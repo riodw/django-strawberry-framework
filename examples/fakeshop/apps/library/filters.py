@@ -106,7 +106,11 @@ class LoanFilter(FilterSet):
 
     class Meta:
         model = models.Loan
-        fields = {"id": ["exact", "in"], "note": ["exact", "icontains"]}
+        fields = {
+            "id": ["exact", "in"],
+            "note": ["exact", "icontains"],
+            "book__loans__patron__email": ["icontains"],
+        }
 
 
 class PatronFilter(FilterSet):

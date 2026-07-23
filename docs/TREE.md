@@ -247,6 +247,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── nested_fetch.py           # Pluggable nested-connection fetch strategies (the Prisma-style seam).
 │   ├── nested_planner.py         # Transactional planner for nested Relay connection selections.
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
+│   ├── predicates.py             # Row-preserving ORM predicate primitives.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
 │   ├── single_parent_fetch.py    # Runtime single-parent degenerate fast path for the windowed nested prefetch.
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
@@ -357,6 +358,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── nested_fetch.py           # Pluggable nested-connection fetch strategies (the Prisma-style seam).
 │   ├── nested_planner.py         # Transactional planner for nested Relay connection selections.
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
+│   ├── predicates.py             # Row-preserving ORM predicate primitives.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
 │   ├── single_parent_fetch.py    # Runtime single-parent degenerate fast path for the windowed nested prefetch.
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
@@ -488,6 +490,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
+│   ├── test_predicates.py        # Executable ORM tests for the neutral correlated-EXISTS predicate primitive.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
@@ -694,6 +697,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
+│   ├── test_predicates.py        # Executable ORM tests for the neutral correlated-EXISTS predicate primitive.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).

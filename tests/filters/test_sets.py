@@ -9,17 +9,22 @@ the Decision-4 owner-aware Relay-vs-scalar conditional in
 
 from __future__ import annotations
 
+import datetime
+import uuid
 from collections import OrderedDict
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 import strawberry
 from apps.kanban import filters as kanban_filters
 from apps.kanban import models as kanban_models
 from apps.library import models as library_models
+from apps.library.filters import BookFilter
 from apps.products.models import Category, Item
+from apps.scalars import models as scalar_models
 from django.db.models import Q
 from django.http import HttpRequest
+from django_filters import CharFilter
 from graphql import GraphQLError
 
 from django_strawberry_framework import DjangoType
@@ -31,7 +36,14 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
-from django_strawberry_framework.filters.sets import _lookups_for_field
+from django_strawberry_framework.filters.base import _GlobalIDMultipleChoiceField
+from django_strawberry_framework.filters.sets import (
+    _MODEL_CHOICE_ONLY_EXTRAS,
+    FilterGenerationProvenance,
+    _lookups_for_field,
+    filter_generation_provenance,
+)
+from django_strawberry_framework.optimizer.predicates import correlated_inner_root
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
@@ -70,6 +82,79 @@ def _make_info(request: HttpRequest | None = None) -> Any:
             self.context = ctx
 
     return _Info(_Context(request or HttpRequest()))
+
+
+class _MedtricsLoanGraph(NamedTuple):
+    """Captured pks of the four root loans seeded by ``_seed_medtrics_loan_graph``.
+
+    Pks are captured at creation time; assertions must compare against these
+    rather than trusting insertion-order pk faith.
+    """
+
+    relation_and_direct: int
+    relation_only: int
+    direct_only: int
+    unrelated: int
+
+
+def _seed_medtrics_loan_graph() -> _MedtricsLoanGraph:
+    """Seed the shared Medtrics reproduction graph on the library models.
+
+    Builds ``Loan.book -> Book.loans -> Loan.patron -> Patron.email`` so a
+    self-join across ``book__loans__patron__email`` fans out root ``Loan`` rows.
+    Uses inline ``Model.objects.create`` (the library app has no services).
+
+    Four root loans, with distinct patrons per loan (the
+    ``unique_open_loan_per_book_patron`` constraint forbids repeating a
+    ``(book, patron)`` pair):
+
+    - ``relation_and_direct``: on ``shared_book``, note contains "Cardio",
+      patron email "Cardio A";
+    - ``relation_only``: also on ``shared_book``, note WITHOUT "Cardio",
+      patron email "Cardio B";
+    - ``direct_only``: on a second book, note contains "Cardio", patron email
+      "Neurology";
+    - ``unrelated``: on a third book, note and patron email neither containing
+      "Cardio".
+    """
+    branch = library_models.Branch.objects.create(name="Medtrics Central")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="MED-1")
+    shared_book = library_models.Book.objects.create(shelf=shelf, title="Shared Ward Manual")
+    second_book = library_models.Book.objects.create(shelf=shelf, title="Second Manual")
+    third_book = library_models.Book.objects.create(shelf=shelf, title="Third Manual")
+
+    patron_a = library_models.Patron.objects.create(name="Patron A", email="Cardio A")
+    patron_b = library_models.Patron.objects.create(name="Patron B", email="Cardio B")
+    patron_c = library_models.Patron.objects.create(name="Patron C", email="Neurology")
+    patron_d = library_models.Patron.objects.create(name="Patron D", email="Ortho")
+
+    relation_and_direct = library_models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_a,
+        note="Cardio direct",
+    )
+    relation_only = library_models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_b,
+        note="routine checkout",
+    )
+    direct_only = library_models.Loan.objects.create(
+        book=second_book,
+        patron=patron_c,
+        note="Cardio direct",
+    )
+    unrelated = library_models.Loan.objects.create(
+        book=third_book,
+        patron=patron_d,
+        note="routine checkout",
+    )
+
+    return _MedtricsLoanGraph(
+        relation_and_direct=relation_and_direct.pk,
+        relation_only=relation_only.pk,
+        direct_only=direct_only.pk,
+        unrelated=unrelated.pk,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,36 +511,1351 @@ def test_filter_for_field_keeps_generated_to_one_path_non_distinct():
     assert filter_instance.distinct is False
 
 
-# TODO(docs/row-preserving-predicates-part1-plan.md Slice C.1-C.4): replace
-# these staged cases with executable baseline-vs-rewrite equivalence tests before
-# cutting generated leaves over to the adapter.
+# ---------------------------------------------------------------------------
+# Row-preserving relational predicates: raw-ORM oracle + cut-over correctness.
 #
-# Pseudo:
-# - Freeze both shipped defects first: an explicit deep generated path emits an
-#   outer fan-out plus ``distinct=True``; an expanded RelatedFilter leaf is
-#   rooted against the child today, carries ``distinct=False``, duplicates a
-#   parent, and inflates a connection count.
-# - Pin candidate provenance after FINAL expansion: direct generated and
-#   expanded generated leaves classify against the owning root model; declared,
-#   method, custom-subclass, consumer-distinct, ``Meta.filter_overrides``, and
-#   names missing from a pre-finalization mapping remain ineligible.
-# - Compare baseline/rewrite PK sets for reverse FK, both M2M directions,
-#   GenericRelation, duplicate/no/zero children, nullable-child isnull true and
-#   false, exclude leaves, range, integer ``in`` (empty/mixed invalid), and
-#   GlobalID lists.
-# - Prove boolean fidelity: two active leaves on one relation attach separate
-#   EXISTS branches (cross-row AND); one multi-lookup invocation stays one inner
-#   invocation; the split-across-rows negated range matches Django baseline; and
-#   direct/and/or/not tree positions leave ``_q_for_branch`` negation outside
-#   each child queryset.
-# - With many candidate form fields but one active value, assert exactly one
-#   ``EXISTS`` and one reserved alias. Omitted/None/upstream no-op and
-#   exclude-empty match-all inputs attach nothing; restrictive empty membership
-#   produces false EXISTS and no rows.
-# - For ordinary generated CharFilter plus every explicitly supported package
-#   filter class, assert root alias_map excludes related tables,
-#   ``query.distinct`` is false, results are unique, direct-only leaves retain
-#   their simple SQL, and custom/ineligible filters are byte-for-byte unchanged.
+# The first test is the PERMANENT raw-ORM oracle documenting the JOIN + global
+# ``DISTINCT`` fan-out the row-preserving applicator avoids; the tests that
+# follow assert the post-cut-over row-preserving behavior (correlated EXISTS,
+# no framework-added ``DISTINCT``).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_medtrics_ordered_sequence_baseline_freezes_fanout():
+    """Document the raw-ORM fan-out the production adapter avoids.
+
+    This case never routes through ``FilterSet``; it is the PERMANENT raw-ORM
+    oracle. A disjunction of a direct predicate and a to-many self-join
+    predicate fans out root ``Loan`` rows; ``.distinct()`` hides the duplicates
+    in the visible sequence but does NOT remove the self-join fan-out from the
+    query. The row-preserving adapter (asserted elsewhere) produces the same
+    ordered rows WITHOUT the self-join fan-out or a framework-added ``DISTINCT``.
+    """
+    graph = _seed_medtrics_loan_graph()
+
+    qs = library_models.Loan.objects.order_by("id").filter(
+        Q(note__icontains="Cardio") | Q(book__loans__patron__email__icontains="Cardio"),
+    )
+
+    sequence = list(qs.values_list("pk", flat=True))
+    assert sequence == [
+        graph.relation_and_direct,
+        graph.relation_and_direct,
+        graph.relation_only,
+        graph.relation_only,
+        graph.direct_only,
+    ]
+    assert qs.count() == 5
+
+    distinct_sequence = list(qs.distinct().values_list("pk", flat=True))
+    assert distinct_sequence == [graph.relation_and_direct, graph.relation_only, graph.direct_only]
+
+    # DISTINCT hides but does not remove the fan-out: the self-join still adds a
+    # second ``library_loan`` alias (the T3 arm) and the ``library_patron`` table.
+    loan_aliases = [
+        alias for alias, join in qs.query.alias_map.items() if join.table_name == "library_loan"
+    ]
+    assert len(loan_aliases) >= 2
+    table_names = {join.table_name for join in qs.query.alias_map.values()}
+    assert "library_patron" in table_names
+
+
+@pytest.mark.django_db
+def test_generated_deep_to_many_path_correctness_is_row_preserving():
+    """A generated deep to-many leaf is row-preserving via correlated EXISTS.
+
+    A framework-generated deep lookup crossing a to-many
+    relation no longer fans out through JOIN + global ``DISTINCT``. The applied
+    queryset carries ``query.distinct is False``, its ``alias_map`` contains
+    NEITHER the M2M through-table nor the terminal ``library_genre`` table, and
+    an ``EXISTS`` owns the membership join -- yielding the SAME single correct
+    row. The permanent test-local oracle (the old production behavior: invoke the
+    same filter instance directly on the outer queryset, then its own
+    ``distinct``) is asserted to yield the identical row set.
+    """
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    generated = BookGenreFilter.get_filters()["genres__name__icontains"]
+    assert generated.distinct is True
+
+    branch = library_models.Branch.objects.create(name="Deep Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="DEEP-1")
+    matching_book = library_models.Book.objects.create(shelf=shelf, title="Matched")
+    matching_book.genres.add(
+        library_models.Genre.objects.create(name="cardiology"),
+        library_models.Genre.objects.create(name="cardio-thoracic"),
+    )
+    other_book = library_models.Book.objects.create(shelf=shelf, title="Other")
+    other_book.genres.add(library_models.Genre.objects.create(name="neurology"))
+
+    outer_qs = library_models.Book.objects.order_by("id")
+    bare = BookGenreFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=outer_qs,
+        request=HttpRequest(),
+    )
+    result = bare.qs
+
+    # Row-preserving: no outer DISTINCT, no membership/terminal JOIN, one EXISTS.
+    assert result.query.distinct is False
+    joined_tables = {join.table_name for join in result.query.alias_map.values()}
+    assert "library_book_genres" not in joined_tables
+    assert "library_genre" not in joined_tables
+    assert "EXISTS" in str(result.query).upper()
+    production_rows = list(result.values_list("pk", flat=True))
+    assert production_rows == [matching_book.pk]
+
+    # Permanent test-local oracle: the OLD production behavior (direct outer
+    # invocation of the same filter instance, then its own distinct) yields the
+    # same rows the row-preserving production adapter now yields.
+    oracle_rows = list(
+        generated.filter(outer_qs, "cardio").distinct().values_list("pk", flat=True),
+    )
+    assert oracle_rows == production_rows
+
+
+@pytest.mark.django_db
+def test_flattened_related_filter_leaf_is_row_preserving():
+    """Cut-over: a flattened ``RelatedFilter`` leaf no longer duplicates the parent row.
+
+    Post-cut-over (C.3): although ``_expand_related_filter`` deep-copies a filter
+    generated against the CHILD model then prefixes ``field_name`` (so the flat
+    ``genres__name__icontains`` leaf on ``BookFilter`` is still a
+    ``distinct=False`` leaf with ``field_name="genres__name"``), the applicator
+    classifies the EXPANDED path against the root model and routes it through the
+    row-preserving correlated ``EXISTS``. The single matching book is returned
+    ONCE. The permanent test-local oracle (the old production behavior: direct
+    outer invocation of the same ``distinct=False`` leaf) still DUPLICATES the
+    row, proving the fix is in the adapter, not the leaf.
+    """
+    leaf = BookFilter.get_filters()["genres__name__icontains"]
+    assert leaf.field_name == "genres__name"
+    assert leaf.distinct is False
+
+    branch = library_models.Branch.objects.create(name="Flat Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="FLAT-1")
+    matching_book = library_models.Book.objects.create(shelf=shelf, title="Matched")
+    matching_book.genres.add(
+        library_models.Genre.objects.create(name="cardiology"),
+        library_models.Genre.objects.create(name="cardio-thoracic"),
+    )
+    other_book = library_models.Book.objects.create(shelf=shelf, title="Other")
+    other_book.genres.add(library_models.Genre.objects.create(name="neurology"))
+
+    outer_qs = library_models.Book.objects.order_by("id")
+    bare = BookFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=outer_qs,
+        request=HttpRequest(),
+    )
+    result = bare.qs
+
+    # Row-preserving production: the single matching book is returned ONCE.
+    assert list(result.values_list("pk", flat=True)) == [matching_book.pk]
+    assert result.count() == 1
+
+    # Permanent test-local oracle: the OLD behavior (direct outer invocation of
+    # the same distinct=False leaf) still duplicates the parent row.
+    oracle_rows = list(leaf.filter(outer_qs, "cardio").values_list("pk", flat=True))
+    assert oracle_rows == [matching_book.pk, matching_book.pk]
+
+
+# ---------------------------------------------------------------------------
+# C.3 / C.3a - flat-leaf applicator + distinct-suppression invocation helper
+# ---------------------------------------------------------------------------
+
+
+def _seed_two_matching_genres_on_one_book():
+    """One book with two genres both matching "cardio", plus a non-matching book."""
+    branch = library_models.Branch.objects.create(name="Adapter Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="ADP-1")
+    matching_book = library_models.Book.objects.create(shelf=shelf, title="Matched")
+    matching_book.genres.add(
+        library_models.Genre.objects.create(name="cardiology"),
+        library_models.Genre.objects.create(name="cardio-thoracic"),
+    )
+    other_book = library_models.Book.objects.create(shelf=shelf, title="Other")
+    other_book.genres.add(library_models.Genre.objects.create(name="neurology"))
+    return matching_book, other_book
+
+
+@pytest.mark.django_db
+def test_eligible_m2m_candidate_has_no_outer_or_inner_distinct():
+    """An eligible M2M candidate composes with no outer DISTINCT and no inner SELECT DISTINCT."""
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    matching_book, _other = _seed_two_matching_genres_on_one_book()
+    # Publish the expansion snapshot (production does this via ``apply_*`` ->
+    # ``get_filters``); a bare-``.qs`` filterset built before it degrades wholesale.
+    BookGenreFilter.get_filters()
+    bare = BookGenreFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    result = bare.qs
+    sql = str(result.query)
+
+    assert result.query.distinct is False
+    # No DISTINCT anywhere: not on the outer query, not inside the EXISTS body.
+    assert "DISTINCT" not in sql.upper()
+    assert "EXISTS" in sql.upper()
+    assert list(result.values_list("pk", flat=True)) == [matching_book.pk]
+
+
+@pytest.mark.django_db
+def test_invoke_suppressing_helper_restores_distinct_after_success():
+    """The helper restores the per-instance ``distinct`` flag after a successful apply."""
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    bare = BookGenreFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    filter_instance = bare.filters["genres__name__icontains"]
+    assert filter_instance.distinct is True
+
+    inner_root = correlated_inner_root(library_models.Book.objects.all())
+    result = FilterSet._invoke_suppressing_framework_distinct(
+        filter_instance,
+        inner_root,
+        "cardio",
+    )
+    assert result.model is library_models.Book
+    # Restored to the original live value after a successful invocation.
+    assert filter_instance.distinct is True
+
+
+@pytest.mark.django_db
+def test_invoke_suppressing_helper_restores_distinct_after_exception():
+    """The helper restores ``distinct`` even when the wrapped invocation raises."""
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    bare = BookGenreFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    filter_instance = bare.filters["genres__name__icontains"]
+    assert filter_instance.distinct is True
+
+    boom = RuntimeError("decode failure mid-invocation")
+
+    def _raising_filter(qs, value):
+        # The flag is suppressed at this point; prove it, then blow up.
+        assert filter_instance.distinct is False
+        raise boom
+
+    filter_instance.filter = _raising_filter
+    inner_root = correlated_inner_root(library_models.Book.objects.all())
+    with pytest.raises(RuntimeError, match="decode failure"):
+        FilterSet._invoke_suppressing_framework_distinct(filter_instance, inner_root, "cardio")
+    # Restored to the original live value despite the exception.
+    assert filter_instance.distinct is True
+
+
+@pytest.mark.django_db
+def test_inactive_candidates_attach_nothing():
+    """With many to-many candidates but ONE active, exactly one EXISTS + one reserved alias."""
+
+    class MultiBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"], "loans__note": ["icontains"]}
+
+    matching_book, _other = _seed_two_matching_genres_on_one_book()
+    MultiBookFilter.get_filters()
+    bare = MultiBookFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    result = bare.qs
+    sql = str(result.query)
+
+    # Only the active candidate attaches: exactly one EXISTS body and exactly one
+    # reserved ``_dst_predicate_`` alias (the alias lives in ``query.annotations``,
+    # inlined into the compiled EXISTS SQL).
+    assert sql.upper().count("EXISTS") == 1
+    reserved = [name for name in result.query.annotations if name.startswith("_dst_predicate_")]
+    assert reserved == ["_dst_predicate_0"]
+    assert list(result.values_list("pk", flat=True)) == [matching_book.pk]
+
+
+@pytest.mark.django_db
+def test_restrictive_empty_in_composes_as_exists_over_none():
+    """A restrictive membership on a to-many path matches no rows via ``Exists(none)``.
+
+    ``IntegerInFilter`` treats an explicit ``in: []`` as a no-op skip; the
+    RESTRICTIVE-empty shape (a non-empty membership whose every value is out of
+    range and drops) routes through ``_match_none_queryset`` -> ``inner_root.none()``,
+    which the adapter attaches as ``Exists(none)``. Django folds that to a constant
+    ``False`` (so the EXISTS text is optimized away), but the reserved alias is
+    still attached and the composed result matches nothing.
+    """
+    # Seed a book that WOULD match a non-empty membership, to prove the input is
+    # restrictive (matches nothing), not a widened no-op (matches everything).
+    _seed_two_matching_genres_on_one_book()
+
+    class BookGenreInFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__id": ["in"]}
+
+    BookGenreInFilter.get_filters()
+    bare = BookGenreInFilter(
+        # A member past SQLite's signed-64-bit range drops, leaving an empty but
+        # RESTRICTIVE membership (``_match_none_queryset``), unlike an explicit [].
+        data={"genres__id__in": [99999999999999999999999]},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    result = bare.qs
+
+    reserved = [name for name in result.query.annotations if name.startswith("_dst_predicate_")]
+    assert reserved == ["_dst_predicate_0"]
+    assert list(result.values_list("pk", flat=True)) == []
+
+
+@pytest.mark.django_db
+def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch):
+    """A filterset with no expansion snapshot behaves byte-for-byte like the old path."""
+    matching_book, _other = _seed_two_matching_genres_on_one_book()
+
+    # Expand ``base_filters`` (so the flat leaf is a real form field) THEN force
+    # the fail-closed pre-snapshot state (a filterset built before lazy target
+    # resolution): every name becomes a non-candidate and the flattened
+    # distinct=False leaf duplicates the parent row exactly as it did before.
+    BookFilter.get_filters()
+    monkeypatch.setattr(BookFilter, "_expansion_snapshot", classmethod(lambda cls: None))
+    bare = BookFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    result = bare.qs
+
+    assert list(result.values_list("pk", flat=True)) == [matching_book.pk, matching_book.pk]
+    assert result.count() == 2
+
+
+@pytest.mark.django_db
+def test_not_branch_over_to_many_related_branch_is_row_preserving():
+    """A ``not`` tree position over a to-many related branch keeps ``_q_for_branch`` intact.
+
+    Branch negation composes through the outer ``Q(pk__in=...)`` (``_q_for_branch``),
+    never pushed inside a child queryset. A genre-name ``not`` branch over the
+    reverse-M2M ``books`` relation returns exactly the genres NOT matching, each
+    once (row-preserving), which the cut-over must not disturb.
+    """
+    branch = library_models.Branch.objects.create(name="Not Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="NOT-1")
+    cardio = library_models.Genre.objects.create(name="cardiology")
+    neuro = library_models.Genre.objects.create(name="neurology")
+    book_one = library_models.Book.objects.create(shelf=shelf, title="Cardio Atlas One")
+    book_two = library_models.Book.objects.create(shelf=shelf, title="Cardio Atlas Two")
+    book_one.genres.add(cardio)
+    book_two.genres.add(cardio)
+    neuro_book = library_models.Book.objects.create(shelf=shelf, title="Neuro Atlas")
+    neuro_book.genres.add(neuro)
+
+    from apps.library.filters_genre import GenreFilter
+
+    qs = GenreFilter.apply_sync(
+        {"not_": {"books__title": {"i_contains": "cardio"}}},
+        library_models.Genre.objects.order_by("id"),
+        _make_info(),
+    )
+    # Only the non-cardio genre survives, exactly once.
+    assert list(qs.values_list("pk", flat=True)) == [neuro.pk]
+
+
+@pytest.mark.django_db
+def test_qs_and_apply_sync_and_async_over_eligible_candidate():
+    """``.qs``, ``apply_sync``, and ``apply_async`` all filter an eligible candidate correctly.
+
+    Uses the fakeshop ``GenreFilter`` flat reverse-M2M leaf ``books__title`` (an
+    eligible framework-generated to-many candidate) so the input spelling matches
+    the real generated surface.
+    """
+    import asyncio
+
+    from apps.library.filters_genre import GenreFilter
+
+    branch = library_models.Branch.objects.create(name="Apply Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="APL-1")
+    cardio = library_models.Genre.objects.create(name="cardiology")
+    neuro = library_models.Genre.objects.create(name="neurology")
+    book_one = library_models.Book.objects.create(shelf=shelf, title="Cardio One")
+    book_two = library_models.Book.objects.create(shelf=shelf, title="Cardio Two")
+    book_one.genres.add(cardio)
+    book_two.genres.add(cardio)
+    neuro_book = library_models.Book.objects.create(shelf=shelf, title="Neuro")
+    neuro_book.genres.add(neuro)
+
+    # `.qs` path (snapshot published via get_filters, as apply_* does).
+    GenreFilter.get_filters()
+    bare = GenreFilter(
+        data={"books__title__icontains": "cardio"},
+        queryset=library_models.Genre.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    assert list(bare.qs.values_list("pk", flat=True)) == [cardio.pk]
+
+    # apply_sync path.
+    sync_qs = GenreFilter.apply_sync(
+        {"books__title": {"i_contains": "cardio"}},
+        library_models.Genre.objects.order_by("id"),
+        _make_info(),
+    )
+    assert list(sync_qs.values_list("pk", flat=True)) == [cardio.pk]
+
+    # apply_async path.
+    async_qs = asyncio.run(
+        GenreFilter.apply_async(
+            {"books__title": {"i_contains": "cardio"}},
+            library_models.Genre.objects.order_by("id"),
+            _make_info(),
+        ),
+    )
+    assert list(async_qs.values_list("pk", flat=True)) == [cardio.pk]
+
+
+# Row-preserving relational-predicate cut-over cases:
+# ``test_medtrics_ordered_sequence_baseline_freezes_fanout`` stays as the
+# permanent raw-ORM fan-out oracle,
+# ``test_generated_deep_to_many_path_correctness_is_row_preserving`` and
+# ``test_flattened_related_filter_leaf_is_row_preserving`` now assert the
+# row-preserving production behavior against the permanent test-local oracle.
+#
+# ---------------------------------------------------------------------------
+# C.4 - baseline-vs-rewritten equivalence matrix
+#
+# For every supported candidate shape, the production ``FilterSet`` path
+# (correlated ``EXISTS``) must return the SAME ordered primary-key sequence and
+# count as the permanent test-local oracle: the same filter instance invoked
+# DIRECTLY on the outer queryset (django-filter's plain pre-rewrite behavior).
+# ``distinct=True`` baseline leaves are NOT double-``.distinct()``-ed here -
+# upstream ``Filter.filter`` already calls ``qs.distinct()`` when
+# ``self.distinct`` is set, so the direct invocation IS the old behavior; a
+# ``.distinct()`` chained after it only mirrors the framework's own suppressed
+# outer distinct and is applied only where noted (many-side membership leaves).
+#
+# Cases already proven by the landed C.1-flipped tests
+# (``test_generated_deep_to_many_path_correctness_is_row_preserving``,
+# ``test_flattened_related_filter_leaf_is_row_preserving``) and the C.3 adapter
+# tests are NOT re-added: forward M2M single-parent equivalence, the
+# expanded-vs-root classification EXECUTION equivalence (matrix row 13, covered
+# by ``test_flattened_related_filter_leaf_is_row_preserving`` which compares the
+# expanded ``BookFilter`` ``genres__name`` leaf against its direct-invocation
+# oracle), inactive-candidate no-op (row: one active among many), and
+# restrictive-empty membership.
+#
+# N/A rows (no fixture topology in any example app; reported to the orchestrator):
+# - matrix row 7 (``to_field`` FK-to-non-pk hop): grep of every
+#   ``examples/fakeshop/apps/*/models.py`` finds no ``to_field=`` FK. Inventing
+#   package-test fixture models for this is out of scope; N/A.
+# - matrix row 11 GlobalID-list sub-case: a framework-generated FLAT Relay M2M
+#   leaf (``Meta.fields = {"genres": [...]}`` with a Relay-Node target) IS
+#   generated as a ``GlobalIDMultipleChoiceFilter``; its form field is
+#   constructible because the replacement strips the model-choice-only extras
+#   (``_strip_model_choice_extras``), and the decode/apply round-trip is covered
+#   by ``test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.
+#   The flat leaf stays package-tier: the fakeshop filtersets declare
+#   ``RelatedFilter``s under the same base names, and a declared name shadows
+#   the flat leaf in the generated GraphQL input, so no live surface reaches it.
+#   The integer-``in`` sub-cases (empty / mixed / all-invalid) ARE covered below.
+# ---------------------------------------------------------------------------
+
+
+def _library_shelf():
+    """Create a throwaway ``Branch`` + ``Shelf`` for library-model C.4 fixtures."""
+    branch = library_models.Branch.objects.create(name="C4 Branch")
+    return library_models.Shelf.objects.create(branch=branch, code="C4-1")
+
+
+def _make_scalar_specimen(label, parent=None):
+    """Create a ``ScalarSpecimen`` with all required non-null scalar fields set."""
+    return scalar_models.ScalarSpecimen.objects.create(
+        label=label,
+        occurred_on=datetime.date(2020, 1, 1),
+        occurred_at=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+        occurred_time=datetime.time(1, 2, 3),
+        external_id=uuid.uuid4(),
+        parent=parent,
+    )
+
+
+@pytest.mark.django_db
+def test_c4_reverse_fk_loans_note_is_row_preserving():
+    """Matrix row 1 (reverse FK) + row 14 (ordinary generated ``CharFilter``).
+
+    ``Book`` root, generated ``loans__note`` ``icontains`` leaf (a plain upstream
+    ``CharFilter`` crossing the reverse-FK ``Book.loans`` to-many hop). A parent
+    with two matching loans yields ONE row via correlated ``EXISTS``; equivalence
+    against the direct-invocation oracle holds.
+    """
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="Matched")
+    patron_a = library_models.Patron.objects.create(name="pa", email="a")
+    patron_b = library_models.Patron.objects.create(name="pb", email="b")
+    library_models.Loan.objects.create(book=book, patron=patron_a, note="Cardio one")
+    library_models.Loan.objects.create(book=book, patron=patron_b, note="Cardio two")
+    other = library_models.Book.objects.create(shelf=shelf, title="Other")
+    library_models.Loan.objects.create(
+        book=other,
+        patron=library_models.Patron.objects.create(name="pc", email="c"),
+        note="routine",
+    )
+
+    class BookLoanFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+
+    leaf = BookLoanFilter.get_filters()["loans__note__icontains"]
+    assert isinstance(leaf, CharFilter)
+    assert leaf.distinct is True
+    outer = library_models.Book.objects.order_by("id")
+    result = BookLoanFilter(
+        data={"loans__note__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    assert production == [book.pk]
+    assert result.count() == 1
+    assert "EXISTS" in str(result.query).upper()
+    oracle = list(leaf.filter(outer, "cardio").order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_forward_m2m_multiple_parents_is_row_preserving():
+    """Matrix row 2 (forward M2M) gap: MULTIPLE parents, one direct, one via dups.
+
+    ``Book`` root over the forward M2M ``Book.genres``. One book matches through a
+    single genre; another matches through two duplicate-matching genres. Both are
+    returned exactly once (ordered), equal to the direct-invocation oracle.
+    """
+    shelf = _library_shelf()
+    single = library_models.Book.objects.create(shelf=shelf, title="Single")
+    single.genres.add(library_models.Genre.objects.create(name="cardiology"))
+    dupes = library_models.Book.objects.create(shelf=shelf, title="Dupes")
+    dupes.genres.add(
+        library_models.Genre.objects.create(name="cardio-thoracic"),
+        library_models.Genre.objects.create(name="cardio-vascular"),
+    )
+    miss = library_models.Book.objects.create(shelf=shelf, title="Miss")
+    miss.genres.add(library_models.Genre.objects.create(name="neurology"))
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    leaf = BookGenreFilter.get_filters()["genres__name__icontains"]
+    outer = library_models.Book.objects.order_by("id")
+    result = BookGenreFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    assert production == [single.pk, dupes.pk]
+    assert result.count() == 2
+    oracle = list(leaf.filter(outer, "cardio").order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_reverse_m2m_genre_books_title_is_row_preserving():
+    """Matrix row 3 (reverse M2M): ``Genre`` root over ``books__title``.
+
+    A genre linked to two matching books is returned once; ordered equivalence
+    against the direct-invocation oracle.
+    """
+    shelf = _library_shelf()
+    matched = library_models.Genre.objects.create(name="matched")
+    book_one = library_models.Book.objects.create(shelf=shelf, title="Cardio Atlas One")
+    book_two = library_models.Book.objects.create(shelf=shelf, title="Cardio Atlas Two")
+    book_one.genres.add(matched)
+    book_two.genres.add(matched)
+    other = library_models.Genre.objects.create(name="other")
+    neuro = library_models.Book.objects.create(shelf=shelf, title="Neuro Atlas")
+    neuro.genres.add(other)
+
+    class GenreBooksFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"books__title": ["icontains"]}
+
+    leaf = GenreBooksFilter.get_filters()["books__title__icontains"]
+    outer = library_models.Genre.objects.order_by("id")
+    result = GenreBooksFilter(
+        data={"books__title__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    assert production == [matched.pk]
+    assert result.count() == 1
+    oracle = list(leaf.filter(outer, "cardio").order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_generic_relation_branch_tags_is_row_preserving():
+    """Matrix row 4 (``GenericRelation``): ``Branch`` root over ``tags__tag``.
+
+    ``Meta.fields = {"tags__tag": ["icontains"]}`` DOES generate through
+    django-filter's ``get_model_field`` (a plain ``CharFilter``, ``distinct=True``
+    because the ``GenericRelation`` is a to-many hop). Two matching tags on one
+    branch yield one row; equivalence against the direct-invocation oracle.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    branch = library_models.Branch.objects.create(name="Tagged Branch")
+    ct = ContentType.objects.get_for_model(library_models.Branch)
+    library_models.TaggedItem.objects.create(tag="cardio-x", content_type=ct, object_id=branch.pk)
+    library_models.TaggedItem.objects.create(tag="cardio-y", content_type=ct, object_id=branch.pk)
+    other = library_models.Branch.objects.create(name="Other Branch")
+    library_models.TaggedItem.objects.create(tag="neuro-z", content_type=ct, object_id=other.pk)
+
+    class BranchTagFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"tags__tag": ["icontains"]}
+
+    leaf = BranchTagFilter.get_filters()["tags__tag__icontains"]
+    assert isinstance(leaf, CharFilter)
+    assert leaf.distinct is True
+    outer = library_models.Branch.objects.order_by("id")
+    result = BranchTagFilter(
+        data={"tags__tag__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    assert production == [branch.pk]
+    assert result.count() == 1
+    oracle = list(leaf.filter(outer, "cardio").order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_isnull_on_nullable_child_field_is_row_preserving():
+    """Matrix row 5 (``isnull`` on a nullable child field over a to-many hop).
+
+    ``Genre`` root over ``books__subtitle`` (``subtitle`` is nullable). Both
+    ``isnull=True`` and ``isnull=False`` match the production result to the
+    direct-invocation oracle. A genre with ZERO books is INCLUDED by
+    ``isnull=True`` (LEFT-join null) and EXCLUDED by ``isnull=False`` - and the
+    correlated ``EXISTS`` reproduces that outer-join semantics identically.
+    """
+    shelf = _library_shelf()
+    g_has = library_models.Genre.objects.create(name="has-subtitle")
+    g_null = library_models.Genre.objects.create(name="null-subtitle")
+    g_empty = library_models.Genre.objects.create(name="no-books")
+    book_sub = library_models.Book.objects.create(shelf=shelf, title="Has", subtitle="Sub")
+    book_nosub = library_models.Book.objects.create(shelf=shelf, title="Null", subtitle=None)
+    book_sub.genres.add(g_has)
+    book_nosub.genres.add(g_null)
+
+    class GenreSubtitleFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"books__subtitle": ["isnull"]}
+
+    leaf = GenreSubtitleFilter.get_filters()["books__subtitle__isnull"]
+    outer = library_models.Genre.objects.order_by("id")
+    for value, expected in ((True, [g_null.pk, g_empty.pk]), (False, [g_has.pk])):
+        result = GenreSubtitleFilter(
+            data={"books__subtitle__isnull": value},
+            queryset=outer,
+            request=HttpRequest(),
+        ).qs
+        production = list(result.order_by("id").values_list("pk", flat=True))
+        assert production == expected
+        oracle = list(
+            leaf.filter(outer, value).order_by("id").values_list("pk", flat=True),
+        )
+        assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_nullable_intermediate_to_one_hop_is_row_preserving():
+    """Matrix row 6 (nullable intermediate to-one hop in the multiplying chain).
+
+    ``ScalarSpecimen`` root over ``parent__children__label`` - a nullable self-FK
+    (``parent``) followed by the reverse-FK to-many hop (``children``). The
+    baseline OR would LEFT-OUTER-promote the null hop; the ``EXISTS`` arm is
+    simply false for a null ``parent``. The equivalence is TESTED, not assumed:
+    the null-parent root is excluded in both production and the oracle.
+    """
+    parent = _make_scalar_specimen("parent")
+    child_match = _make_scalar_specimen("cardiology child", parent=parent)
+    sibling = _make_scalar_specimen("root-with-parent", parent=parent)
+    root_null = _make_scalar_specimen("cardiology but null parent", parent=None)
+
+    class SpecimenFilter(FilterSet):
+        class Meta:
+            model = scalar_models.ScalarSpecimen
+            fields = {"parent__children__label": ["icontains"]}
+
+    leaf = SpecimenFilter.get_filters()["parent__children__label__icontains"]
+    outer = scalar_models.ScalarSpecimen.objects.order_by("id")
+    result = SpecimenFilter(
+        data={"parent__children__label__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    # child_match and sibling share ``parent`` (whose children include the
+    # matching label); root_null has a NULL parent so the EXISTS arm is false.
+    assert production == [child_match.pk, sibling.pk]
+    assert root_null.pk not in production
+    assert "EXISTS" in str(result.query).upper()
+    oracle = list(leaf.filter(outer, "cardio").order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_two_active_leaves_same_relation_cross_row_and():
+    """Matrix row 8 (two active leaves on one relation, cross-row AND).
+
+    ``Book`` root with TWO active leaves on the M2M ``genres`` relation matching
+    DIFFERENT genre rows of the same book (name ``icontains`` matches one genre,
+    ``id__gt`` matches the other). The book qualifies because each ``EXISTS`` is
+    independently true; TWO reserved aliases / ``EXISTS`` bodies appear in the
+    SQL. The old baseline (two separate ``.filter`` invocations, each its own
+    join alias) ALSO matches cross-row, so equivalence holds.
+    """
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="CrossRow")
+    cardio = library_models.Genre.objects.create(name="cardiology")
+    neuro = library_models.Genre.objects.create(name="neurology")
+    book.genres.add(cardio, neuro)
+    lonely = library_models.Book.objects.create(shelf=shelf, title="Lonely")
+    lonely.genres.add(cardio)
+
+    class TwoLeafFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"], "genres__id": ["gt"]}
+
+    TwoLeafFilter.get_filters()
+    outer = library_models.Book.objects.order_by("id")
+    result = TwoLeafFilter(
+        data={"genres__name__icontains": "cardio", "genres__id__gt": neuro.pk - 1},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    sql = str(result.query)
+
+    assert sql.upper().count("EXISTS") == 2
+    reserved = [n for n in result.query.annotations if n.startswith("_dst_predicate_")]
+    assert reserved == ["_dst_predicate_0", "_dst_predicate_1"]
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    # ``book`` has cardiology (name match) AND neurology (id__gt match, cross-row);
+    # ``lonely`` has only cardiology (fails id__gt) so it is excluded.
+    assert production == [book.pk]
+
+    name_leaf = TwoLeafFilter.get_filters()["genres__name__icontains"]
+    id_leaf = TwoLeafFilter.get_filters()["genres__id__gt"]
+    oracle_qs = name_leaf.filter(outer, "cardio")
+    oracle_qs = id_leaf.filter(oracle_qs, neuro.pk - 1)
+    oracle = list(oracle_qs.order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_range_binds_to_single_child_row():
+    """Matrix row 9 (positive multi-lookup single-invocation binding).
+
+    A ``range`` leaf on ``Book.loans__id``: both bounds must bind to ONE child row
+    inside a single invocation. A book whose loans SPLIT the range (one below, one
+    above, none inside) is EXCLUDED; a book with a loan inside the range is
+    included. Equivalence against the direct-invocation oracle holds.
+    """
+    shelf = _library_shelf()
+    split = library_models.Book.objects.create(shelf=shelf, title="Split")
+    p1 = library_models.Patron.objects.create(name="p1", email="a")
+    p2 = library_models.Patron.objects.create(name="p2", email="b")
+    low = library_models.Loan.objects.create(book=split, patron=p1, note="low")
+    match_book = library_models.Book.objects.create(shelf=shelf, title="Match")
+    p3 = library_models.Patron.objects.create(name="p3", email="c")
+    mid = library_models.Loan.objects.create(book=match_book, patron=p3, note="mid")
+    high = library_models.Loan.objects.create(book=split, patron=p2, note="high")
+    # id order: low < mid < high. Range == [mid, mid]: match_book's loan is in
+    # range; split's loans (low, high) straddle it with none inside.
+    assert low.pk < mid.pk < high.pk
+
+    class BookLoanRangeFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__id": ["range"]}
+
+    leaf = BookLoanRangeFilter.get_filters()["loans__id__range"]
+    outer = library_models.Book.objects.order_by("id")
+    result = BookLoanRangeFilter(
+        data={"loans__id__range": [mid.pk, mid.pk]},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    assert production == [match_book.pk]
+    assert split.pk not in production
+    cleaned = leaf.field.clean([mid.pk, mid.pk])
+    oracle = list(leaf.filter(outer, cleaned).order_by("id").values_list("pk", flat=True))
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_negated_split_across_rows_range_counterexample():
+    """Matrix row 10 (negated split-across-rows range counterexample).
+
+    The framework's generated FLAT leaves NEVER carry ``exclude=True`` - negation
+    is a logic-tree ``not_`` concern handled by ``_q_for_branch`` (untouched
+    machinery), so the flat-leaf adapter never sees a negated leaf. This test
+    proves a ``not_`` over a to-many ``range`` leaf keeps Django's per-condition
+    exclusion semantics: a book with a loan INSIDE the range is excluded, while a
+    split-row book (loans straddling the range, none inside) is KEPT - matching
+    Django's ``exclude(loans__id__range=...)`` baseline exactly.
+    """
+    shelf = _library_shelf()
+    split = library_models.Book.objects.create(shelf=shelf, title="Split")
+    p1 = library_models.Patron.objects.create(name="p1", email="a")
+    p2 = library_models.Patron.objects.create(name="p2", email="b")
+    low = library_models.Loan.objects.create(book=split, patron=p1, note="low")
+    match_book = library_models.Book.objects.create(shelf=shelf, title="Match")
+    p3 = library_models.Patron.objects.create(name="p3", email="c")
+    mid = library_models.Loan.objects.create(book=match_book, patron=p3, note="mid")
+    high = library_models.Loan.objects.create(book=split, patron=p2, note="high")
+    assert low.pk < mid.pk < high.pk
+
+    class BookLoanRangeFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__id": ["range"]}
+
+    production = list(
+        BookLoanRangeFilter.apply_sync(
+            {"not_": {"loans__id": {"range": [mid.pk, mid.pk]}}},
+            library_models.Book.objects.order_by("id"),
+            _make_info(),
+        )
+        .order_by("id")
+        .values_list("pk", flat=True),
+    )
+    # ``match_book`` is excluded (has a loan in range); the split-row book is KEPT.
+    assert production == [split.pk]
+    oracle = list(
+        library_models.Book.objects.order_by("id")
+        .exclude(loans__id__range=(mid.pk, mid.pk))
+        .values_list("pk", flat=True),
+    )
+    assert oracle == production
+
+
+@pytest.mark.django_db
+def test_c4_integer_in_over_to_many_path():
+    """Matrix row 11 (integer ``in`` semantics over an eligible to-many path).
+
+    ``Genre`` root over ``books__id`` ``in``: an explicit empty list is a no-op
+    skip (matches every row, == baseline); a mixed valid/invalid membership
+    filters on the valid member only; an all-invalid membership matches nothing.
+    (The GlobalID-list sub-case is covered by
+    ``test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving`` below.)
+    """
+    shelf = _library_shelf()
+    g1 = library_models.Genre.objects.create(name="g1")
+    g2 = library_models.Genre.objects.create(name="g2")
+    b1 = library_models.Book.objects.create(shelf=shelf, title="b1")
+    b2 = library_models.Book.objects.create(shelf=shelf, title="b2")
+    b1.genres.add(g1)
+    b2.genres.add(g2)
+
+    class GenreBookInFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"books__id": ["in"]}
+
+    outer = library_models.Genre.objects.order_by("id")
+    cases = {
+        "empty-noop": ([], [g1.pk, g2.pk]),
+        "mixed-valid-invalid": ([b1.pk, 99999999], [g1.pk]),
+        "all-invalid": ([88888888, 99999999], []),
+    }
+    for _label, (value, expected) in cases.items():
+        GenreBookInFilter.get_filters()
+        result = GenreBookInFilter(
+            data={"books__id__in": value},
+            queryset=outer,
+            request=HttpRequest(),
+        ).qs
+        production = list(result.order_by("id").values_list("pk", flat=True))
+        assert production == expected
+
+
+def test_flat_relay_m2m_leaf_builds_form_field_without_model_choice_extras():
+    """The Relay M2M replacement strips model-choice extras so its field builds.
+
+    Regression: upstream's M2M default carries a ``queryset`` extra; forwarding
+    it into ``_GlobalIDMultipleChoiceField.__init__`` (a plain
+    ``MultipleChoiceField``) raised ``TypeError`` at form-field construction,
+    before any predicate could run.
+    """
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class FlatBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact", "in"]}
+
+    generated = FlatBookFilter.get_filters()
+    for name in ("genres", "genres__in"):
+        leaf = generated[name]
+        assert isinstance(leaf, GlobalIDMultipleChoiceFilter)
+        assert _MODEL_CHOICE_ONLY_EXTRAS.isdisjoint(leaf.extra)
+        assert isinstance(leaf.field, _GlobalIDMultipleChoiceField)
+
+
+def test_flat_relay_fk_leaf_builds_form_field_without_model_choice_extras():
+    """The single-valued Relay FK replacement strips the extras too.
+
+    Upstream's FK default carries ``queryset`` AND ``to_field_name`` /
+    ``empty_label`` / ``null_label``, none of which ``GlobalIDFilter``'s plain
+    ``CharField`` accepts.
+    """
+
+    class BookType(DjangoType):
+        class Meta:
+            model = library_models.Book
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(BookType, BookType.__django_strawberry_definition__)
+
+    class FlatLoanFilter(FilterSet):
+        class Meta:
+            model = library_models.Loan
+            fields = {"book": ["exact"]}
+
+    leaf = FlatLoanFilter.get_filters()["book"]
+    assert isinstance(leaf, GlobalIDFilter)
+    assert _MODEL_CHOICE_ONLY_EXTRAS.isdisjoint(leaf.extra)
+    leaf.field
+
+
+@pytest.mark.django_db
+def test_c4_global_id_list_over_flat_relay_m2m_is_row_preserving():
+    """Matrix row 11, GlobalID-list sub-case: decode + row-preserving apply.
+
+    A flat Relay M2M ``in`` leaf decodes real ``global_id_for``-minted ids and
+    routes through the correlated-EXISTS applicator: a book linked to BOTH
+    requested genres appears exactly once, the reserved alias is attached, and
+    the membership tables stay out of the outer query.
+    """
+    from django_strawberry_framework import finalize_django_types
+    from django_strawberry_framework.testing.relay import global_id_for
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            # ``books`` (reverse M2M -> Book) is excluded so finalization does
+            # not demand a registered Book type; the filter targets Genre ids.
+            fields = ("id", "name")
+            interfaces = (strawberry.relay.Node,)
+
+    finalize_django_types()
+
+    shelf = _library_shelf()
+    g1 = library_models.Genre.objects.create(name="gid-alpha")
+    g2 = library_models.Genre.objects.create(name="gid-beta")
+    both = library_models.Book.objects.create(shelf=shelf, title="both genres")
+    both.genres.add(g1, g2)
+    one = library_models.Book.objects.create(shelf=shelf, title="one genre")
+    one.genres.add(g1)
+    library_models.Book.objects.create(shelf=shelf, title="no genres")
+
+    class FlatBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["in"]}
+
+    FlatBookFilter.get_filters()
+    snapshot = FlatBookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert snapshot.candidates["genres__in"].eligible is True
+
+    result = FlatBookFilter(
+        data={"genres__in": [global_id_for(GenreType, g1.pk), global_id_for(GenreType, g2.pk)]},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+
+    # ``both`` matches via TWO memberships yet appears once; ``one`` matches once.
+    assert list(result.values_list("pk", flat=True)) == [both.pk, one.pk]
+    assert result.query.distinct is False
+    assert "_dst_predicate_0" in result.query.annotations
+    outer_tables = {join.table_name for join in result.query.alias_map.values()}
+    assert "library_book_genres" not in outer_tables
+    assert "library_genre" not in outer_tables
+
+
+@pytest.mark.django_db
+def test_c4_untouched_surfaces_attach_no_reserved_alias():
+    """Matrix row 12 (untouched surfaces): declared / method / custom / overrides.
+
+    Each ineligible surface must run today's unchanged path: no reserved
+    ``_dst_predicate_`` alias attaches, and the correct row is still returned. A
+    ``distinct=True`` DECLARED filter keeps its own outer ``distinct``.
+    """
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="bk")
+    p1 = library_models.Patron.objects.create(name="p1", email="a")
+    p2 = library_models.Patron.objects.create(name="p2", email="b")
+    library_models.Loan.objects.create(book=book, patron=p1, note="Cardio one")
+    library_models.Loan.objects.create(book=book, patron=p2, note="Cardio two")
+    outer = library_models.Book.objects.order_by("id")
+
+    class DeclaredDistinctFilter(FilterSet):
+        loan_note = CharFilter(field_name="loans__note", lookup_expr="icontains", distinct=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    DeclaredDistinctFilter.get_filters()
+    declared = DeclaredDistinctFilter(
+        data={"loan_note": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    assert [n for n in declared.query.annotations if n.startswith("_dst_predicate_")] == []
+    assert declared.query.distinct is True
+    assert list(declared.order_by("id").values_list("pk", flat=True)) == [book.pk]
+
+    class MethodFilter(FilterSet):
+        loan_note = CharFilter(method="filter_note")
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+        def filter_note(
+            self,
+            queryset,
+            name,
+            value,
+        ):
+            return queryset.filter(loans__note__icontains=value).distinct()
+
+    MethodFilter.get_filters()
+    method = MethodFilter(
+        data={"loan_note": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    assert [n for n in method.query.annotations if n.startswith("_dst_predicate_")] == []
+    assert list(method.order_by("id").values_list("pk", flat=True)) == [book.pk]
+
+    class CustomLoanNoteFilter(CharFilter):
+        """A declared custom ``CharFilter`` subclass (ineligible: not generated)."""
+
+    class CustomSubclassFilter(FilterSet):
+        loan_note = CustomLoanNoteFilter(
+            field_name="loans__note",
+            lookup_expr="icontains",
+            distinct=True,
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    CustomSubclassFilter.get_filters()
+    custom = CustomSubclassFilter(
+        data={"loan_note": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    assert [n for n in custom.query.annotations if n.startswith("_dst_predicate_")] == []
+    assert list(custom.order_by("id").values_list("pk", flat=True)) == [book.pk]
+
+    class OverridesFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+            filter_overrides = {
+                library_models.Loan._meta.get_field("note").__class__: {
+                    "filter_class": CharFilter,
+                    "extra": lambda f: {"lookup_expr": "icontains"},
+                },
+            }
+
+    OverridesFilter.get_filters()
+    overridden = OverridesFilter(
+        data={"loans__note__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    assert [n for n in overridden.query.annotations if n.startswith("_dst_predicate_")] == []
+    assert list(overridden.order_by("id").values_list("pk", flat=True)) == [book.pk]
+
+
+# ---------------------------------------------------------------------------
+# C.4 - multiset contract
+#
+# A framework-generated predicate is a SQL selection over the queryset it
+# receives: each existing root-row occurrence is retained exactly once or
+# removed. Framework predicates never multiply rows AND never collapse
+# duplicates already present from the consumer's own queryset shaping;
+# consumer ordering and explicit consumer ``.distinct()`` pass through
+# untouched. These rows assert ordered pk SEQUENCES (never sets), ``count()``,
+# and duplicate multiplicity across four INPUT querysets for one fixed
+# eligible to-many candidate (``BookFilter`` root, ``genres__name`` icontains).
+# ---------------------------------------------------------------------------
+
+
+def _seed_multiset_book_genre_graph():
+    """Three books over the ``genres__name`` icontains candidate.
+
+    ``book_two_genres`` matches "cardio" via TWO genres (its own occurrences
+    fan when a consumer joins on genres); ``book_one_genre`` matches via ONE
+    genre; ``book_no_match`` carries only a non-matching genre. Every genre
+    also contains the letter "o", so a consumer pre-fan on ``icontains="o"``
+    includes ``book_no_match`` as a non-matching occurrence the framework
+    predicate must drop.
+    """
+    branch = library_models.Branch.objects.create(name="Multiset Branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="MS-1")
+    book_two_genres = library_models.Book.objects.create(shelf=shelf, title="Book Two Genres")
+    book_one_genre = library_models.Book.objects.create(shelf=shelf, title="Book One Genre")
+    book_no_match = library_models.Book.objects.create(shelf=shelf, title="Book No Match")
+    book_two_genres.genres.add(
+        library_models.Genre.objects.create(name="cardiology"),
+        library_models.Genre.objects.create(name="cardio-thoracic"),
+    )
+    book_one_genre.genres.add(library_models.Genre.objects.create(name="cardio-vascular"))
+    book_no_match.genres.add(library_models.Genre.objects.create(name="neurology"))
+    return book_two_genres.pk, book_one_genre.pk, book_no_match.pk
+
+
+def _apply_book_genre_leaf(queryset):
+    """Apply the eligible framework leaf via the consumer-shaped-queryset seam.
+
+    Constructing ``BookFilter`` with ``queryset=<shaped input>`` is exactly the
+    consumer-shaped-queryset seam production uses; form validation is
+    transparent (the flat leaf name is a valid form key).
+    """
+    BookFilter.get_filters()
+    return BookFilter(
+        data={"genres__name__icontains": "cardio"},
+        queryset=queryset,
+        request=HttpRequest(),
+    ).qs
+
+
+@pytest.mark.django_db
+def test_c4_multiset_non_fanned_input_each_row_once():
+    """(a) Non-fanned input: each matching book exactly once, consumer order kept."""
+    two, one, _no = _seed_multiset_book_genre_graph()
+
+    result = _apply_book_genre_leaf(library_models.Book.objects.order_by("id"))
+
+    sequence = list(result.values_list("pk", flat=True))
+    assert sequence == [two, one]
+    assert result.count() == len(sequence)
+    # The framework leaf is row-preserving: no framework-added DISTINCT.
+    assert result.query.distinct is False
+
+
+@pytest.mark.django_db
+def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives():
+    """(b) Pre-fanned consumer input: existing duplicates that match survive; non-matches drop.
+
+    The consumer deliberately fans the queryset on ``genres__name icontains
+    "o"`` BEFORE the framework filter runs. ``book_two_genres`` fans to two
+    rows, ``book_one_genre`` to one, ``book_no_match`` to one. The framework
+    predicate SELECTS over that multiset: the matching occurrences survive with
+    their multiplicity and the non-matching ``book_no_match`` occurrence drops -
+    NO framework dedup.
+    """
+    two, one, no_match = _seed_multiset_book_genre_graph()
+
+    pre_fanned = library_models.Book.objects.filter(genres__name__icontains="o").order_by("id")
+    # The consumer's own shaping already produced duplicate rows.
+    assert list(pre_fanned.values_list("pk", flat=True)) == [
+        two,
+        two,
+        one,
+        no_match,
+    ]
+
+    result = _apply_book_genre_leaf(pre_fanned)
+
+    sequence = list(result.values_list("pk", flat=True))
+    assert sequence == [two, two, one]
+    assert result.count() == len(sequence)
+    assert result.query.distinct is False
+
+
+@pytest.mark.django_db
+def test_c4_multiset_consumer_distinct_input_is_preserved():
+    """(c) Explicitly consumer-distinct input: consumer's own distinct collapses duplicates."""
+    two, one, _no = _seed_multiset_book_genre_graph()
+
+    consumer_distinct = (
+        library_models.Book.objects.filter(genres__name__icontains="o").order_by("id").distinct()
+    )
+    result = _apply_book_genre_leaf(consumer_distinct)
+
+    sequence = list(result.values_list("pk", flat=True))
+    assert sequence == [two, one]
+    assert result.count() == len(sequence)
+    # The consumer's explicit distinct passes through untouched.
+    assert result.query.distinct is True
+
+
+@pytest.mark.django_db
+def test_c4_multiset_custom_filter_produced_input_multiplicity_survives():
+    """(d) Custom-filter-produced input: the fanned multiplicity from a declared leaf survives.
+
+    A consumer-declared ``CharFilter`` with ``distinct=False`` on a to-many
+    path (the old fan-out shape, consumer-owned) runs first and fans the rows;
+    the eligible framework leaf then preserves that multiplicity.
+    """
+    two, one, _no = _seed_multiset_book_genre_graph()
+
+    class ConsumerFanFilter(FilterSet):
+        genres_fan = CharFilter(
+            field_name="genres__name",
+            lookup_expr="icontains",
+            distinct=False,
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    ConsumerFanFilter.get_filters()
+    fanned = ConsumerFanFilter(
+        data={"genres_fan": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    # The consumer-declared leaf fans the matching book with two genres.
+    assert list(fanned.values_list("pk", flat=True)) == [two, two, one]
+
+    result = _apply_book_genre_leaf(fanned)
+
+    sequence = list(result.values_list("pk", flat=True))
+    assert sequence == [two, two, one]
+    assert result.count() == len(sequence)
+    assert result.query.distinct is False
+
+
+# ---------------------------------------------------------------------------
+# C.4 - Medtrics LoanFilter adapter tier (package-tier SQL shape + pagination)
+#
+# The fakeshop ``LoanFilter`` gains the generated deep path
+# ``book__loans__patron__email`` (spelled ``bookLoansPatronEmail`` on the wire).
+# These package-tier tests inspect the query object; the live row-semantics
+# proof lives in ``examples/fakeshop/test_query/test_library_api.py``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_c4_medtrics_loanfilter_deep_leaf_sql_shape():
+    """The Medtrics deep leaf composes as ONE correlated EXISTS with no root fan-out."""
+    from apps.library.filters import LoanFilter
+
+    graph = _seed_medtrics_loan_graph()
+    LoanFilter.get_filters()
+
+    result = LoanFilter(
+        data={"book__loans__patron__email__icontains": "Cardio"},
+        queryset=library_models.Loan.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+
+    # Root alias_map: exactly ONE library_loan alias, NO patron, NO second
+    # book-join fan-out; the outer query carries no framework DISTINCT.
+    root_tables = [join.table_name for join in result.query.alias_map.values()]
+    assert root_tables == ["library_loan"]
+    assert "library_patron" not in root_tables
+    assert result.query.distinct is False
+
+    # Exactly one correlated EXISTS owns the inner joins; the inner SQL contains
+    # the membership library_loan re-entry and the terminal library_patron.
+    sql = str(result.query).upper()
+    assert sql.count("EXISTS") == 1
+    inner = str(result.query)
+    assert inner.upper().count("LIBRARY_LOAN") >= 2  # outer + inner membership re-entry
+    assert "library_patron" in inner
+
+    # Ordered pks: the shared-book row matching via TWO patrons appears ONCE.
+    sequence = list(result.values_list("pk", flat=True))
+    assert sequence == [graph.relation_and_direct, graph.relation_only]
+    assert result.count() == 2
+
+
+@pytest.mark.django_db
+def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination():
+    """Two-edge page-size-1 boundary over the filtered loans (package-tier slicing).
+
+    ``all_library_loans`` is a plain list field (no connection surface), so
+    pagination coverage lands here as offset/limit slicing with a stable count.
+    """
+    from apps.library.filters import LoanFilter
+
+    graph = _seed_medtrics_loan_graph()
+    LoanFilter.get_filters()
+
+    filtered = LoanFilter(
+        data={"book__loans__patron__email__icontains": "Cardio"},
+        queryset=library_models.Loan.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+
+    total = filtered.count()
+    assert total == 2
+
+    page_one = list(filtered[0:1].values_list("pk", flat=True))
+    page_two = list(filtered[1:2].values_list("pk", flat=True))
+    assert page_one == [graph.relation_and_direct]
+    assert page_two == [graph.relation_only]
 
 
 # ---------------------------------------------------------------------------
@@ -2933,3 +4333,658 @@ def test_validate_logic_branch_shape_accepts_inactive_list_element():
     # No raise: ``None`` list arms are skipped downstream, not shape errors.
     CategoryFilter._validate_logic_branch_shape("or", [None, {"name": {"exact": "x"}}])
     CategoryFilter._validate_logic_branch_shape("and", [{"name": {"exact": "x"}}, None])
+
+
+# ---------------------------------------------------------------------------
+# Frozen generation-provenance records
+#
+# Each generated / declared / replaced / expanded filter instance carries a
+# frozen ``FilterGenerationProvenance`` record read through
+# ``filter_generation_provenance`` (None = fail closed). These pin the origin,
+# the framework-added-distinct bit, expansion inheritance, and deepcopy /
+# per-request survival before the LATER candidate-metadata build consumes them.
+# ---------------------------------------------------------------------------
+
+
+def test_generation_provenance_framework_default_for_generated_leaf():
+    """A plainly generated CharFilter leaf is ``framework_default``, no distinct."""
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["icontains"]}
+
+    leaf = BookFilter.get_filters()["title__icontains"]
+    record = filter_generation_provenance(leaf)
+    assert record == FilterGenerationProvenance(
+        origin="framework_default",
+        framework_added_distinct=False,
+        expanded_from=(),
+    )
+
+
+def test_generation_provenance_package_replacement_for_own_pk_global_id():
+    """The own-PK GlobalID branch stamps ``package_replacement`` on the new instance."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
+
+    class _Owner:
+        origin = CategoryType
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    CategoryFilter._owner_definition = _Owner()
+    pk_field = Category._meta.pk
+
+    resolved = CategoryFilter.filter_for_field(pk_field, "id", "exact")
+    assert isinstance(resolved, GlobalIDFilter)
+    record = filter_generation_provenance(resolved)
+    assert record is not None
+    assert record.origin == "package_replacement"
+    assert record.framework_added_distinct is False
+
+
+def test_generation_provenance_package_replacement_for_relay_relation():
+    """The Relay-relation branch stamps ``package_replacement`` on the new instance."""
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    field = library_models.Book._meta.get_field("genres")
+    resolved = BookFilter.filter_for_field(field, "genres")
+    assert isinstance(resolved, GlobalIDMultipleChoiceFilter)
+    record = filter_generation_provenance(resolved)
+    assert record is not None
+    assert record.origin == "package_replacement"
+    # ``genres`` is an M2M (a many-side hop), so the framework adds distinct.
+    assert record.framework_added_distinct is True
+
+
+def test_generation_provenance_declared_for_consumer_declared_filter():
+    """A consumer-declared filter attribute is ``declared``."""
+    import django_filters
+
+    class BookFilter(FilterSet):
+        title_search = django_filters.CharFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    leaf = BookFilter.get_filters()["title_search"]
+    record = filter_generation_provenance(leaf)
+    assert record == FilterGenerationProvenance(origin="declared")
+
+
+def test_generation_provenance_override_generated_for_meta_filter_overrides():
+    """A leaf produced through ``Meta.filter_overrides`` is ``override_generated``."""
+    import django_filters
+    from django.db import models
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+            # ``Book.title`` is a ``TextField``; key the override on its class so
+            # ``try_dbfield`` matches it (the framework mirrors django-filter's
+            # own MRO-walked override selection).
+            filter_overrides = {
+                models.TextField: {"filter_class": django_filters.CharFilter},
+            }
+
+    leaf = BookFilter.get_filters()["title"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+
+
+def test_generation_provenance_framework_added_distinct_for_to_many_path():
+    """A generated to-many path leaf records ``framework_added_distinct=True``."""
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    leaf = BookFilter.get_filters()["genres__name__icontains"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "framework_default"
+    assert record.framework_added_distinct is True
+    assert leaf.distinct is True
+
+
+def test_generation_provenance_framework_added_distinct_false_for_to_one_path():
+    """A generated to-one path leaf records ``framework_added_distinct=False``."""
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf__code": ["icontains"]}
+
+    leaf = BookFilter.get_filters()["shelf__code__icontains"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.framework_added_distinct is False
+    assert leaf.distinct is False
+
+
+def test_generation_provenance_expanded_leaf_inherits_generated_child_origin():
+    """An expanded leaf inherits the child leaf's origin + appends a breadcrumb."""
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"]}
+
+    class BookFilter(FilterSet):
+        genres = RelatedFilter(GenreFilter, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    leaf = BookFilter.get_filters()["genres__name__icontains"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "framework_default"
+    assert record.expanded_from == ("name__icontains",)
+
+
+def test_generation_provenance_expanded_leaf_of_declared_child_stays_declared():
+    """Appearing in expansion output does not make a DECLARED child expanded-generated."""
+    import django_filters
+
+    class GenreFilter(FilterSet):
+        label = django_filters.CharFilter(field_name="name")
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    class BookFilter(FilterSet):
+        genres = RelatedFilter(GenreFilter, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    leaf = BookFilter.get_filters()["genres__label"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "declared"
+    assert record.expanded_from == ("label",)
+
+
+def test_generation_provenance_expanded_leaf_of_unstamped_child_stays_none():
+    """An expanded copy of an UNSTAMPED child leaf inherits no record (fail closed)."""
+    import django_filters
+
+    class GenreFilter(FilterSet):
+        @classmethod
+        def filter_for_field(
+            cls,
+            field,
+            field_name,
+            lookup_expr=None,
+        ):
+            # Returns its OWN object, so the child leaf carries no framework record.
+            return django_filters.CharFilter(field_name=field_name)
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"]}
+
+    class BookFilter(FilterSet):
+        genres = RelatedFilter(GenreFilter, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    leaf = BookFilter.get_filters()["genres__name__icontains"]
+    assert filter_generation_provenance(leaf) is None
+
+
+def test_generation_provenance_none_for_consumer_overridden_filter_for_field():
+    """A consumer ``filter_for_field`` returning its OWN object yields no record."""
+    import django_filters
+
+    class OverridingFilter(FilterSet):
+        @classmethod
+        def filter_for_field(
+            cls,
+            field,
+            field_name,
+            lookup_expr=None,
+        ):
+            return django_filters.CharFilter(field_name=field_name)
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["icontains"]}
+
+    leaf = OverridingFilter.get_filters()["title__icontains"]
+    assert filter_generation_provenance(leaf) is None
+
+
+def test_generation_provenance_survives_deepcopy_and_per_request_instance():
+    """The record survives ``copy.deepcopy`` and the per-request instance filters."""
+    import copy
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"], "title": ["exact"]}
+
+    base_leaf = BookFilter.get_filters()["genres__name__icontains"]
+    clone = copy.deepcopy(base_leaf)
+    clone_record = filter_generation_provenance(clone)
+    assert clone_record is not None
+    assert clone_record.framework_added_distinct is True
+
+    instance = BookFilter(
+        data={},
+        queryset=library_models.Book.objects.all(),
+        request=None,
+    )
+    instance_record = filter_generation_provenance(instance.filters["genres__name__icontains"])
+    assert instance_record is not None
+    assert instance_record.origin == "framework_default"
+    assert instance_record.framework_added_distinct is True
+
+
+def test_generation_provenance_declared_never_restamped_by_later_machinery():
+    """A declared filter's record is stamped once and never overwritten."""
+    import django_filters
+
+    class BookFilter(FilterSet):
+        custom = django_filters.CharFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    declared = BookFilter.declared_filters["custom"]
+    first = filter_generation_provenance(declared)
+    assert first is not None and first.origin == "declared"
+
+    # Repeated expansion passes must not restamp (same identity preserved).
+    BookFilter.get_filters()
+    BookFilter.get_filters()
+    assert filter_generation_provenance(declared) is first
+
+
+# ---------------------------------------------------------------------------
+# Candidate metadata built inside ONE immutable expansion snapshot
+#
+# ``FilterSet.get_filters`` publishes the expanded filters AND a
+# ``CandidateFilterMetadata`` mapping as one frozen ``ExpansionSnapshot``,
+# atomically, under the same ``should_cache_expansion`` gate; the snapshot slot
+# is registered in ``SetLifecycleAttrs.extra`` so ``registry.clear()`` resets
+# filters and metadata together. The mapping contains ONLY proven
+# framework-generated leaves (fail closed: an absent name is a non-candidate).
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_snapshot_expanded_to_many_leaf_is_eligible_and_to_one_is_not():
+    """An expanded to-many leaf is eligible; a flat to-one leaf has a row but is not."""
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"]}
+
+    class BookFilter(FilterSet):
+        genres = RelatedFilter(GenreFilter, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["icontains"]}
+
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+
+    expanded_row = snapshot.candidates["genres__name__icontains"]
+    assert expanded_row.eligible is True
+    assert expanded_row.path_plan.first_many_index is not None
+    # Classified against the ROOT model (Book), on the model-field path.
+    assert expanded_row.path_plan.model is library_models.Book
+    assert expanded_row.path_plan.path == "genres__name"
+    assert expanded_row.provenance.origin == "framework_default"
+    assert expanded_row.provenance.expanded_from == ("name__icontains",)
+
+    to_one_row = snapshot.candidates["title__icontains"]
+    assert to_one_row.eligible is False
+    assert to_one_row.path_plan.first_many_index is None
+    assert to_one_row.provenance.origin == "framework_default"
+
+
+def test_candidate_snapshot_omits_declared_and_method_filters():
+    """Declared filters (incl. method filters) are ``declared`` origin -> no row."""
+    import django_filters
+
+    class BookFilter(FilterSet):
+        title_search = django_filters.CharFilter(field_name="title")
+        note_method = django_filters.CharFilter(
+            field_name="title",
+            method="filter_note",
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+        def filter_note(
+            self,
+            queryset,
+            name,
+            value,
+        ):
+            return queryset
+
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    # A framework-generated leaf DOES get a row ...
+    assert "title" in snapshot.candidates
+    # ... but declared / method-carrying declared leaves do NOT (fail closed).
+    assert "title_search" not in snapshot.candidates
+    assert "note_method" not in snapshot.candidates
+
+
+def test_candidate_snapshot_skips_expanded_leaf_under_non_relation_prefix():
+    """Expanded children of a ``RelatedFilter`` with a non-relation prefix get no row (no raise)."""
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"]}
+
+    class BookFilter(FilterSet):
+        # ``field_name="id"`` is a bare local column (resolves, but no relation
+        # hop); ``field_name="does_not_exist"`` does not resolve at all. Both are
+        # permitted non-model declared prefixes (finding 1): their expanded,
+        # inherited-framework-origin children must NOT be classified (no raise)
+        # and get no candidate row.
+        local_prefix = RelatedFilter(GenreFilter, field_name="id")
+        missing_prefix = RelatedFilter(GenreFilter, field_name="does_not_exist")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    # Must not raise despite ``id__name`` / ``does_not_exist__name`` being
+    # unclassifiable against Book.
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "local_prefix__name__icontains" not in snapshot.candidates
+    assert "missing_prefix__name__icontains" not in snapshot.candidates
+    # The direct framework-generated leaf still gets its row.
+    assert "title" in snapshot.candidates
+
+
+def test_candidate_snapshot_omits_override_generated_leaf():
+    """A ``Meta.filter_overrides`` product is ``override_generated`` -> no row."""
+    import django_filters
+    from django.db import models as django_models
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+            filter_overrides = {
+                django_models.TextField: {"filter_class": django_filters.CharFilter},
+            }
+
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "title" not in snapshot.candidates
+
+
+def test_candidate_snapshot_includes_package_replacement_global_id_leaf():
+    """An own-PK GlobalID ``package_replacement`` leaf gets a row (ineligible per path)."""
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class _Owner:
+        origin = GenreType
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"id": ["exact"], "name": ["icontains"]}
+
+    GenreFilter._owner_definition = _Owner()
+
+    GenreFilter.get_filters()
+    snapshot = GenreFilter._expansion_snapshot()
+    assert snapshot is not None
+    id_row = snapshot.candidates["id"]
+    assert id_row.provenance.origin == "package_replacement"
+    # The own PK is a local column (no many-side hop), so it is ineligible.
+    assert id_row.eligible is False
+    assert id_row.path_plan.first_many_index is None
+
+
+def test_candidate_metadata_helper_raises_on_unclassifiable_framework_leaf():
+    """A framework-generated leaf with an unresolvable path is a defect -> RAISES.
+
+    Unreachable through the public pipeline (``get_model_field`` guards
+    generation), so the internal build helper is exercised directly with a
+    synthetic provenance-stamped filter whose ``field_name`` is garbage.
+    """
+    import django_filters
+
+    from django_strawberry_framework.exceptions import PathResolutionError
+    from django_strawberry_framework.filters.sets import (
+        _candidate_metadata_for,
+        _stamp_generation_provenance,
+    )
+
+    leaf = django_filters.CharFilter(field_name="not_a_real_field")
+    _stamp_generation_provenance(
+        leaf,
+        FilterGenerationProvenance(origin="framework_default"),
+    )
+    with pytest.raises(PathResolutionError):
+        _candidate_metadata_for(library_models.Book, leaf)
+
+
+def test_candidate_metadata_helper_never_classifies_declared_leaf():
+    """A declared leaf with a garbage path returns ``None`` and is NEVER classified."""
+    import django_filters
+
+    from django_strawberry_framework.filters.sets import (
+        _candidate_metadata_for,
+        _stamp_generation_provenance,
+    )
+
+    leaf = django_filters.CharFilter(field_name="not_a_real_field")
+    _stamp_generation_provenance(leaf, FilterGenerationProvenance(origin="declared"))
+    # No raise despite the unresolvable path -- declared leaves fail closed.
+    assert _candidate_metadata_for(library_models.Book, leaf) is None
+
+
+def test_candidate_metadata_helper_returns_none_for_unstamped_leaf():
+    """An unstamped (consumer-returned) leaf has no record -> no row, fail closed."""
+    import django_filters
+
+    from django_strawberry_framework.filters.sets import _candidate_metadata_for
+
+    leaf = django_filters.CharFilter(field_name="genres__name")
+    assert _candidate_metadata_for(library_models.Book, leaf) is None
+
+
+def test_expansion_snapshot_build_failure_publishes_nothing_then_retry_recovers():
+    """A mid-build classification failure publishes NOTHING; a retry republishes both."""
+    from django_strawberry_framework.exceptions import PathResolutionError
+    from django_strawberry_framework.filters import sets as sets_module
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"], "genres__name": ["icontains"]}
+
+    real_classify = sets_module.classify_path
+    calls = {"n": 0}
+
+    def flaky_classify(model, field_path):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise PathResolutionError(model, field_path, field_path)
+        return real_classify(model, field_path)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(sets_module, "classify_path", flaky_classify)
+    try:
+        with pytest.raises(PathResolutionError):
+            BookFilter.get_filters()
+        # A failed build published neither the filter cache nor the snapshot.
+        assert "_expanded_snapshot" not in BookFilter.__dict__
+        assert "_expanded_filters" not in BookFilter.__dict__
+        assert BookFilter._expansion_snapshot() is None
+    finally:
+        monkeypatch.undo()
+
+    # After un-patching, the next build succeeds and republishes both together.
+    filters = BookFilter.get_filters()
+    assert "genres__name__icontains" in filters
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "genres__name__icontains" in snapshot.candidates
+
+
+def test_expansion_snapshot_is_isolated_per_subclass():
+    """A subclass builds its OWN snapshot and never observes its parent's."""
+
+    class BaseBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
+    class SubBookFilter(BaseBookFilter):
+        pass
+
+    BaseBookFilter.get_filters()
+    parent_snapshot = BaseBookFilter._expansion_snapshot()
+    assert parent_snapshot is not None
+
+    SubBookFilter.get_filters()
+    sub_snapshot = SubBookFilter._expansion_snapshot()
+    assert sub_snapshot is not None
+    # Distinct objects; the subclass never inherits the parent's classification.
+    assert sub_snapshot is not parent_snapshot
+    # The parent's snapshot is unchanged by the subclass build.
+    assert BaseBookFilter._expansion_snapshot() is parent_snapshot
+
+
+def test_expansion_snapshot_absent_for_unresolved_lazy_target():
+    """A ``RelatedFilter`` naming a not-registered target caches no snapshot; each call rebuilds."""
+
+    class BranchFilter(FilterSet):
+        # A reference to a non-existent class - expansion raises and nothing
+        # (neither the filter cache nor the snapshot) is published, mirroring
+        # ``test_filterset_get_filters_does_not_cache_when_string_filterset_remains``.
+        bogus = RelatedFilter("DefinitelyDoesNotExistFilter", field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ImportError):
+        BranchFilter.get_filters()
+    assert BranchFilter._expansion_snapshot() is None
+    assert "_expanded_snapshot" not in BranchFilter.__dict__
+    # Each call re-attempts the build (no half-built snapshot is ever cached).
+    with pytest.raises(ImportError):
+        BranchFilter.get_filters()
+    assert BranchFilter._expansion_snapshot() is None
+
+
+def test_expansion_snapshot_none_before_build_is_the_fail_closed_hook():
+    """Pre-finalization (no snapshot built), the accessor returns None for the adapter."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter("ShelfFilter", field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # No ``get_filters`` build has cached a snapshot yet: the accessor is None,
+    # so a filterset instantiated before its lazy targets resolve presents the
+    # unexpanded surface and every flat name is absent from the (absent)
+    # mapping -- the adapter degrades to today's behavior.
+    assert BranchFilter._expansion_snapshot() is None
+    instance = BranchFilter(
+        data={},
+        queryset=library_models.Branch.objects.all(),
+        request=None,
+    )
+    assert type(instance)._expansion_snapshot() is None
+
+
+def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
+    """``registry.clear()`` resets filters + metadata together; the next build republishes."""
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"]}
+
+    class BookFilter(FilterSet):
+        genres = RelatedFilter(GenreFilter, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "genres__name__icontains" in snapshot.candidates
+
+    registry.clear()
+
+    # The snapshot slot is gone from the class dict together with the filter
+    # cache -- no stale metadata observable between the clear and the rebuild.
+    assert "_expanded_snapshot" not in BookFilter.__dict__
+    assert "_expanded_filters" not in BookFilter.__dict__
+    assert BookFilter._expansion_snapshot() is None
+
+    BookFilter.get_filters()
+    rebuilt = BookFilter._expansion_snapshot()
+    assert rebuilt is not None
+    assert rebuilt is not snapshot
+    assert "genres__name__icontains" in rebuilt.candidates

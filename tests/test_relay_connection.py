@@ -638,6 +638,74 @@ def test_relation_connection_teardown_restores_owned_annotations_in_place():
     assert definition.relation_connections is None
 
 
+def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
+    """Teardown applies the per-field inverse when the annotations dict was replaced.
+
+    On Python <= 3.13 Phase 3 (``strawberry.type`` processing,
+    ``strawberry.types.object_type._check_field_annotations``) REPLACES the
+    class's own ``__annotations__`` dict, so the synthesis-time identity no
+    longer matches even though no consumer touched the class. The teardown
+    must still drop the synthesized annotation and restore the suppressed
+    relation annotation into whatever dict is current.
+    """
+    synthesis_time_annotations = {"items": list[Item]}
+    replaced = {"name": str, "items_connection": object}
+
+    class CategoryType:
+        __annotations__ = replaced
+
+    field_obj = strawberry.field(resolver=lambda: None)
+    CategoryType.items_connection = field_obj
+    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    registry.register(Category, CategoryType)
+    _register_relation_connection_teardown(
+        CategoryType,
+        definition,
+        generated="items_connection",
+        field_obj=field_obj,
+        relation_name="items",
+        shape="connection",
+        annotations=synthesis_time_annotations,
+        annotations_snapshot={"name": str, "items": list[Item]},
+        list_resolver=object(),
+    )
+
+    registry.unregister(CategoryType)
+
+    assert CategoryType.__dict__["__annotations__"] is replaced
+    assert replaced == {"name": str, "items": list[Item]}
+
+
+def test_relation_connection_teardown_keeps_a_present_relation_annotation():
+    """The replaced-dict inverse never overwrites an already-present relation slot."""
+    synthesis_time_annotations = {"items": list[Item]}
+    consumer_items = object()
+    replaced = {"items": consumer_items, "items_connection": object}
+
+    class CategoryType:
+        __annotations__ = replaced
+
+    field_obj = strawberry.field(resolver=lambda: None)
+    CategoryType.items_connection = field_obj
+    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    registry.register(Category, CategoryType)
+    _register_relation_connection_teardown(
+        CategoryType,
+        definition,
+        generated="items_connection",
+        field_obj=field_obj,
+        relation_name="items",
+        shape="connection",
+        annotations=synthesis_time_annotations,
+        annotations_snapshot={"items": list[Item]},
+        list_resolver=object(),
+    )
+
+    registry.unregister(CategoryType)
+
+    assert replaced == {"items": consumer_items}
+
+
 def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild():
     """A fresh same-named type rebuild cannot inherit the prior connection shape.
 

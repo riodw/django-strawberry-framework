@@ -83,13 +83,22 @@ from django.db import models
 from django.db.models import Prefetch, sql
 from django.db.models.expressions import RawSQL
 from django.db.models.query import (
-    PROHIBITED_FILTER_KWARGS,
     FlatValuesListIterable,
     ModelIterable,
     NamedValuesListIterable,
     ValuesIterable,
     ValuesListIterable,
 )
+
+try:
+    from django.db.models.query import PROHIBITED_FILTER_KWARGS
+except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
+    # Django < 6.0 has no module-level constant; ``QuerySet._filter_or_exclude``
+    # rejects the same ``models.Q.__init__`` internals inline. Mirror Django
+    # 6.0's ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` verbatim so the
+    # deferred-filter defect gate behaves identically at the declared
+    # ``Django>=5.2`` floor (pyproject ``[project.dependencies]``).
+    PROHIBITED_FILTER_KWARGS = frozenset({"_connector", "_negated"})
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError

@@ -362,11 +362,23 @@ class SetLifecycleAttrs:
         str  # the completed-expansion cache slot (``_expanded_filters`` / ``_expanded_fields``).
     )
     guard: str  # the expansion reentry-guard slot (``_is_expanding_filters`` / ``_is_expanding_fields``).
+    # Family-specific EXTRA class-level slots published atomically alongside the
+    # expansion cache (empty for the order family). The filter family adds its
+    # candidate-metadata expansion-snapshot slot here so ``registry.clear()``
+    # resets filters and metadata TOGETHER, by construction: a free-floating
+    # fourth class attribute would survive the clear that deletes ``cache`` and
+    # pair stale metadata with a rebuilt ``base_filters``.
+    extra: tuple[str, ...] = ()
 
     @property
-    def binding_attrs(self) -> tuple[str, str, str]:
-        """The ``(owner, cache, guard)`` tuple ``clear_generated_input_namespace`` resets."""
-        return (self.owner, self.cache, self.guard)
+    def binding_attrs(self) -> tuple[str, ...]:
+        """The ``(owner, cache, guard, *extra)`` tuple ``clear_generated_input_namespace`` resets."""
+        return (
+            self.owner,
+            self.cache,
+            self.guard,
+            *self.extra,
+        )
 
 
 __all__ = (

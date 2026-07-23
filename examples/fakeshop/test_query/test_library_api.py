@@ -786,6 +786,54 @@ def test_library_branches_filter_by_name_icontains():
     )
 
 
+@pytest.mark.django_db
+def test_library_loans_filter_by_deep_to_many_email_is_row_preserving_over_http():
+    """The Medtrics deep to-many leaf is row-preserving over ``/graphql/`` (spec-049 Part 1).
+
+    ``LoanFilter`` gained the generated deep path ``book__loans__patron__email``
+    (spelled ``bookLoansPatronEmail`` on the wire). Filtering the loans list on
+    ``iContains: "Cardio"`` returns exactly the two loans on the shared book
+    whose patrons carry "Cardio" emails - ordered, each once, with no framework
+    fan-out. ``direct_only`` (a "Cardio" note but a "Neurology" patron on a book
+    with no Cardio-patron loan) is excluded: the note-OR belongs to card 049's
+    search, not this relational filter.
+    """
+    branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
+    shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
+    shared_book = models.Book.objects.create(shelf=shelf, title="Shared Ward Manual")
+    second_book = models.Book.objects.create(shelf=shelf, title="Second Manual")
+    third_book = models.Book.objects.create(shelf=shelf, title="Third Manual")
+    patron_a = models.Patron.objects.create(name="Patron A", email="Cardio A")
+    patron_b = models.Patron.objects.create(name="Patron B", email="Cardio B")
+    patron_c = models.Patron.objects.create(name="Patron C", email="Neurology")
+    patron_d = models.Patron.objects.create(name="Patron D", email="Ortho")
+    relation_and_direct = models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_a,
+        note="Cardio direct",
+    )
+    relation_only = models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_b,
+        note="routine checkout",
+    )
+    models.Loan.objects.create(book=second_book, patron=patron_c, note="Cardio direct")
+    models.Loan.objects.create(book=third_book, patron=patron_d, note="routine checkout")
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryLoans(filter: { bookLoansPatronEmail: { iContains: "Cardio" } }) {
+            id
+          }
+        }
+        """,
+        {
+            "allLibraryLoans": [{"id": relation_and_direct.pk}, {"id": relation_only.pk}],
+        },
+    )
+
+
 def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
     project_schema_override,
 ):
@@ -2491,23 +2539,311 @@ def test_genre_connection_full_round_trip():
     assert conn_two["totalCount"] == 4
 
 
-# TODO(docs/row-preserving-predicates-part1-plan.md Slice C.5): add the live
-# reverse-M2M flat-leaf regression beside the connection/filter acceptance
-# surface.
-#
-# Pseudo:
-# - Seed one Genre linked to two Books whose titles both match, plus visible
-#   nonmatches, using inline ``Model.objects.create`` as required for library
-#   acceptance tests.
-# - Query ``allLibraryGenresConnection(filter: { booksTitle: { iContains:
-#   "needle" } })`` with ``totalCount``, edges, and pageInfo through /graphql/.
-# - Assert one Genre edge, ``totalCount == 1``, and stable page metadata.
-# - Capture SQL and assert both count/page root queries contain correlated
-#   EXISTS, contain no search/filter-driven SELECT DISTINCT, and do not own the
-#   book or membership tables in their outer query shape. Keep the nested
-#   ``books: { title: ... }`` spelling as a separate row-preserving control for
-#   the existing ``_apply_related_constraints`` path, not coverage for the new
-#   flat-leaf adapter.
+@pytest.mark.django_db
+def test_genre_connection_flat_leaf_total_count_is_row_preserving():
+    """The live public flat ``booksTitle`` leaf is row-preserving.
+
+    The public flat ``booksTitle`` leaf on ``GenreFilter`` (the flattened
+    ``books__title__icontains`` expansion, public because ``HIDE_FLAT_FILTERS``
+    defaults False) is still a ``distinct=False`` leaf, but the applicator routes
+    the expanded reverse-M2M path through the row-preserving correlated
+    ``EXISTS``. A single genre linked to TWO books whose titles both match the
+    term is now reported ONCE: the connection reports ``totalCount == 1`` and a
+    single edge for the one genre.
+    """
+    branch = models.Branch.objects.create(name="Cardio Central", city="Boston")
+    shelf = models.Shelf.objects.create(code="C-1", topic="Cardiology", branch=branch)
+    matching_genre = models.Genre.objects.create(name="Cardiology")
+    book_one = models.Book.objects.create(title="Cardio Atlas One", shelf=shelf)
+    book_two = models.Book.objects.create(title="Cardio Atlas Two", shelf=shelf)
+    book_one.genres.add(matching_genre)
+    book_two.genres.add(matching_genre)
+    # A visible non-matching genre so the corruption is distinguishable from a
+    # match-everything bug.
+    other_genre = models.Genre.objects.create(name="Neurology")
+    other_book = models.Book.objects.create(title="Neuro Atlas", shelf=shelf)
+    other_book.genres.add(other_genre)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(filter: { booksTitle: { iContains: "cardio" } }) {
+            edges { node { name } }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+
+    # Row-preserving: one genre, reported exactly once.
+    assert conn["totalCount"] == 1
+    assert [edge["node"]["name"] for edge in conn["edges"]] == ["Cardiology"]
+
+
+def _seed_two_matching_genres_over_two_books_each():
+    """Seed the shared C.5 expanded-origin fixture and return the branch/shelf.
+
+    Two genres each match the ``booksTitle`` term "cardio" through TWO matching
+    books (so a fan-out bug would duplicate each genre once per matching book,
+    corrupting both ``totalCount`` and the edge list), plus one non-matching
+    genre on a non-matching book. Ordered by name ASC the matches are
+    ``["Cardiac Care", "Cardiology"]``. Inline ``Model.objects.create`` per the
+    library-acceptance convention (the library app has no services helper).
+    """
+    branch = models.Branch.objects.create(name="Cardio Central", city="Boston")
+    shelf = models.Shelf.objects.create(code="C-1", topic="Cardiology", branch=branch)
+    genre_care = models.Genre.objects.create(name="Cardiac Care")
+    genre_ology = models.Genre.objects.create(name="Cardiology")
+    for title in ("Cardio Manual A", "Cardio Manual B"):
+        models.Book.objects.create(title=title, shelf=shelf).genres.add(genre_care)
+    for title in ("Cardio Atlas One", "Cardio Atlas Two"):
+        models.Book.objects.create(title=title, shelf=shelf).genres.add(genre_ology)
+    # Visible non-match so a match-everything regression is distinguishable from
+    # a fan-out regression.
+    non_match = models.Genre.objects.create(name="Neurology")
+    models.Book.objects.create(title="Neuro Atlas", shelf=shelf).genres.add(non_match)
+    return branch, shelf
+
+
+@pytest.mark.django_db
+def test_genre_connection_expanded_origin_pagination_is_row_preserving():
+    """Cursor pagination + counts operate on row-preserved expanded-origin roots.
+
+    Two genres each match the public flat ``booksTitle`` leaf (the flattened
+    reverse-M2M ``books__title__icontains`` expansion) through TWO matching books
+    apiece. Pre-cut-over each genre would fan out to two rows, inflating
+    ``totalCount`` to 4 and duplicating edges. Post-cut-over the correlated
+    ``EXISTS`` collapses the membership to a per-parent existence test:
+    ``first: 1`` returns one edge with ``hasNextPage: true`` and a pre-slice
+    ``totalCount`` of 2; following the ``after:`` cursor returns the second
+    genre with ``hasNextPage: false``. This proves the connection's cursor
+    slicing and count run over row-preserved roots, not a fanned-out join.
+    """
+    _seed_two_matching_genres_over_two_books_each()
+
+    page_one = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(
+            filter: { booksTitle: { iContains: "cardio" } }
+            orderBy: [{ name: ASC }]
+            first: 1
+          ) {
+            edges { node { name } }
+            pageInfo { hasNextPage endCursor }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert page_one.status_code == 200
+    payload_one = page_one.json()
+    assert "errors" not in payload_one, payload_one
+    conn_one = payload_one["data"]["allLibraryGenresConnection"]
+
+    assert [edge["node"]["name"] for edge in conn_one["edges"]] == ["Cardiac Care"]
+    assert conn_one["pageInfo"]["hasNextPage"] is True
+    end_cursor = conn_one["pageInfo"]["endCursor"]
+    assert isinstance(end_cursor, str) and end_cursor
+    # Row-preserving pre-slice count: two genres, NOT four fanned-out rows.
+    assert conn_one["totalCount"] == 2
+
+    page_two = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenresConnection(
+            filter: {{ booksTitle: {{ iContains: "cardio" }} }}
+            orderBy: [{{ name: ASC }}]
+            first: 1
+            after: "{end_cursor}"
+          ) {{
+            edges {{ node {{ name }} }}
+            pageInfo {{ hasNextPage }}
+            totalCount
+          }}
+        }}
+        """,
+    )
+    assert page_two.status_code == 200
+    payload_two = page_two.json()
+    assert "errors" not in payload_two, payload_two
+    conn_two = payload_two["data"]["allLibraryGenresConnection"]
+
+    # Second page carries the second genre once, no overlap, boundary reached.
+    assert [edge["node"]["name"] for edge in conn_two["edges"]] == ["Cardiology"]
+    assert conn_two["pageInfo"]["hasNextPage"] is False
+    assert conn_two["totalCount"] == 2
+
+
+@pytest.mark.django_db
+def test_genre_connection_nested_spelling_matches_flat_spelling():
+    """The nested ``books: {title: ...}`` control equals the flat ``booksTitle`` leaf.
+
+    The nested spelling routes through ``_apply_related_constraints`` (machinery
+    untouched by the flat-leaf cut-over); the flat spelling routes through the new
+    correlated-``EXISTS`` applicator. Over the shared expanded-origin fixture both
+    must return the SAME edges and ``totalCount`` - the nested path is the
+    row-preserving control that pins the flat path's parity, not new coverage for
+    the flat adapter.
+    """
+    _seed_two_matching_genres_over_two_books_each()
+
+    def _fetch(filter_body: str):
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(
+                filter: %s
+                orderBy: [{ name: ASC }]
+              ) {
+                edges { node { name } }
+                totalCount
+              }
+            }
+            """
+            % filter_body,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        conn = payload["data"]["allLibraryGenresConnection"]
+        return [edge["node"]["name"] for edge in conn["edges"]], conn["totalCount"]
+
+    flat_names, flat_count = _fetch('{ booksTitle: { iContains: "cardio" } }')
+    nested_names, nested_count = _fetch('{ books: { title: { iContains: "cardio" } } }')
+
+    assert flat_names == ["Cardiac Care", "Cardiology"]
+    assert flat_count == 2
+    # The untouched nested path is the control: identical edges and count.
+    assert nested_names == flat_names
+    assert nested_count == flat_count
+
+
+@pytest.mark.django_db
+def test_genre_connection_flat_leaf_sql_shape_is_row_preserving():
+    """Live SQL over the expanded origin: no DISTINCT, correlated EXISTS, pinned count.
+
+    Capturing the flat-spelling connection POST (``totalCount`` + edges +
+    ``pageInfo`` with ``first: 1``): the ``library_genre`` root emits exactly TWO
+    queries - the page fetch and the count - and no others. Neither carries a
+    filter-driven ``SELECT DISTINCT`` (the distinct wrapper the pre-cut-over
+    ``distinct=True`` path would add); both carry the correlated ``EXISTS`` that
+    the flat-leaf adapter compiles. The membership + book tables live INSIDE the
+    ``EXISTS`` body, never in the outer root shape.
+    """
+    _seed_two_matching_genres_over_two_books_each()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(
+                filter: { booksTitle: { iContains: "cardio" } }
+                orderBy: [{ name: ASC }]
+                first: 1
+              ) {
+                edges { node { name } }
+                pageInfo { hasNextPage endCursor }
+                totalCount
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    assert "errors" not in response.json(), response.json()
+
+    genre_sql = [
+        q["sql"] for q in captured.captured_queries if "library_genre" in q["sql"].lower()
+    ]
+    # Pinned query roles over the ``library_genre`` root:
+    #   [0] page fetch  - SELECT ... FROM library_genre WHERE EXISTS(...) LIMIT 2
+    #   [1] count       - SELECT COUNT(*) ... FROM library_genre WHERE EXISTS(...)
+    # Exactly two; totalCount gating (Decision 4) adds the count, first: 1 adds
+    # no separate slice query.
+    assert len(genre_sql) == 2
+    for sql in genre_sql:
+        assert "SELECT DISTINCT" not in sql.upper()
+        assert "EXISTS(" in sql.upper()
+        # The book + membership tables belong to the EXISTS body, never the
+        # outer root FROM clause.
+        pre_where = sql.split("WHERE")[0]
+        assert "library_book" not in pre_where.lower()
+
+
+@pytest.mark.django_db
+def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
+    """Live SQL over the direct deep origin: single query, no DISTINCT, EXISTS re-entry.
+
+    The ``allLibraryLoans`` list field filtered on the reverse-FK deep leaf
+    ``bookLoansPatronEmail`` emits exactly ONE query. Its outer shape owns
+    ``library_loan`` exactly once (the membership re-entry - a second
+    ``library_loan`` alias plus ``library_patron`` - lives inside the ``EXISTS``
+    subquery, after the outer ``WHERE``). No filter-driven ``SELECT DISTINCT``.
+    """
+    branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
+    shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
+    shared_book = models.Book.objects.create(shelf=shelf, title="Shared Ward Manual")
+    patron_a = models.Patron.objects.create(name="Patron A", email="Cardio A")
+    patron_b = models.Patron.objects.create(name="Patron B", email="Cardio B")
+    models.Loan.objects.create(book=shared_book, patron=patron_a, note="checkout")
+    models.Loan.objects.create(book=shared_book, patron=patron_b, note="checkout")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryLoans(filter: { bookLoansPatronEmail: { iContains: "Cardio" } }) {
+                id
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    assert "errors" not in response.json(), response.json()
+
+    loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
+    # A plain list field, filter-only: exactly one root query, no count.
+    assert len(loan_sql) == 1
+    sql = loan_sql[0]
+    assert "SELECT DISTINCT" not in sql.upper()
+    assert "EXISTS(" in sql.upper()
+
+    # The outer query (everything before the outer WHERE) owns library_loan once;
+    # the membership re-entry and library_patron live inside the EXISTS body.
+    pre_where = sql.split("WHERE")[0]
+    assert pre_where.count('FROM "library_loan"') == 1
+    assert "library_patron" not in pre_where.lower()
+
+
+@pytest.mark.django_db
+def test_genre_connection_flat_leaf_no_match_is_empty():
+    """A flat leaf whose term matches nothing yields ``totalCount 0`` / empty edges.
+
+    Proves the correlated ``EXISTS`` does not over-match: an unmatched term keeps
+    the row-preserving root empty rather than admitting parents.
+    """
+    _seed_two_matching_genres_over_two_books_each()
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(filter: { booksTitle: { iContains: "nonesuch" } }) {
+            edges { node { name } }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    assert conn["edges"] == []
+    assert conn["totalCount"] == 0
 
 
 @pytest.mark.django_db

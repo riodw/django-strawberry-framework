@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models.constants import LOOKUP_SEP
+
+from django_strawberry_framework.exceptions import (
+    LookupValidationError,
+    PathResolutionError,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
@@ -119,74 +126,217 @@ def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     return kind in MANY_SIDE_RELATION_KINDS
 
 
-# TODO(docs/row-preserving-predicates-part1-plan.md Slice A): replace the
-# boolean-only path walk below with one strict, immutable model-path classifier
-# shared by filters, orders, and the future search compiler.
-#
-# Pseudo:
-# - Define a typed ``PathResolutionError`` whose message always names the root
-#   model, complete path, and first offending segment. Keep it distinct from
-#   lookup validation errors so callers never turn a malformed declaration into
-#   a lenient "does not traverse many" answer accidentally.
-# - Define frozen ``RelationPathHop`` and ``ClassifiedPath`` records. Each hop
-#   carries the segment, ``relation_kind(field)``, target model, and many-side
-#   bit. The path record carries the ordered hops, the terminal descriptor
-#   (scalar field OR relation descriptor), ``first_many_index``, and the complete
-#   relation-chain key future predicate grouping consumes.
-# - ``classify_path(model, field_path)`` accepts model-field paths only. Resolve
-#   ``pk`` explicitly as Django's ORM alias, follow FK/O2O/MTI and every many-side
-#   relation through ``related_model``, preserve a relation reached at the final
-#   segment as a valid terminal, and raise ``PathResolutionError`` for an empty,
-#   missing, non-traversable, ``related_name='+'``, or forward-GFK path.
-# - Keep lookup parsing separate. ``validate_lookup_expr(terminal,
-#   lookup_expr)`` walks each transform from the CURRENT output field, then
-#   resolves the final lookup with ``get_lookup``. Never classify transform or
-#   lookup tokens as model relation hops and never restart transform validation
-#   from the original field.
-# - Reimplement ``path_traverses_to_many`` as
-#   ``classify_path(...).first_many_index is not None`` while catching ONLY
-#   ``PathResolutionError``. Preserve this function's cache and its legacy
-#   garbage-tail behavior for orders and existing filters; strict new callers
-#   use ``classify_path`` directly and fail loud.
-#
-# Coverage (Rev 5 - each category is independently covered; NONE subsumes
-# another, and a classifier/fixture proving only one is incomplete):
-# - Reverse-FK-behind-a-to-one-prefix (named four-hop category). Shape:
-#   ``root --forward FK--> intermediate --reverse FK--> membership
-#   --forward FK--> terminal`` (real example: ``Loan.book -> Book.loans ->
-#   Loan.patron -> Patron.email``, where ``Book.loans`` is the reverse side of
-#   the forward ``Loan.book`` FK). This path contains NO ``ManyToManyField``
-#   and the row-multiplying hop sits BEHIND a to-one prefix, yet the frozen
-#   plan MUST set ``first_many_index`` to that reverse FK - i.e. it MUST
-#   identify the reverse FK as the FIRST multiplying boundary. A production
-#   reproduction proved this defect class: it is not covered by generic
-#   reverse-FK coverage that only exercises a reverse FK at the leading hop.
-#   Note the at-risk site is the NEW machinery: the lenient
-#   ``path_traverses_to_many`` below already detects a reverse FK mid-walk,
-#   so this category exists to prove ``classify_path``'s ``first_many_index``
-#   computation over the full chain - do not "fix" the legacy helper in
-#   response to it.
-# - Direct AND nested ``ManyToManyField`` traversal is a SEPARATE category
-#   from the reverse-FK case above; neither test subsumes the other. A fixture
-#   or classifier that proves only direct M2M traversal is incomplete - nested
-#   M2M must be exercised too.
-@lru_cache(maxsize=2048)
-def path_traverses_to_many(model: type, field_path: str) -> bool:
-    """Return whether an ORM ``field_path`` traverses a to-many relation.
+@dataclass(frozen=True)
+class RelationPathHop:
+    """One resolved relation segment of a classified model-field path.
 
-    Walks the ``__``-separated path from ``model`` until it reaches a
-    terminal scalar, an unresolvable transform/lookup, or a relation without
-    a concrete target model. A reverse FK or forward/reverse M2M hop is
-    row-multiplying and returns ``True`` immediately.
+    ``kind`` is ``relation_kind(field)`` - the semantic topology of the hop.
+    ``many_side`` is the SQL-cardinality answer read from Django's
+    ``PathInfo`` records (``any(pi.m2m for pi in field.path_infos)``): despite
+    the name, ``PathInfo.m2m`` is ``True`` for an ordinary non-unique reverse
+    FK too, so it, not ``kind``, decides whether the hop multiplies rows.
+    ``target_model`` is ``field.path_infos[-1].to_opts.model`` - the model the
+    walk continues from after one declared segment (which may expand to several
+    ``PathInfo`` records, e.g. an M2M through table, collapsed at the segment
+    boundary). No Django ``PathInfo`` object is retained on the frozen record.
+    """
 
-    Filter generation uses the result to set ``distinct=True`` on plain
-    generated leaf filters; order resolution uses it to replace a fan-out
-    ``order_by`` with a row-preserving aggregate. The answer depends only on
-    model metadata, so the bounded process-lifetime cache safely serves both
-    subsystems.
+    segment: str
+    kind: RelationKind
+    target_model: type
+    many_side: bool
+
+
+@dataclass(frozen=True)
+class ClassifiedPath:
+    """The strict, immutable classification of one model-field path.
+
+    ``hops`` are the ordered relation segments (empty for a local scalar).
+    ``terminal`` is NEVER ``None``: for a path ending on a column it is that
+    concrete Django field; for a relation-terminal path (e.g. ``genres`` used
+    by an ``isnull`` relation filter) it is the terminal relation descriptor
+    itself, which ALSO appears as the last hop. ``first_many_index`` is the
+    index into ``hops`` of the first ``many_side`` hop, or ``None`` when the
+    whole path is row-preserving. ``relation_chain`` is the tuple of relation
+    (hop) segments - the path minus a scalar terminal - the safe subquery
+    grouping key predicate generation consumes.
+    """
+
+    model: type
+    path: str
+    hops: tuple[RelationPathHop, ...]
+    terminal: Any
+    first_many_index: int | None
+    relation_chain: tuple[str, ...]
+
+
+def _resolve_segment_field(model: type, segment: str) -> object:
+    """Return the field a path segment names, resolving ``pk`` to the pk field.
+
+    ``pk`` is Django's ORM alias for the model's primary key; a ``pk`` segment
+    anywhere in a path behaves like that pk field. Any other unresolvable
+    segment surfaces as ``FieldDoesNotExist`` for the caller to convert into a
+    typed ``PathResolutionError`` (this includes a hidden reverse relation
+    declared ``related_name="+"``, whose reverse name ``get_field`` rejects).
+    """
+    if segment == "pk":
+        return model._meta.pk
+    return model._meta.get_field(segment)
+
+
+def _is_traversable_relation(field: object) -> bool:
+    """Return whether a resolved field is a relation the walk can follow.
+
+    A traversable relation is one exposing usable ``path_infos``. A forward
+    ``GenericForeignKey`` reports ``is_relation=True`` but defines NO
+    ``path_infos`` - reading it before this guard would raise ``AttributeError``
+    instead of the typed error, so ``path_infos`` is touched ONLY after this
+    returns ``True``.
+    """
+    return bool(getattr(field, "is_relation", False)) and hasattr(field, "path_infos")
+
+
+def classify_path(model: type, field_path: str) -> ClassifiedPath:
+    """Strictly classify an ORM ``field_path`` into an immutable relation plan.
+
+    Splits on ``LOOKUP_SEP`` and walks each segment through
+    ``Model._meta.get_field`` (with ``pk`` resolved to the pk field). A
+    non-relation field is a valid terminal only as the LAST segment; anywhere
+    earlier the path continues past an untraversable column and raises. A
+    relation segment must expose non-empty ``path_infos``; its hop records
+    ``relation_kind(field)`` as ``kind`` and ``any(pi.m2m ...)`` as
+    ``many_side``, and the walk continues from ``path_infos[-1].to_opts.model``.
+    A relation reached at the final segment is preserved as ``terminal`` AND as
+    the last hop. Raises ``PathResolutionError`` (naming model, path, and
+    segment) for a missing, non-traversable (forward ``GenericForeignKey``),
+    empty-``path_infos``, or non-relation-mid-path segment.
+
+    Kept uncached so callers may pass unhashable test doubles (a
+    ``SimpleNamespace`` fake model pins the empty-``path_infos`` branch);
+    ``_classify_path_cached`` layers a bounded ``lru_cache`` over it for the
+    hot ``path_traverses_to_many`` path, keyed on the hashable,
+    definition-time-stable ``(model, field_path)`` pair.
+    """
+    segments = field_path.split(LOOKUP_SEP)
+    current = model
+    hops: list[RelationPathHop] = []
+    terminal: Any = None
+    last_index = len(segments) - 1
+    for index, segment in enumerate(segments):
+        try:
+            field = _resolve_segment_field(current, segment)
+        except FieldDoesNotExist:
+            raise PathResolutionError(current, field_path, segment) from None
+        if getattr(field, "is_relation", False):
+            if not _is_traversable_relation(field):
+                raise PathResolutionError(current, field_path, segment)
+            path_infos = field.path_infos  # type: ignore[attr-defined]
+            if not path_infos:
+                raise PathResolutionError(current, field_path, segment)
+            target_model = path_infos[-1].to_opts.model
+            hops.append(
+                RelationPathHop(
+                    segment=segment,
+                    kind=relation_kind(field),  # type: ignore[arg-type]
+                    target_model=target_model,
+                    many_side=any(pi.m2m for pi in path_infos),
+                ),
+            )
+            current = target_model
+            if index == last_index:
+                terminal = field
+        elif index == last_index:
+            terminal = field
+        else:
+            raise PathResolutionError(current, field_path, segment)
+    first_many_index = next(
+        (i for i, hop in enumerate(hops) if hop.many_side),
+        None,
+    )
+    return ClassifiedPath(
+        model=model,
+        path=field_path,
+        hops=tuple(hops),
+        terminal=terminal,
+        first_many_index=first_many_index,
+        relation_chain=tuple(hop.segment for hop in hops),
+    )
+
+
+def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
+    """Validate a django-filter lookup expression against a classified terminal.
+
+    A contract SEPARATE from path classification. ``terminal`` is a
+    ``ClassifiedPath.terminal`` - a concrete Django field or a relation
+    descriptor (forward relation field / ``ForeignObjectRel``). ``lookup_expr``
+    is a ``LOOKUP_SEP``-joined chain of zero or more transforms followed by a
+    final lookup (e.g. ``"icontains"``, ``"date__year__gte"``, ``"exact"``,
+    ``"isnull"``).
+
+    The walk advances an EXPRESSION cursor (the terminal, then successive
+    transform instances). For each non-final part the cursor's
+    ``get_transform`` must resolve a transform; the cursor advances to that
+    transform bound to the previous cursor, so validation of the next part runs
+    against the transform's own output field - NEVER re-validated against the
+    original terminal. For the final part the cursor's ``get_lookup`` is tried
+    first; if it returns ``None`` the part is treated as a TRAILING TRANSFORM
+    with an implicit ``exact`` (Django's own ORM semantics: a lookup path
+    ending on a transform compiles as ``transform + exact``), accepted only
+    when the transform's output field supports ``exact``.
+
+    Both concrete Django fields and Django relation descriptors (verified
+    empirically against ``ManyToManyField`` / ``ManyToOneRel`` / ``OneToOneRel``
+    / ``ForeignKey``: all expose ``get_lookup`` returning ``RelatedIsNull`` /
+    ``RelatedExact`` / ``RelatedIn``) answer ``get_lookup`` / ``get_transform``
+    directly, so the walk uses the cursor's own methods uniformly.
+
+    Returns the resolved final lookup CLASS (the trailing-transform case
+    returns the ``exact`` lookup class) - cheap and useful to callers.
+
+    Raises ``LookupValidationError`` (naming the terminal, the full
+    ``lookup_expr``, and the offending part) for an empty expression, an empty
+    part, an unresolvable mid-chain transform, or a final part that is neither
+    a lookup nor a trailing transform with a supported ``exact``.
+    """
+    if not lookup_expr:
+        raise LookupValidationError(terminal, lookup_expr, lookup_expr)
+    parts = lookup_expr.split(LOOKUP_SEP)
+    for part in parts:
+        if not part:
+            raise LookupValidationError(terminal, lookup_expr, part)
+    cursor: Any = terminal
+    last_index = len(parts) - 1
+    for index, part in enumerate(parts):
+        if index < last_index:
+            transform = cursor.get_transform(part)
+            if transform is None:
+                raise LookupValidationError(terminal, lookup_expr, part)
+            cursor = transform(cursor)
+            continue
+        lookup = cursor.get_lookup(part)
+        if lookup is not None:
+            return lookup
+        transform = cursor.get_transform(part)
+        if transform is not None:
+            exact = transform(cursor).get_lookup("exact")
+            if exact is not None:
+                return exact
+        raise LookupValidationError(terminal, lookup_expr, part)
+
+
+def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
+    """Legacy lenient to-many walk, retained verbatim as a fail-open fallback.
+
+    Walks the ``__``-separated path swallowing any resolution failure into a
+    ``False`` answer, returning ``True`` the instant a many-side relation is
+    reached - even if garbage follows it. ``path_traverses_to_many`` runs this
+    ONLY when strict ``classify_path`` raises ``PathResolutionError``, which
+    guarantees byte-identical answers to the pre-refactor implementation: a
+    many-then-garbage path (e.g. ``genres__nonexistent``) still answers
+    ``True`` here, whereas plain ``False`` on the raise would have regressed it.
     """
     current = model
-    for segment in field_path.split("__"):
+    for segment in field_path.split(LOOKUP_SEP):
         try:
             field = current._meta.get_field(segment)
         except FieldDoesNotExist:
@@ -200,6 +350,50 @@ def path_traverses_to_many(model: type, field_path: str) -> bool:
             return False
         current = related
     return False
+
+
+@lru_cache(maxsize=2048)
+def _classify_path_cached(model: type, field_path: str) -> ClassifiedPath:
+    """Bounded ``lru_cache`` over ``classify_path`` for the hot to-many probe.
+
+    ``path_traverses_to_many`` is called repeatedly with the same
+    definition-time ``(model, field_path)`` pairs during filter/order
+    generation; caching the frozen ``ClassifiedPath`` here avoids re-walking
+    model metadata without forcing a cache onto the public, uncached
+    ``classify_path`` (which must accept unhashable test doubles).
+    """
+    return classify_path(model, field_path)
+
+
+@lru_cache(maxsize=2048)
+def path_traverses_to_many(model: type, field_path: str) -> bool:
+    """Return whether an ORM ``field_path`` traverses a to-many relation.
+
+    Reimplemented on ``classify_path``: the strict classifier is the single
+    site of the relation taxonomy, and this helper answers
+    ``classify_path(...).first_many_index is not None``. When strict
+    classification raises ``PathResolutionError`` (an unresolvable head, a
+    garbage tail, a forward ``GenericForeignKey``) it falls back to the legacy
+    lenient walk (``_lenient_traverses_to_many``) rather than a bare ``False``.
+
+    That fallback is load-bearing for byte-identical compatibility: the old
+    walk returned ``True`` the instant it reached a many-side hop and never saw
+    a garbage tail beyond it, while ``classify_path`` raises on that tail. A
+    32-path adversarial matrix (``tests/utils/test_relations.py``) confirms the
+    fallback reproduces the pre-refactor answers exactly, including
+    ``genres__nonexistent`` -> ``True`` and ``genres__name__icontains`` ->
+    ``True`` (many-then-garbage), where a plain ``False`` would have diverged.
+
+    Filter generation uses the result to set ``distinct=True`` on plain
+    generated leaf filters; order resolution uses it to replace a fan-out
+    ``order_by`` with a row-preserving aggregate. The answer depends only on
+    model metadata, so the bounded process-lifetime cache safely serves both
+    subsystems.
+    """
+    try:
+        return _classify_path_cached(model, field_path).first_many_index is not None
+    except PathResolutionError:
+        return _lenient_traverses_to_many(model, field_path)
 
 
 def is_forward_many_to_many(field: object) -> bool:

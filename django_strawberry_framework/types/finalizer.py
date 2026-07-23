@@ -440,10 +440,29 @@ def _register_relation_connection_teardown(
                 definition.relation_connections = None
         current_annotations = type_cls.__dict__.get("__annotations__")
         if current_annotations is None:
+            # Python 3.14+ (PEP 649): the class ``__dict__`` never carries a
+            # plain ``"__annotations__"`` entry, so restore the full
+            # pre-synthesis snapshot through the descriptor.
             type_cls.__annotations__ = dict(annotations_snapshot)
         elif current_annotations is annotations:
             current_annotations.clear()
             current_annotations.update(annotations_snapshot)
+        else:
+            # Python <= 3.13: Phase 3 (``strawberry.type`` processing,
+            # ``strawberry.types.object_type._check_field_annotations``)
+            # REPLACES the class's own ``__annotations__`` dict, so the
+            # identity above no longer matches even though no consumer touched
+            # the class. Apply the exact per-field inverse to whatever dict is
+            # current: drop the synthesized sibling's annotation and, for a
+            # ``"connection"`` shape, restore the suppressed relation
+            # annotation when its slot is still absent.
+            current_annotations.pop(generated, None)
+            if (
+                shape == "connection"
+                and relation_name not in current_annotations
+                and relation_name in annotations_snapshot
+            ):
+                current_annotations[relation_name] = annotations_snapshot[relation_name]
 
         if shape != "connection":
             return

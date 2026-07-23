@@ -483,7 +483,13 @@ def test_missing_post_write_refetch_returns_conflict_envelope(monkeypatch):
 
 def test_not_updated_exceptions_prefers_the_typed_signal():
     """Django 6.0's per-model ``NotUpdated`` is caught by type; 5.2 falls back to DatabaseError."""
-    assert not_updated_exceptions(product_models.Item) == (product_models.Item.NotUpdated,)
+    typed_signal = getattr(product_models.Item, "NotUpdated", None)
+    if typed_signal is not None:
+        assert not_updated_exceptions(product_models.Item) == (typed_signal,)
+    else:
+        # Django < 6.0: models grow no per-model ``NotUpdated``; the helper
+        # falls back to the broad ``DatabaseError`` compat catch.
+        assert not_updated_exceptions(product_models.Item) == (DatabaseError,)
 
     class _LegacyModelStandIn:
         """A Django-5.2-shaped model class: no ``NotUpdated`` attribute."""

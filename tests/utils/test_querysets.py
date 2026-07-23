@@ -2764,7 +2764,8 @@ def test_bake_deferred_non_sequence_args_fails_closed():
 def test_bake_deferred_prohibited_kwargs_fails_closed():
     """A deferred filter carrying a prohibited ``_connector`` / ``_negated`` kwarg fails closed."""
     from django.db.models import sql
-    from django.db.models.query import PROHIBITED_FILTER_KWARGS
+
+    from django_strawberry_framework.utils.querysets import PROHIBITED_FILTER_KWARGS
 
     prohibited = next(iter(PROHIBITED_FILTER_KWARGS))
     rebuilt = sql.Query.clone(Item.objects.all().query)
@@ -2773,6 +2774,25 @@ def test_bake_deferred_prohibited_kwargs_fails_closed():
         (False, (), {prohibited: True}),
         "QuerySet",
     ) == ("untrusted", "QuerySet deferred filter carries prohibited kwargs")
+
+
+def test_prohibited_filter_kwargs_matches_django_when_available():
+    """The Django<6.0 import fallback stays byte-identical to Django 6.0's constant.
+
+    ``django_strawberry_framework.utils.querysets`` guards the Django 6.0-only
+    ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` import with a verbatim
+    fallback so the package imports at the declared ``Django>=5.2`` floor. On
+    Django versions that DO expose the constant this pins the fallback literal
+    against upstream drift; on the 5.2 floor it pins the expected value.
+    """
+    import django.db.models.query as django_query
+
+    from django_strawberry_framework.utils import querysets as querysets_module
+
+    upstream = getattr(django_query, "PROHIBITED_FILTER_KWARGS", None)
+    if upstream is not None:
+        assert upstream == querysets_module.PROHIBITED_FILTER_KWARGS
+    assert frozenset({"_connector", "_negated"}) == querysets_module.PROHIBITED_FILTER_KWARGS
 
 
 def test_bake_deferred_hostile_arg_fails_closed():

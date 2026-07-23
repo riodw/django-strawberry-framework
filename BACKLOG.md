@@ -853,6 +853,31 @@ class UpdateOrder(DjangoMutation):
 
 **Composes with**: `version_gossip_extension`, `mutation_invalidation_gossip` (either suffices; both supported).
 
+### `operation_document_and_plan_cache`
+
+**Realistic**: 9/10 — Hashing + bounded LRU over mature seams; the optimizer's shipped B1 AST plan cache already carries the harder half of the idea.
+
+**Impact**: 7/10 — Live-search typing bursts send a byte-identical document per keystroke with only `variables` changing; caching parse + validation makes every repeat operation skip straight to execution, transparently, for every client with zero client changes.
+
+**Difficulty**: 3/10 — Extends the shipped B1 keying upward to parse/validation; the registry-epoch keying and negative-cache policy are the concentrated design work.
+
+**Source**: 2026-07-23 maintainer discussion of DRF live-search cancellation overhead (per-keystroke requests re-paying the full invariant request prefix). Second card of the three-card request-lifecycle cluster.
+
+**Blocked by**: `request_lifecycle_cancellation_and_reuse` — maintainer-sequenced first of the cluster; this card lands second.
+
+**What we'd do**: a server-side operation cache — hash the incoming document text on arrival and reuse the parsed AST, validation verdict, and compiled optimizer plan for repeat operations, so per-request work reduces to binding new variables into a prepared plan.
+
+**Spec**:
+- **The hash is derived server-side, never sent by the client.** Clients keep sending full query text over plain POST; on arrival the document bytes are hashed (SHA-256, sub-microsecond) and looked up. Hit → cached parse/validation/plan, bind variables, execute. Miss → full pipeline, then store.
+- **Exact match only, never semantic similarity.** At most a cheap deterministic syntactic normalization (insignificant whitespace) before hashing — deciding two *different* documents are equivalent executes the wrong cached plan against a request; a cache that can be approximately right is a correctness bug factory. Every sane client sends a constant document with the changing term in `variables`, so exact match already hits ~100% for the motivating workload.
+- Cache key = (document hash, schema identity / registry epoch): a rebuilt schema (`registry.clear()` lifecycle, dev autoreload, multi-schema deployments) must never serve plans compiled against the old schema. Variables never enter the key — that is the whole point.
+- Cache only after successful validation; failed documents get at most a small negative-cache entry (so garbage-hammering doesn't force re-parsing) and never a plan.
+- Bounded per-process LRU: plans hold references into the schema, and an unbounded dict keyed by attacker-controlled query text is a memory-growth vector. A few hundred entries covers any real app's operation inventory.
+- **This is the "separately named performance mode" that `persisted_query_allowlist` explicitly reserves** — that card is a *security* posture (only deploy-time-registered hashes execute) and its spec forbids conflating the two. The two share hash infrastructure and nothing else; when both are active the allowlist gates first, then the cache serves.
+- APQ-style hash-only requests (client sends hash + variables, no document) stay out of scope — if ever wanted for bandwidth, they are a thin opt-in layer over this same cache, not a different system.
+
+**Composes with**: shipped optimizer B1 AST plan cache (builds on it), `request_lifecycle_cancellation_and_reuse` (*prerequisite* — cluster sequencing), `live_search_over_websocket` (WS operations must hit this same cache — one cache, not two), `persisted_query_allowlist` (sibling posture, shared hash infrastructure), `http_cache_headers_and_etag` (operation hash is its cache key source).
+
 ---
 
 ## Mutations
@@ -1592,6 +1617,51 @@ class OrderMatrix(DjangoMatrix):
 - Subscription-time policy checks happen at subscription open; a per-event-flood defense (e.g. a `SubscriptionConcurrencyCap` policy) belongs to the DoS stack.
 
 **Composes with**: `opt_in_async_resolvers`, `declarative_row_and_field_permissions`, `dos_policy_stack_framework`.
+
+### `request_lifecycle_cancellation_and_reuse`
+
+**Realistic**: 7/10 — ASGI `http.disconnect` and psycopg3 native cancellation are documented mechanisms; actually reaching a sync-ORM query running in a thread is the researched kernel.
+
+**Impact**: 8/10 — Converts every abandoned live-search request from wasted DB load into freed DB load (ten stacked abandoned `ILIKE` scans is the motivating DRF pain); neither upstream addresses request cancellation at all.
+
+**Difficulty**: 6/10 — Disconnect plumbing + a per-backend cancellation matrix + the auth-context staleness contract; two halves, one shared lifecycle object.
+
+**Source**: 2026-07-23 maintainer discussion of DRF live-search cancellation overhead (per-keystroke requests canceled client-side while the server runs every one to completion). First card of the three-card request-lifecycle cluster — maintainer-sequenced to land before `operation_document_and_plan_cache` and `live_search_over_websocket`.
+
+**Blocked by**: nothing — this card is the cluster's foundation.
+
+**What we'd do**: one request-lifecycle contract with two halves: work must *die* when its request dies (disconnect → cancel the in-flight DB query), and provably request-invariant work may *outlive* its request (opt-in, short-TTL session-scoped auth/visibility context). One spec because both halves share a single lifecycle/context object with one invalidation story.
+
+**Spec**:
+- **Cancellation half.** Under ASGI, observe `http.disconnect` (and, once `live_search_over_websocket` lands, the WS `complete`/stop message through the same seam) and cancel the in-flight database query. The sync ORM query runs in a thread Python cannot kill, so cancellation happens *at the database*: psycopg3 native cancel where available, cancel-via-second-connection (`pg_cancel_backend`) as the Postgres fallback, per-operation `statement_timeout` as the blunt instrument. SQLite: documented no-op.
+- **Under WSGI the entire card is a graceful, documented no-op** — nothing observes the disconnect; the request runs to completion exactly as today. ASGI-only value, stated loudly (shared deployment story with `opt_in_async_resolvers`).
+- **Reuse half (opt-in per schema, off by default).** A short-TTL cache of the resolved auth/visibility context, keyed on (user, registry epoch), built on the existing `authorization_phase` seam. The staleness contract is written, not implied: an explicit invalidation hook plus a documented revocation window equal to the TTL — a permission revoked mid-burst may be honored up to TTL seconds late. Consumers who cannot accept any window simply never opt in; the default posture is today's behavior.
+- Distinct from admission control: the DoS stack (`rate_limit_extension`, `circuit_breaker_extension`, `dos_policy_stack_framework`) rejects work *before* it starts; this card manages work *already admitted*. Complementary, never merged.
+
+**Composes with**: `operation_document_and_plan_cache` (cluster sibling, lands second), `live_search_over_websocket` (this card is its cancellation seam), `opt_in_async_resolvers` (shared ASGI deployment story), `dos_policy_stack_framework` (complementary layer, explicit non-overlap).
+
+### `live_search_over_websocket`
+
+**Realistic**: 7/10 — The transport substrate shipped with spec-041 (Channels router, auth stack, origin validation); the remainder is context reuse and supersession semantics, not protocol work.
+
+**Impact**: 8/10 — First-class answer to the per-keystroke live-search workload both upstreams punt on: auth once at connect, each keystroke a lightweight message with new variables, superseded searches actually canceled instead of abandoned.
+
+**Difficulty**: 5/10 — Connection-scoped context lifecycle + supersession wiring onto the shipped router; was materially higher before spec-041 shipped the transport half.
+
+**Source**: 2026-07-23 maintainer discussion of DRF live-search cancellation overhead. Third card of the three-card request-lifecycle cluster.
+
+**Blocked by**: `request_lifecycle_cancellation_and_reuse` (its stop-message → DB-cancel seam) and `operation_document_and_plan_cache` (WS operations must hit the same cache) — both land first.
+
+**What we'd do**: a live-search operation mode over the shipped Channels WebSocket transport — connection-scoped context established once, per-keystroke operations as protocol messages, and explicit supersession so a new search cancels the in-flight one.
+
+**Spec**:
+- **Connection-scoped context is the safe form of auth reuse**: auth runs once at connection accept, the context lives exactly as long as the connection, and revocation has a natural enforcement point (close the connection). No TTL, no staleness window — the lifecycle is protocol-defined, not timer-defined. This is deliberately *not* the sibling card's TTL cache; over a connection the TTL mechanism is unnecessary.
+- **Supersession**: a new operation carrying the same client-declared operation group (e.g. the search box's group key) cancels the prior in-flight operation of that group — wired through the graphql-ws `complete`/stop machinery into `request_lifecycle_cancellation_and_reuse`'s DB-cancel seam, so superseded searches free the database, not just the socket.
+- WS operations resolve through `operation_document_and_plan_cache` — one cache across HTTP and WS, never two.
+- Transport substrate: **shipped** (spec-041, 0.0.14) — `routers.py::DjangoGraphQLProtocolRouter` already carries queries over WebSocket with `AuthMiddlewareStack` and origin validation behind the soft `channels` dependency. This card adds no protocol surface.
+- **Sibling of `signal_wired_subscriptions`, never merged**: that card is server-initiated push (signals → `on_commit` → publish); this card is client-driven re-execution with new variables. They share the shipped transport and nothing else — merging would double an already Difficulty-7 card.
+
+**Composes with**: `request_lifecycle_cancellation_and_reuse` (*prerequisite*), `operation_document_and_plan_cache` (*prerequisite*), shipped spec-041 Channels router (builds on), `signal_wired_subscriptions` (transport sibling), `opt_in_async_resolvers`, `dos_policy_stack_framework` (per-connection operation caps belong there).
 
 ---
 

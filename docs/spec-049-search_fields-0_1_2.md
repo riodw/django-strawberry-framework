@@ -786,6 +786,23 @@ review — neither test subsumes the other):
 - **a direct or nested M2M path**, matching the library
   `GenreType.books__title` fixture.
 
+Why the reverse-FK fixture exists (follow-up review, finding 4): NOT
+because Django cannot detect reverse-FK fan-out — at the compatibility
+floor Django's own `PathInfo.m2m` flags an ordinary non-unique reverse FK
+as multiplying, and admin's `lookup_spawns_duplicates()` returns `True`
+for the complete Medtrics path. Detecting possible fan-out is
+insufficient: the package must compile the correct row-preserving query
+and prove its observable GraphQL cardinality (exact ordered IDs,
+`totalCount`, page boundaries). Accordingly, search consumes the frozen
+structured Part 1 path plan created at type finalization — it never calls
+`lookup_spawns_duplicates()` during request execution and never collapses
+the plan to a `search_requires_distinct`-style boolean, because search
+must separate direct from row-multiplying arms, group compatible
+relational arms without reconstructing paths, compose hop visibility and
+terminal matching under the same-related-row rule (Decision 12), attach
+correlated `EXISTS` branches under reserved aliases, and preserve the
+incoming queryset rather than normalizing it with `.distinct()`.
+
 Alternatives rejected: **blanket `.distinct()`** (upstream) and
 **conditional `.distinct()`** (this spec's own earlier revision) — both
 retain the fan-out and the distinct-wrapper count; **post-processing
@@ -1416,6 +1433,16 @@ library cases in `test_library_api.py`, inline creates):
   in the example schema.
 - Nested-connection search: correct results under the per-parent
   fallback, no dead cached window, strictness reporting behavior.
+- Compatibility floor (follow-up review, finding 5): the live
+  Medtrics-shaped search reproduction runs under **Python 3.10 with an
+  exact `Django==5.2.0` pin** (isolated `/tmp` venv per the
+  matrix-testing rule — `Django>=5.2` resolves to the newest compatible
+  release and proves nothing about 5.2.0), through the real `/graphql/`
+  path rather than import-only coverage, with the current-version
+  (Django 6.0.x) job retained as the other end of the supported range.
+  New code relies on no API added after 5.2.0, Django 6.0, or
+  Python 3.11+ (including convenience typing APIs without an existing
+  project compatibility import).
 
 Performance evidence (non-gating artifact, Slice 4): a PostgreSQL
 before/after comparison of the `EXISTS` shape vs JOIN-plus-DISTINCT on
@@ -1580,6 +1607,9 @@ compiler shape.
   covers every reachable behavior per the Test plan, including the
   library to-many proof over `allLibraryGenresConnection`.
 - [ ] The non-gating PostgreSQL plan-evidence artifact is retained.
+- [ ] The exact compatibility floor is proven: the live Medtrics-shaped
+  search reproduction passes under Python 3.10 + `Django==5.2.0`, and
+  the current-version job stays green (follow-up review, finding 5).
 - [ ] Slice 5 card-local docs updated; GLOSSARY moves to the precise
   intermediate status; no release-cut artifact is changed.
 - [ ] **No release-cut edit** — the `0.1.2` quintet, README shipped-surface

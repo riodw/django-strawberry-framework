@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 6)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 7)
 
 ## Identity and completion ownership
 
@@ -51,7 +51,15 @@ SQL shape named as an asserted case, nullable-intermediate-hop and
 the shared fixture, live-tier client/reload discipline per
 `examples/fakeshop/test_query/README.md`, the dead C.5 fallback clause
 removed (the loan surface exists), and the `test_query` README added to
-Slice D's bookkeeping.
+Slice D's bookkeeping. Rev 7 enacts the follow-up multiplicity review
+([`feedback.md`][feedback]): the prior-art statement about admin's
+`lookup_spawns_duplicates` corrected (it detects reverse FK through
+`PathInfo.m2m`; the earlier "misses reverse FK" reading of the `m2m`
+name was false), `PathInfo` named as Slice A's SQL-multiplicity
+authority beside `relation_kind()`'s semantic topology, the
+admin-helper-as-differential-oracle-only rule, the reverse-FK category
+rationale recast from detection to compilation, and the exact
+Python 3.10 + `Django==5.2.0` acceptance floor.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -93,8 +101,22 @@ outer `alias_map`, keeps `query.distinct` False, returns one row per parent
 with multiple matching children, and adds no distinct wrapper to `.count()`;
 `EXISTS` distributes over OR for same-value disjunctions (card 049's future
 grouping is a cost choice there); no surveyed prior art implements a
-positive-filter `EXISTS` rewrite (Django core does it only for `exclude()`;
-admin's `lookup_spawns_duplicates` detects m2m only and misses reverse FK).
+positive-filter `EXISTS` rewrite. Django core does it only for `exclude()`.
+Django admin's `lookup_spawns_duplicates()` detects potentially multiplying
+reverse-FK **and** M2M traversals through `PathInfo.m2m` — despite the
+historical `m2m` name, the helper walks `field.path_infos` and tests
+`any(path_info.m2m for path_info in path_infos)`, and reverse-path
+construction sets `m2m` to `not self.unique`, so an ordinary non-unique
+reverse FK is multiplying while a reverse one-to-one is not (verified in
+Django source; present with these semantics at the 5.2.0 floor) — but it
+returns only a boolean: it neither exposes a reusable structured path plan
+nor compiles positive relational predicates into correlated `EXISTS`
+expressions. (An earlier revision of this paragraph claimed the helper
+"detects m2m only and misses reverse FK"; that reading of the `m2m` name
+was false and is corrected here — follow-up review, finding 1.) Detection
+of possible fan-out is not the same operation as preventing
+framework-owned fan-out while preserving the incoming queryset's
+multiplicity, so the no-prior-art conclusion stands.
 
 ## The multiset contract (finding 5 — maintainer-decided)
 
@@ -185,6 +207,36 @@ Per first-review finding 5, classification and lookup validation are
   terminal relation descriptor** (relation-terminal paths like the `isnull`
   relation filters need it; `None` would discard required information) —
   and the index of the first row-multiplying hop (or `None`).
+  - **Two distinct questions, two distinct sources (follow-up review,
+    finding 2).** `relation_kind(field)` supplies the *semantic relation
+    topology* (reverse FK vs M2M vs `GenericRelation` vs forward
+    single-valued — needed by visibility, generic-relation handling,
+    diagnostics, and test assertions); Django's `PathInfo` supplies *SQL
+    multiplicity and the traversal target*. Each hop's `many_side` bit is
+    `any(path_info.m2m for path_info in field.path_infos)` and its target
+    is `path_infos[-1].to_opts.model` — one declared segment may expand to
+    multiple ORM `PathInfo` records, so multiplicity collapses at the
+    declared-segment boundary; empty `path_infos` on a relation segment
+    raises the typed resolution error. Despite its historical name,
+    `PathInfo.m2m` is true for an ordinary non-unique reverse FK as well
+    as an M2M hop (`not self.unique` on the reverse side), which is
+    exactly the SQL-cardinality answer the plan needs; it deliberately
+    collapses reverse FK and M2M into one boolean, which is why
+    `relation_kind()` remains alongside it. The frozen plan retains no
+    `PathInfo` objects — it freezes only the package-owned values its
+    consumers require (segment, relation kind, target model, many-side
+    bit, terminal descriptor, first-many index, relation-chain grouping
+    key).
+  - **`django.contrib.admin.utils.lookup_spawns_duplicates` is never
+    imported or called in production.** The helper is admin-owned, returns
+    only a boolean, stops at the first multiplying hop, and leniently
+    ignores unresolved segments; Part 1 needs strict validation, the exact
+    first boundary, the complete chain, a terminal descriptor, and typed
+    failures — reimplementing those richer semantics over the same Django
+    model metadata is not duplication of the admin helper's contract. In
+    package tests it MAY serve as an **additional differential oracle**
+    over valid Django-native paths only (asserting `first_many_index is
+    not None` agrees with its boolean), never the sole oracle.
 - A separate `validate_lookup_expr(terminal, lookup_expr)` helper validates
   a lookup expression against the classified terminal, walking chained
   transforms via each transform's `output_field` (never re-validating
@@ -225,7 +277,20 @@ The defect this category targets lives in the NEW machinery: the legacy
 lenient `path_traverses_to_many` already detects a reverse FK mid-walk,
 so it is not the at-risk site — the category exists to prove
 `classify_path`'s `first_many_index` computation over the full chain,
-and nobody should "fix" the legacy helper in response to it.
+and nobody should "fix" the legacy helper in response to it. Nor does
+the category exist because Django cannot detect reverse-FK fan-out — at
+the 5.2.0 floor Django's own metadata flags the complete Medtrics path
+as multiplying (`PathInfo.m2m`, and admin's `lookup_spawns_duplicates`
+returns `True` for it). Detection is table stakes; the category's tests
+must still prove what no detector provides (follow-up review,
+finding 3): `Book.loans` identified as the first multiplying hop behind
+the to-one `Loan.book` prefix, the correlated predicate constructed
+without an outer self-join, mixed direct/relational OR semantics
+preserved, the exact ordered ID sequence and correct `count()`, the
+two-page connection boundary, and neither framework-owned outer fan-out
+nor framework-owned `DISTINCT`. A boolean agreement with the admin
+helper can never replace those exact `first_many_index`, relation-kind,
+SQL-shape, and live cardinality assertions.
 
 ## Slice B — the neutral correlated-EXISTS primitive
 
@@ -738,9 +803,10 @@ make stale:
    registration).
 3. Strict classifier + separate lookup validation (Slice A).
 4. Neutral correlated-`EXISTS` primitive + full-namespace alias allocator,
-   no evaluated-outer guard (Slice B); pin `pk=OuterRef("pk")` on Django
-   5.2 and 6.0 (isolated `/tmp` venvs per the matrix-testing rule) before
-   considering per-column expansion.
+   no evaluated-outer guard (Slice B); pin `pk=OuterRef("pk")` on the
+   exact floor and the current release — **Python 3.10 with
+   `Django==5.2.0`** and Django 6.0 (isolated `/tmp` venvs per the
+   matrix-testing rule) — before considering per-column expansion.
 5. FilterSet leaf adapter invoking the original filter against the
    correlated inner root through the distinct-suppressing helper
    (C.3 + C.3a).
@@ -749,8 +815,22 @@ make stale:
 7. Cut over direct and flattened generated leaves; remove the
    framework-added global `distinct` per the multiset contract.
 8. Live proofs for both generated origins + SQL-shape assertions (C.5).
-9. Validate Django 5.2/6.0, SQLite/PostgreSQL, multi-database aliases;
-   capture the PostgreSQL plan artifact from actually emitted SQL.
+9. Validate the **exact acceptance floor** and the current release
+   (follow-up review, finding 5): run the Slice A classifier and Slice B
+   predicate suites under Python 3.10 with an exact `Django==5.2.0` pin —
+   not merely `Django>=5.2`, which resolves to the newest compatible
+   release and proves nothing about 5.2.0 — and retain the
+   current-version (Django 6.0.x) job as the other end of the supported
+   range. `field.path_infos`, `PathInfo.m2m`, and `PathInfo.to_opts` all
+   carry the required reverse-FK semantics at 5.2.0; new code must not
+   rely on APIs added by later 5.2 patch releases, Django 6.0, or
+   Python 3.11+ (including convenience typing APIs without an existing
+   project compatibility import). SQLite/PostgreSQL and multi-database
+   aliases validate as before; capture the PostgreSQL plan artifact from
+   actually emitted SQL. The floor changes neither runtime caching nor
+   lazy evaluation — classification stays a type-finalization operation;
+   aliases, routers, visibility querysets, and request values stay
+   resolve-time inputs.
 10. Slice D documentation updates; leave search grouping and the `search:`
     surface to card 049.
 

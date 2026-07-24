@@ -9,10 +9,12 @@ the Decision-4 owner-aware Relay-vs-scalar conditional in
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import uuid
 from collections import OrderedDict
 from typing import Any, NamedTuple
+from unittest import mock
 
 import pytest
 import strawberry
@@ -6919,3 +6921,495 @@ def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup():
     assert (
         BookFilter._generation_origin_for_field(field, "not_a_real_lookup") == "override_generated"
     )
+
+
+# ======================================================================
+# Round-5 High 3: parameterized fail-closed signature acceptance matrix
+# ----------------------------------------------------------------------
+# The Part 1 plan enumerates a FINITE authorization boundary; round-5 High 3
+# requires an acceptance row for EVERY enumerated signature member, not only the
+# handful previously exercised. A shared pre-fanned harness proves the SAME four
+# invariants for each mutation: the capability token stays EQUAL, the semantic
+# signature DIVERGES, no reserved ``EXISTS`` alias attaches, and the ORIGINAL
+# outer invocation's result (the framework-``distinct`` collapse of the pre-fan)
+# wins. Helper descriptors are covered in BOTH halves the signature models --
+# instance ``__dict__`` override and class-level descriptor replacement.
+# ======================================================================
+
+
+class _R5PreFanBookFilter(FilterSet):
+    """Module-scope harness: an eligible direct-M2M ``Book.genres`` leaf.
+
+    ``Genre`` is NOT registered as a Relay node, so ``genres`` stays the review's
+    exact ``ModelMultipleChoiceFilter`` family (the one whose ``get_filter_predicate``
+    reads ``field.to_field_name``), generated through the package's own machinery ->
+    eligible, token-bearing. The snapshot is frozen once at import; each test seeds
+    its own rows and re-derives the live signature.
+    """
+
+    class Meta:
+        model = library_models.Book
+        fields = {"genres": ["exact"]}
+
+
+def _r5_prefan_candidate():
+    _R5PreFanBookFilter.get_filters()
+    candidate = _R5PreFanBookFilter._expansion_snapshot().candidates["genres"]
+    assert candidate.eligible is True
+    assert candidate.token is not None
+    return candidate
+
+
+def _seed_r5_prefan_genre_book():
+    """One ``Book`` pre-fanned by TWO loans (distinct patrons).
+
+    A relation JOIN to ``loans`` with no ``distinct`` makes the one book appear
+    twice, so a correlated ``EXISTS`` (which suppresses the framework fan-out
+    ``distinct``) preserves the pre-fan while the original outer invocation
+    (honoring ``distinct``) collapses it. Returns ``(book, genre)``.
+
+    The genre's ``name`` is set to its OWN pk (as a string). ``get_filter_predicate``
+    with a ``to_field="name"`` redirect builds ``{genres: getattr(genre, "name")}`` --
+    i.e. it filters the M2M by the EXTRACTED value against the target pk -- so the
+    name must be a valid pk for the failed-closed outer predicate to still match the
+    same genre (round-5 Blocker 2). For every other (pk-based) mutation the name is
+    irrelevant.
+    """
+    genre = library_models.Genre.objects.create(name="temp")
+    genre.name = str(genre.pk)
+    genre.save(update_fields=["name"])
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="book-1")
+    book.genres.add(genre)
+    patron_a = library_models.Patron.objects.create(name="pa", email="a@example.com")
+    patron_b = library_models.Patron.objects.create(name="pb", email="b@example.com")
+    library_models.Loan.objects.create(book=book, patron=patron_a, note="l1")
+    library_models.Loan.objects.create(book=book, patron=patron_b, note="l2")
+    return book, genre
+
+
+def _r5_prefanned_books():
+    return library_models.Book.objects.filter(loans__isnull=False).order_by("id")
+
+
+# -- instance-override mutations (each keeps effective behavior identical so the
+#    ONLY observable change is the fail-closed routing collapse) ----------------
+
+
+def _r5_mut_get_method_instance(leaf):
+    original = leaf.get_method
+    leaf.get_method = lambda qs: original(qs)
+
+
+def _r5_mut_is_noop_instance(leaf):
+    original = leaf.is_noop
+    leaf.is_noop = lambda qs, value: original(qs, value)
+
+
+def _r5_mut_get_filter_predicate_instance(leaf):
+    original = leaf.get_filter_predicate
+    leaf.get_filter_predicate = lambda value: original(value)
+
+
+def _r5_mut_field_to_field_name(leaf):
+    # The form field was built by pre-validation (resolving the submitted value by
+    # pk); redirecting its ``to_field_name`` now changes ONLY the effective runtime
+    # target the model-choice predicate reads (round-5 Blocker 2). The seeded genre's
+    # name equals its own pk, so the failed-closed outer predicate
+    # (``{genres: getattr(genre, "name")}``) resolves to a valid pk and still matches
+    # the same book -> a clean single-row ``distinct`` collapse.
+    leaf.field.to_field_name = "name"
+
+
+def _r5_mut_conjoined(leaf):
+    leaf.conjoined = True
+
+
+def _r5_mut_always_filter(leaf):
+    # ``MultipleChoiceFilter.always_filter`` defaults True; flipping it diverges the
+    # signature. With a non-empty submitted value the leaf still applies, so the
+    # failed-closed outer result is unchanged.
+    leaf.always_filter = False
+
+
+def _r5_mut_null_value(leaf):
+    leaf.null_value = "dst-sentinel"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(_r5_mut_get_method_instance, id="get_method"),
+        pytest.param(_r5_mut_is_noop_instance, id="is_noop"),
+        pytest.param(_r5_mut_get_filter_predicate_instance, id="get_filter_predicate"),
+        pytest.param(_r5_mut_field_to_field_name, id="field_to_field_name"),
+        pytest.param(_r5_mut_conjoined, id="conjoined"),
+        pytest.param(_r5_mut_always_filter, id="always_filter"),
+        pytest.param(_r5_mut_null_value, id="null_value"),
+    ],
+)
+def test_signature_matrix_instance_mutation_fails_closed(mutate):
+    """Every enumerated signature member, mutated on the LIVE instance, fails closed.
+
+    Asserts the four invariants for each member: token EQUAL, signature DIVERGES,
+    no reserved ``EXISTS`` alias, and the ORIGINAL outer result (the pre-fan
+    collapsed to one row) rather than the correlated adapter's preserved pre-fan.
+    """
+    candidate = _r5_prefan_candidate()
+    book, genre = _seed_r5_prefan_genre_book()
+    fs = _R5PreFanBookFilter(
+        data={"genres": [str(genre.pk)]},
+        queryset=_r5_prefanned_books(),
+        request=HttpRequest(),
+    )
+    # Validate FIRST so the live form field is built (by pk) BEFORE any mutation --
+    # mirrors a consumer mutating effective runtime state post-validation.
+    assert fs.form.is_valid()
+    leaf = fs.filters["genres"]
+    mutate(leaf)
+    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(leaf) != candidate.fingerprint
+    qs = fs.qs
+    assert _reserved_aliases(qs) == []
+    assert "EXISTS" not in str(qs.query).upper()
+    assert list(qs.values_list("pk", flat=True)) == [book.pk]
+
+
+@contextlib.contextmanager
+def _r5_patched_class_descriptor(leaf_cls, name):
+    """Temporarily replace ``leaf_cls.<name>`` with a behavior-identical delegate.
+
+    The delegate has the SAME effect as the original (so the failed-closed outer
+    result stays deterministic) but a DIFFERENT object identity, so the signature's
+    class-descriptor half diverges. ``mock.patch.object`` restores the original --
+    including deleting an inherited attribute it had to add -- on exit.
+    """
+    original = getattr(leaf_cls, name)
+
+    def _delegate(self, *args, **kwargs):
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(leaf_cls, name, _delegate):
+        yield
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "name",
+    [
+        "get_method",
+        "is_noop",
+        "get_filter_predicate",
+        "filter",
+    ],
+)
+def test_signature_matrix_class_descriptor_swap_fails_closed(name):
+    """A class-level descriptor replacement (the OTHER signature half) fails closed.
+
+    The signature intentionally captures each helper in two halves; this covers the
+    class-descriptor half for the full ``.filter`` call graph. Same four invariants.
+    """
+    candidate = _r5_prefan_candidate()
+    book, genre = _seed_r5_prefan_genre_book()
+    fs = _R5PreFanBookFilter(
+        data={"genres": [str(genre.pk)]},
+        queryset=_r5_prefanned_books(),
+        request=HttpRequest(),
+    )
+    assert fs.form.is_valid()
+    leaf = fs.filters["genres"]
+    with _r5_patched_class_descriptor(type(leaf), name):
+        assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+        assert _fingerprint_of(leaf) != candidate.fingerprint
+        qs = fs.qs
+        assert _reserved_aliases(qs) == []
+        assert "EXISTS" not in str(qs.query).upper()
+        assert list(qs.values_list("pk", flat=True)) == [book.pk]
+
+
+@pytest.mark.django_db
+def test_signature_matrix_untouched_leaf_routes_and_preserves_prefan():
+    """Positive control: the untampered live leaf re-derives the frozen signature.
+
+    Proves the round-5 Blocker-2 build-on-deepcopy capture of the effective
+    ``field.to_field_name`` still yields a signature EQUAL to a genuine request's
+    live signature (so genuine requests are never falsely failed closed): the leaf
+    routes through ONE correlated ``EXISTS`` and PRESERVES the pre-fan (two rows).
+    """
+    candidate = _r5_prefan_candidate()
+    book, genre = _seed_r5_prefan_genre_book()
+    fs = _R5PreFanBookFilter(
+        data={"genres": [str(genre.pk)]},
+        queryset=_r5_prefanned_books(),
+        request=HttpRequest(),
+    )
+    leaf = fs.filters["genres"]
+    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(leaf) == candidate.fingerprint
+    qs = fs.qs
+    assert len(_reserved_aliases(qs)) == 1
+    assert str(qs.query).upper().count("EXISTS") == 1
+    assert list(qs.values_list("pk", flat=True)) == [book.pk, book.pk]
+
+
+@pytest.mark.django_db
+def test_blocker2_live_field_to_field_name_mutation_fails_closed_pre_fanned():
+    """Round-5 Blocker 2: a live ``field.to_field_name`` mutation fails closed.
+
+    ``ModelMultipleChoiceFilter.get_filter_predicate`` reads the built form field's
+    ``to_field_name``, NOT ``extra["to_field_name"]``. Before the fix the signature
+    signed the constructor copy, so a post-validation mutation of the LIVE field
+    (``leaf.field.to_field_name = "name"``) left the token AND signature unchanged
+    and the leaf STILL routed through the correlated adapter -- which suppresses the
+    framework ``distinct`` and preserves the pre-fanned Book multiplicity. Signing
+    the effective runtime read now diverges the signature, so the leaf fails closed
+    to the original outer invocation (honoring ``distinct``): the reserved alias is
+    absent and the pre-fan collapses. Asserts token equality, signature mismatch,
+    alias absence, and the original outer result.
+    """
+    candidate = _r5_prefan_candidate()
+    book, genre = _seed_r5_prefan_genre_book()
+    fs = _R5PreFanBookFilter(
+        data={"genres": [str(genre.pk)]},
+        queryset=_r5_prefanned_books(),
+        request=HttpRequest(),
+    )
+    # Validation (with the default pk-based field) resolves the submitted value to
+    # the Genre instance; only AFTER that does the consumer mutate the live field.
+    assert fs.form.is_valid()
+    leaf = fs.filters["genres"]
+    assert (leaf.extra or {}).get("to_field_name") is None
+    leaf.field.to_field_name = "name"
+    assert leaf.field.to_field_name == "name"  # the effective runtime target moved
+    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(leaf) != candidate.fingerprint
+    qs = fs.qs
+    assert _reserved_aliases(qs) == []
+    assert "EXISTS" not in str(qs.query).upper()
+    # The failed-closed outer predicate ({genres: genre.name}, where the seeded
+    # name equals the genre pk) still matches the book, but honors distinct -> ONE
+    # row, not the adapter's preserved [book, book].
+    assert list(qs.values_list("pk", flat=True)) == [book.pk]
+
+
+# ======================================================================
+# Round-5 Blocker 1: an ``extra``-only class-level ``FILTER_DEFAULTS`` shadow is
+# consumer-owned. A shadow that keeps the standard filter class but supplies its
+# own ``extra`` factory (restricted queryset, non-default ``to_field_name``, ...)
+# is a documented django-filter customization; whole-entry ownership now honors it
+# instead of discarding it under Relay conversion.
+# ======================================================================
+
+
+def _register_relay(model):
+    # Build the Relay-node type dynamically so each call gets a fresh type bound to
+    # ``model`` (the autouse registry-isolation fixture clears it between tests).
+    meta = type("Meta", (), {"model": model, "interfaces": (strawberry.relay.Node,)})
+    relay_type = type(f"{model.__name__}RelayType", (DjangoType,), {"Meta": meta})
+    apply_interfaces(relay_type, relay_type.__django_strawberry_definition__)
+    return relay_type
+
+
+@pytest.mark.django_db
+def test_blocker1_m2m_extra_only_shadow_is_consumer_owned():
+    """Same base M2M class + a consumer ``extra`` (restricted queryset) is honored."""
+    import django_filters
+    from django.db import models as dj_models
+    from django_filters import filterset as df_filterset
+
+    _register_relay(library_models.Genre)
+    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
+
+    class BookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            dj_models.ManyToManyField: {
+                "filter_class": base_entry["filter_class"],  # SAME base class
+                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+
+    leaf = BookFilter.get_filters()["genres"]
+    # The consumer's class survives -- NOT discarded for a package GlobalID.
+    assert isinstance(leaf, django_filters.ModelMultipleChoiceFilter)
+    assert not isinstance(leaf, GlobalIDMultipleChoiceFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    assert "genres" not in BookFilter._expansion_snapshot().candidates
+    # OBSERVABLE: the consumer's restricted queryset survived generation (a GlobalID
+    # replacement would have stripped it as a model-choice-only extra).
+    assert leaf.field.queryset.count() == 0
+
+
+@pytest.mark.django_db
+def test_blocker1_fk_extra_only_shadow_is_consumer_owned():
+    """Same base FK class + a consumer ``extra`` (non-default to_field_name) is kept."""
+    import django_filters
+    from django.db import models as dj_models
+    from django_filters import filterset as df_filterset
+
+    _register_relay(library_models.Shelf)
+    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ForeignKey]
+
+    class BookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            dj_models.ForeignKey: {
+                "filter_class": base_entry["filter_class"],  # SAME base class
+                "extra": lambda f: {
+                    "queryset": library_models.Shelf.objects.all(),
+                    "to_field_name": "code",
+                },
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf": ["exact"]}
+
+    leaf = BookFilter.get_filters()["shelf"]
+    assert isinstance(leaf, django_filters.ModelChoiceFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    assert "shelf" not in BookFilter._expansion_snapshot().candidates
+    # OBSERVABLE: the consumer's non-default to_field target survived.
+    assert leaf.field.to_field_name == "code"
+
+
+@pytest.mark.django_db
+def test_blocker1_extra_only_shadow_survives_related_filter_expansion():
+    """An ``extra``-only shadow on a child survives ``RelatedFilter`` expansion."""
+    import django_filters
+    from django.db import models as dj_models
+    from django_filters import filterset as df_filterset
+
+    _register_relay(library_models.Genre)
+    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
+
+    class ChildBookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            dj_models.ManyToManyField: {
+                "filter_class": base_entry["filter_class"],
+                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+
+    class LoanParentFilter(FilterSet):
+        book = RelatedFilter(ChildBookFilter, field_name="book")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    leaf = LoanParentFilter.get_filters()["book__genres"]
+    assert isinstance(leaf, django_filters.ModelMultipleChoiceFilter)
+    assert not isinstance(leaf, GlobalIDMultipleChoiceFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    assert "book__genres" not in LoanParentFilter._expansion_snapshot().candidates
+    assert leaf.field.queryset.count() == 0
+
+
+@pytest.mark.django_db
+def test_blocker1_extra_only_shadow_runs_outer_with_no_reserved_alias():
+    """End-to-end: the honored ``extra``-only shadow runs OUTER, not through EXISTS."""
+    import django_filters  # noqa: F401
+    from django.db import models as dj_models
+    from django_filters import filterset as df_filterset
+
+    _register_relay(library_models.Genre)
+    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
+
+    class BookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            dj_models.ManyToManyField: {
+                "filter_class": base_entry["filter_class"],
+                "extra": lambda f: {"queryset": library_models.Genre._default_manager.all()},
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+
+    BookFilter.get_filters()
+    assert "genres" not in BookFilter._expansion_snapshot().candidates
+
+    genre_a = library_models.Genre.objects.create(name="A")
+    genre_b = library_models.Genre.objects.create(name="B")
+    branch = library_models.Branch.objects.create(name="Central")
+    shelf = library_models.Shelf.objects.create(code="S", branch=branch)
+    book1 = library_models.Book.objects.create(title="book-1", shelf=shelf)
+    book1.genres.add(genre_a)
+    book2 = library_models.Book.objects.create(title="book-2", shelf=shelf)
+    book2.genres.add(genre_b)
+    book3 = library_models.Book.objects.create(title="book-3", shelf=shelf)
+    book3.genres.add(genre_a, genre_b)
+
+    # The consumer's ModelMultipleChoiceField cleans a raw pk list -- a shape the
+    # discarded GlobalID primitive would have rejected -- proving the consumer ran.
+    result = BookFilter(
+        data={"genres": [str(genre_a.pk)]},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert _reserved_aliases(result) == []
+    assert "EXISTS" not in str(result.query).upper()
+    assert set(result.values_list("title", flat=True)) == {"book-1", "book-3"}
+
+
+@pytest.mark.django_db
+def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
+    """Positive control: an untouched entry in a shallow-copied defaults map is NOT
+
+    falsely treated as consumer-owned. A ``{**base, M2M: {...}}`` shadow that changes
+    ONLY the M2M entry reuses the SAME nested object for the untouched forward-FK
+    entry, so the FK relation stays ``framework_default`` and is still converted to
+    the package GlobalID primitive, while the changed M2M entry is
+    ``override_generated`` and keeps the consumer class.
+    """
+    from django.db import models as dj_models
+    from django_filters import filterset as df_filterset
+
+    _register_relay(library_models.Genre)
+    _register_relay(library_models.Shelf)
+    base_m2m = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
+
+    class BookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            dj_models.ManyToManyField: {
+                "filter_class": base_m2m["filter_class"],
+                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"], "shelf": ["exact"]}
+
+    filters = BookFilter.get_filters()
+    genres_field = library_models.Book._meta.get_field("genres")
+    shelf_field = library_models.Book._meta.get_field("shelf")
+    # The CHANGED M2M entry -> consumer-owned; class preserved.
+    assert BookFilter._generation_origin_for_field(genres_field, "exact") == "override_generated"
+    assert not isinstance(filters["genres"], GlobalIDMultipleChoiceFilter)
+    # The UNTOUCHED FK entry (same object in the shallow copy) -> framework default;
+    # still converted to the package GlobalID primitive.
+    assert BookFilter._generation_origin_for_field(shelf_field, "exact") == "framework_default"
+    assert isinstance(filters["shelf"], GlobalIDFilter)

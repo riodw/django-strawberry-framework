@@ -1,385 +1,384 @@
-# Third adversarial implementation review: row-preserving predicates Part 1
+# Fourth adversarial implementation review: row-preserving predicates Part 1
 
 ## Verdict
 
-The latest revision closes the three concrete defects from the second review:
+The latest revision closes the previous review's concrete probes:
 
-- an own class-body declaration now transitions unconditionally to
-  `origin="declared"` and loses any borrowed generation token;
-- the live signature now includes the non-pk-`to_field` marker and the
-  directly assigned / class-level `.filter` implementation;
-- a forward Relay relationship using `in` now preserves the lookup-aware
-  `GlobalIDMultipleChoiceFilter`; and
-- the PostgreSQL artifact, `exclude=True` invariant, glossary text, live-test
-  guide, and previously omitted relation-fixture tree entries have been added.
+- generated-filter helper overrides are now part of the signature;
+- a consumer `FilterSet.__init__` override prevents capability-token minting;
+- Relay relation overrides that replace the filter class survive direct and
+  expanded generation;
+- the expanded non-pk-`to_field` `in` path now has a complete adapter regression;
+- the PostgreSQL artifact generator emits its canonical footer and has a
+  regeneration guard; and
+- the stale provenance documentation was replaced with the finite-boundary
+  contract.
 
-Those are real improvements and their focused regressions exercise the intended
-production paths. Part 1 is still not ready for final sign-off, however. The
-authorization model remains incomplete in two independently reproducible ways:
+Those corrections are substantive. Part 1 is still not ready for sign-off,
+however. Two independently reproducible ownership/integrity failures remain:
 
-1. the “canonical semantic signature” does not cover the effective behavior
-   dynamically invoked by django-filter filters; and
-2. `Meta.filter_overrides` on a Relay relation is discarded and reclassified as
-   a safe package replacement.
+1. a shadowed class-level `FILTER_DEFAULTS` entry is recognized as
+   consumer-owned only when its `filter_class` changes, so an `extra`-only
+   override is still discarded by Relay conversion; and
+2. the signature records the constructor copy of `to_field_name`, while
+   django-filter executes against the mutable live form-field value.
 
-Both violate the normative fail-closed contract in the [Part 1 plan][part1-plan].
-The first can change the multiplicity of a consumer-mutated, pre-fanned input.
-The second silently replaces a consumer-owned filter before the live gate is
-even reached.
+The first silently removes a documented django-filter customization. The
+second reopens the pre-fanned multiplicity failure that the signature was
+introduced to prevent. Both contradict the normative authorization state
+machine in the [Part 1 plan][part1-plan] and the shipped claim in the
+[glossary][glossary].
 
-No production files were changed during this review. Per repository policy,
-pytest was not run because this was a review request rather than an explicit
-test-run request. The results below were reproduced in isolated Django
-processes against the current checkout; the multiplicity reproduction used an
-in-memory migrated fakeshop database and did not touch the tracked SQLite file.
+No production files were changed during this review. The reproductions ran in
+isolated in-memory fakeshop databases and did not touch the tracked SQLite
+file. Per repository policy, pytest was not run because the request was for a
+code review, not an explicit test run.
 
-## Blocker 1 — the semantic signature still does not identify the effective filter behavior
+## Blocker 1 — `FILTER_DEFAULTS` ownership still compares only the filter class
 
-The expanded
-`django_strawberry_framework/filters/sets.py::_CandidateFingerprint` records:
+The new Relay ownership boundary in
+`django_strawberry_framework/filters/sets.py::FilterSet._generation_origin_for_field`
+does not identify the complete django-filter selection. For a shadowed
+class-level `FILTER_DEFAULTS`, it compares only:
 
-- the concrete class;
-- `field_name`, `lookup_expr`, `method`, `exclude`, and `distinct`;
-- an instance-level `.filter` assignment and the class-level `.filter`
-  descriptor;
-- the non-pk-`to_field` marker; and
-- `conjoined`, `always_filter`, and `null_value`.
-
-That is stronger than the prior tuple, but it is not the “single-source
-semantic signature” claimed by the source and plan. Capturing the top-level
-`.filter` descriptor does not capture the helpers that descriptor dispatches
-through dynamically.
-
-For example, django-filter's generated `ModelMultipleChoiceFilter` inherits a
-`.filter()` implementation that calls all of the following on the live
-instance:
-
-```text
-self.is_noop(...)
-self.get_method(...)
-self.get_filter_predicate(...)
-self.field.to_field_name
+```python
+shadowed.get("filter_class") is not base.get("filter_class")
 ```
 
-None of those effective callables, instance overrides, or the effective
-relation target stored on the form field is represented by
-`_CandidateFingerprint`. A consumer can therefore mutate a generated live
-filter through a normal django-filter extension seam while retaining both the
-token and an equal signature.
+That is insufficient. A `FILTER_DEFAULTS` entry is a generation policy
+containing both `filter_class` and `extra`. Changing only `extra` is a normal
+django-filter customization: it can restrict the relation queryset, select a
+`to_field_name`, change requiredness, or supply other constructor state while
+deliberately retaining the standard filter class.
+
+Upstream
+`django_filters.filterset.BaseFilterSet.filter_for_lookup` consumes both parts.
+The package origin oracle consumes only one. The two paths therefore disagree
+about ownership.
 
 ### Reproduction
 
-The reproduction used a generated `Book.genres` `ModelMultipleChoiceFilter`,
-which is an eligible direct M2M candidate. Its incoming queryset was
-deliberately pre-fanned by two `Loan` rows for the same `Book`. After form
-validation, the live filter's `get_filter_predicate` was assigned a
-consumer-owned callable with the same predicate result:
+The reproduction registered `Genre` as a Relay-node target and shadowed the
+M2M default with the **same** upstream
+`ModelMultipleChoiceFilter` class but a consumer-owned `extra` factory:
 
 ```python
-leaf.get_filter_predicate = lambda value: {"genres": value}
+base = dict(
+    django_filters.filterset.BaseFilterSet.FILTER_DEFAULTS[
+        models.ManyToManyField
+    ],
+)
+
+
+class BookFilter(FilterSet):
+    FILTER_DEFAULTS = {
+        **django_filters.filterset.BaseFilterSet.FILTER_DEFAULTS,
+        models.ManyToManyField: {
+            "filter_class": base["filter_class"],
+            "extra": lambda field: {
+                "queryset": Genre.objects.none(),
+                "required": True,
+            },
+        },
+    }
+
+    class Meta:
+        model = Book
+        fields = {"genres": ["exact"]}
 ```
 
 The current checkout produced:
 
 ```text
-authorized True True
+class GlobalIDMultipleChoiceFilter
+is_global True
+origin FilterGenerationProvenance(
+    origin='package_replacement',
+    framework_added_distinct=True,
+    expanded_from=(),
+    generation_capable=False,
+)
+extra {'required': True}
+candidate CandidateFilterMetadata(... eligible=True, fingerprint=None, token=None)
+```
+
+The consumer's filter class happens to equal the base class, but its generation
+policy does not. The package nevertheless:
+
+- classifies the selection as `framework_default`;
+- replaces it with `GlobalIDMultipleChoiceFilter`;
+- strips the consumer's relation queryset as a model-choice-only extra;
+- stamps the result `package_replacement`; and
+- publishes a framework candidate row.
+
+The absent token prevents correlated routing, but it cannot recover the filter
+class, queryset validation, or wire shape already discarded during generation.
+This is the same public-surface loss as the prior Relay override blocker through
+an untested half of the same extension API.
+
+It also directly falsifies the glossary statement that a shadowed
+`FILTER_DEFAULTS` “keeps its own wire shape and is never converted to a package
+GlobalID primitive.”
+
+### Required root-cause correction
+
+Model the result of django-filter's lookup-default selection as one explicit,
+immutable ownership-bearing value rather than independently inferring ownership
+from one member of its mapping.
+
+The selection must include at least:
+
+- the resolved selection field and lookup;
+- the effective default entry selected through the field-class MRO;
+- the selected `filter_class`;
+- the selected `extra` provider and its effective constructor parameters; and
+- whether that entry came from the unmodified base defaults,
+  `Meta.filter_overrides`, or a class-level `FILTER_DEFAULTS` shadow.
+
+`filter_for_lookup` and `filter_for_field` must consume that single verdict.
+Any consumer change to the effective selected entry — class, `extra`, or other
+generation policy — remains consumer-owned, is returned unchanged, and is
+ineligible. A package GlobalID replacement is legal only when the **entire**
+effective selection is proven to come from the unmodified framework default.
+
+For the current dictionary shape, identity of the selected entry is a safer
+minimum than comparing only `filter_class`: an ordinary shallow
+`{**BaseFilterSet.FILTER_DEFAULTS}` copy retains the original nested entry
+objects for untouched field classes, while replacing one entry gives the
+changed class an independent object. A fully normalized selection result is
+still the stronger architecture because it prevents the ownership oracle and
+upstream parameter construction from drifting again.
+
+Required regressions:
+
+- direct M2M and forward-FK Relay relations with the same base filter class but
+  a different `extra` factory;
+- an observable restricted queryset or non-default `to_field_name`, not only a
+  class assertion;
+- expansion through `RelatedFilter`;
+- unchanged consumer wire shape, `origin="override_generated"`, no candidate
+  row, and no reserved predicate alias; and
+- a positive control showing an untouched entry in a shallow copied defaults
+  mapping is not falsely treated as modified unless the specification
+  deliberately makes any `FILTER_DEFAULTS` shadow globally consumer-owned.
+
+Do not fix this by withholding only the token or relabeling the replacement.
+The consumer object must survive generation.
+
+## Blocker 2 — the signature signs declared constructor state, not the effective runtime field
+
+`django_strawberry_framework/filters/sets.py::_fingerprint_of` records:
+
+```python
+(filter_instance.extra or {}).get("to_field_name")
+```
+
+The accompanying source and plan describe that as the effective relation
+target. It is not. django-filter's
+`MultipleChoiceFilter.get_filter_predicate` executes against:
+
+```python
+self.field.to_field_name
+```
+
+`filter.field` is a lazily built, cached form field on the live per-request
+filter. Once built, its `to_field_name` can diverge from `extra` without
+changing any signed value. The implementation deliberately avoids reading the
+built field because the field object itself is not equality-stable across
+deepcopy, but the string/`None` attribute that runtime actually consumes **is**
+normalizable. Signing the declaration instead of the effective read leaves the
+authorization boundary incomplete.
+
+### Reproduction
+
+The reproduction used the same eligible generated `Book.genres`
+`ModelMultipleChoiceFilter` family as the prior helper-mutation finding and a
+Book queryset pre-fanned by two Loan rows.
+
+Two genres were created:
+
+- the submitted genre had pk `1` and name `"2"`;
+- the book was related to genre pk `2`.
+
+After validation built the live filter field, the reproduction changed only:
+
+```python
+leaf.field.to_field_name = "name"
+```
+
+The constructor state remained `extra["to_field_name"] is None`. The submitted
+genre instance therefore contributed its name `"2"` to
+`get_filter_predicate`, redirecting the effective predicate to genre pk `2`.
+
+The current checkout produced:
+
+```text
+before effective None extra None
+token_equal True
+fingerprint_equal True
+effective_to_field name
 routed [1, 1]
 outer [1]
 ```
 
-The two authorization booleans mean the live token still equals the frozen
-token and `_fingerprint_of(leaf) == candidate.fingerprint`. The routed adapter
-therefore suppresses the filter's `distinct` and preserves the two incoming
-rows. The original outer invocation—the behavior the fail-closed contract
-promises for a consumer-mutated filter—honors `distinct` and returns one row.
+The token and signature still authorize the correlated adapter. It suppresses
+the framework `distinct` and preserves the two incoming Book occurrences. The
+original outer invocation — the required fail-closed behavior for a
+consumer-mutated live filter — honors `distinct` and returns one occurrence.
 
-This is a consumer-visible compatibility regression, not merely an internal
-metadata imperfection. It is the exact pre-fanned multiplicity boundary that
-the Part 1 multiset contract deliberately leaves under consumer ownership.
-
-Other variants exist without changing `.filter` itself:
-
-- replace `get_method` to change `filter` versus `exclude`;
-- replace `is_noop` to change whether a restrictive leaf is applied;
-- replace `get_filter_predicate` to target a different lookup; or
-- change `field.to_field_name` / the constructor state from which that field is
-  built.
-
-Adding only `get_filter_predicate` to the tuple would close one probe while
-leaving the abstraction wrong.
+This is a result-set regression at the exact multiset boundary Part 1 promises
+to protect. It is not merely an over-broad documentation claim.
 
 ### Required root-cause correction
 
-The authorization boundary needs an explicit, complete integrity model for the
-supported generated filter families:
+The semantic integrity model must normalize the values the effective
+implementation reads at execution, not proxies from which those values were
+originally constructed.
 
-1. Treat a consumer override of `FilterSet.__init__` as a generation-capability
-   break. `__init__` is the standard place a consumer replaces or mutates
-   `self.filters`; checking only `filter_for_field`, `filter_for_lookup`, and
-   `FILTER_DEFAULTS` knowingly leaves that ordinary seam open.
-2. Define one normalized runtime-behavior signature for the package-generated
-   invocation. It must cover the effective helper call graph and state used by
-   every eligible django-filter family, including instance and class overrides
-   of `get_method`, `get_filter_predicate`, and `is_noop`, plus the effective
-   relation target (`field.to_field_name`) and any execution-relevant
-   constructor state.
-3. Prove the normalization is deepcopy-stable on the exact dependency floor
-   (Python 3.10, Django 5.2.0, and the supported django-filter floor) and on the
-   current matrix. Querysets and form fields cannot be compared by object
-   identity, so any structural normalization must state how those values are
-   represented.
-4. Add a pre-fanned multiplicity regression using an instance helper override,
-   not only a `.filter` replacement. It must assert the original outer result,
-   absence of a reserved alias, and token-equality/signature-mismatch.
+For `ModelMultipleChoiceFilter`, the normalized runtime signature must include
+the effective `filter_instance.field.to_field_name`. A sound build-time capture
+can force form-field construction on a disposable deepcopy of the generated
+filter and record only the primitive string/`None` value; the request-time
+capture can read the same primitive from the live field. This avoids comparing
+queryset or form-field object identity while still signing the actual runtime
+input.
 
-If arbitrary post-construction mutation is intentionally outside the supported
-contract, the plan, glossary, and source must stop claiming that **any**
-consumer mutation fails closed. That would be a material narrowing of the
-current specification, not a documentation-only cleanup. The higher-quality
-resolution is to make the stated integrity boundary true.
+The same audit must cover the rest of the helper call graph by following real
+runtime reads:
 
-## Blocker 2 — Relay conversion erases `Meta.filter_overrides` ownership
+- `is_noop` reads `extra["required"]` and the effective field choices when
+  `always_filter` is false;
+- `get_filter_predicate` reads the effective form-field target;
+- the package GlobalID filters read their live parent/owner definition during
+  decode and validation; and
+- future django-filter upgrades may add state to these supported families.
 
-The plan says `Meta.filter_overrides` products are consumer-origin,
-immediately ineligible, and preserve today's outer invocation byte-for-byte.
-That is true for the scalar tests currently committed, but false for a relation
-whose target implements Relay `Node`.
+The root abstraction should therefore be a per-supported-family normalized
+behavior schema, with tests derived from that schema, rather than an
+ever-growing generic tuple whose completeness is asserted manually. If a
+family's effective state cannot be normalized safely, that family must be
+ineligible until it can be proven safe.
 
-The sequence in [the FilterSet implementation][filter-sets] is:
+Add an end-to-end pre-fanned regression for the live
+`field.to_field_name` mutation above. It must assert token equality, signature
+mismatch, the original outer result, and absence of the reserved alias.
 
-1. upstream `BaseFilterSet.filter_for_lookup` selects the consumer's relation
-   override;
-2. `FilterSet.filter_for_lookup` sees a Relay target and replaces that selected
-   class with `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`;
-3. `FilterSet.filter_for_field` reconstructs `type(default)`, which is now the
-   package GlobalID class rather than the consumer class; and
-4. the replacement is stamped unconditionally as `origin="package_replacement"`.
+## High 3 — the normative signature matrix is still under-tested
 
-The resolved-field origin oracle is therefore bypassed at the exact Relay
-replacement boundary it is supposed to govern.
+The Part 1 plan explicitly enumerates `.filter`, `get_method`,
+`get_filter_predicate`, `is_noop`, the pk-qualification marker,
+`to_field_name`, `conjoined`, `always_filter`, and `null_value` as the finite
+authorization boundary.
 
-### Reproduction
+The committed end-to-end signature tests currently exercise:
 
-The reproduction registered `Genre` as a Relay-node target and declared:
+- `.filter`;
+- `get_filter_predicate`;
+- the pk-qualification marker; and
+- `distinct`.
 
-```python
-class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
-    pass
+There is no focused fail-closed regression for:
 
+- `get_method`;
+- `is_noop`;
+- effective `field.to_field_name`;
+- `conjoined`;
+- `always_filter`; or
+- `null_value`.
 
-class BookFilter(FilterSet):
-    class Meta:
-        model = Book
-        fields = {"genres": ["exact"]}
-        filter_overrides = {
-            models.ManyToManyField: {
-                "filter_class": CustomRelationFilter,
-            },
-        }
-```
+Blocker 2 demonstrates why implementation-by-enumeration requires an
+acceptance row for every enumerated member: a field named in the plan and
+dataclass can still represent the wrong runtime value. Parameterize a shared
+pre-fanned fail-closed harness across every signature member and assert the
+same four invariants for each: the token remains equal, the signature diverges,
+the reserved alias is absent, and the original outer invocation's result wins.
 
-The current checkout produced:
+Tests for helper descriptors should cover both instance overrides and
+class-level descriptor replacement, because the signature intentionally has
+separate halves for those cases. Tests for the execution knobs should use
+values that make the mutation observably change behavior rather than checking
+dataclass inequality alone.
 
-```text
-GlobalIDMultipleChoiceFilter
-FilterGenerationProvenance(
-    origin='package_replacement',
-    framework_added_distinct=True,
-    expanded_from=(),
-    generation_capable=True,
-)
-candidate present: True
-eligible/token: True True
-```
+## Medium 4 — the specification and standing documentation overstate the current implementation
 
-The consumer's `CustomRelationFilter` is absent, the live surface is marked
-package-owned, and the candidate is authorized. This is more severe than a
-false-positive optimization: the consumer override has already been discarded,
-so failing closed later cannot recover its behavior.
+The [Part 1 plan][part1-plan], [glossary][glossary], and implementation
+docstrings now agree on a finite rather than universal mutation boundary. That
+is an improvement. Two statements within that finite contract are still false:
 
-The same architectural question applies to a relation governed by a
-class-level `FILTER_DEFAULTS` override. The current capability check prevents a
-token from being minted, but Relay conversion can still replace the
-consumer-selected filter class before the outer invocation.
+- a shadowed `FILTER_DEFAULTS` does not necessarily keep its wire shape
+  (Blocker 1); and
+- the signature does not record the effective `to_field_name` runtime reads
+  (Blocker 2).
 
-### Required root-cause correction
+Correct the implementation first, then keep one canonical inventory of the
+supported-family behavior schema and have the plan/glossary summarize it. The
+current repeated inventories in `_CandidateFingerprint`, `_fingerprint_of`,
+`FilterSet._apply_flat_leaves`, the plan, and the glossary are already
+expensive to reconcile and made it easy for “constructor state” to be described
+as “effective state.”
 
-Resolve filter ownership once, before any Relay transformation, and carry that
-decision through `filter_for_lookup` and `filter_for_field`:
+The plan header also remains “Rev 8,” while its body now contains several
+“round-4” normative amendments introduced after the Rev 8 history paragraph.
+Either advance the revision/history or remove revision-number narration in
+favor of source-control history; the current identity makes it unclear which
+contract was actually reviewed.
 
-- a consumer-selected `Meta.filter_overrides` or `FILTER_DEFAULTS` product must
-  be returned unchanged and remain consumer-origin/ineligible;
-- a package GlobalID replacement may be constructed and stamped
-  `package_replacement` only when the upstream selection is proven to be the
-  framework default;
-- `filter_for_lookup` and `filter_for_field` must consume one shared selection
-  result rather than independently rediscovering lookup class, Relay shape, and
-  origin; and
-- the Relay wire-shape policy for an explicit consumer relation override must
-  be documented. Under the plan's current byte-for-byte rule, the override owns
-  that shape; the framework must not silently force it back to a package
-  GlobalID primitive.
+## Medium 5 — the tracked SQLite delta is still unrelated to the stated change
 
-Required regressions should cover forward FK and M2M relation overrides, both
-direct and through `RelatedFilter` expansion, plus a class-level
-`FILTER_DEFAULTS` relation override. At least one test must make the custom
-filter return observably different rows and prove no candidate row or reserved
-predicate alias exists.
+Commit `94054416` changes `examples/fakeshop/db.sqlite3` from blob
+`feace7e4…` to `c0e1280…`, at the same byte size. The PostgreSQL capture script
+explicitly states that it never opens the tracked SQLite file, its seed is
+rolled back on PostgreSQL, and no migration or canonical seed change in the
+commit requires a new SQLite image.
 
-Do not repair this by merely stamping the package replacement
-`override_generated`. That would prevent correlated routing but would still
-discard the consumer's filter—the primary defect.
-
-## High 3 — the non-pk-`to_field` list path is not yet proven through the adapter
-
-The forward Relay `in` generation defect is fixed at its source, and the new
-tests prove:
-
-- generated FK-to-pk and FK-to-non-pk-`to_field` leaves are
-  `GlobalIDMultipleChoiceFilter`;
-- the input annotation is list-shaped;
-- primitive execution decodes every GlobalID; and
-- the non-pk target is compared through `relation__pk__in`.
-
-The complete cross-product is still missing. The only parent-FilterSet
-authorization/`EXISTS` regression for the non-pk-`to_field` fixture uses the
-scalar `exact` leaf. The new `in` tests invoke the generated child leaf
-directly on the child queryset; they do not expand it across the reverse
-`children` prefix, mint and verify its candidate capability, or execute it
-inside the correlated adapter.
-
-Add one `ParentFilter` regression for the generated expanded
-`children__target__in` leaf over targets whose pk differs from the stored
-`to_field` value. It should prove:
-
-- the expanded live class and list annotation;
-- marker and token survival through deepcopy/rebasing;
-- one correlated `EXISTS`, no outer join or `DISTINCT`;
-- correct rows for two encoded target pks; and
-- restrictive empty-list behavior through the adapter.
-
-This is a remaining acceptance gap rather than a reproduced production
-failure, but it is the only test that composes all three recently corrected
-mechanisms: lookup-aware `in`, non-pk pk-qualification, and live
-candidate authorization.
-
-## High 4 — the PostgreSQL artifact is not reproducible under the repository documentation contract
-
-The new [PostgreSQL artifact][pg-artifact] is valuable evidence. It contains the
-actual emitted SQL, parameterized SQL, environment, deterministic seed size,
-shape assertions, and `EXPLAIN (ANALYZE, BUFFERS)` output. The accompanying
-[PostgreSQL regression][pg-test] also drives the real `LoanFilter` production
-path.
-
-However, [the capture script][pg-capture] does not emit the mandatory canonical
-link-definition footer. The checked-in artifact currently contains all ten
-required group headers, but `scripts/capture_pg_predicate_explain.py::main`
-ends after the environment section and immediately calls
-`ARTIFACT_PATH.write_text(...)`. Running the documented regeneration command
-therefore removes:
-
-```text
-<!-- LINK DEFINITIONS -->
-<!-- Root -->
-...
-<!-- External -->
-```
-
-That makes the generated file differ from its generator and leaves a
-“do not hand-edit” artifact that cannot be regenerated without violating the
-standing-document rule. The generator must render the canonical footer itself,
-and a test should assert the generated document passes the same link-block
-validation as other standing docs.
-
-[The tree][tree] also omits all three newly introduced PostgreSQL-evidence
-paths:
-
-- `docs/row-preserving-predicates-part1-pg-explain.md`;
-- `scripts/capture_pg_predicate_explain.py`; and
-- `tests/test_predicate_pg_explain.py`.
-
-The relation-fixture omissions from the prior review are fixed, but the new
-files created while fixing the planner-evidence gap introduced a second round
-of tree drift. Regenerate `docs/TREE.md` through its owner rather than adding
-these entries by hand.
-
-## Medium 5 — source and standing-document claims contradict the implementation
-
-`django_strawberry_framework/filters/sets.py::FilterGenerationProvenance`
-still contains the old statement that a consumer `filter_for_field` mutation
-cannot be detected and that the residual is “harmless” because eligibility is
-decided purely from path, provenance, and `method`. The new architecture was
-introduced precisely because that statement is false: live token/signature
-verification now exists to fail those mutations closed.
-
-Elsewhere, `_CandidateFingerprint`, `_fingerprint_of`,
-`FilterSet._apply_flat_leaves`, [the Part 1 plan][part1-plan], and
-[the glossary][glossary] make the opposite over-broad claim: the signature
-covers every behavior-changing state and any consumer mutation runs the
-original outer invocation. Blocker 1 disproves that claim.
-
-After the integrity model is corrected:
-
-- remove the obsolete “harmless residual” text;
-- describe the exact capability and signature boundary once;
-- make the plan, glossary, and implementation docstrings use the same finite
-  contract; and
-- keep local comments focused on why a particular state element is normalized,
-  rather than repeating a total-safety claim at several sites.
-
-This is not cosmetic. Contradictory source contracts make later django-filter
-upgrades difficult to audit and encourage new execution knobs to be added
-without updating authorization.
-
-## Medium 6 — tracked SQLite binary churn remains unexplained
-
-`examples/fakeshop/db.sqlite3` is still modified at the same byte size, while
-the current production/test changes do not add a migration or document a seed
-fixture update requiring a new tracked database image.
-
-Restore the binary if the change is test residue. If it is intentional,
-regenerate it through the repository's owning seed workflow and document the
-logical fixture change that requires it. An opaque SQLite delta should not ride
-with a predicate-compiler implementation.
+If the database update records an intentional Kanban/glossary source-of-truth
+change, document the logical rows changed and regenerate it through that
+owner's workflow. Otherwise it remains unrelated binary churn and should be
+removed from the change. A clean git status does not make an opaque committed
+database delta self-explanatory.
 
 ## What is now satisfactorily closed
 
-The following prior findings should remain closed while the two authorization
-blockers are repaired:
+The following prior findings are closed and should remain closed while the two
+new blockers are repaired:
 
-- own declarations borrowed from generated leaves are restamped `declared`,
-  stripped of their token, absent from the final candidate map, and execute on
-  the outer queryset;
-- the signature detects a flipped non-pk pk-qualification marker and a directly
-  replaced `.filter` callable;
-- forward Relay FK `in` generation now retains the list-shaped filter for both
-  ordinary and non-pk-`to_field` relations;
-- the specification now states the reachable `exclude=True` invariant instead
-  of requiring an impossible generated leaf;
-- the glossary documents the multiset-selection behavior;
-- the live-test guide documents the mixed OR, test-scoped Loan connection, and
-  shard execution;
-- the relation fixture files now appear in the tree; and
-- a real PostgreSQL planner artifact and guarded PostgreSQL regression now
-  exist.
+- own class-body declarations borrowed from generated leaves are
+  unconditionally restamped `declared` and stripped of generation tokens;
+- instance helper mutation is no longer authorized merely because `.filter`
+  itself is unchanged;
+- a consumer `__init__` override makes the generating class non-capable;
+- Relay relation overrides that change the selected filter class survive
+  direct FK, direct M2M, expanded, and observable outer-execution paths;
+- the forward Relay FK `in` lookup remains list-shaped;
+- the expanded `children__target__in` non-pk-`to_field` path composes lookup
+  selection, marker rebasing, token verification, correlated execution, SQL
+  shape, and restrictive empty-list semantics;
+- the PostgreSQL artifact generator now emits the canonical ten-group footer,
+  and a pure test guards the checked-in artifact tail;
+- the PostgreSQL regression drives the real `LoanFilter` path;
+- the stale “harmless residual” provenance statement is gone; and
+- `docs/TREE.md` includes the new package-test files. Its documented trees do
+  not catalog arbitrary `docs/` and `scripts/` files, so the absence of the
+  artifact/capture script from that scoped tree is not itself a remaining
+  defect.
+
+The classifier, correlated-`EXISTS` primitive, live HTTP coverage, Medtrics
+fixture, connection pagination proof, and PostgreSQL evidence remain
+architecturally sound. The remaining problem is narrower: ownership and
+semantic authorization still model only part of the effective django-filter
+selection/execution state.
 
 ## Recommended correction order
 
-1. Preserve consumer relation overrides before Relay conversion; this is a
-   direct public-surface behavior loss.
-2. Replace the partial mutation tuple with a complete integrity model and gate
-   consumer `FilterSet.__init__` overrides.
-3. Add the expanded non-pk-`to_field` `in` adapter regression.
-4. Make the PostgreSQL artifact generator reproduce the canonical link footer
-   and regenerate the tree for all new paths.
-5. Reconcile the stale provenance docstring and the over-broad plan/glossary
-   claims with the corrected implementation.
-6. Remove or explain the tracked SQLite binary change.
-
-The correlated-`EXISTS` classifier and neutral predicate primitive remain the
-right architecture. The remaining root issue is still the ownership boundary
-between django-filter's mutable/customizable filter objects and the
-package-owned correlated invocation.
+1. Preserve an `extra`-only class-level `FILTER_DEFAULTS` selection before
+   Relay conversion.
+2. Replace constructor-only `to_field_name` signing with normalization of the
+   effective runtime field value and audit every runtime read in each eligible
+   family.
+3. Turn the finite signature inventory into a parameterized acceptance matrix.
+4. Reconcile the plan, glossary, and source inventories with that executable
+   schema and advance the plan revision identity.
+5. Remove or explain the tracked SQLite binary delta.
 
 <!-- LINK DEFINITIONS -->
 
@@ -388,23 +387,18 @@ package-owned correlated invocation.
 <!-- docs/ -->
 [glossary]: GLOSSARY.md#filterset
 [part1-plan]: row-preserving-predicates-part1-plan.md
-[pg-artifact]: row-preserving-predicates-part1-pg-explain.md
-[tree]: TREE.md
 
 <!-- docs/SPECS/ -->
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[filter-sets]: ../django_strawberry_framework/filters/sets.py
 
 <!-- tests/ -->
-[pg-test]: ../tests/test_predicate_pg_explain.py
 
 <!-- examples/ -->
 
 <!-- scripts/ -->
-[pg-capture]: ../scripts/capture_pg_predicate_explain.py
 
 <!-- .venv/ -->
 

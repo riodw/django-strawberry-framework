@@ -394,7 +394,8 @@ class _CandidateFingerprint:
     - the non-pk-``to_field`` pk-qualification decision (``pk_qualified``), which
       swings the compiled predicate between ``<relation>=<pk>`` and
       ``<relation>__pk=<pk>``, plus the effective relation target
-      (``to_field_name``, from constructor state);
+      (``to_field_name``, read from the live built form field the model-choice
+      predicate consumes, not the constructor copy -- round-5 Blocker 2);
     - the django-filter execution knobs generated instances carry that affect how
       the filter matches (``conjoined`` / ``always_filter`` / ``null_value``).
 
@@ -459,11 +460,15 @@ class _CandidateFingerprint:
     get_filter_predicate_descriptor: Any = None
     is_noop_override: Any = None
     is_noop_descriptor: Any = None
-    # The effective relation target the form field is built from, represented by the
-    # deepcopy-stable CONSTRUCTOR state ``extra["to_field_name"]`` (a str / None), NEVER
-    # the lazily built form field -- querysets and form fields are not identity- or
-    # value-comparable across ``copy.deepcopy`` (a queryset ``==`` even executes), so
-    # only the construction seam that determines ``field.to_field_name`` is signed.
+    # The EFFECTIVE relation target django-filter's model-choice predicate reads at
+    # execution: the live ``field.to_field_name`` off the built form field (round-5
+    # Blocker 2), captured via ``_effective_to_field_name``. NOT the constructor copy
+    # ``extra["to_field_name"]`` -- the two diverge when a consumer mutates the built
+    # field after construction, and the runtime honors the built field. The form field
+    # itself is not identity/value-comparable across ``copy.deepcopy`` (a queryset
+    # ``==`` even executes), but the primitive str / None it exposes IS deepcopy-stable
+    # (an untampered deepcopy rebuilds the same value from ``extra``), so only that
+    # primitive is signed -- never the field object.
     to_field_name: Any = None
 
 
@@ -480,6 +485,38 @@ def _effective_callable_pair(filter_instance: Any, name: str) -> tuple[Any, Any]
     and would fail every genuine request closed. Compared by equality only.
     """
     return (filter_instance.__dict__.get(name), getattr(type(filter_instance), name, None))
+
+
+def _effective_to_field_name(filter_instance: Any) -> Any:
+    """Return the EFFECTIVE ``to_field_name`` django-filter reads at execution.
+
+    ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` build their predicate from
+    ``self.field.to_field_name`` -- the lazily built, cached form field -- NOT from
+    ``extra["to_field_name"]`` (round-5 Blocker 2). The two can diverge: a consumer
+    can mutate the built field's ``to_field_name`` after form construction without
+    touching ``extra``, redirecting the effective relation target while the
+    constructor copy is unchanged. Signing the constructor proxy therefore left the
+    authorization boundary incomplete; this signs the value the runtime consumes.
+
+    Accessing ``.field`` forces (and caches) the form-field build. That is exactly
+    what django-filter does during filtering, so:
+
+    * at REQUEST time the caller passes the live per-request instance -- itself a
+      disposable ``copy.deepcopy`` of the class-level leaf -- so this reads the SAME
+      field object ``get_filter_predicate`` will read (a live mutation is observed);
+    * at BUILD time the caller passes a disposable ``copy.deepcopy`` (see the
+      ``get_filters._build`` capture site) so forcing the build never mutates or
+      caches a field on the shared class-level instance.
+
+    The built form field is not identity/value-stable across ``copy.deepcopy``, but
+    the primitive ``str`` / ``None`` it exposes IS: an untampered deepcopy rebuilds
+    the field from the same ``extra`` and re-derives the same ``to_field_name``. A
+    filter family whose form field carries no ``to_field_name`` (a plain ``Filter``,
+    or the GlobalID multi-choice backed by ``_GlobalIDMultipleChoiceField``, which
+    matches by decoded pk and never reads ``to_field_name``) yields ``None`` on both
+    sides, so this is inert for those families.
+    """
+    return getattr(getattr(filter_instance, "field", None), "to_field_name", None)
 
 
 def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
@@ -525,10 +562,40 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
       the concrete-class function (identical object across deepcopy, since the class
       is not copied). A consumer assigning any of these on the live instance
       diverges the corresponding override half.
-    - ``to_field_name`` = ``(filter_instance.extra or {}).get("to_field_name")``: a
-      str / None in the ``extra`` dict, deepcopied by value. The built form field is
-      never read (it is not identity/value-stable across deepcopy), so only this
-      construction seam is signed.
+    - ``to_field_name`` = ``_effective_to_field_name(filter_instance)`` = the live
+      ``filter_instance.field.to_field_name`` (round-5 Blocker 2). django-filter's
+      model-choice predicate reads the built form field's ``to_field_name``, which a
+      consumer can mutate after construction WITHOUT touching ``extra``; signing the
+      constructor copy missed that runtime read. The built field is not
+      identity/value-stable across deepcopy, but the primitive it exposes is: at
+      request time this reads the live field (a mutation diverges); at build time the
+      caller fingerprints a disposable deepcopy so forcing the build never mutates
+      the shared class-level instance. See ``_effective_to_field_name``.
+
+    Effective-read audit (round-5 Blocker 2) -- every runtime read of the supported
+    generated families was traced to confirm the signature signs the value the
+    implementation actually consumes, not a construction proxy:
+
+    - ``get_filter_predicate`` (``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter``)
+      reads ``self.field.to_field_name`` -> signed as the effective read above (its
+      callable is also signed, so a swap of the method itself diverges too).
+    - ``is_noop`` reads ``extra["required"]`` and the field choices, but ONLY to
+      decide whether an EMPTY submitted value is applied. Row-preserving routing
+      fires exclusively for a NON-empty value (an empty value never activates a
+      restrictive leaf), where ``is_noop`` returns ``False`` regardless of
+      ``required`` / choices, so neither is a result-set vector for a ROUTED leaf;
+      mutating them cannot change a routed leaf's rows. ``is_noop`` itself (both
+      halves) is signed so a swap of the method still fails closed. ``always_filter``
+      (which would flip that empty-value decision) IS signed.
+    - the GlobalID relation filters read their live parent/owner definition during
+      decode/validation, which affects which GlobalIDs are ACCEPTED, not the outer
+      row multiplicity the adapter preserves; their ``.filter`` call graph and the
+      ``pk_qualified`` marker are already signed, and the effective-``to_field_name``
+      read is inert for them (the ``_GlobalIDMultipleChoiceField`` carries none).
+
+    Adding a NEW effective-read vector for a supported family means extending this
+    audit and ``_CandidateFingerprint`` (not a per-marker gate); a family whose
+    effective state cannot be signed deepcopy-stably must be made ineligible.
     """
     get_method_override, get_method_descriptor = _effective_callable_pair(
         filter_instance,
@@ -559,7 +626,7 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
         get_filter_predicate_descriptor=predicate_descriptor,
         is_noop_override=is_noop_override,
         is_noop_descriptor=is_noop_descriptor,
-        to_field_name=(getattr(filter_instance, "extra", None) or {}).get("to_field_name"),
+        to_field_name=_effective_to_field_name(filter_instance),
     )
 
 
@@ -1054,9 +1121,19 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                         # django-filter's per-request deepcopy carries it by
                         # value onto ``self.filters[name]``.
                         _stamp_generation_token(filter_instance, token)
+                        # Fingerprint a disposable deepcopy, NOT the shared
+                        # class-level instance: capturing the effective
+                        # ``field.to_field_name`` (round-5 Blocker 2) forces the
+                        # lazy form-field build, which must not mutate/cache a
+                        # ``_field`` on the class-level leaf that every per-request
+                        # deepcopy would then inherit. The deepcopy re-derives a
+                        # byte-identical signature (every field is deepcopy-stable)
+                        # and is discarded. This mirrors django-filter's own
+                        # per-request deepcopy, so the frozen signature equals a
+                        # genuine request's live signature.
                         candidates[filter_name] = replace(
                             row,
-                            fingerprint=_fingerprint_of(filter_instance),
+                            fingerprint=_fingerprint_of(copy.deepcopy(filter_instance)),
                             token=token,
                         )
                     else:
@@ -1374,9 +1451,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            an eligible framework leaf).
         2. The selection class is the resolved output field's class -- except for
            ``isnull``, which upstream re-selects against ``models.BooleanField``.
-        3. If a non-empty ``Meta.filter_overrides`` OR a shadowed class-level
-           ``FILTER_DEFAULTS`` governs that SELECTION class with a filter class
-           other than the base default (``try_dbfield`` MRO walk on each), the leaf
+        3. If a non-empty ``Meta.filter_overrides`` governs that SELECTION class,
+           OR a shadowed class-level ``FILTER_DEFAULTS`` selects a DIFFERENT entry
+           object for it than the unmodified base default (``try_dbfield`` MRO walk
+           on each; whole-entry object identity, so an ``extra``-only override is
+           caught, not just a ``filter_class`` change -- round-5 Blocker 1), the leaf
            is consumer-origin (``override_generated``); otherwise it is
            ``framework_default``.
 
@@ -1398,19 +1477,31 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if overrides and try_dbfield(overrides.get, selection_cls):
             return "override_generated"
         # A class-level ``FILTER_DEFAULTS`` shadow is the OTHER consumer-selection
-        # seam (Blocker 2): a subclass that reassigns ``FILTER_DEFAULTS`` changes
-        # which filter class the default path selects, exactly like
+        # seam (round-5 Blocker 1): a subclass that reassigns ``FILTER_DEFAULTS``
+        # changes the WHOLE generation policy the default path selects, exactly like
         # ``Meta.filter_overrides`` but at class scope. ``super().filter_for_lookup``
-        # walks the MERGED ``cls.FILTER_DEFAULTS`` for ``field.__class__``, so a
-        # shadow that maps this selection field to a DIFFERENT filter class than the
-        # unmodified base default is consumer-origin -- and its product must not be
-        # forced back to a package GlobalID primitive. Identity-compared against the
-        # base map so an untouched subclass (inheriting ``FILTER_DEFAULTS`` by
-        # identity) skips the walk entirely.
+        # walks the MERGED ``cls.FILTER_DEFAULTS`` for ``field.__class__`` and
+        # consumes BOTH members of the selected entry -- its ``filter_class`` AND its
+        # ``extra`` provider (which can restrict the relation queryset, select a
+        # ``to_field_name``, change requiredness, or supply other constructor state
+        # while deliberately keeping the standard filter class). Comparing only
+        # ``filter_class`` therefore missed an ``extra``-only override, discarding a
+        # documented django-filter customization under Relay conversion. Compare the
+        # SELECTED ENTRY by object identity instead: the entry is the single
+        # ownership-bearing value django-filter selects, so any change to it -- class
+        # OR ``extra`` -- makes the leaf consumer-origin, and its product must not be
+        # forced back to a package GlobalID primitive. Object identity is exact for
+        # the dictionary shape upstream uses: an ordinary shallow
+        # ``{**BaseFilterSet.FILTER_DEFAULTS, Field: {...}}`` shadow reuses the SAME
+        # nested entry objects for every untouched field class (so they compare
+        # identical and stay ``framework_default``) while the one replaced field gets
+        # an independent object (so it is caught). The outer-map identity guard above
+        # already skips the walk for an untouched subclass that inherits
+        # ``FILTER_DEFAULTS`` by identity.
         if cls.FILTER_DEFAULTS is not filterset.BaseFilterSet.FILTER_DEFAULTS:
-            shadowed = try_dbfield(dict(cls.FILTER_DEFAULTS).get, selection_cls) or {}
-            base = try_dbfield(filterset.BaseFilterSet.FILTER_DEFAULTS.get, selection_cls) or {}
-            if shadowed.get("filter_class") is not base.get("filter_class"):
+            shadowed_entry = try_dbfield(dict(cls.FILTER_DEFAULTS).get, selection_cls)
+            base_entry = try_dbfield(filterset.BaseFilterSet.FILTER_DEFAULTS.get, selection_cls)
+            if shadowed_entry is not base_entry:
                 return "override_generated"
         return "framework_default"
 

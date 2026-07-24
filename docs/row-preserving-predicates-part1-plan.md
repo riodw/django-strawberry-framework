@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 8)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 10)
 
 ## Identity and completion ownership
 
@@ -71,7 +71,22 @@ Loan connection (fakeshop's default schema stays permanently list-only; the
 real `LoanType` / `LoanFilter` connection is gated OFF by default and
 exposed only under `override_settings` + `project_schema_override` for the
 acceptance test), and the correction of this document's lenient-fallback
-wording to the actual three-part `path_traverses_to_many` rule.
+wording to the actual three-part `path_traverses_to_many` rule. Rev 9 enacts
+the round-4 review ([`feedback.md`][feedback]): Relay-conversion ownership
+resolved once before conversion through the single `_generation_origin_for_field`
+oracle (a consumer relation override survives), the effective `.filter` call
+graph (`get_method` / `get_filter_predicate` / `is_noop`) added to the semantic
+signature, and a consumer `__init__` override made a capability break. Rev 10
+enacts the round-5 review ([`feedback.md`][feedback]): a shadowed class-level
+`FILTER_DEFAULTS` is now owned by **whole-entry object identity** (an
+`extra`-only override — same filter class, different `extra` provider — is
+consumer-owned too, not just a `filter_class` change — round-5 Blocker 1); the
+signature records the **effective** `field.to_field_name` the model-choice
+predicate reads at execution (captured on a disposable deepcopy at build time,
+read from the live built field at request time) rather than the constructor copy
+(round-5 Blocker 2); and the finite signature boundary is exercised by a
+parameterized fail-closed acceptance matrix — one row per enumerated member, in
+both the instance-override and class-descriptor halves (round-5 High 3).
 
 The first review's verified corrections continue to shape the plan:
 
@@ -561,9 +576,24 @@ missing/mismatch
   upstream selection is the proven framework default**. A consumer-selected
   relation filter — via `Meta.filter_overrides` or a shadowed class-level
   `FILTER_DEFAULTS` — is returned **unchanged**, stays `origin="override_generated"`
-  (ineligible, never a candidate), and keeps ownership of the wire shape. **Relay
-  wire-shape policy:** under the byte-for-byte rule the consumer override owns the
-  GraphQL input shape for that relation; the framework must not silently force it
+  (ineligible, never a candidate), and keeps ownership of the wire shape. Ownership
+  of a `FILTER_DEFAULTS` shadow is decided by **whole-entry object identity**, not
+  by comparing the `filter_class` alone (round-5 Blocker 1): the selected entry is
+  the single ownership-bearing value django-filter consumes (both its `filter_class`
+  and its `extra` provider), so an `extra`-only override — same standard filter
+  class, a consumer `extra` factory that restricts the relation queryset or selects
+  a `to_field_name` — is consumer-owned exactly like a class change. An ordinary
+  shallow `{**BaseFilterSet.FILTER_DEFAULTS, Field: {...}}` shadow reuses the SAME
+  nested entry object for every untouched field class, so those stay
+  `framework_default` and still convert (the changed field alone gets an independent
+  object and is caught). Both `filter_for_lookup` and `filter_for_field` consume this
+  one verdict, so the conversion decision and the origin stamp can never drift apart;
+  a fully-normalized selection value (resolved field + lookup + selected entry +
+  `filter_class` + `extra` provider + source) is the documented forward architecture
+  should the upstream `FILTER_DEFAULTS` shape ever stop preserving nested-entry
+  identity, at which point object identity would no longer be a sufficient proxy.
+  **Relay wire-shape policy:** under the byte-for-byte rule the consumer override owns
+  the GraphQL input shape for that relation; the framework must not silently force it
   back to a package GlobalID primitive. (The owner's OWN primary key remains a
   GlobalID regardless — that shape is mandated by Relay `Node` conformance, not a
   framework default a consumer repossesses.)
@@ -581,14 +611,26 @@ missing/mismatch
   django-filter families, no more and no less: the effective `.filter` **call
   graph** (`.filter` itself plus the helpers it dispatches through —
   `get_method`, `get_filter_predicate`, `is_noop` — each in an instance-override
-  and class-descriptor half), the non-pk-`to_field` pk-qualification marker and
-  `to_field_name` (from constructor state), the core fields (`field_name`,
-  `lookup_expr`, `method`, `exclude`, `distinct`), and the django-filter execution
-  knobs that change the compiled predicate (`conjoined`, `always_filter`,
-  `null_value`). State that is not identity/value-stable across `copy.deepcopy`
-  (querysets, the built form field) is represented only by its deepcopy-stable
-  constructor state. Token and signature are frozen together into the atomic
-  snapshot; a matching token alone is explicitly insufficient.
+  and class-descriptor half), the non-pk-`to_field` pk-qualification marker and the
+  **effective** `to_field_name` — the value the model-choice predicate reads off the
+  built form field at execution, not the constructor copy (round-5 Blocker 2; the
+  two diverge when a consumer mutates the built field post-validation, and the
+  runtime honors the built field) — the core fields (`field_name`, `lookup_expr`,
+  `method`, `exclude`, `distinct`), and the django-filter execution knobs that change
+  the compiled predicate (`conjoined`, `always_filter`, `null_value`). State that is
+  not identity/value-stable across `copy.deepcopy` (querysets, the built form field)
+  is represented only by a deepcopy-stable primitive: the effective `to_field_name`
+  is signed as the built field's `str` / `None`, captured on a **disposable
+  deepcopy** at build time (so forcing the lazy form-field build never mutates the
+  shared class-level leaf) and read from the live built field at request time. Token
+  and signature are frozen together into the atomic snapshot; a matching token alone
+  is explicitly insufficient. This finite boundary is the single canonical inventory
+  — `_CandidateFingerprint` / `_fingerprint_of` carry it; the glossary and this plan
+  summarize it — and every enumerated member has a fail-closed acceptance row in the
+  parameterized signature matrix (`tests/filters/test_sets.py`, round-5 High 3). An
+  audit of the remaining effective reads (documented on `_fingerprint_of`) confirms
+  the non-signed helper reads — `is_noop`'s `required` / choices and the GlobalID
+  filters' owner-decode read — are not result-set vectors for a *routed* leaf.
 - **Live signature verification, fail closed.** Immediately before
   correlated invocation,
   `django_strawberry_framework/filters/sets.py::FilterSet._apply_flat_leaves`
@@ -924,6 +966,16 @@ make stale:
   in `filters/sets.py`, `optimizer/predicates.py`, and
   `utils/relations.py` are consumed (deleted) by their implementing
   steps.
+- **Tracked `examples/fakeshop/db.sqlite3` provenance (round-5 Medium 5).**
+  The only logical delta this work makes to the tracked SQLite image is the
+  `filterset` glossary term — a single `glossary_glossaryterm` row whose `body`
+  (the row-preserving paragraph) and `updated_date` change. It is the
+  source-of-truth backing `docs/GLOSSARY.md#filterset`, edited exclusively
+  through the owner workflow (an ORM update of that one row followed by
+  `scripts/build_glossary_md.py` re-render — never a hand-edit of the rendered
+  Markdown and never a DB reset). A row-count diff against the parent commit is
+  identically zero across every table; the sole content change is that one row.
+  There is no migration, seed, or Kanban delta riding along.
 
 ## What this deliberately does not change
 

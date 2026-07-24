@@ -579,14 +579,19 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
     - ``get_filter_predicate`` (``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter``)
       reads ``self.field.to_field_name`` -> signed as the effective read above (its
       callable is also signed, so a swap of the method itself diverges too).
-    - ``is_noop`` reads ``extra["required"]`` and the field choices, but ONLY to
-      decide whether an EMPTY submitted value is applied. Row-preserving routing
-      fires exclusively for a NON-empty value (an empty value never activates a
-      restrictive leaf), where ``is_noop`` returns ``False`` regardless of
-      ``required`` / choices, so neither is a result-set vector for a ROUTED leaf;
-      mutating them cannot change a routed leaf's rows. ``is_noop`` itself (both
-      halves) is signed so a swap of the method still fails closed. ``always_filter``
-      (which would flip that empty-value decision) IS signed.
+    - ``is_noop`` (``MultipleChoiceFilter``) reads ``always_filter``,
+      ``extra["required"]`` and the field choices: it returns ``True`` (skip the
+      filter) when ``always_filter`` is falsy AND ``required`` is truthy AND the
+      submitted value covers EVERY choice -- so, contrary to a naive reading, it CAN
+      return ``True`` for a non-empty value. It is still not a result-set vector for a
+      ROUTED leaf, by equivalence rather than by never firing: when ``is_noop`` skips,
+      the leaf's ``.filter`` returns its argument unchanged, which on the routed path
+      is the correlated inner root (so the applicator attaches nothing and the OUTER is
+      unchanged) and on the unrouted path is the outer queryset (upstream ``return
+      qs``) -- identical rows either way. So mutating ``required`` / choices cannot
+      diverge a routed leaf from its outer semantics. ``always_filter`` (which forces
+      ``is_noop`` to ``False``) IS signed, and ``is_noop`` itself (both halves) is
+      signed, so a swap of the method still fails closed.
     - the GlobalID relation filters read their live parent/owner definition during
       decode/validation, which affects which GlobalIDs are ACCEPTED, not the outer
       row multiplicity the adapter preserves; their ``.filter`` call graph and the
@@ -1331,14 +1336,23 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # the Relay-relation branch below so ownership is never independently
         # rediscovered after the conversion decision in ``filter_for_lookup``.
         default_origin = cls._generation_origin_for_field(field, lookup_expr)
-        _stamp_generation_provenance(
-            default,
-            FilterGenerationProvenance(
-                origin=default_origin,
-                framework_added_distinct=framework_added_distinct,
-                generation_capable=generation_capable,
-            ),
-        )
+
+        def _stamp(instance: Any, origin: FilterOrigin) -> None:
+            # Every generation site on this method stamps the SAME
+            # ``framework_added_distinct`` / ``generation_capable`` bits (both fixed for
+            # this (field, lookup) pair); only ``origin`` and the target instance vary.
+            # A single closure removes the copy-paste so a future branch cannot stamp an
+            # inconsistent capability bit onto a replacement instance.
+            _stamp_generation_provenance(
+                instance,
+                FilterGenerationProvenance(
+                    origin=origin,
+                    framework_added_distinct=framework_added_distinct,
+                    generation_capable=generation_capable,
+                ),
+            )
+
+        _stamp(default, default_origin)
         if cls._is_own_pk_under_relay_owner(field):
             # The owner's own PK is a GlobalID over the wire. Honor the
             # lookup cardinality: an ``in`` lookup consumes a LIST of
@@ -1367,14 +1381,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 distinct=requires_distinct,
                 **default.extra,
             )
-            _stamp_generation_provenance(
-                own_pk_replacement,
-                FilterGenerationProvenance(
-                    origin="package_replacement",
-                    framework_added_distinct=framework_added_distinct,
-                    generation_capable=generation_capable,
-                ),
-            )
+            _stamp(own_pk_replacement, "package_replacement")
             return own_pk_replacement
         target_type = cls._resolve_relation_target_type(field, field_name)
         if target_type is None or not implements_relay_node(target_type):
@@ -1388,6 +1395,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # owns the wire shape byte-for-byte and the leaf stays override_generated
         # (ineligible), never discarded and re-stamped ``package_replacement``.
         if default_origin != "framework_default":
+            return default
+        if default.lookup_expr == "isnull":
+            # A relation null test stays the upstream Boolean, mirroring the own-PK
+            # ``isnull`` pass-through above. ``filter_for_lookup`` already kept the
+            # ``BooleanField`` default, so ``default`` is correctly shaped and already
+            # stamped ``framework_default``; converting it would emit a GlobalID-shaped
+            # input for a null test (a LIST on the multi-valued side) that raises at
+            # bind. No ``__pk`` marker applies -- a Boolean never reads it. The Boolean
+            # leaf stays eligible for the correlated-``EXISTS`` adapter exactly like any
+            # non-Relay to-many ``isnull`` (the adapter compiles the null semantics
+            # inside the pk-correlated inner root, row-preservingly).
             return default
         # Preserve the lookup-aware class ``filter_for_lookup`` already chose rather
         # than independently reselecting by cardinality (High 3 root cause).
@@ -1407,14 +1425,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             distinct=requires_distinct,
             **_strip_model_choice_extras(default.extra),
         )
-        _stamp_generation_provenance(
-            relay_replacement,
-            FilterGenerationProvenance(
-                origin="package_replacement",
-                framework_added_distinct=framework_added_distinct,
-                generation_capable=generation_capable,
-            ),
-        )
+        _stamp(relay_replacement, "package_replacement")
         # A forward FK/O2O bound on a NON-pk ``to_field`` stores and joins on that
         # ``to_field`` column, but a Relay GlobalID carries the target's PK. Set the
         # BOOLEAN pk-qualification flag so the GlobalID filter DERIVES the
@@ -1451,13 +1462,18 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            an eligible framework leaf).
         2. The selection class is the resolved output field's class -- except for
            ``isnull``, which upstream re-selects against ``models.BooleanField``.
-        3. If a non-empty ``Meta.filter_overrides`` governs that SELECTION class,
-           OR a shadowed class-level ``FILTER_DEFAULTS`` selects a DIFFERENT entry
-           object for it than the unmodified base default (``try_dbfield`` MRO walk
-           on each; whole-entry object identity, so an ``extra``-only override is
-           caught, not just a ``filter_class`` change -- round-5 Blocker 1), the leaf
-           is consumer-origin (``override_generated``); otherwise it is
-           ``framework_default``.
+        3. Select the ``FILTER_DEFAULTS``-plus-``filter_overrides`` entry EXACTLY as
+           ``super().filter_for_lookup`` does -- one ``try_dbfield`` MRO walk over
+           ``dict(cls.FILTER_DEFAULTS)`` updated with ``cls._meta.filter_overrides``
+           (merge order preserved, so a more-derived ``FILTER_DEFAULTS`` entry shadows
+           a less-derived override) -- and compare that selected entry by object
+           identity against the pure ``BaseFilterSet.FILTER_DEFAULTS`` selection. A
+           DIFFERENT entry object means a consumer seam governs the selection: either a
+           ``Meta.filter_overrides`` entry that actually wins the merged walk OR a
+           class-level ``FILTER_DEFAULTS`` shadow (round-5 Blocker 1). Whole-entry
+           identity catches an ``extra``-only override (restricted queryset,
+           ``to_field_name``, requiredness), not just a ``filter_class`` change; a
+           SAME object is ``framework_default``.
 
         This is the SINGLE ownership oracle both ``filter_for_lookup`` (which
         decides whether to convert a Relay-node relation to a package GlobalID
@@ -1473,36 +1489,47 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         except FieldLookupError:
             return "override_generated"
         selection_cls = models.BooleanField if lookup_type == "isnull" else type(resolved_field)
+        # Replicate django-filter's EXACT class selection so the oracle cannot drift
+        # from it in EITHER direction. ``BaseFilterSet.filter_for_lookup`` builds
+        # ``DEFAULTS = dict(cls.FILTER_DEFAULTS)``, then ``DEFAULTS.update(
+        # cls._meta.filter_overrides)``, then runs ONE ``try_dbfield`` MRO walk over the
+        # MERGED map for the selection class. Merge order is load-bearing: because the
+        # walk returns the FIRST (most-derived) class on the MRO present in the map, a
+        # more-derived entry contributed by ``FILTER_DEFAULTS`` SHADOWS a less-derived
+        # ``filter_overrides`` entry -- e.g. a ``OneToOneField`` selection keeps the
+        # base ``OneToOneField`` default even when ``filter_overrides`` supplies a
+        # ``ForeignKey`` entry, since ``OneToOneField`` is nearer on the MRO than its
+        # ``ForeignKey`` base. Walking ``filter_overrides`` ALONE (an earlier revision)
+        # mis-selected that shadowed override and mis-classified the leaf
+        # ``override_generated`` -- declining a legitimate Relay conversion (wire-shape
+        # regression) and dropping a genuine framework leaf from routing (false-closed).
+        #
+        # Comparing the merged SELECTION by object identity against the pure
+        # ``BaseFilterSet.FILTER_DEFAULTS`` selection subsumes BOTH consumer-selection
+        # seams in one check:
+        #   * ``Meta.filter_overrides`` -- when an override entry ACTUALLY governs the
+        #     selection class (upstream would select it), the merged walk returns that
+        #     override object, which is not the base object -> ``override_generated``.
+        #   * a class-level ``FILTER_DEFAULTS`` shadow (round-5 Blocker 1) -- a subclass
+        #     that reassigns ``FILTER_DEFAULTS`` changes the whole generation policy;
+        #     its replaced entry is an independent object -> ``override_generated``,
+        #     while an untouched shallow ``{**BaseFilterSet.FILTER_DEFAULTS, Field:
+        #     {...}}`` copy reuses the SAME nested object for every unchanged class, so
+        #     those stay ``framework_default``.
+        # The compared entry is the single ownership-bearing value django-filter selects
+        # (its ``filter_class`` AND its ``extra`` provider -- a restricted relation
+        # queryset, a ``to_field_name``, requiredness), so an ``extra``-only override is
+        # caught, not just a ``filter_class`` change. ``dict(cls.FILTER_DEFAULTS)`` is a
+        # shallow copy, so on an unmodified subclass the merged selection is the SAME
+        # object as the base selection and identity holds.
         overrides = getattr(cls._meta, "filter_overrides", None)
-        if overrides and try_dbfield(overrides.get, selection_cls):
+        merged_defaults = dict(cls.FILTER_DEFAULTS)
+        if overrides:
+            merged_defaults.update(overrides)
+        selected_entry = try_dbfield(merged_defaults.get, selection_cls)
+        base_entry = try_dbfield(filterset.BaseFilterSet.FILTER_DEFAULTS.get, selection_cls)
+        if selected_entry is not base_entry:
             return "override_generated"
-        # A class-level ``FILTER_DEFAULTS`` shadow is the OTHER consumer-selection
-        # seam (round-5 Blocker 1): a subclass that reassigns ``FILTER_DEFAULTS``
-        # changes the WHOLE generation policy the default path selects, exactly like
-        # ``Meta.filter_overrides`` but at class scope. ``super().filter_for_lookup``
-        # walks the MERGED ``cls.FILTER_DEFAULTS`` for ``field.__class__`` and
-        # consumes BOTH members of the selected entry -- its ``filter_class`` AND its
-        # ``extra`` provider (which can restrict the relation queryset, select a
-        # ``to_field_name``, change requiredness, or supply other constructor state
-        # while deliberately keeping the standard filter class). Comparing only
-        # ``filter_class`` therefore missed an ``extra``-only override, discarding a
-        # documented django-filter customization under Relay conversion. Compare the
-        # SELECTED ENTRY by object identity instead: the entry is the single
-        # ownership-bearing value django-filter selects, so any change to it -- class
-        # OR ``extra`` -- makes the leaf consumer-origin, and its product must not be
-        # forced back to a package GlobalID primitive. Object identity is exact for
-        # the dictionary shape upstream uses: an ordinary shallow
-        # ``{**BaseFilterSet.FILTER_DEFAULTS, Field: {...}}`` shadow reuses the SAME
-        # nested entry objects for every untouched field class (so they compare
-        # identical and stay ``framework_default``) while the one replaced field gets
-        # an independent object (so it is caught). The outer-map identity guard above
-        # already skips the walk for an untouched subclass that inherits
-        # ``FILTER_DEFAULTS`` by identity.
-        if cls.FILTER_DEFAULTS is not filterset.BaseFilterSet.FILTER_DEFAULTS:
-            shadowed_entry = try_dbfield(dict(cls.FILTER_DEFAULTS).get, selection_cls)
-            base_entry = try_dbfield(filterset.BaseFilterSet.FILTER_DEFAULTS.get, selection_cls)
-            if shadowed_entry is not base_entry:
-                return "override_generated"
         return "framework_default"
 
     @classmethod
@@ -1623,6 +1650,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``override_generated`` on ``filter_for_field``'s ``default``, so it is
         # ineligible). Only the proven framework default is converted below.
         if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
+            return default_class, params
+        if lookup_type == "isnull":
+            # A null test is a Boolean predicate, never a GlobalID, regardless of
+            # relation cardinality. ``super().filter_for_lookup`` already selected the
+            # ``BooleanField`` default for ``isnull``; converting it to a GlobalID would
+            # emit a nonsensical GlobalID-shaped input for a null test (a LIST input on
+            # the multi-valued side) that raises ``ValueError`` at bind. Mirror the
+            # own-PK ``isnull`` pass-through (spec-027 H1); the branches below convert
+            # only the equality (``exact``) and membership (``in``) wire shapes.
             return default_class, params
         if lookup_type == "in":
             # A relay-relation ``in`` lookup consumes a LIST of GlobalIDs, so it must

@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 10)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 11)
 
 ## Identity and completion ownership
 
@@ -86,7 +86,18 @@ predicate reads at execution (captured on a disposable deepcopy at build time,
 read from the live built field at request time) rather than the constructor copy
 (round-5 Blocker 2); and the finite signature boundary is exercised by a
 parameterized fail-closed acceptance matrix — one row per enumerated member, in
-both the instance-override and class-descriptor halves (round-5 High 3).
+both the instance-override and class-descriptor halves (round-5 High 3). Rev 11
+enacts a follow-up Fable review (round 6): the origin oracle now replicates
+django-filter's EXACT selection via ONE `try_dbfield` MRO walk over the MERGED
+`FILTER_DEFAULTS`-plus-`filter_overrides` map (a separate walk over
+`filter_overrides` alone mis-selected an override shadowed by a more-derived default,
+regressing the wire shape and dropping a framework leaf from routing — HIGH-3); a
+relation `isnull` stays the upstream `BooleanFilter` instead of a `ValueError`-shaped
+GlobalID (HIGH-2); `GlobalIDMultipleChoiceFilter` drops empty decoded `node_id`
+elements so a crafted empty-id GlobalID no-ops instead of 500ing, matching the single
+`GlobalIDFilter` guard (HIGH-1); plus the shared `_marked_pk_field_name` derivation, a
+`_stamp` provenance closure, corrected `is_noop` audit prose, and consolidated test
+scaffolds (DRY / LOW).
 
 The first review's verified corrections continue to shape the plan:
 
@@ -576,13 +587,22 @@ missing/mismatch
   upstream selection is the proven framework default**. A consumer-selected
   relation filter — via `Meta.filter_overrides` or a shadowed class-level
   `FILTER_DEFAULTS` — is returned **unchanged**, stays `origin="override_generated"`
-  (ineligible, never a candidate), and keeps ownership of the wire shape. Ownership
-  of a `FILTER_DEFAULTS` shadow is decided by **whole-entry object identity**, not
-  by comparing the `filter_class` alone (round-5 Blocker 1): the selected entry is
-  the single ownership-bearing value django-filter consumes (both its `filter_class`
-  and its `extra` provider), so an `extra`-only override — same standard filter
-  class, a consumer `extra` factory that restricts the relation queryset or selects
-  a `to_field_name` — is consumer-owned exactly like a class change. An ordinary
+  (ineligible, never a candidate), and keeps ownership of the wire shape. Ownership is
+  decided by replicating django-filter's EXACT class selection: one `try_dbfield` MRO
+  walk over `dict(cls.FILTER_DEFAULTS)` merged with `cls._meta.filter_overrides` (merge
+  order preserved), then a **whole-entry object-identity** comparison of that selected
+  entry against the pure `BaseFilterSet.FILTER_DEFAULTS` selection (round-5 Blocker 1;
+  round-6 HIGH-3 unified both consumer-selection seams into this one merged walk).
+  Merge order is load-bearing: a more-derived `FILTER_DEFAULTS` default shadows a
+  less-derived override (e.g. a `OneToOneField` selection keeps the base default even
+  when `filter_overrides` supplies a `ForeignKey` entry), so an earlier revision that
+  walked `filter_overrides` ALONE mis-selected that shadowed override and mis-stamped
+  the leaf `override_generated` — declining a legitimate Relay conversion (wire-shape
+  regression) and dropping a genuine framework leaf from routing (false-closed). The
+  selected entry is the single ownership-bearing value django-filter consumes (both its
+  `filter_class` and its `extra` provider), so an `extra`-only override — same standard
+  filter class, a consumer `extra` factory that restricts the relation queryset or
+  selects a `to_field_name` — is consumer-owned exactly like a class change. An ordinary
   shallow `{**BaseFilterSet.FILTER_DEFAULTS, Field: {...}}` shadow reuses the SAME
   nested entry object for every untouched field class, so those stay
   `framework_default` and still convert (the changed field alone gets an independent
@@ -596,7 +616,15 @@ missing/mismatch
   the GraphQL input shape for that relation; the framework must not silently force it
   back to a package GlobalID primitive. (The owner's OWN primary key remains a
   GlobalID regardless — that shape is mandated by Relay `Node` conformance, not a
-  framework default a consumer repossesses.)
+  framework default a consumer repossesses.) A relation `isnull` lookup is **never**
+  converted to a GlobalID even when framework-owned: a null test is a Boolean
+  predicate, so both `filter_for_lookup` and `filter_for_field` pass the upstream
+  `BooleanFilter` through unchanged, mirroring the own-PK `isnull` pass-through
+  (spec-027 H1). Only the equality (`exact`) and membership (`in`) wire shapes convert;
+  a GlobalID-shaped input for a null test (a LIST on the multi-valued side) raised
+  `ValueError` at bind (round-6 HIGH-2). The Boolean `isnull` leaf stays eligible for
+  the correlated-`EXISTS` adapter like any non-Relay to-many `isnull` — the pk-correlated
+  inner root compiles the null semantics row-preservingly.
 - **Token vs signature — provenance vs semantics (Blocker 2).** Two
   independent slots gate routing. The capability **token** proves
   *provenance*: the live instance descends from a framework generation site

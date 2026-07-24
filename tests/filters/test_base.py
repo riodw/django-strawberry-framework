@@ -400,6 +400,57 @@ def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everythin
 
 
 # ---------------------------------------------------------------------------
+# A crafted empty-id GlobalID ELEMENT of a non-empty list no-ops instead of 500ing
+# (round-6 Finding 1). The single ``GlobalIDFilter`` already no-ops an empty
+# ``node_id`` (its ``EMPTY_VALUES`` guard); the multi sibling dropped no empties, so
+# ``[to_base64(type, "")]`` decoded to ``[""]`` and reached ``genres__in=[""]`` (or a
+# per-element ``{genres: ""}`` on the non-``in`` path) -> ``ValueError`` at bind on an
+# integer pk. Distinct from an explicit ``[]`` (match-nothing, handled before decode).
+# ---------------------------------------------------------------------------
+
+
+class _CapturingQs:
+    """Predicate-capturing stub: records ``filter`` kwargs, no database needed."""
+
+    def __init__(self):
+        self.captured = {}
+
+    def distinct(self):
+        return self
+
+    def filter(self, **kwargs):
+        self.captured.update(kwargs)
+        return self
+
+
+def test_global_id_multiple_choice_filter_empty_node_id_in_path_is_noop():
+    """An all-vacuous ``in`` list strips to empty and no-ops (no predicate, no 500)."""
+    qs = _CapturingQs()
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
+    result = f.filter(qs, [relay.to_base64("GenreType", "")])
+    assert result is qs
+    assert qs.captured == {}
+
+
+def test_global_id_multiple_choice_filter_empty_node_id_exact_path_is_noop():
+    """The same guard covers the non-``in`` (per-element) path."""
+    qs = _CapturingQs()
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact")
+    result = f.filter(qs, [relay.to_base64("GenreType", "")])
+    assert result is qs
+    assert qs.captured == {}
+
+
+def test_global_id_multiple_choice_filter_mixed_empty_and_real_strips_empty():
+    """A vacuous element alongside a real id is dropped; the real id still applies."""
+    qs = _CapturingQs()
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
+    encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "")]
+    f.filter(qs, encoded)
+    assert qs.captured == {"genres__in": ["5"]}
+
+
+# ---------------------------------------------------------------------------
 # GlobalID relation filtering against a non-pk ``to_field`` (High 3)
 # ---------------------------------------------------------------------------
 

@@ -219,6 +219,24 @@ def _relation_uses_non_pk_to_field(model_field: Any) -> bool:
     return model_field.target_field is not model_field.related_model._meta.pk
 
 
+def _marked_pk_field_name(filter_instance: Filter) -> str | None:
+    """Derive the pk-qualified relation path for a marked GlobalID filter, else ``None``.
+
+    The single home for the ``_GLOBALID_RELATION_PK_ATTR`` read shared by
+    ``GlobalIDFilter.filter`` and ``GlobalIDMultipleChoiceFilter.filter``: a marked
+    filter (a forward FK/O2O bound on a non-pk ``to_field``) compiles against
+    ``f"{self.field_name}__pk"`` DERIVED from the LIVE ``field_name`` at filter time
+    (immune to ``_expand_related_filter`` rebasing, per ``_GLOBALID_RELATION_PK_ATTR``);
+    every other target keeps the raw ``{field_name__lookup_expr: node_id}`` predicate
+    (``None``). Sharing the derivation keeps the two siblings from drifting apart the
+    way an earlier per-method copy let the empty-``node_id`` guard reach only one of
+    them (round-6 Finding 1).
+    """
+    if getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False):
+        return f"{filter_instance.field_name}__pk"
+    return None
+
+
 class ArrayFilterMethod(_EmptyListAwareFilterMethod):
     """Empty-list-aware `FilterMethod` for `ArrayFilter` (see the shared base)."""
 
@@ -642,8 +660,8 @@ class GlobalIDFilter(Filter):
             # empty ``node_id`` would compile ``<relation>__pk__exact=""`` and raise a
             # 500 on an integer pk. Short-circuit to the untouched queryset either way.
             return qs
-        if getattr(self, _GLOBALID_RELATION_PK_ATTR, False):
-            pk_field_name = f"{self.field_name}__pk"
+        pk_field_name = _marked_pk_field_name(self)
+        if pk_field_name is not None:
             return _apply_lookup_predicate(self, qs, node_id, field_name=pk_field_name)
         return super().filter(qs, node_id)
 
@@ -763,21 +781,32 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         node_ids = [
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]
+        # Drop vacuous elements: a well-typed GlobalID with an empty id part decodes to
+        # ``""`` (passes decode + strategy validation) but is not a filter value, exactly
+        # as in the single ``GlobalIDFilter`` (its ``node_id in EMPTY_VALUES`` no-op).
+        # Without this, ``[""]`` reaches the predicate as ``<relation>__pk__in=[""]`` (or
+        # a per-element ``{field: ""}`` on the non-``in`` path) and raises a 500 on an
+        # integer pk -- the guard the single sibling had but this one lacked (round-6
+        # Finding 1). If nothing survives, no element constrains the result, so no-op to
+        # the untouched queryset -- the list-of-vacuous-ids analogue of the single
+        # filter's empty-id no-op, distinct from an explicit ``[]`` (the match-nothing
+        # membership predicate handled above BEFORE decode).
+        node_ids = [node_id for node_id in node_ids if node_id not in EMPTY_VALUES]
+        if not node_ids:
+            return qs
         if self.lookup_expr != "in":
             return super().filter(qs, node_ids)
-        # The boolean ``_GLOBALID_RELATION_PK_ATTR`` flag DERIVES the pk-qualified
-        # relation path ``f"{self.field_name}__pk"`` from the LIVE ``field_name`` at
-        # filter time (immune to ``_expand_related_filter`` rebasing) for a
-        # non-pk-``to_field`` forward relation; every other target passes
-        # ``field_name=None``, leaving the predicate byte-identical to the raw
-        # ``{field_name__in: node_ids}`` form. Framework generation stamps the flag on
-        # this filter for a forward, single-valued FK bound on a non-pk ``to_field``
+        # ``_marked_pk_field_name`` DERIVES the pk-qualified relation path
+        # ``f"{self.field_name}__pk"`` from the LIVE ``field_name`` (immune to
+        # ``_expand_related_filter`` rebasing) for a non-pk-``to_field`` forward relation;
+        # every other target passes ``None``, leaving the predicate byte-identical to the
+        # raw ``{field_name__in: node_ids}`` form. Framework generation stamps the marker
+        # on this filter for a forward, single-valued FK bound on a non-pk ``to_field``
         # whose ``in`` lookup is list-shaped (High 3): ``filter_for_field`` selects
-        # ``GlobalIDMultipleChoiceFilter`` for such an ``in`` and then applies the
-        # marker, so the pk-qualified path is honored identically to
-        # ``GlobalIDFilter``'s single-value ``in``.
-        marked = getattr(self, _GLOBALID_RELATION_PK_ATTR, False)
-        pk_field_name = f"{self.field_name}__pk" if marked else None
+        # ``GlobalIDMultipleChoiceFilter`` for such an ``in`` and applies the marker, so
+        # the pk-qualified path is honored identically to ``GlobalIDFilter``'s
+        # single-value ``in`` (shared derivation, one home).
+        pk_field_name = _marked_pk_field_name(self)
         return _apply_lookup_predicate(self, qs, node_ids, field_name=pk_field_name)
 
 

@@ -7036,6 +7036,39 @@ def _r5_mut_null_value(leaf):
     leaf.null_value = "dst-sentinel"
 
 
+def _r5_prefan_setup():
+    """Frozen candidate + a pre-fanned Book/Genre + an unvalidated request filterset.
+
+    The scaffold every signature-matrix test shares: the eligible frozen candidate,
+    the two-loan pre-fanned book, and the request-bound filterset over the pre-fanned
+    queryset. Each caller validates (or not) and reads / mutates the leaf itself.
+    """
+    candidate = _r5_prefan_candidate()
+    book, genre = _seed_r5_prefan_genre_book()
+    fs = _R5PreFanBookFilter(
+        data={"genres": [str(genre.pk)]},
+        queryset=_r5_prefanned_books(),
+        request=HttpRequest(),
+    )
+    return candidate, book, genre, fs
+
+
+def _assert_prefan_failed_closed(fs, candidate, book):
+    """The four fail-closed invariants shared by every signature-mutation test.
+
+    Token EQUAL, semantic signature DIVERGES, no reserved ``EXISTS`` alias, and the
+    ORIGINAL outer invocation's result (the pre-fan collapsed to one row by the
+    framework ``distinct``) rather than the correlated adapter's preserved pre-fan.
+    """
+    leaf = fs.filters["genres"]
+    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(leaf) != candidate.fingerprint
+    qs = fs.qs
+    assert _reserved_aliases(qs) == []
+    assert "EXISTS" not in str(qs.query).upper()
+    assert list(qs.values_list("pk", flat=True)) == [book.pk]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "mutate",
@@ -7056,24 +7089,12 @@ def test_signature_matrix_instance_mutation_fails_closed(mutate):
     no reserved ``EXISTS`` alias, and the ORIGINAL outer result (the pre-fan
     collapsed to one row) rather than the correlated adapter's preserved pre-fan.
     """
-    candidate = _r5_prefan_candidate()
-    book, genre = _seed_r5_prefan_genre_book()
-    fs = _R5PreFanBookFilter(
-        data={"genres": [str(genre.pk)]},
-        queryset=_r5_prefanned_books(),
-        request=HttpRequest(),
-    )
+    candidate, book, _genre, fs = _r5_prefan_setup()
     # Validate FIRST so the live form field is built (by pk) BEFORE any mutation --
     # mirrors a consumer mutating effective runtime state post-validation.
     assert fs.form.is_valid()
-    leaf = fs.filters["genres"]
-    mutate(leaf)
-    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(leaf) != candidate.fingerprint
-    qs = fs.qs
-    assert _reserved_aliases(qs) == []
-    assert "EXISTS" not in str(qs.query).upper()
-    assert list(qs.values_list("pk", flat=True)) == [book.pk]
+    mutate(fs.filters["genres"])
+    _assert_prefan_failed_closed(fs, candidate, book)
 
 
 @contextlib.contextmanager
@@ -7110,22 +7131,11 @@ def test_signature_matrix_class_descriptor_swap_fails_closed(name):
     The signature intentionally captures each helper in two halves; this covers the
     class-descriptor half for the full ``.filter`` call graph. Same four invariants.
     """
-    candidate = _r5_prefan_candidate()
-    book, genre = _seed_r5_prefan_genre_book()
-    fs = _R5PreFanBookFilter(
-        data={"genres": [str(genre.pk)]},
-        queryset=_r5_prefanned_books(),
-        request=HttpRequest(),
-    )
+    candidate, book, _genre, fs = _r5_prefan_setup()
     assert fs.form.is_valid()
     leaf = fs.filters["genres"]
     with _r5_patched_class_descriptor(type(leaf), name):
-        assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-        assert _fingerprint_of(leaf) != candidate.fingerprint
-        qs = fs.qs
-        assert _reserved_aliases(qs) == []
-        assert "EXISTS" not in str(qs.query).upper()
-        assert list(qs.values_list("pk", flat=True)) == [book.pk]
+        _assert_prefan_failed_closed(fs, candidate, book)
 
 
 @pytest.mark.django_db
@@ -7137,13 +7147,7 @@ def test_signature_matrix_untouched_leaf_routes_and_preserves_prefan():
     live signature (so genuine requests are never falsely failed closed): the leaf
     routes through ONE correlated ``EXISTS`` and PRESERVES the pre-fan (two rows).
     """
-    candidate = _r5_prefan_candidate()
-    book, genre = _seed_r5_prefan_genre_book()
-    fs = _R5PreFanBookFilter(
-        data={"genres": [str(genre.pk)]},
-        queryset=_r5_prefanned_books(),
-        request=HttpRequest(),
-    )
+    candidate, book, _genre, fs = _r5_prefan_setup()
     leaf = fs.filters["genres"]
     assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
     assert _fingerprint_of(leaf) == candidate.fingerprint
@@ -7168,13 +7172,7 @@ def test_blocker2_live_field_to_field_name_mutation_fails_closed_pre_fanned():
     absent and the pre-fan collapses. Asserts token equality, signature mismatch,
     alias absence, and the original outer result.
     """
-    candidate = _r5_prefan_candidate()
-    book, genre = _seed_r5_prefan_genre_book()
-    fs = _R5PreFanBookFilter(
-        data={"genres": [str(genre.pk)]},
-        queryset=_r5_prefanned_books(),
-        request=HttpRequest(),
-    )
+    candidate, book, _genre, fs = _r5_prefan_setup()
     # Validation (with the default pk-based field) resolves the submitted value to
     # the Genre instance; only AFTER that does the consumer mutate the live field.
     assert fs.form.is_valid()
@@ -7182,15 +7180,10 @@ def test_blocker2_live_field_to_field_name_mutation_fails_closed_pre_fanned():
     assert (leaf.extra or {}).get("to_field_name") is None
     leaf.field.to_field_name = "name"
     assert leaf.field.to_field_name == "name"  # the effective runtime target moved
-    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(leaf) != candidate.fingerprint
-    qs = fs.qs
-    assert _reserved_aliases(qs) == []
-    assert "EXISTS" not in str(qs.query).upper()
-    # The failed-closed outer predicate ({genres: genre.name}, where the seeded
-    # name equals the genre pk) still matches the book, but honors distinct -> ONE
-    # row, not the adapter's preserved [book, book].
-    assert list(qs.values_list("pk", flat=True)) == [book.pk]
+    # Fails closed to the original outer predicate ({genres: genre.name}, where the
+    # seeded name equals the genre pk): still matches the book, but honors distinct ->
+    # ONE row, not the adapter's preserved [book, book].
+    _assert_prefan_failed_closed(fs, candidate, book)
 
 
 # ======================================================================
@@ -7211,28 +7204,47 @@ def _register_relay(model):
     return relay_type
 
 
+def _extra_only_shadow_filter(
+    model,
+    field_cls,
+    extra_fn,
+    meta_fields,
+    name="BookFilter",
+):
+    """Build a FilterSet whose ``FILTER_DEFAULTS`` shadows ONE field class.
+
+    The shared shape of the round-5 Blocker-1 tests: an ordinary
+    ``{**BaseFilterSet.FILTER_DEFAULTS, field_cls: {...}}`` shallow copy that keeps the
+    SAME upstream ``filter_class`` but supplies a consumer ``extra`` provider. The
+    shallow copy reuses every untouched nested entry object (so those classes stay
+    ``framework_default``) while the one shadowed class gets an independent object (so
+    it is ``override_generated``). Built via ``type(...)`` so the metaclass runs
+    exactly as for a ``class`` statement.
+    """
+    from django_filters import filterset as df_filterset
+
+    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[field_cls]
+    filter_defaults = {
+        **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+        field_cls: {"filter_class": base_entry["filter_class"], "extra": extra_fn},
+    }
+    meta = type("Meta", (), {"model": model, "fields": meta_fields})
+    return type(name, (FilterSet,), {"FILTER_DEFAULTS": filter_defaults, "Meta": meta})
+
+
 @pytest.mark.django_db
 def test_blocker1_m2m_extra_only_shadow_is_consumer_owned():
     """Same base M2M class + a consumer ``extra`` (restricted queryset) is honored."""
     import django_filters
     from django.db import models as dj_models
-    from django_filters import filterset as df_filterset
 
     _register_relay(library_models.Genre)
-    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
-
-    class BookFilter(FilterSet):
-        FILTER_DEFAULTS = {
-            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
-            dj_models.ManyToManyField: {
-                "filter_class": base_entry["filter_class"],  # SAME base class
-                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
-            },
-        }
-
-        class Meta:
-            model = library_models.Book
-            fields = {"genres": ["exact"]}
+    BookFilter = _extra_only_shadow_filter(
+        library_models.Book,
+        dj_models.ManyToManyField,
+        lambda f: {"queryset": library_models.Genre.objects.none()},
+        {"genres": ["exact"]},
+    )
 
     leaf = BookFilter.get_filters()["genres"]
     # The consumer's class survives -- NOT discarded for a package GlobalID.
@@ -7252,26 +7264,14 @@ def test_blocker1_fk_extra_only_shadow_is_consumer_owned():
     """Same base FK class + a consumer ``extra`` (non-default to_field_name) is kept."""
     import django_filters
     from django.db import models as dj_models
-    from django_filters import filterset as df_filterset
 
     _register_relay(library_models.Shelf)
-    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ForeignKey]
-
-    class BookFilter(FilterSet):
-        FILTER_DEFAULTS = {
-            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
-            dj_models.ForeignKey: {
-                "filter_class": base_entry["filter_class"],  # SAME base class
-                "extra": lambda f: {
-                    "queryset": library_models.Shelf.objects.all(),
-                    "to_field_name": "code",
-                },
-            },
-        }
-
-        class Meta:
-            model = library_models.Book
-            fields = {"shelf": ["exact"]}
+    BookFilter = _extra_only_shadow_filter(
+        library_models.Book,
+        dj_models.ForeignKey,
+        lambda f: {"queryset": library_models.Shelf.objects.all(), "to_field_name": "code"},
+        {"shelf": ["exact"]},
+    )
 
     leaf = BookFilter.get_filters()["shelf"]
     assert isinstance(leaf, django_filters.ModelChoiceFilter)
@@ -7289,23 +7289,15 @@ def test_blocker1_extra_only_shadow_survives_related_filter_expansion():
     """An ``extra``-only shadow on a child survives ``RelatedFilter`` expansion."""
     import django_filters
     from django.db import models as dj_models
-    from django_filters import filterset as df_filterset
 
     _register_relay(library_models.Genre)
-    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
-
-    class ChildBookFilter(FilterSet):
-        FILTER_DEFAULTS = {
-            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
-            dj_models.ManyToManyField: {
-                "filter_class": base_entry["filter_class"],
-                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
-            },
-        }
-
-        class Meta:
-            model = library_models.Book
-            fields = {"genres": ["exact"]}
+    ChildBookFilter = _extra_only_shadow_filter(
+        library_models.Book,
+        dj_models.ManyToManyField,
+        lambda f: {"queryset": library_models.Genre.objects.none()},
+        {"genres": ["exact"]},
+        name="ChildBookFilter",
+    )
 
     class LoanParentFilter(FilterSet):
         book = RelatedFilter(ChildBookFilter, field_name="book")
@@ -7329,23 +7321,14 @@ def test_blocker1_extra_only_shadow_runs_outer_with_no_reserved_alias():
     """End-to-end: the honored ``extra``-only shadow runs OUTER, not through EXISTS."""
     import django_filters  # noqa: F401
     from django.db import models as dj_models
-    from django_filters import filterset as df_filterset
 
     _register_relay(library_models.Genre)
-    base_entry = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
-
-    class BookFilter(FilterSet):
-        FILTER_DEFAULTS = {
-            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
-            dj_models.ManyToManyField: {
-                "filter_class": base_entry["filter_class"],
-                "extra": lambda f: {"queryset": library_models.Genre._default_manager.all()},
-            },
-        }
-
-        class Meta:
-            model = library_models.Book
-            fields = {"genres": ["exact"]}
+    BookFilter = _extra_only_shadow_filter(
+        library_models.Book,
+        dj_models.ManyToManyField,
+        lambda f: {"queryset": library_models.Genre._default_manager.all()},
+        {"genres": ["exact"]},
+    )
 
     BookFilter.get_filters()
     assert "genres" not in BookFilter._expansion_snapshot().candidates
@@ -7384,24 +7367,15 @@ def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
     ``override_generated`` and keeps the consumer class.
     """
     from django.db import models as dj_models
-    from django_filters import filterset as df_filterset
 
     _register_relay(library_models.Genre)
     _register_relay(library_models.Shelf)
-    base_m2m = df_filterset.BaseFilterSet.FILTER_DEFAULTS[dj_models.ManyToManyField]
-
-    class BookFilter(FilterSet):
-        FILTER_DEFAULTS = {
-            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
-            dj_models.ManyToManyField: {
-                "filter_class": base_m2m["filter_class"],
-                "extra": lambda f: {"queryset": library_models.Genre.objects.none()},
-            },
-        }
-
-        class Meta:
-            model = library_models.Book
-            fields = {"genres": ["exact"], "shelf": ["exact"]}
+    BookFilter = _extra_only_shadow_filter(
+        library_models.Book,
+        dj_models.ManyToManyField,
+        lambda f: {"queryset": library_models.Genre.objects.none()},
+        {"genres": ["exact"], "shelf": ["exact"]},
+    )
 
     filters = BookFilter.get_filters()
     genres_field = library_models.Book._meta.get_field("genres")
@@ -7413,3 +7387,180 @@ def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
     # still converted to the package GlobalID primitive.
     assert BookFilter._generation_origin_for_field(shelf_field, "exact") == "framework_default"
     assert isinstance(filters["shelf"], GlobalIDFilter)
+
+
+# ======================================================================
+# Round-6 HIGH-2: a relation ``isnull`` under a Relay-node target stays the upstream
+# ------------------------------------------------------------------------
+# BooleanFilter. The relation branch of ``filter_for_lookup`` / ``filter_for_field``
+# converts only the equality / membership wire shapes to a package GlobalID; a null
+# test is a Boolean predicate (a GlobalID-shaped input for it -- a LIST on the
+# multi-valued side -- raised ``ValueError`` at bind). Mirrors the own-PK
+# ``isnull`` pass-through (spec-027 H1).
+# ======================================================================
+
+
+@pytest.mark.django_db
+def test_r6_relation_isnull_stays_boolean_m2m():
+    """A to-many M2M ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
+    from django_filters import BooleanFilter
+
+    _register_relay(library_models.Genre)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["isnull"]}
+
+    leaf = BookFilter.get_filters()["genres__isnull"]
+    assert isinstance(leaf, BooleanFilter)
+    assert not isinstance(leaf, (GlobalIDFilter, GlobalIDMultipleChoiceFilter))
+
+
+@pytest.mark.django_db
+def test_r6_relation_isnull_stays_boolean_fk():
+    """A forward-FK ``isnull`` under a Relay target is a BooleanFilter, not a GlobalID."""
+    from django_filters import BooleanFilter
+
+    _register_relay(library_models.Shelf)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf": ["isnull"]}
+
+    leaf = BookFilter.get_filters()["shelf__isnull"]
+    assert isinstance(leaf, BooleanFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+
+
+@pytest.mark.django_db
+def test_r6_relation_isnull_filters_correctly_no_500():
+    """End-to-end: a Relay-target relation ``isnull`` filters rows instead of raising.
+
+    Before the fix the leaf was a ``GlobalIDMultipleChoiceFilter``, so a boolean
+    ``isnull`` input compiled a list-shaped GlobalID predicate and raised
+    ``ValueError`` at bind. The BooleanFilter now compiles the null test correctly (the
+    to-many path routes it row-preservingly through the correlated ``EXISTS`` adapter,
+    which the pk-correlated inner root compiles the null semantics inside).
+    """
+    _register_relay(library_models.Genre)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["isnull"]}
+
+    genre = library_models.Genre.objects.create(name="G")
+    shelf = _library_shelf()
+    with_genre = library_models.Book.objects.create(title="with", shelf=shelf)
+    with_genre.genres.add(genre)
+    library_models.Book.objects.create(title="without", shelf=shelf)
+
+    result_true = BookFilter(
+        data={"genres__isnull": True},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert set(result_true.values_list("title", flat=True)) == {"without"}
+
+    result_false = BookFilter(
+        data={"genres__isnull": False},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert set(result_false.values_list("title", flat=True)) == {"with"}
+
+
+# ======================================================================
+# Round-6 HIGH-3: the origin oracle replicates upstream's MERGED FILTER_DEFAULTS +
+# ------------------------------------------------------------------------
+# filter_overrides selection (one ``try_dbfield`` MRO walk over the merged map),
+# not a separate walk over ``filter_overrides`` alone. Merge order matters: a
+# more-derived ``FILTER_DEFAULTS`` default shadows a less-derived override, so such
+# an override does NOT govern and the leaf stays framework-generated.
+# ======================================================================
+
+
+@pytest.mark.django_db
+def test_r6_override_shadowed_by_more_derived_default_stays_framework():
+    """A ``filter_overrides`` entry shadowed by a more-derived default does NOT govern.
+
+    ``MembershipCard.patron`` is a ``OneToOneField``; base ``FILTER_DEFAULTS`` has a
+    ``OneToOneField`` entry nearer on the MRO than the ``ForeignKey`` override, so
+    upstream selects the base default and the leaf is framework-generated (converted to
+    the Relay GlobalID). Walking ``filter_overrides`` ALONE mis-classified this
+    ``override_generated`` -- declining the conversion (a silent GlobalID -> ModelChoice
+    wire-shape regression).
+    """
+    from django.db import models as dj_models
+
+    _register_relay(library_models.Patron)
+
+    class MembershipCardFilter(FilterSet):
+        class Meta:
+            model = library_models.MembershipCard
+            fields = {"patron": ["exact"]}
+            filter_overrides = {
+                dj_models.ForeignKey: {"filter_class": CharFilter, "extra": lambda f: {}},
+            }
+
+    field = library_models.MembershipCard._meta.get_field("patron")
+    assert MembershipCardFilter._generation_origin_for_field(field, "exact") == "framework_default"
+    assert isinstance(MembershipCardFilter.get_filters()["patron"], GlobalIDFilter)
+
+
+@pytest.mark.django_db
+def test_r6_override_that_actually_governs_is_consumer_owned():
+    """Positive control: an override that WINS the merged walk stays consumer-owned.
+
+    A ``filter_overrides`` entry keyed on the EXACT field class (``OneToOneField``)
+    overwrites the base default in the merged map, so upstream selects it. The oracle
+    agrees (``override_generated``) and the consumer's class is NOT converted.
+    """
+    from django.db import models as dj_models
+
+    _register_relay(library_models.Patron)
+
+    class MembershipCardFilter(FilterSet):
+        class Meta:
+            model = library_models.MembershipCard
+            fields = {"patron": ["exact"]}
+            filter_overrides = {
+                dj_models.OneToOneField: {"filter_class": CharFilter, "extra": lambda f: {}},
+            }
+
+    field = library_models.MembershipCard._meta.get_field("patron")
+    assert (
+        MembershipCardFilter._generation_origin_for_field(field, "exact") == "override_generated"
+    )
+    leaf = MembershipCardFilter.get_filters()["patron"]
+    assert isinstance(leaf, CharFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+
+
+@pytest.mark.django_db
+def test_r6_benign_base_override_does_not_block_to_many_routing():
+    """A shadowed override must NOT drop a genuine framework to-many leaf from routing.
+
+    ``Loan.note`` is a ``TextField`` with its own base ``FILTER_DEFAULTS`` entry; a
+    ``filter_overrides`` keyed on the less-derived ``models.Field`` is shadowed by it,
+    so upstream selects the framework default across the reverse ``loans`` (to-many)
+    path. Walking ``filter_overrides`` ALONE mis-stamped the leaf ``override_generated``
+    -- so it never became a candidate and never routed through the ``EXISTS`` adapter
+    (a false-closed routing loss).
+    """
+    from django.db import models as dj_models
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["exact"]}
+            filter_overrides = {
+                dj_models.Field: {"filter_class": CharFilter, "extra": lambda f: {}},
+            }
+
+    BookFilter.get_filters()
+    candidates = BookFilter._expansion_snapshot().candidates
+    assert "loans__note" in candidates
+    assert candidates["loans__note"].eligible is True

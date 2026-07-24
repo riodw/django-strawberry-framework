@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 11)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 12)
 
 ## Identity and completion ownership
 
@@ -97,7 +97,24 @@ GlobalID (HIGH-2); `GlobalIDMultipleChoiceFilter` drops empty decoded `node_id`
 elements so a crafted empty-id GlobalID no-ops instead of 500ing, matching the single
 `GlobalIDFilter` guard (HIGH-1); plus the shared `_marked_pk_field_name` derivation, a
 `_stamp` provenance closure, corrected `is_noop` audit prose, and consolidated test
-scaffolds (DRY / LOW).
+scaffolds (DRY / LOW). Rev 12 enacts the round-7 review: the empty-decoded-`node_id`
+decision is recognized as a **general GlobalID input contract** (independent of
+row-preserving predicates) and **relocated** out of this plan into the standing filter
+spec ([spec-027][spec-027-filters] Decision 4 M6) — where an empty decoded `node_id` is
+now **rejected** with `GLOBALID_INVALID` (index-named for list elements) consistently for
+the scalar `GlobalIDFilter` and the multiple `GlobalIDMultipleChoiceFilter`, superseding
+round-6 HIGH-1's silent drop/no-op; this plan now references that contract as a discovered
+dependency (Medium 7). Rev 12 also folds in the round-7 filter changes: framework-owned
+Relay **relation lookups are classified EXHAUSTIVELY** — only `exact` / `in` / `isnull`
+are valid, any other raises a typed `ConfigurationError` at BUILD time mirroring the own-PK
+branch, never a resolver-time `FieldError` (Blocker 1); the ownership/capability comparison
+target is now the **package-owned IMMUTABLE** `_PACKAGE_FILTER_DEFAULTS` baseline (a frozen
+`MappingProxyType` installed as `FilterSet.FILTER_DEFAULTS`), replacing identity comparison
+against django-filter's live-mutable `BaseFilterSet.FILTER_DEFAULTS` (Blocker 2); and the
+supported-generated-family boundary is now an **executable registry**
+(`_FILTER_FAMILY_REGISTRY` / `_FilterFamilyProfile` / `_family_profile_for`), the single
+executable source of truth, so an unknown/ambiguous family gets no profile, is ineligible,
+and fails closed (High 4).
 
 The first review's verified corrections continue to shape the plan:
 
@@ -221,7 +238,13 @@ django-filter semantics live in one adapter:
    boolean semantics, empty-list handling, GlobalID decoding, range
    decomposition included — with the framework-added `distinct` flag
    scoped out for the duration, per C.3a), and asks layer 2 to attach the
-   positive `Exists(filtered_inner)`.
+   positive `Exists(filtered_inner)`. The GlobalID decode boundary
+   (`django_strawberry_framework/filters/base.py::_decode_and_validate_global_id`)
+   enforces a **standing, general GlobalID input contract** — malformed-payload
+   and empty-decoded-`node_id` rejection with `GLOBALID_INVALID` — owned by
+   [spec-027][spec-027-filters] Decision 4 M6, not by this plan; it is a
+   discovered dependency this adapter inherits unchanged, applied identically
+   whether or not the leaf routes through the correlated `EXISTS`.
 
 This "invoke the original filter against the correlated inner root" shape is
 what makes the rewrite semantics-preserving without reimplementing any
@@ -591,8 +614,17 @@ missing/mismatch
   decided by replicating django-filter's EXACT class selection: one `try_dbfield` MRO
   walk over `dict(cls.FILTER_DEFAULTS)` merged with `cls._meta.filter_overrides` (merge
   order preserved), then a **whole-entry object-identity** comparison of that selected
-  entry against the pure `BaseFilterSet.FILTER_DEFAULTS` selection (round-5 Blocker 1;
-  round-6 HIGH-3 unified both consumer-selection seams into this one merged walk).
+  entry against the selection made over the **package-owned IMMUTABLE baseline**
+  `django_strawberry_framework/filters/sets.py::_PACKAGE_FILTER_DEFAULTS` — a frozen
+  `MappingProxyType` snapshot of django-filter's defaults (outer map and every nested
+  entry are read-only proxies), installed as `FilterSet.FILTER_DEFAULTS` and the SINGLE
+  comparison target of BOTH the ownership oracle (`_generation_origin_for_field`) and the
+  capability gate (`_is_generation_capable`), replacing identity comparison against
+  django-filter's live-mutable, process-shared `BaseFilterSet.FILTER_DEFAULTS` (feedback
+  Blocker 2). Comparing against a value that cannot be mutated in place means the identity
+  a consumer would have to preserve to look framework-owned cannot itself be poisoned
+  process-wide (round-5 Blocker 1; round-6 HIGH-3 unified both consumer-selection seams
+  into this one merged walk).
   Merge order is load-bearing: a more-derived `FILTER_DEFAULTS` default shadows a
   less-derived override (e.g. a `OneToOneField` selection keeps the base default even
   when `filter_overrides` supplies a `ForeignKey` entry), so an earlier revision that
@@ -603,10 +635,11 @@ missing/mismatch
   `filter_class` and its `extra` provider), so an `extra`-only override — same standard
   filter class, a consumer `extra` factory that restricts the relation queryset or
   selects a `to_field_name` — is consumer-owned exactly like a class change. An ordinary
-  shallow `{**BaseFilterSet.FILTER_DEFAULTS, Field: {...}}` shadow reuses the SAME
-  nested entry object for every untouched field class, so those stay
-  `framework_default` and still convert (the changed field alone gets an independent
-  object and is caught). Both `filter_for_lookup` and `filter_for_field` consume this
+  shallow `{**FilterSet.FILTER_DEFAULTS, Field: {...}}` shadow (spread from the installed
+  frozen `_PACKAGE_FILTER_DEFAULTS`) reuses the SAME frozen nested-entry proxy for every
+  untouched field class, so those stay `framework_default` and still convert (the changed
+  field alone gets an independent object and is caught). Both `filter_for_lookup` and
+  `filter_for_field` consume this
   one verdict, so the conversion decision and the origin stamp can never drift apart;
   a fully-normalized selection value (resolved field + lookup + selected entry +
   `filter_class` + `extra` provider + source) is the documented forward architecture
@@ -625,6 +658,22 @@ missing/mismatch
   `ValueError` at bind (round-6 HIGH-2). The Boolean `isnull` leaf stays eligible for
   the correlated-`EXISTS` adapter like any non-Relay to-many `isnull` — the pk-correlated
   inner root compiles the null semantics row-preservingly.
+- **Exhaustive relation-lookup classification (feedback Blocker 1).** A framework-owned
+  Relay relation is classified **exhaustively** at build time in
+  `django_strawberry_framework/filters/sets.py::FilterSet.filter_for_lookup`: only
+  `exact` (a single GlobalID), `in` (a list of GlobalIDs), and `isnull` (the upstream
+  `BooleanFilter`) are valid wire shapes for a **proven framework default**. Any OTHER
+  lookup — pattern (`icontains`), ordering (`gt` / `lt`), `range` — carries no GlobalID
+  ordering / pattern semantics, so converting it to a GlobalID input would emit a shape
+  that fails only when the query executes (a Django `FieldError` such as "Unsupported
+  lookup 'icontains' for ForeignKey"). It is instead rejected at generation time with a
+  typed `ConfigurationError`, exactly mirroring the own-PK branch. Because
+  `super().filter_for_field` calls `cls.filter_for_lookup`, the raise propagates through
+  `filter_for_field` before any corrupt leaf is built, so an unsupported relation lookup
+  can never reach the wire — this replaces the prior implicit reliance on a resolver-time
+  `FieldError`. A consumer-selected relation override (`Meta.filter_overrides` / shadowed
+  `FILTER_DEFAULTS`, resolved above) is exempt: its class may intentionally implement a
+  nonstandard lookup, so it is returned unchanged and never subject to this policy.
 - **Token vs signature — provenance vs semantics (Blocker 2).** Two
   independent slots gate routing. The capability **token** proves
   *provenance*: the live instance descends from a framework generation site
@@ -636,8 +685,19 @@ missing/mismatch
   (`django_strawberry_framework/filters/sets.py::_CandidateFingerprint`,
   derived by `_fingerprint_of`) proves *semantics did not drift* over a **finite,
   enumerated** boundary — the effective behavior of the supported generated
-  django-filter families, no more and no less: the effective `.filter` **call
-  graph** (`.filter` itself plus the helpers it dispatches through —
+  django-filter families, no more and no less. That supported-family boundary is
+  itself **executable, not prose** (High 4):
+  `django_strawberry_framework/filters/sets.py::_FILTER_FAMILY_REGISTRY` — a frozen
+  `type -> _FilterFamilyProfile` map matched by `_family_profile_for`'s MRO walk (the
+  most-derived registered ancestor wins; the universal `Filter` base is deliberately
+  unregistered so the walk cannot match everything) — is the SINGLE executable source of
+  truth for which generated families are supported, and the matched profile is signed
+  into the fingerprint as its `family` slot. An unknown or ambiguous family resolves to
+  no profile (`_family_profile_for(...) is None`), which makes the leaf ineligible AND
+  diverges its `family` signature from any audited candidate, so an unaudited family
+  fails closed and can never reach the correlated adapter. The remaining signed members:
+  the effective `.filter` **call graph** (`.filter` itself plus the helpers it dispatches
+  through —
   `get_method`, `get_filter_predicate`, `is_noop` — each in an instance-override
   and class-descriptor half), the non-pk-`to_field` pk-qualification marker and the
   **effective** `to_field_name` — the value the model-choice predicate reads off the
@@ -653,8 +713,10 @@ missing/mismatch
   shared class-level leaf) and read from the live built field at request time. Token
   and signature are frozen together into the atomic snapshot; a matching token alone
   is explicitly insufficient. This finite boundary is the single canonical inventory
-  — `_CandidateFingerprint` / `_fingerprint_of` carry it; the glossary and this plan
-  summarize it — and every enumerated member has a fail-closed acceptance row in the
+  — `_FILTER_FAMILY_REGISTRY` enumerates the supported families executably and
+  `_CandidateFingerprint` / `_fingerprint_of` carry the per-instance signature; the
+  glossary and this plan summarize them — and every enumerated member has a fail-closed
+  acceptance row in the
   parameterized signature matrix (`tests/filters/test_sets.py`, round-5 High 3). An
   audit of the remaining effective reads (documented on `_fingerprint_of`) confirms
   the non-signed helper reads — `is_noop`'s `required` / choices and the GlobalID
@@ -1099,6 +1161,7 @@ the previous commit added tracked files.
 [spec-049]: spec-049-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
+[spec-027-filters]: SPECS/spec-027-filters-0_0_8.md
 
 <!-- docs/builder/ -->
 

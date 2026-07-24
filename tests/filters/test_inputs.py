@@ -19,8 +19,10 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
+from django_filters import BooleanFilter
 from strawberry import relay
 
+from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
     FilterSet,
@@ -54,6 +56,7 @@ from django_strawberry_framework.filters.inputs import (
     normalize_input_value,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.relay import apply_interfaces
 
 
 @pytest.fixture(autouse=True)
@@ -1325,3 +1328,112 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
     # ``D`` is reachable through both ``B`` and ``C`` but appears once.
     assert found.count(D) == 1
     assert {B, C, D}.issubset(set(found))
+
+
+# ---------------------------------------------------------------------------
+# Relay-RELATION ``isnull`` -> Boolean input (feedback Medium 6 / Blocker 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
+    """A framework-owned Relay-RELATION ``isnull`` lookup generates a Boolean input.
+
+    Behavior (B) / feedback Blocker 1: an ``isnull`` lookup on a relation whose
+    target is a Relay node (``Book.genres`` -> the Relay ``GenreType``) must stay
+    an upstream ``BooleanFilter`` -- a null test is never a GlobalID -- while the
+    SAME relation's ``exact`` still converts to the GlobalID list wire shape.
+
+    Justified in-process fallback (Medium 6): NO live fakeshop ``/graphql/``
+    surface exposes a DIRECT Relay-relation ``isnull``. Every fakeshop relation is
+    declared as a ``RelatedFilter`` (a separate traversal mechanism, not a
+    ``Meta.fields`` relation lookup), and the only ``Meta.fields`` ``isnull`` is
+    ``Book.subtitle`` (a ``CharField``); ``test_kanban_api.py`` covers only the
+    OWN-PK ``id`` ``isnull`` branch, not the relation branch corrected here.
+    Adding a relation ``isnull`` to a shipped fakeshop filterset would mutate the
+    live schema surface, so the schema-level annotation + coercion assertion is
+    earned in-process instead. The low-level Python predicate shape stays in
+    ``tests/filters/test_base.py``; this test pins the generated GraphQL INPUT.
+    """
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class RelayRelationIsnullBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["isnull", "exact"]}
+
+    genres_field = library_models.Book._meta.get_field("genres")
+
+    # Routing: the Relay relation's ``isnull`` stays an upstream Boolean filter,
+    # while the SAME relation's ``exact`` converts to the GlobalID list primitive.
+    isnull_cls, _ = RelayRelationIsnullBookFilter.filter_for_lookup(genres_field, "isnull")
+    exact_cls, _ = RelayRelationIsnullBookFilter.filter_for_lookup(genres_field, "exact")
+    assert isnull_cls is BooleanFilter
+    assert not issubclass(isnull_cls, (GlobalIDFilter, GlobalIDMultipleChoiceFilter))
+    assert exact_cls is GlobalIDMultipleChoiceFilter
+
+    # Generated input annotations: the ``isNull`` sub-field is a Boolean scalar;
+    # the ``exact`` sub-field keeps the ``list[str]`` GlobalID list wire shape.
+    triples = _build_input_fields(RelayRelationIsnullBookFilter)
+    by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
+    genres_bag = next(arg for arg in get_args(by_attr["genres"]) if arg is not type(None))
+    bag_annotations = {
+        field.graphql_name: field.type_annotation.annotation
+        for field in genres_bag.__strawberry_definition__.fields
+    }
+    assert bag_annotations["isNull"] == (bool | None)
+    assert bag_annotations["exact"] == (list[str] | None)
+
+    # Schema-level annotation + coercion: introspection reports ``isNull:
+    # Boolean``, and the resolver ACCEPTS ``true`` / ``false`` while REJECTING a
+    # non-Boolean. The former GlobalID/list coercion would instead accept a
+    # String and reject the Boolean. The resolver's annotations are assigned as
+    # real objects (not strings) so this module's ``from __future__ import
+    # annotations`` cannot stringify the per-test bag class out of scope.
+    def _probe(genres=None) -> str:
+        if genres is None:
+            return "omitted"
+        return f"isNull={genres.is_null!r}"
+
+    _probe.__annotations__ = {"genres": genres_bag | None, "return": str}
+
+    @strawberry.type
+    class Query:
+        probe: str = strawberry.field(resolver=_probe)
+
+    schema = strawberry.Schema(query=Query)
+
+    introspection = schema.execute_sync(
+        """
+        {
+          __type(name: "RelayRelationIsnullBookFilterGenresFilterInputType") {
+            inputFields { name type { kind name } }
+          }
+        }
+        """,
+    )
+    assert introspection.errors is None, introspection.errors
+    input_fields = {
+        field["name"]: field["type"] for field in introspection.data["__type"]["inputFields"]
+    }
+    assert input_fields["isNull"] == {"kind": "SCALAR", "name": "Boolean"}
+    # ``exact`` is the GlobalID membership list, NOT a Boolean scalar.
+    assert input_fields["exact"]["kind"] == "LIST"
+
+    accepted_true = schema.execute_sync("{ probe(genres: { isNull: true }) }")
+    assert accepted_true.errors is None, accepted_true.errors
+    assert accepted_true.data == {"probe": "isNull=True"}
+
+    accepted_false = schema.execute_sync("{ probe(genres: { isNull: false }) }")
+    assert accepted_false.errors is None, accepted_false.errors
+    assert accepted_false.data == {"probe": "isNull=False"}
+
+    rejected_string = schema.execute_sync('{ probe(genres: { isNull: "not-a-bool" }) }')
+    assert rejected_string.errors, rejected_string
+    assert "Boolean cannot represent" in str(rejected_string.errors[0])

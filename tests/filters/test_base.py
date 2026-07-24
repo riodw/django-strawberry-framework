@@ -400,12 +400,14 @@ def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everythin
 
 
 # ---------------------------------------------------------------------------
-# A crafted empty-id GlobalID ELEMENT of a non-empty list no-ops instead of 500ing
-# (round-6 Finding 1). The single ``GlobalIDFilter`` already no-ops an empty
-# ``node_id`` (its ``EMPTY_VALUES`` guard); the multi sibling dropped no empties, so
-# ``[to_base64(type, "")]`` decoded to ``[""]`` and reached ``genres__in=[""]`` (or a
-# per-element ``{genres: ""}`` on the non-``in`` path) -> ``ValueError`` at bind on an
-# integer pk. Distinct from an explicit ``[]`` (match-nothing, handled before decode).
+# A crafted empty-id GlobalID (well-typed, empty node part) is a REJECTED input,
+# not a silent no-op (High 3). ``to_base64(type, "")`` decodes to ``node_id == ""``
+# and clears decode + strategy + type-name validation, but an empty identifier is
+# not a valid resource id: the shared ``_decode_and_validate_global_id`` boundary
+# raises ``GLOBALID_INVALID`` (naming the list index when present) so a client can
+# no longer widen a restrictive membership predicate by supplying ``type:``. An
+# explicit ``[]`` (match-none) and a ``None`` value (omission) remain non-error
+# paths and are asserted separately.
 # ---------------------------------------------------------------------------
 
 
@@ -423,31 +425,48 @@ class _CapturingQs:
         return self
 
 
-def test_global_id_multiple_choice_filter_empty_node_id_in_path_is_noop():
-    """An all-vacuous ``in`` list strips to empty and no-ops (no predicate, no 500)."""
-    qs = _CapturingQs()
+def test_global_id_multiple_choice_filter_all_empty_node_id_list_rejects():
+    """An all-vacuous ``in`` list rejects with ``GLOBALID_INVALID`` (no silent widen)."""
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
-    result = f.filter(qs, [relay.to_base64("GenreType", "")])
-    assert result is qs
-    assert qs.captured == {}
+    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
+        f.filter(object(), [relay.to_base64("GenreType", "")])
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+    assert "at index 0" in str(exc_info.value)
 
 
-def test_global_id_multiple_choice_filter_empty_node_id_exact_path_is_noop():
-    """The same guard covers the non-``in`` (per-element) path."""
-    qs = _CapturingQs()
+def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
+    """The same reject covers the non-``in`` (per-element) path."""
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact")
-    result = f.filter(qs, [relay.to_base64("GenreType", "")])
-    assert result is qs
-    assert qs.captured == {}
+    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
+        f.filter(object(), [relay.to_base64("GenreType", "")])
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
-def test_global_id_multiple_choice_filter_mixed_empty_and_real_strips_empty():
-    """A vacuous element alongside a real id is dropped; the real id still applies."""
-    qs = _CapturingQs()
+def test_global_id_multiple_choice_filter_mixed_empty_and_real_rejects_naming_index():
+    """A vacuous element alongside a real id rejects the WHOLE input, naming its index.
+
+    A mixed list must reject like malformed / wrong-type inputs do -- never
+    silently ignore the empty element while accepting the rest -- and the offending
+    index is named so the client can identify it.
+    """
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
     encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "")]
+    with pytest.raises(GraphQLError, match="at index 1") as exc_info:
+        f.filter(object(), encoded)
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+
+
+def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predicate():
+    """Regression: a well-formed non-empty ``in`` list still yields the whole-list predicate.
+
+    Removing the empty-stripping block must not disturb the normal path -- a list
+    of real ids compiles the byte-identical ``{field__in: node_ids}`` predicate.
+    """
+    qs = _CapturingQs()
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
+    encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "9")]
     f.filter(qs, encoded)
-    assert qs.captured == {"genres__in": ["5"]}
+    assert qs.captured == {"genres__in": ["5", "9"]}
 
 
 # ---------------------------------------------------------------------------
@@ -580,28 +599,36 @@ def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
     assert captured == {"genres__in": ["1", "2"]}
 
 
-@pytest.mark.django_db(transaction=True)
-def test_global_id_filter_marked_empty_node_id_short_circuits():
-    """A well-typed empty-id GlobalID no-ops on a marked filter (Finding 6).
+def test_global_id_filter_empty_node_id_rejects():
+    """A scalar well-typed empty-id GlobalID rejects with ``GLOBALID_INVALID`` (High 3).
 
-    ``to_base64(<accepted type>, "")`` decodes to ``node_id == ""``, which passes
-    decode + strategy validation (an unbound owner falls back to node-id-only). On a
-    MARKED leaf the pre-Finding-6 code compiled ``<relation>__pk__exact=""`` -- a 500
-    ``ValueError`` on the integer target pk -- because the marked branch skips the
-    ``super().filter`` delegation that no-ops empty values upstream. The new
-    ``EMPTY_VALUES`` short-circuit returns the queryset untouched instead.
+    ``to_base64(<accepted type>, "")`` decodes to ``node_id == ""``, which clears
+    decode + strategy + type-name validation (an unbound owner falls back to
+    node-id-only), but an empty identifier is not a filter value. The old scalar
+    ``EMPTY_VALUES`` no-op silently widened the restrictive filter to the whole
+    queryset; the shared boundary now raises before any queryset clause runs.
     """
-    with relation_fixture_tables(connection):
-        f = GlobalIDFilter(field_name="target", lookup_expr="exact")
-        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
-        qs = RpToFieldChild.objects.all()
-        encoded = relay.to_base64("RpToFieldTargetType", "")
-        # No exception, and the queryset is returned untouched (identity).
-        result = f.filter(qs, encoded)
-        assert result is qs
-        # Red->green witness: the marked predicate the guard bypasses would 500.
-        with pytest.raises(ValueError):
-            list(RpToFieldChild.objects.filter(target__pk__exact=""))
+    f = GlobalIDFilter(field_name="id", lookup_expr="exact")
+    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
+        f.filter(object(), relay.to_base64("GenreType", ""))
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+
+
+def test_global_id_filter_marked_empty_node_id_rejects_before_query():
+    """The marked non-pk-``to_field`` path also rejects an empty id -- never a 500.
+
+    Pre-High-3 a MARKED leaf compiled ``<relation>__pk__exact=""`` (a 500
+    ``ValueError`` on the integer target pk) whenever the empty id slipped past the
+    scalar no-op. Because the reject now happens inside
+    ``_decode_and_validate_global_id`` -- before the marked/unmarked branch and
+    before any queryset access -- the marked path raises the same clean
+    ``GLOBALID_INVALID`` and never touches the database.
+    """
+    f = GlobalIDFilter(field_name="target", lookup_expr="exact")
+    setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
+        f.filter(object(), relay.to_base64("RpToFieldTargetType", ""))
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
 # ---------------------------------------------------------------------------

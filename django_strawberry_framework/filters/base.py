@@ -553,9 +553,20 @@ def _decode_and_validate_global_id(
     `type_name:node_id` payload) raises `GraphQLError(..., extensions={"code":
     "GLOBALID_INVALID"})` - the uniform coded error the node-refetch path emits
     (`relay.py::_decode_or_graphql_error`) - instead of leaking Strawberry's raw
-    `GlobalIDValueError`. `GlobalIDMultipleChoiceFilter` passes `index` so the
-    rejected list element is named in both the mismatch and malformed messages
-    per spec-027 #"validates every element of the list independently".
+    `GlobalIDValueError`. A well-formed GlobalID whose id part is empty (e.g.
+    `to_base64("BookNode", "")`) decodes to an empty `node_id` and passes decode +
+    strategy + `type_name` validation, but an empty identifier is not a valid
+    resource id: it too raises `GraphQLError(..., extensions={"code":
+    "GLOBALID_INVALID"})` (with the list index when present). Treating an empty
+    decoded id as a filter value would silently widen a restrictive predicate (a
+    scalar no-op, or a dropped list element turning `{in: ["type:"]}` into an
+    unfiltered query), so an empty decoded id is a rejected input of the same
+    class as a malformed payload / wrong type. Only a `None` value (omission,
+    handled by the callers) and an explicit `[]` (match-none, handled by
+    `GlobalIDMultipleChoiceFilter`) remain non-error paths.
+    `GlobalIDMultipleChoiceFilter` passes `index` so the rejected list element is
+    named in the mismatch, malformed, and empty-id messages per spec-027
+    #"validates every element of the list independently".
     """
     if isinstance(value, relay.GlobalID):
         decoded = value
@@ -614,6 +625,20 @@ def _decode_and_validate_global_id(
         raise GraphQLError(
             f"GlobalID type mismatch: filter expects {expected} but received {decoded.type_name}{suffix}",
         )
+    if decoded.node_id in EMPTY_VALUES:
+        # A well-typed GlobalID whose id part is empty decodes to ``""`` and clears
+        # decode + strategy + type-name validation, but an empty identifier is not a
+        # valid resource id. Accepting it would silently widen a restrictive filter
+        # (a scalar no-op, or a dropped list element turning ``{in: ["type:"]}`` into
+        # an unfiltered query), so reject it as the same class of bad input as a
+        # malformed payload -- the uniform coded GraphQL error shared with the
+        # node-refetch path -- naming the list index when present.
+        suffix = "" if index is None else f" at index {index}"
+        raise GraphQLError(
+            f"Invalid GlobalID: {value!r} decodes to an empty node id, which is not a "
+            f"valid resource identifier{suffix}.",
+            extensions={"code": "GLOBALID_INVALID"},
+        )
     return decoded.node_id
 
 
@@ -639,6 +664,13 @@ class GlobalIDFilter(Filter):
     def filter(self, qs: Any, value: Any) -> Any:
         """Decode + validate the GlobalID; delegate to `Filter.filter` with `node_id`.
 
+        A ``None`` value is omission and short-circuits to the unfiltered queryset.
+        Every other value is decoded and validated by
+        ``_decode_and_validate_global_id``, which rejects a malformed payload, a
+        wrong ``type_name``, AND a well-typed empty-id GlobalID (an empty decoded
+        ``node_id`` is ``GLOBALID_INVALID``, not a silent no-op), so ``node_id`` is
+        guaranteed present and valid below.
+
         When the filter targets a forward relation bound on a non-pk ``to_field``
         (flagged at generation via the boolean ``_GLOBALID_RELATION_PK_ATTR``), the
         predicate is compiled against the pk-qualified relation path
@@ -652,14 +684,6 @@ class GlobalIDFilter(Filter):
         if value is None:
             return super().filter(qs, None)
         node_id = _decode_and_validate_global_id(value, self)
-        if node_id in EMPTY_VALUES:
-            # A well-typed GlobalID whose id part is empty decodes to ``""``, which
-            # passes decode + strategy validation but is not a filter value. Upstream
-            # ``Filter.filter`` no-ops the unmarked path via its own ``EMPTY_VALUES``
-            # short circuit; the marked path skips that delegation, so without this an
-            # empty ``node_id`` would compile ``<relation>__pk__exact=""`` and raise a
-            # 500 on an integer pk. Short-circuit to the untouched queryset either way.
-            return qs
         pk_field_name = _marked_pk_field_name(self)
         if pk_field_name is not None:
             return _apply_lookup_predicate(self, qs, node_id, field_name=pk_field_name)
@@ -755,12 +779,15 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     def filter(self, qs: Any, value: Any) -> Any:
         """Decode + validate every GlobalID; apply the lookup-shaped predicate.
 
-        Empty-list handling runs BEFORE decode and BEFORE the ``in`` /
-        non-``in`` split: upstream ``MultipleChoiceFilter.filter`` treats any
-        empty value as a no-op (``return qs``), which would silently widen a
-        restrictive membership predicate for many-side ``exact`` the same way
-        it used to for ``in``. ``ListFilter`` empty-set semantics apply to
-        every list-shaped lookup on this filter.
+        A ``None`` value is omission and short-circuits to the unfiltered
+        queryset; an explicit ``[]`` is the match-none membership predicate
+        (``ListFilter`` empty-set semantics for every list-shaped lookup, not
+        upstream ``MultipleChoiceFilter``'s ``if not value: return qs`` skip).
+        Both run BEFORE decode. Every remaining element is decoded and validated
+        by ``_decode_and_validate_global_id``, which rejects a malformed payload,
+        a wrong ``type_name``, AND a well-typed empty-id GlobalID (an empty
+        decoded id is ``GLOBALID_INVALID`` with its list index named), so no
+        vacuous element can silently reduce the membership list.
 
         The ``in`` lookup consumes the WHOLE decoded list in one predicate.
         Upstream ``MultipleChoiceFilter.filter`` instead ORs one predicate
@@ -781,19 +808,6 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         node_ids = [
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]
-        # Drop vacuous elements: a well-typed GlobalID with an empty id part decodes to
-        # ``""`` (passes decode + strategy validation) but is not a filter value, exactly
-        # as in the single ``GlobalIDFilter`` (its ``node_id in EMPTY_VALUES`` no-op).
-        # Without this, ``[""]`` reaches the predicate as ``<relation>__pk__in=[""]`` (or
-        # a per-element ``{field: ""}`` on the non-``in`` path) and raises a 500 on an
-        # integer pk -- the guard the single sibling had but this one lacked (round-6
-        # Finding 1). If nothing survives, no element constrains the result, so no-op to
-        # the untouched queryset -- the list-of-vacuous-ids analogue of the single
-        # filter's empty-id no-op, distinct from an explicit ``[]`` (the match-nothing
-        # membership predicate handled above BEFORE decode).
-        node_ids = [node_id for node_id in node_ids if node_id not in EMPTY_VALUES]
-        if not node_ids:
-            return qs
         if self.lookup_expr != "in":
             return super().filter(qs, node_ids)
         # ``_marked_pk_field_name`` DERIVES the pk-qualified relation path

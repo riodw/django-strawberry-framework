@@ -1200,6 +1200,109 @@ def test_library_genres_filter_malformed_own_pk_global_id_in_names_index():
 
 
 @pytest.mark.django_db
+def test_library_genres_filter_empty_id_scalar_global_id_raises_globalid_invalid():
+    """A well-typed own-PK GlobalID whose id part is EMPTY is ``GLOBALID_INVALID`` (Medium 6).
+
+    ``to_base64("library.genre", "")`` decodes to the accepted ``library.genre``
+    ``type_name`` with an EMPTY ``node_id``: it clears decode + strategy +
+    ``type_name`` validation, but an empty identifier is not a valid resource id.
+    The shared ``base.py::_decode_and_validate_global_id`` boundary now REJECTS it
+    with the uniform ``GLOBALID_INVALID`` coded error rather than silently
+    no-op'ing to an UNFILTERED query (the pre-fix scalar-widening behavior). This
+    is the live acceptance test the review requires for the newly reachable
+    empty-id branch: a package stub cannot be the acceptance test for a
+    consumer-visible ``/graphql/`` surface.
+    """
+    models.Genre.objects.create(name="SciFi")
+    empty_gid = str(relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=""))
+    response = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ exact: "{empty_gid}" }} }}) {{
+            name
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "empty node id" in error["message"], payload
+    # Not silently widened: the query errors out rather than returning the full
+    # (unfiltered) genre list.
+    assert payload.get("data") is None or payload["data"].get("allLibraryGenres") is None, payload
+
+
+@pytest.mark.django_db
+def test_library_genres_filter_empty_id_in_list_raises_globalid_invalid_at_index_0():
+    """An all-empty-id ``id: { in: ["<empty gid>"] }`` list is rejected, naming index 0 (Medium 6).
+
+    Each list element is decoded independently; an empty-``node_id`` element
+    raises the same ``GLOBALID_INVALID`` coded error with its list position
+    named, rather than being DROPPED -- dropping it would turn the restrictive
+    ``{in: ["type:"]}`` into an unfiltered query (the pre-fix list-widening
+    behavior the review flagged). Live acceptance for the empty-id branch on the
+    multi-value ``GlobalIDMultipleChoiceFilter``.
+    """
+    models.Genre.objects.create(name="SciFi")
+    empty_gid = str(relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=""))
+    response = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ in: ["{empty_gid}"] }} }}) {{
+            name
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "empty node id" in error["message"], payload
+    assert "at index 0" in error["message"], payload
+    assert payload.get("data") is None or payload["data"].get("allLibraryGenres") is None, payload
+
+
+@pytest.mark.django_db
+def test_library_genres_filter_mixed_empty_id_in_list_rejects_whole_input_at_index_1():
+    """A mixed ``[valid, empty-id]`` list rejects the WHOLE input, naming index 1 (Medium 6).
+
+    The valid element at index 0 does not narrow-and-continue: a single empty-id
+    element at index 1 rejects the whole membership input with
+    ``GLOBALID_INVALID`` and names index 1, matching the malformed / wrong-type
+    per-element contract (the restrictive input is rejected, never silently
+    narrowed to the remaining valid members). Live acceptance for the mixed case.
+    """
+    sci_fi = models.Genre.objects.create(name="SciFi")
+    models.Genre.objects.create(name="Fantasy")
+    valid_gid = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(sci_fi.pk)),
+    )
+    empty_gid = str(relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=""))
+    response = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ in: ["{valid_gid}", "{empty_gid}"] }} }}) {{
+            name
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "empty node id" in error["message"], payload
+    assert "at index 1" in error["message"], payload
+    assert payload.get("data") is None or payload["data"].get("allLibraryGenres") is None, payload
+
+
+@pytest.mark.django_db
 def test_library_branches_filter_by_reverse_fk_lookup():
     """Spec-021 L1048: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")

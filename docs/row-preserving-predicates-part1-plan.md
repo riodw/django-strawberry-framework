@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 12)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 14)
 
 ## Identity and completion ownership
 
@@ -108,13 +108,61 @@ dependency (Medium 7). Rev 12 also folds in the round-7 filter changes: framewor
 Relay **relation lookups are classified EXHAUSTIVELY** — only `exact` / `in` / `isnull`
 are valid, any other raises a typed `ConfigurationError` at BUILD time mirroring the own-PK
 branch, never a resolver-time `FieldError` (Blocker 1); the ownership/capability comparison
-target is now the **package-owned IMMUTABLE** `_PACKAGE_FILTER_DEFAULTS` baseline (a frozen
-`MappingProxyType` installed as `FilterSet.FILTER_DEFAULTS`), replacing identity comparison
-against django-filter's live-mutable `BaseFilterSet.FILTER_DEFAULTS` (Blocker 2); and the
-supported-generated-family boundary is now an **executable registry**
+target was moved off django-filter's live-mutable, process-shared
+`BaseFilterSet.FILTER_DEFAULTS` onto a package-controlled generation-policy baseline
+(Blocker 2); and the supported-generated-family boundary was made an **executable registry**
 (`_FILTER_FAMILY_REGISTRY` / `_FilterFamilyProfile` / `_family_profile_for`), the single
-executable source of truth, so an unknown/ambiguous family gets no profile, is ineligible,
-and fails closed (High 4).
+executable source of truth for which generated families are supported (High 4). Rev 13
+supersedes both of these round-7 mechanisms (see below), which the sixth review found
+incomplete.
+
+Rev 13 enacts the sixth adversarial review ([`feedback.md`][feedback]). The
+generation-ownership baseline no longer snapshots django-filter's mutable global: the
+package now AUTHORS its own defaults as the plain, deepcopyable
+`django_strawberry_framework/filters/sets.py::_PUBLIC_PACKAGE_FILTER_DEFAULTS` dict
+(installed as `FilterSet.FILTER_DEFAULTS`, restoring django-filter's inherited
+`copy.deepcopy` / `dict(...)` / per-entry customization seam that round-7's
+nested-`MappingProxyType` install broke) and derives from it a PRIVATE, immutable,
+normalized baseline `django_strawberry_framework/filters/sets.py::_PACKAGE_POLICY_BASELINE`;
+ownership is decided by comparing the effective selection against that private baseline by
+normalized VALUE (`django_strawberry_framework/filters/sets.py::_normalize_policy_entry`),
+not by object identity, so a consumer mutating `BaseFilterSet.FILTER_DEFAULTS` before OR
+after package import can never taint the baseline (Blocker 1 + High 3). Family resolution
+replaces the round-7 MRO walk with **exact-class match** plus structurally-validated
+recognition of django-filter's genuine dynamic `ConcreteInFilter` / `ConcreteRangeFilter`
+(`django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`), so an unaudited
+SUBCLASS of a registered base now correctly resolves to no profile and fails closed — the
+claim the round-7 MRO walk overstated (Blocker 2). Each `_FilterFamilyProfile` now owns
+executable `_SemanticExtractor` extractors whose emitted names ARE its (computed)
+`relevant_reads`, and `_fingerprint_of` builds the fingerprint by running their
+de-duplicated union (`_ALL_SEMANTIC_EXTRACTORS`), making the semantic audit executable
+rather than declared (Medium 4; further simplified in Rev 14). This plan,
+[spec-027][spec-027-filters]'s test-count wording, and the live-test README are reconciled to
+that final boundary (Medium 5).
+
+Rev 14 enacts the Fable-review follow-up to the sixth review (the maintainer commissioned a
+scope + bug-hunt pass and chose a hybrid simplification). Two hardening fixes landed: the
+dynamic-CSV structural validator
+(`django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`) now rejects a class
+whose own attribute-NAME set differs from a `pass`-body reference
+(`django_strawberry_framework/filters/sets.py::_EMPTY_BODY_DYNAMIC_CSV_ATTRS`), closing a gap
+where a DUNDER-named state/behavior member (`__evil_state__`, an overridden `__getattribute__`
+/ `__init_subclass__`, `__slots__`) slipped the fail-closed check that a
+"startswith/endswith `__`" test had exempted; and a drift-guard test pins
+`_PUBLIC_PACKAGE_FILTER_DEFAULTS` to the installed django-filter's
+`FILTER_FOR_DBFIELD_DEFAULTS`, so a future release that changes the table fails loudly instead
+of generating from a stale mirror. The scope simplification collapses Rev 13's per-family
+extractor tuples: `_FilterFamilyProfile` is now a bare family IDENTITY (no `extractors` field,
+no computed `relevant_reads`), and the fingerprint schema is ONE canonical
+`django_strawberry_framework/filters/sets.py::_ALL_SEMANTIC_EXTRACTORS` tuple that
+`_fingerprint_of` runs for EVERY family. This is behavior-preserving at the trust boundary —
+the fingerprint still signs the conservative whole-schema union for every family, never a
+per-family narrowing (which could go fail-open if a future audit omitted a runtime read) —
+while removing machinery that was never a runtime gate (`_fingerprint_of` always signed the
+union, not per-profile tuples). The per-family read AUDIT that each signed field actually
+gates routing lives where it belongs: the behavioral `test_signature_matrix_*` suite, which
+mutates every signed seam and proves signature divergence + fail-closed routing, rather than a
+duplicated production read table.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -613,38 +661,49 @@ missing/mismatch
   (ineligible, never a candidate), and keeps ownership of the wire shape. Ownership is
   decided by replicating django-filter's EXACT class selection: one `try_dbfield` MRO
   walk over `dict(cls.FILTER_DEFAULTS)` merged with `cls._meta.filter_overrides` (merge
-  order preserved), then a **whole-entry object-identity** comparison of that selected
-  entry against the selection made over the **package-owned IMMUTABLE baseline**
-  `django_strawberry_framework/filters/sets.py::_PACKAGE_FILTER_DEFAULTS` — a frozen
-  `MappingProxyType` snapshot of django-filter's defaults (outer map and every nested
-  entry are read-only proxies), installed as `FilterSet.FILTER_DEFAULTS` and the SINGLE
-  comparison target of BOTH the ownership oracle (`_generation_origin_for_field`) and the
-  capability gate (`_is_generation_capable`), replacing identity comparison against
-  django-filter's live-mutable, process-shared `BaseFilterSet.FILTER_DEFAULTS` (feedback
-  Blocker 2). Comparing against a value that cannot be mutated in place means the identity
-  a consumer would have to preserve to look framework-owned cannot itself be poisoned
-  process-wide (round-5 Blocker 1; round-6 HIGH-3 unified both consumer-selection seams
-  into this one merged walk).
+  order preserved), then a **normalized-VALUE** comparison of that selected
+  entry against the corresponding entry in the **private, immutable, package-authored
+  normalized baseline**
+  `django_strawberry_framework/filters/sets.py::_PACKAGE_POLICY_BASELINE` — a
+  `MappingProxyType` of `_NormalizedPolicyEntry` records (each capturing an entry's
+  `filter_class` and `extra` provider) derived from the package's OWN
+  `django_strawberry_framework/filters/sets.py::_PUBLIC_PACKAGE_FILTER_DEFAULTS` table via
+  `django_strawberry_framework/filters/sets.py::_normalize_policy_entry`, never from
+  django-filter's live global. `_PUBLIC_PACKAGE_FILTER_DEFAULTS` is a package-AUTHORED
+  plain `dict` — it mirrors django-filter's `FILTER_FOR_DBFIELD_DEFAULTS` exactly but is
+  the package's own object graph built from stable filter classes and package-owned
+  `extra` provider functions — and is installed as `FilterSet.FILTER_DEFAULTS`, a plain,
+  deepcopyable, customizable mapping (restoring the inherited `copy.deepcopy` /
+  `dict(...)` / `[cls][key]=...` extension seam that round-7's nested-`MappingProxyType`
+  install broke). The private `_PACKAGE_POLICY_BASELINE` is the SINGLE comparison target
+  of BOTH the ownership oracle (`_generation_origin_for_field`) and the capability gate
+  (`_is_generation_capable`, which additionally requires `cls.FILTER_DEFAULTS is
+  _PUBLIC_PACKAGE_FILTER_DEFAULTS`), replacing round-7's reliance on comparing object
+  identity against a frozen snapshot of django-filter's live-mutable, process-shared
+  `BaseFilterSet.FILTER_DEFAULTS` (feedback Blocker 1 + High 3). Because the baseline
+  derives from the package's own table and is compared by value, it is
+  **import-order-immune**: a consumer mutating `BaseFilterSet.FILTER_DEFAULTS` before OR
+  after package import cannot taint it, closing at its source the round-7 defect of
+  capturing a consumer's pre-import mutation as trusted package policy and minting a token
+  for it.
   Merge order is load-bearing: a more-derived `FILTER_DEFAULTS` default shadows a
   less-derived override (e.g. a `OneToOneField` selection keeps the base default even
   when `filter_overrides` supplies a `ForeignKey` entry), so an earlier revision that
   walked `filter_overrides` ALONE mis-selected that shadowed override and mis-stamped
   the leaf `override_generated` — declining a legitimate Relay conversion (wire-shape
   regression) and dropping a genuine framework leaf from routing (false-closed). The
-  selected entry is the single ownership-bearing value django-filter consumes (both its
-  `filter_class` and its `extra` provider), so an `extra`-only override — same standard
-  filter class, a consumer `extra` factory that restricts the relation queryset or
-  selects a `to_field_name` — is consumer-owned exactly like a class change. An ordinary
-  shallow `{**FilterSet.FILTER_DEFAULTS, Field: {...}}` shadow (spread from the installed
-  frozen `_PACKAGE_FILTER_DEFAULTS`) reuses the SAME frozen nested-entry proxy for every
-  untouched field class, so those stay `framework_default` and still convert (the changed
-  field alone gets an independent object and is caught). Both `filter_for_lookup` and
-  `filter_for_field` consume this
-  one verdict, so the conversion decision and the origin stamp can never drift apart;
-  a fully-normalized selection value (resolved field + lookup + selected entry +
-  `filter_class` + `extra` provider + source) is the documented forward architecture
-  should the upstream `FILTER_DEFAULTS` shape ever stop preserving nested-entry
-  identity, at which point object identity would no longer be a sufficient proxy.
+  normalized entry captures the single ownership-bearing value django-filter consumes
+  (both its `filter_class` and its `extra` provider), so an `extra`-only override — same
+  standard filter class, a consumer `extra` factory that restricts the relation queryset
+  or selects a `to_field_name` — is consumer-owned exactly like a class change, because
+  its normalized value differs from the baseline's. An ordinary shallow
+  `{**FilterSet.FILTER_DEFAULTS, Field: {...}}` shadow keeps every untouched field class's
+  entry value-equal to the baseline, so those stay `framework_default` and still convert
+  (the changed field alone normalizes differently and is caught) — and value comparison
+  holds even when a consumer `deepcopy`s or rebuilds the now-plain public table, since
+  round-7's dependence on shared nested-entry object identity is gone. Both
+  `filter_for_lookup` and `filter_for_field` consume this one verdict, so the conversion
+  decision and the origin stamp can never drift apart.
   **Relay wire-shape policy:** under the byte-for-byte rule the consumer override owns
   the GraphQL input shape for that relation; the framework must not silently force it
   back to a package GlobalID primitive. (The owner's OWN primary key remains a
@@ -686,16 +745,25 @@ missing/mismatch
   derived by `_fingerprint_of`) proves *semantics did not drift* over a **finite,
   enumerated** boundary — the effective behavior of the supported generated
   django-filter families, no more and no less. That supported-family boundary is
-  itself **executable, not prose** (High 4):
+  itself **executable, not prose**:
   `django_strawberry_framework/filters/sets.py::_FILTER_FAMILY_REGISTRY` — a frozen
-  `type -> _FilterFamilyProfile` map matched by `_family_profile_for`'s MRO walk (the
-  most-derived registered ancestor wins; the universal `Filter` base is deliberately
-  unregistered so the walk cannot match everything) — is the SINGLE executable source of
-  truth for which generated families are supported, and the matched profile is signed
-  into the fingerprint as its `family` slot. An unknown or ambiguous family resolves to
+  `type -> _FilterFamilyProfile` map — is the SINGLE executable source of
+  truth for which generated families are supported. `_family_profile_for` matches it by
+  **exact class first** (`_FILTER_FAMILY_REGISTRY[type(instance)]`, no MRO walk); with no
+  exact key it falls back to
+  `django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`, which
+  structurally recognizes ONLY django-filter's genuine empty-body dynamic
+  `ConcreteInFilter` / `ConcreteRangeFilter` — exactly `(BaseInFilter | BaseRangeFilter,
+  <an exact-registered scalar family>)` bases and an own attribute-NAME set identical to a
+  `pass`-body reference (`_EMPTY_BODY_DYNAMIC_CSV_ATTRS`), so a DUNDER-named state/behavior
+  member fails closed too (Rev 14) — and returns `None` otherwise. The matched profile is signed
+  into the fingerprint as its `family` slot. An unknown or ambiguous family — including an
+  unaudited SUBCLASS of a registered base, which the retired MRO walk wrongly accepted
+  through its most-derived registered ancestor (feedback Blocker 2) — resolves to
   no profile (`_family_profile_for(...) is None`), which makes the leaf ineligible AND
   diverges its `family` signature from any audited candidate, so an unaudited family
-  fails closed and can never reach the correlated adapter. The remaining signed members:
+  fails closed and can never reach the correlated adapter; upgrading django-filter
+  therefore cannot add a routable default class merely through inheritance. The remaining signed members:
   the effective `.filter` **call graph** (`.filter` itself plus the helpers it dispatches
   through —
   `get_method`, `get_filter_predicate`, `is_noop` — each in an instance-override
@@ -715,9 +783,17 @@ missing/mismatch
   is explicitly insufficient. This finite boundary is the single canonical inventory
   — `_FILTER_FAMILY_REGISTRY` enumerates the supported families executably and
   `_CandidateFingerprint` / `_fingerprint_of` carry the per-instance signature; the
-  glossary and this plan summarize them — and every enumerated member has a fail-closed
-  acceptance row in the
-  parameterized signature matrix (`tests/filters/test_sets.py`, round-5 High 3). An
+  glossary and this plan summarize them. The signature schema is itself executable and
+  lives in ONE place (feedback Medium 4, simplified in Rev 14): a single canonical
+  `_ALL_SEMANTIC_EXTRACTORS` tuple of named `_SemanticExtractor` functions that
+  `_fingerprint_of` runs for EVERY recognized family — a `_FilterFamilyProfile` is now a
+  bare family identity, not an extractor owner. The schema test pins the extractor names to
+  EXACTLY the `_CandidateFingerprint` semantic fields (and requires them unique), so a
+  signed field with no extractor — or vice versa — fails; the fingerprint deliberately
+  signs the whole canonical union for every family (fail-safe; per-family narrowing could
+  go fail-open). Every enumerated member has a fail-closed acceptance row in the
+  parameterized signature matrix (`tests/filters/test_sets.py`, round-5 High 3) — the
+  behavioral per-seam audit that each signed field actually gates routing. An
   audit of the remaining effective reads (documented on `_fingerprint_of`) confirms
   the non-signed helper reads — `is_noop`'s `required` / choices and the GlobalID
   filters' owner-decode read — are not result-set vectors for a *routed* leaf.

@@ -1,483 +1,456 @@
-# Fifth adversarial implementation review: row-preserving predicates Part 1
+# Sixth adversarial implementation review: row-preserving predicates Part 1
 
 ## Verdict
 
-The latest revision closes the previous review's two concrete blockers in
-their intended, tested forms:
+The implementation is converging, and the previous review's concrete behavior defects are
+substantially closed:
 
-- replacing one class-level `FILTER_DEFAULTS` entry now preserves an
-  `extra`-only consumer policy and its original relation-filter wire shape;
-- the live semantic signature reads the effective built form field's
-  `to_field_name`, so the previously demonstrated post-validation mutation
-  fails closed;
-- the origin oracle now performs the same single MRO walk over the merged
-  defaults/overrides mapping as django-filter;
-- a framework-owned Relay relation `isnull` remains an upstream Boolean
-  filter; and
-- the exact Python 3.10 / Django 5.2.0 floor is now an ordinary push/PR CI
-  node rather than a prose-only acceptance requirement.
+- unsupported lookups on framework-owned Relay relations now raise a typed
+  `ConfigurationError` at generation time while consumer-owned relation overrides retain
+  their own lookup semantics;
+- empty decoded GlobalID node identifiers now reject consistently through the shared
+  decoder, including live scalar, all-empty-list, and mixed-list acceptance coverage;
+- relation `isnull` keeps its Boolean input shape and now has schema-level coercion
+  coverage;
+- the prior mutable-shared-entry attacks now fail loudly in the spellings the tests cover;
+- the signature suite now gives behaviorally meaningful rows to the mutable fields that
+  can change result semantics and documents the no-op-equivalent fields separately; and
+- the supported Python 3.10 / Django 5.2.0 floor remains present in push and pull-request
+  CI.
 
-Those are substantive corrections. Part 1 is nevertheless not ready for
-sign-off. Two new blockers are independently reproducible:
+Part 1 is nevertheless **not ready to call architecturally closed**. The new fix introduces
+two related authorization blockers and one consumer-compatibility regression:
 
-1. framework-owned Relay relations still convert unsupported lookups such as
-   `icontains` into GlobalID filters, contradicting Rev 11's own lookup policy
-   and producing an execution-time `FieldError`; and
-2. whole-entry identity is not an ownership boundary while the compared
-   entries remain mutable and shared. A normal shallow copy followed by an
-   in-place nested edit is still classified as the untouched base entry, so
-   the consumer's policy is discarded during Relay conversion.
+1. `_PACKAGE_FILTER_DEFAULTS` is not intrinsically package-owned. It snapshots the live,
+   mutable `django_filters.filterset.BaseFilterSet.FILTER_DEFAULTS` at import time, so
+   consumer or third-party mutations made before that import are reclassified as trusted
+   package policy and can mint a routing token.
+2. `_family_profile_for` treats every subclass of a registered base as audited. An
+   unregistered subclass with additional behavior therefore receives a profile through
+   its MRO, contradicting the fail-closed contract.
+3. Installing nested `MappingProxyType` objects as the consumer-facing
+   `FilterSet.FILTER_DEFAULTS` breaks normal copy/customization behavior inherited from
+   django-filter; `copy.deepcopy(FilterSet.FILTER_DEFAULTS)` fails on both Python 3.10 and
+   current Python.
 
-A newly added empty-GlobalID guard also turns a syntactically restrictive,
-non-empty list into an unfiltered query. In addition, the implementation still
-describes a finite “supported family” integrity model without making the
-supported families executable, and the new signature matrix does not prove
-the behavioral meaning of several values it claims to cover.
+The first two combine into a reproducible result-semantics authorization failure: an
+application-owned filter class installed in django-filter's global defaults before package
+import becomes `origin="framework_default"`, `generation_capable=True`, `eligible=True`,
+and token-bearing even though the class is absent from the registry and carries unsigned
+behavior.
 
-Only this review document was changed. The reproductions ran in isolated
-processes with an in-memory fakeshop database setting; each process restored
-the django-filter global it temporarily changed before exit. No tracked
-database was opened or modified. Per repository policy, pytest was not run
-because the request did not explicitly ask for a test run.
+## Blocker 1 — the “package-owned” baseline can capture consumer policy at import
 
-## Blocker 1 — unsupported Relay relation lookups still become GlobalID filters
-
-The normative Relay wire-shape policy in the [Part 1 plan][part1-plan] now
-states:
-
-> Only the equality (`exact`) and membership (`in`) wire shapes convert.
-
-`django_strawberry_framework/filters/sets.py::FilterSet.filter_for_lookup`
-implements only three branches:
+The central premise of the new ownership fix is stated in
+`django_strawberry_framework/filters/sets.py::_PACKAGE_FILTER_DEFAULTS`: the snapshot is a
+package-owned, immutable generation-policy baseline. Its source, however, is:
 
 ```python
-if lookup_type == "isnull":
-    return default_class, params
-if lookup_type == "in":
-    return GlobalIDMultipleChoiceFilter, ...
-return cls._relay_filter_class_for_field(field), ...
-```
-
-The final unconditional return converts **every** other lookup, not only
-`exact`. Pattern, range, ordering, and other lookups therefore acquire a
-GlobalID wire shape even though neither Relay ID semantics nor the generated
-filter can execute them.
-
-### Reproduction
-
-Registering `Genre` as a Relay target and declaring an explicit unsupported
-lookup is sufficient:
-
-```python
-class BookFilter(FilterSet):
-    class Meta:
-        model = Book
-        fields = {"genres": ["icontains"]}
-```
-
-The current checkout produces:
-
-```text
-GlobalIDMultipleChoiceFilter icontains _GlobalIDMultipleChoiceField
-FieldError Unsupported lookup 'icontains' for ForeignKey or join on the field not permitted.
-```
-
-This is worse than a schema-build rejection: the invalid surface is generated
-successfully, accepts a list-shaped GlobalID input, and fails only when the
-query executes. It is also a direct implementation/specification
-contradiction, not an omitted optional hardening.
-
-The same fall-through applies to forward FK, reverse relation, and expanded
-relation leaves. `FilterSet.get_fields` narrows an `"__all__"` declaration
-after owner binding, but an explicit `Meta.fields` lookup still reaches this
-path. The own-Relay-PK branch already handles the analogous case correctly by
-raising a typed `ConfigurationError`.
-
-### Required root-cause correction
-
-Give framework-owned Relay relation lookups one shared exhaustive
-classification, consumed by both generation stages:
-
-```text
-exact  -> GlobalIDFilter or GlobalIDMultipleChoiceFilter by relation cardinality
-in     -> GlobalIDMultipleChoiceFilter
-isnull -> upstream BooleanFilter
-other  -> typed ConfigurationError at generation/finalization
-```
-
-Ownership must be decided first. If a consumer override actually governs the
-selection, return that consumer filter unchanged; its class may intentionally
-implement a nonstandard lookup. Apply the exhaustive lookup policy only to the
-proven framework default. Do not merely pass unsupported framework defaults
-through: the resulting upstream model-choice filter is not a valid
-Relay-GlobalID contract either.
-
-Required regressions:
-
-- explicit unsupported lookup on a framework-owned forward FK, M2M, and
-  reverse relation;
-- the same shape through `RelatedFilter` expansion;
-- a typed build/finalization error naming the filterset, field, and lookup,
-  never a resolver-time Django `FieldError`;
-- positive `exact`, `in`, and `isnull` controls with their scalar/list/Boolean
-  annotations; and
-- a consumer-owned relation override proving the package does not reject a
-  lookup implemented by the consumer's own filter class.
-
-## Blocker 2 — mutable shared entries defeat the whole-entry ownership check
-
-`django_strawberry_framework/filters/sets.py::FilterSet._generation_origin_for_field`
-now compares the selected entry to the corresponding
-`BaseFilterSet.FILTER_DEFAULTS` entry with:
-
-```python
-if selected_entry is not base_entry:
-    return "override_generated"
-```
-
-This fixes a shadow that **replaces** the nested entry. It does not establish
-an immutable baseline. Both the outer mapping and every nested entry are
-ordinary mutable dictionaries. A shallow copy intentionally reuses the nested
-entry objects; mutating one of those objects changes the object on both sides
-of the identity comparison.
-
-That is not hypothetical metaprogramming. It is the natural alternative
-spelling of an `extra`-only customization:
-
-```python
-shadow = dict(BaseFilterSet.FILTER_DEFAULTS)
-shadow[models.ManyToManyField]["extra"] = lambda field: {
-    "queryset": Genre.objects.none(),
-    "required": True,
-}
-
-
-class BookFilter(FilterSet):
-    FILTER_DEFAULTS = shadow
-
-    class Meta:
-        model = Book
-        fields = {"genres": ["exact"]}
-```
-
-### Reproduction
-
-The current checkout reports:
-
-```text
-capable False
-selected_is_base True
-origin FilterGenerationProvenance(
-    origin='package_replacement',
-    framework_added_distinct=True,
-    expanded_from=(),
-    generation_capable=False,
+_PACKAGE_FILTER_DEFAULTS = _freeze_filter_defaults(
+    filterset.BaseFilterSet.FILTER_DEFAULTS,
 )
-class GlobalIDMultipleChoiceFilter True
-extra {'required': True}
-token None
 ```
 
-The capability gate correctly withholds the token because the outer
-`FILTER_DEFAULTS` mapping is shadowed, but the earlier ownership decision has
-already failed:
+`BaseFilterSet.FILTER_DEFAULTS` is explicitly live, mutable, and process-shared. Freezing
+its current contents does not establish who authored those contents; it only prevents
+later mutation of the snapshot. Any application, reusable Django app, or initialization
+hook that customizes django-filter's defaults before
+`django_strawberry_framework.filters.sets` is imported is silently promoted into the
+trusted baseline.
 
-- the selected entry and “base” entry are the same mutated object;
-- the origin oracle calls it `framework_default`;
-- Relay conversion discards the consumer's `ModelMultipleChoiceFilter`;
-- `_strip_model_choice_extras` removes the restricted queryset; and
-- the replacement is stamped `package_replacement`.
+That import order is realistic. Installing `django_strawberry_framework` as a Django app
+imports the package root, but the package root does not import `filters.sets`; filter
+modules can be loaded later while application modules and app initialization have already
+run.
 
-Withholding the token only prevents correlated routing. It cannot restore the
-consumer's lost validation policy or wire shape.
+### Reproduction
 
-There is a second form of the same defect: mutating the inherited
-`BaseFilterSet.FILTER_DEFAULTS` outer mapping in place leaves
-`FilterSet._is_generation_capable()` true, classifies the mutated entry as the
-base entry, converts it, and mints a token. The isolated reproduction produced:
+In a fresh process, before importing `django_strawberry_framework.filters.sets`:
+
+```python
+from django.db import models
+from django_filters import CharFilter, filterset
+
+
+class ConsumerOrderingCharFilter(CharFilter):
+    descending = True
+
+    def filter(self, qs, value):
+        return qs.order_by("-pk" if self.descending else "pk")
+
+
+filterset.BaseFilterSet.FILTER_DEFAULTS[models.TextField][
+    "filter_class"
+] = ConsumerOrderingCharFilter
+
+from apps.library.models import Book
+from django_strawberry_framework.filters.sets import FilterSet
+
+
+class BookFilter(FilterSet):
+    class Meta:
+        model = Book
+        fields = {"loans__note": ["icontains"]}
+```
+
+The current implementation reports:
 
 ```text
-capable True
-origin package_replacement
-class GlobalIDMultipleChoiceFilter
+leaf ConsumerOrderingCharFilter
+exact_registry False
+origin/capable framework_default True
+eligible/token/profile True 2 scalar_lookup
+fingerprint before True
+fingerprint after class-state mutation True
+```
+
+The deep `loans__note` leaf crosses a reverse FK, so it is a row-preserving candidate. The
+consumer class is not a registry key, but the MRO matcher gives it the `CharFilter`
+`scalar_lookup` profile. Because the mutable upstream entry was captured before package
+import, the ownership oracle calls it `framework_default`, the capability gate calls the
+class capable, and the snapshot mints a token.
+
+This is observably unsafe, not merely a provenance-label disagreement:
+
+- the original outer invocation of `ConsumerOrderingCharFilter.filter` changes the outer
+  queryset ordering;
+- the routed invocation applies that ordering only to the correlated inner queryset;
+  `Exists` discards subquery ordering, so the outer ordering does not change; and
+- mutating the class-level `descending` behavior after the snapshot does not change any
+  current fingerprint member. The class, `.filter` descriptor, token, and family profile
+  all remain equal, so routing stays authorized while behavior changes.
+
+An `extra`-only pre-import mutation is trusted the same way. For example, replacing the
+upstream `TextField` `extra` provider with `lambda field: {"exclude": True}` produces a
+leaf with:
+
+```text
+exclude True
+origin framework_default
+generation_capable True
+eligible True
 token 2
 ```
 
-The plan repeatedly calls the comparison target the “pure” or “unmodified”
-base defaults. It is neither while it is a live mutable object also exposed as
-the consumer extension hook.
+That directly disproves the standing invariant that generated candidates never carry
+`exclude=True`. Even if a particular exclusion currently happens to be relationally
+equivalent inside the correlated root, it is outside the audited and documented Part 1
+contract and must not be authorized accidentally.
 
 ### Required root-cause correction
 
-Separate the package's canonical generation policy from django-filter's
-mutable public extension mapping. The strongest design is:
+Do not derive package ownership from whatever happens to be in a mutable third-party
+global at import time.
 
-1. create a package-owned copy of the supported upstream default policy;
-2. freeze both the outer mapping and each nested entry, or store an immutable
-   normalized record containing the selected class and `extra` provider;
-3. make `FilterSet` use that package-owned baseline;
-4. require consumers to replace an entry in a shadowed mapping rather than
-   mutate shared package state; and
-5. have generation and ownership consume the same immutable selection result.
+The durable architecture should separate three concepts:
 
-A shallow consumer copy can then safely reuse unchanged immutable entries,
-while an attempted nested mutation fails loudly and a deliberate replacement
-is unambiguously consumer-owned. Comparing against a deep snapshot without
-preventing later shared mutation is weaker: it may detect drift, but it still
-allows one consumer to contaminate every other filterset process-wide.
+1. **Package policy:** an independently defined, immutable, normalized table owned by this
+   package and reviewed with this package's supported django-filter families.
+2. **Effective generation policy:** the mapping the current `FilterSet` class will actually
+   give django-filter, including consumer `FILTER_DEFAULTS` and `Meta.filter_overrides`.
+3. **Selection provenance:** a frozen generation-time record of which normalized policy
+   entry selected the class and extras for this exact field/lookup.
+
+Generation and ownership must consume the same normalized selection record. A difference
+between effective policy and package policy is consumer-owned and cannot mint a token,
+regardless of whether the difference arrived through:
+
+- a subclass replacement;
+- nested mutation;
+- mutation of `BaseFilterSet.FILTER_DEFAULTS` before or after package import;
+- a stateful `extra` provider; or
+- a future django-filter release changing the default entry shape.
+
+Do not solve this by adding another request-time marker. The defect occurs before the
+candidate exists: consumer policy is being mislabeled as package policy. Correct the
+generation-policy source and provenance boundary.
 
 Required regressions:
 
-- shallow outer copy plus nested `extra` mutation;
-- direct in-place mutation through an inherited defaults mapping;
-- proof that one filterset's customization cannot alter an unrelated
-  filterset;
-- observable restricted queryset and wire-shape preservation, not merely a
-  token assertion; and
-- positive controls for unchanged canonical entries and an explicit
-  replacement entry.
+- mutate `BaseFilterSet.FILTER_DEFAULTS` **before** importing/reloading the package filter
+  module and prove the resulting custom class or `extra` provider is consumer-owned and
+  tokenless;
+- use a custom filter whose outer invocation changes ordering and prove it is never routed;
+- install an `extra` provider that generates `exclude=True` and prove the candidate gate
+  refuses it;
+- prove pristine package defaults still generate token-bearing candidates; and
+- restore all third-party global state in process-isolated tests so this regression cannot
+  contaminate neighboring suites.
 
-Do not address this only in `_is_generation_capable`. Relay conversion happens
-before the capability token can protect anything.
+## Blocker 2 — MRO family matching is an open ancestry allowlist
 
-## High 3 — an empty-node-id list silently widens a restrictive filter
+`django_strawberry_framework/filters/sets.py::_family_profile_for` walks
+`type(filter_instance).__mro__` and returns the first registered ancestor. This is useful
+for django-filter's generated `ConcreteInFilter` and `ConcreteRangeFilter`, but it is not a
+fail-closed family registry.
 
-`django_strawberry_framework/filters/base.py::GlobalIDMultipleChoiceFilter.filter`
-now drops decoded node IDs in django-filter's `EMPTY_VALUES` and returns the
-incoming queryset when nothing remains:
+Any subclass of a registered family is accepted, including a subclass the package has
+never audited:
 
 ```python
-node_ids = [node_id for node_id in node_ids if node_id not in EMPTY_VALUES]
-if not node_ids:
-    return qs
+class FutureSemanticCharFilter(CharFilter):
+    reverse = True
+
+    def filter(self, qs, value):
+        if self.reverse:
+            return qs.exclude(**{self.field_name: value})
+        return super().filter(qs, value)
 ```
 
-This avoids the previous integer-binding `ValueError`, but the chosen behavior
-is unsafe and contradicts the filter's own restrictive-empty contract:
+Current result:
 
 ```text
-id: {in: []}                         -> match no rows
-id: {in: ["<well-formed type:>"]}    -> match every row
+exactly registered False
+resolved profile scalar_lookup
 ```
 
-A client can therefore turn a non-empty restrictive membership condition into
-no condition merely by supplying a well-formed GlobalID with an empty node-id
-component. A mixed list silently ignores that element while accepting the
-rest, unlike malformed or wrong-type GlobalIDs, which reject the whole input
-and name the offending index.
+The exact class is signed in `_CandidateFingerprint.filter_class`, but that only detects a
+class swap between build and request. It does not prove that the original class was
+audited. Likewise, signing the subclass's `.filter` descriptor proves the method did not
+change; it does not sign arbitrary state that the unreviewed method reads.
 
-The existing single-value no-op in
-`django_strawberry_framework/filters/base.py::GlobalIDFilter.filter` is not a
-sound precedent. It is the same silent-widening issue on a scalar input, and
-duplicating it into the list path makes the behavior harder to correct later.
-“Decodable as `type_name:`” does not make an empty identifier a valid resource
-identifier.
+This matters independently of Blocker 1 because `django-filter>=25.2` has no upper bound. A
+future django-filter version can place a new subclass of `CharFilter`,
+`ModelMultipleChoiceFilter`, `BaseInFilter`, or another registered ancestor into its
+defaults. The current MRO walk will automatically authorize it before this package has
+audited its call graph or state.
 
-The root fix should live in the shared
-`django_strawberry_framework/filters/base.py::_decode_and_validate_global_id`
-boundary: reject an empty decoded `node_id` with the existing
-`GLOBALID_INVALID` error code, including the list index when present. Apply
-that rule consistently to the single and multiple filters. If the project
-deliberately prefers a non-error policy, match-none is the only
-non-widening alternative; returning the unfiltered queryset is not.
+The existing negative test uses `_UnknownFamilyFilter(Filter)`. That proves only that a
+direct descendant of the deliberately unregistered universal `Filter` base fails closed.
+It does not test the dangerous case: an unknown descendant of a **registered** base.
 
-Add live regressions for scalar, all-empty list, and mixed empty/real list
-inputs. Each should prove the response/error contract and that the root query
-does not silently return unrelated rows.
+### Required root-cause correction
 
-## High 4 — “supported generated families” is prose, not an executable fail-closed boundary
+The behavior profile must be minted from a known generation decision, not rediscovered
+from arbitrary ancestry.
 
-The plan and
-`django_strawberry_framework/filters/sets.py::_CandidateFingerprint` describe a
-finite integrity boundary for “the supported generated django-filter
-families.” No production object enumerates those families or selects a
-family-specific behavior profile.
+Recommended shape:
 
-`django_strawberry_framework/filters/sets.py::_candidate_metadata_for` marks
-any framework-origin leaf on a many-side path eligible based only on path and
-`method is None`. If the class is generation-capable, the generic
-`_fingerprint_of` tuple is applied to whatever filter class upstream selected.
-An unknown family introduced by an unbounded future `django-filter>=25.2`
-release therefore becomes routable before its runtime reads have been audited.
-The mutable-default reproduction above demonstrates the same architectural
-gap today: changing the base mapping can place different behavior behind a
-supposed framework origin.
+- stable audited families match by exact class;
+- package-owned filter classes match by exact class;
+- django-filter's dynamic `in` / `range` classes receive a profile at the generation site,
+  where the package knows the lookup kind and the exact audited scalar class used to build
+  the dynamic class;
+- the generated profile travels through deepcopy with the same provenance/token chain;
+  and
+- an arbitrary subclass of an audited base receives no profile unless explicitly added and
+  audited.
 
-The previous exact-class allowlist was correctly withdrawn because upstream
-creates dynamic `ConcreteInFilter` and `ConcreteRangeFilter` subclasses. That
-does not require a class-agnostic authorization boundary. Use an executable
-behavior-profile registry:
+If structural recognition remains for dynamic CSV classes, it must validate their exact
+MRO and class body rather than grant trust to every descendant of `BaseInFilter` or
+`BaseRangeFilter`. A dynamic class that adds a new method, descriptor, or state-bearing
+attribute must fail closed.
 
-- identify supported base families by a controlled MRO/profile match;
-- normalize the effective runtime values each family actually reads;
-- let dynamic `in`/`range` subclasses inherit the relevant base profile;
-- return no profile for an unknown or ambiguous family; and
-- make “no profile” ineligible, so upstream additions fail closed to the outer
-  invocation until audited.
+Required regressions:
 
-This consolidates the repeated signature inventory in the plan, glossary,
-dataclass, fingerprint builder, and applicator into one executable source of
-truth. It also makes the claim “a family whose state cannot be normalized is
-ineligible” true by construction rather than by review discipline.
+- an unregistered subclass of every broad registered category (`CharFilter`,
+  `ModelMultipleChoiceFilter`, `BaseInFilter`) resolves to no profile;
+- genuine django-filter-generated `ConcreteInFilter` and `ConcreteRangeFilter` instances
+  still receive their intended profiles;
+- a dynamic subclass with one added behavior member fails closed;
+- every exact filter class in the package-owned generation table has an audited profile;
+  and
+- upgrading django-filter cannot add a routable default class merely through inheritance.
 
-## High 5 — the signature matrix proves inequality, not the semantics of several fields
+## High 3 — the frozen public `FILTER_DEFAULTS` is not a drop-in django-filter mapping
 
-The [Part 1 plan][part1-plan] says every enumerated signature member has a
-fail-closed row in the **parameterized** matrix. The parameterized instance
-matrix in `tests/filters/test_sets.py` covers only:
+The implementation installs the nested immutable snapshot directly as
+`FilterSet.FILTER_DEFAULTS` and calls it a drop-in replacement because django-filter itself
+only shallow-copies and reads the mapping.
 
-- `get_method`;
-- `is_noop`;
-- `get_filter_predicate`;
-- effective `field.to_field_name`;
-- `conjoined`;
-- `always_filter`; and
-- `null_value`.
+That considers only django-filter's internal reader. `FILTER_DEFAULTS` is also an inherited
+class customization seam for consumers. The [FilterSet glossary entry][glossary] promises
+that, because this class is a `BaseFilterSet` subclass, every django-filter filter,
+`FilterMethod`, and form-cleaning primitive carries over. A nested `MappingProxyType`
+changes that extension behavior:
 
-Other fields are scattered across older tests (`.filter`, pk qualification,
-and `distinct`) or have no equivalent capable-live-mutation acceptance row
-(`field_name`, `lookup_expr`, `method`, `exclude`, and wholesale class
-replacement). The prose claim is therefore inaccurate even if the tuple
-implementation itself is straightforward.
+```python
+import copy
 
-More importantly, several new rows mutate a value without making that value
-behaviorally relevant:
+from django_strawberry_framework.filters import FilterSet
 
-- `conjoined=True` is tested with only one submitted genre, so AND and OR are
-  identical;
-- `always_filter=False` is tested while `required=False`, so `is_noop` remains
-  false;
-- `null_value` is changed to a sentinel that is never submitted; and
-- helper replacements delegate to the original behavior unchanged.
+copy.deepcopy(FilterSet.FILTER_DEFAULTS)
+```
 
-Those cases prove only that dataclass equality notices a changed attribute.
-They cannot catch a signature field that reads the wrong construction proxy,
-which was exactly how the prior `to_field_name` blocker survived despite the
-field being present in the tuple.
+On both the supported Python 3.10 floor and current Python, this raises:
 
-Build the matrix from the executable family profiles recommended above. Each
-row should supply:
+```text
+TypeError: cannot pickle 'mappingproxy' object
+```
 
-1. a frozen/runtime normalization mutation;
-2. input and fixtures that make the mutated value alter the original filter's
-   predicate or no-op decision;
-3. a pre-fanned outer queryset that distinguishes correlated routing from the
-   required outer fallback; and
-4. the common token-equality, signature-divergence, alias-absence, SQL-shape,
-   ordered-row, and count assertions.
+The following formerly ordinary customization forms now also raise:
 
-For example, `conjoined` needs two selected relations and rows that distinguish
-OR from AND. `null_value` needs the submitted sentinel and a nullable relation.
-`get_method` should switch filter to exclude rather than call an
-effect-identical delegate. Keep separate class-descriptor rows for every
-callable profile member.
+```python
+defaults = dict(FilterSet.FILTER_DEFAULTS)
+defaults[models.CharField]["extra"] = custom_extra
 
-## Medium 6 — the new reachable GlobalID behavior is tested at the wrong tier
+FilterSet.FILTER_DEFAULTS[models.CharField] = replacement
+```
 
-The empty-node-id branches added to
-`GlobalIDMultipleChoiceFilter.filter` are covered only by predicate-capturing
-stubs in `tests/filters/test_base.py`. The same code is directly reachable
-through the existing fakeshop `/graphql/` surface:
-`allLibraryGenres(filter: {id: {in: [...]}})` already exercises
-`GlobalIDMultipleChoiceFilter` and has live wrong-type, malformed, ordinary
-list, and explicit-empty-list coverage.
+The first aliases a frozen nested proxy; the second targets the frozen outer proxy. The
+tests currently assert these failures as the desired fix, but that converts an ownership
+implementation detail into a consumer-visible compatibility break.
 
-The repository's live-first rule and the [test-query tier guide][test-query-readme]
-therefore require the new consumer-visible behavior to be earned in
-`examples/fakeshop/test_query/`, not solely through a package stub. A small
-package test may remain for the exact low-level predicate shape, but it cannot
-be the acceptance test.
+The root fix should keep an immutable **private normalized baseline** without forcing the
+consumer-facing django-filter mapping itself to be a non-copyable type. The capability
+check can compare the effective policy against the immutable normalized baseline and fail
+closed on drift. It does not need to make the inherited public mapping a
+`MappingProxyType`.
 
-The Relay-relation `isnull` correction also needs at least one schema-level
-annotation/coercion assertion. The current tests prove the Python filter class
-and direct queryset rows, but not that the generated GraphQL input is Boolean
-and accepts `true`/`false` without the former GlobalID/list coercion. Use a live
-fakeshop surface if one already exposes a direct Relay relation `isnull`;
-otherwise an in-process package schema test is the justified fallback.
+At minimum, the public surface must remain safely cloneable for subclass customization,
+and the supported customization spelling must be documented and tested. Given the
+package's DRF/django-filter migration contract, preserving normal `dict`/deepcopy behavior
+is preferable to documenting a new incompatibility.
 
-The existing row-preserving live coverage and its descriptions in the
-[test-query tier guide][test-query-readme] remain aligned: both direct-deep and
-expanded origins, SQL shape, mixed OR, `totalCount`, cursor, and page-boundary
-claims are represented. The gap is limited to the newly introduced Rev 11
-GlobalID/Boolean behavior.
+Required regressions:
 
-## Medium 7 — Rev 11 folds unrelated input-validation fixes into the Part 1 contract
+- `copy.deepcopy(FilterSet.FILTER_DEFAULTS)` works on Python 3.10 and current Python;
+- the copy can replace one nested entry without mutating the package baseline;
+- replacing one entry marks only that entry consumer-owned while untouched entries retain
+  their intended framework behavior;
+- mutating a consumer copy cannot contaminate another FilterSet; and
+- the private package baseline remains immutable and independent of the public copy.
 
-The row-preserving predicate plan now owns:
+## Medium 4 — `relevant_reads` does not make the semantic audit executable
 
-- correlated-`EXISTS` classification and application;
-- Relay conversion ownership;
-- relation `isnull` wire correction; and
-- empty decoded GlobalID semantics.
+`_FilterFamilyProfile.relevant_reads` is described as the executable per-family inventory
+of runtime reads. In the implementation, however:
 
-The first two are integral to safe adapter authorization. Relation `isnull` was
-exposed by the same conversion branch and reasonably belongs in the repair.
-Empty-node-id validation is different: it is a general GlobalID input contract
-shared by scalar and list filters and does not depend on row preservation.
+- `_fingerprint_of` always constructs one union fingerprint and never consults
+  `profile.relevant_reads`;
+- `test_family_profiles_declare_valid_read_inventories` checks only that declared names are
+  dataclass fields and that every profile includes `_CORE_FAMILY_READS`; and
+- adding a new family with only `_CORE_FAMILY_READS` passes that structural test even if
+  the new `.filter` implementation reads additional state.
 
-Keeping that change in Rev 11 without adding it to the standing GlobalID
-contract makes Part 1 the only source of truth for a broadly visible input
-rule. Move the normative empty-ID decision into the appropriate GlobalID/filter
-specification or glossary section and let Part 1 reference it as a discovered
-dependency. This is especially important if the correct fix changes the
-existing scalar no-op to `GLOBALID_INVALID`.
+The registry makes **membership** executable, but it does not make the effective-read audit
+executable. That is why Blocker 2 can assign `scalar_lookup` to a subclass whose
+`descending` or `reverse` state is absent from the fingerprint without any registry test
+failing.
+
+The higher-quality shape is for a profile to own a semantic-state extractor (or a tuple of
+named extractor functions) that produces its normalized fingerprint contribution. Adding
+a family would then require executable extraction logic, not only a frozenset of field
+names and prose saying an audit occurred. The common core can stay DRY; each profile adds
+only its family-specific state.
+
+At minimum, add a test that the set of reads declared by every profile exactly matches the
+state its extractor emits. A one-way subset assertion is too weak to serve as an integrity
+boundary.
+
+## Medium 5 — specification and documentation now overstate the fixed guarantees
+
+Several standing statements need correction if the implementation remains in its current
+shape:
+
+- The [Part 1 plan][part1-plan] says an unknown or ambiguous family resolves to no profile.
+  An unknown subclass of any registered base currently resolves to that ancestor's
+  profile.
+- The plan calls `_PACKAGE_FILTER_DEFAULTS` package-owned. It is immutable after creation,
+  but its initial contents can be consumer-owned because they come from a mutable
+  third-party global.
+- The [FilterSet glossary entry][glossary] promises django-filter primitives carry over,
+  but it does not disclose that `FILTER_DEFAULTS` is now non-mutable and non-deepcopyable.
+- The glossary says generated candidates never carry `exclude=True`; a pre-import
+  upstream-default customization currently creates an eligible, token-bearing
+  `exclude=True` candidate.
+- [spec-027][spec-027] now carries the general empty-node-id GlobalID contract, but its
+  historical “exactly 14 live tests” statements do not distinguish the original card's 14
+  tests from the three later empty-ID acceptance tests added to the same live suite.
+- The [live-test README][test-query-readme] describes the row-preserving and GlobalID
+  acceptance responsibilities in detail but does not yet mention the new empty-node-id
+  rejection contract.
+
+Do not document around Blockers 1 and 2. Correct the architecture first, then update the
+plan and glossary to describe the actual final boundary. The spec-027 and live-test README
+updates are straightforward bookkeeping after that.
+
+## Missing tests implied by this review
+
+The current additions are strong for the earlier findings, but the new architecture needs
+the following adversarial rows:
+
+1. A fresh-process import-order test that mutates django-filter defaults before importing
+   package filters.
+2. An unknown subclass of a registered family, not only a direct `Filter` subclass.
+3. A custom family whose outer behavior changes ordering, proving that accidental routing
+   is observably different from the outer invocation.
+4. A build-time `exclude=True` candidate refusal.
+5. A Python 3.10 `FILTER_DEFAULTS` deepcopy/customization compatibility test.
+6. An inverse registry assertion: every package-generation class is explicitly audited,
+   and no other class is accepted merely by ancestry.
+7. A profile-extractor completeness test if the registry is refactored to own executable
+   semantic extraction.
+
+These belong primarily in [package FilterSet tests][test-sets]. Consumer-visible behavior
+that can be exposed through the existing fakeshop schema should retain a live HTTP
+acceptance companion, following the [live-test tier contract][test-query-readme].
 
 ## What is satisfactorily closed
 
-The following prior findings are closed and should remain closed:
+The following earlier findings do not need to remain open:
 
-- a replaced `FILTER_DEFAULTS` entry is consumer-owned by its whole entry,
-  including an `extra`-only replacement;
-- merged-map/MRO precedence now agrees with
-  `BaseFilterSet.filter_for_lookup`, including an override shadowed by a
-  more-derived default;
-- live `field.to_field_name` mutation is observed from the built form field;
-- build-time form-field inspection happens on a disposable deepcopy;
-- the previously missing helper descriptors and execution knobs are present
-  in the signature tuple;
-- a relation `isnull` is no longer converted to a GlobalID filter;
-- the shared pk-qualified-path helper removes the duplicated single/multiple
-  derivation;
-- the Python 3.10 / Django 5.2.0 floor is pinned in CI;
-- the PostgreSQL artifact/footer checks, Medtrics fixture, direct and expanded
-  live proofs, test-scoped Loan connection, and multi-database coverage remain
-  architecturally sound; and
-- the tracked SQLite delta now has an explicit single-row provenance contract
-  in the plan rather than remaining unexplained binary churn.
+- [FilterSet.filter_for_lookup][filter-sets] now classifies framework-owned Relay relation
+  lookups exhaustively: `exact`, `in`, and `isnull` are the only accepted shapes, while an
+  unsupported lookup fails at generation. Consumer-owned overrides are checked first and
+  keep their own class.
+- [GlobalID decoding][filter-base] now rejects an empty decoded node identifier with
+  `GLOBALID_INVALID` before either scalar or multiple predicate construction. The live
+  tests cover scalar, all-empty list, and mixed-list index reporting.
+- [spec-027][spec-027] is now the normative home for that general GlobalID input rule, so
+  the earlier Part 1 scope concern is resolved.
+- [Relay relation `isnull` input coverage][test-inputs] verifies Boolean annotation,
+  introspection, accepted Boolean coercion, and rejected String coercion.
+- The effective `to_field_name` read remains signed from the live built form field.
+- The signature suite now distinguishes genuinely behavioral mutations from fields whose
+  no-op decision is equivalent on the inner and outer invocations.
+- The existing direct reverse-FK, expanded reverse-M2M, Medtrics-shaped mixed `OR`,
+  pre-fanned multiset, connection pagination, PostgreSQL, and sharded-database coverage
+  remains aligned with the [Part 1 plan][part1-plan] and the
+  [live-test README][test-query-readme].
 
-The core classifier, neutral correlated predicate primitive, and multiset
-selection contract remain the right architecture. The remaining blockers are
-at the authorization and GraphQL wire boundaries around that core.
+No new result-set defect was found in the currently audited, pristine built-in filter
+families themselves. The remaining blockers are at the trust boundary that decides which
+families and policies count as pristine.
 
 ## Recommended correction order
 
-1. Make framework-owned Relay relation lookup handling exhaustive and reject
-   every lookup outside `exact` / `in` / `isnull` at build time.
-2. Replace mutable `BaseFilterSet.FILTER_DEFAULTS` identity with a
-   package-owned immutable generation-policy baseline.
-3. Reject empty decoded node IDs consistently in the shared GlobalID decoder;
-   never widen a restrictive filter.
-4. Replace the class-agnostic generic signature with executable
-   per-supported-family behavior profiles that fail unknown families closed.
-5. Derive a genuinely behavioral acceptance matrix from those profiles and
-   move reachable GlobalID cases to live HTTP.
-6. Reconcile the plan, glossary, and GlobalID documentation after the behavior
-   is fixed.
+1. Replace the import-time snapshot of mutable upstream state with an independently owned
+   normalized package policy and generation-time selection provenance.
+2. Replace open-ended MRO family authorization with exact or generation-stamped profiles;
+   preserve dynamic `in`/`range` support explicitly.
+3. Restore a copyable consumer-facing `FILTER_DEFAULTS` extension surface while keeping
+   the private policy baseline immutable.
+4. Make each family profile own executable semantic-state extraction.
+5. Add the import-order, unknown-descendant, ordering, exclusion, Python 3.10, and inverse
+   registry regressions.
+6. Reconcile the Part 1 plan, glossary, spec-027 test-count wording, and live-test README
+   with the corrected final behavior.
+
+After those corrections, one final adversarial pass should be enough unless the normalized
+policy redesign exposes another consumer customization path.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[pyproject]: ../pyproject.toml
 
 <!-- docs/ -->
+[glossary]: GLOSSARY.md#filterset
 [part1-plan]: row-preserving-predicates-part1-plan.md
 
 <!-- docs/SPECS/ -->
+[spec-027]: SPECS/spec-027-filters-0_0_8.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[filter-base]: ../django_strawberry_framework/filters/base.py
+[filter-sets]: ../django_strawberry_framework/filters/sets.py
 
 <!-- tests/ -->
+[test-inputs]: ../tests/filters/test_inputs.py
+[test-sets]: ../tests/filters/test_sets.py
 
 <!-- examples/ -->
 [test-query-readme]: ../examples/fakeshop/test_query/README.md

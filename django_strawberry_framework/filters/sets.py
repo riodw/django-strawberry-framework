@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from itertools import count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, NoReturn
 
 from django.db import models
+from django.db.models.fields.related import ManyToManyRel, ManyToOneRel, OneToOneRel
 from django_filters import (
     BaseInFilter,
     BaseRangeFilter,
@@ -42,6 +43,7 @@ from django_filters import (
     UUIDFilter,
     filterset,
 )
+from django_filters.conf import settings as _df_settings
 from django_filters.exceptions import FieldLookupError
 from django_filters.utils import get_model_field, resolve_field, try_dbfield
 from graphql import GraphQLError
@@ -220,53 +222,180 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in extra.items() if key not in _MODEL_CHOICE_ONLY_EXTRAS}
 
 
-def _freeze_filter_defaults(
-    source: Mapping[type, Mapping[str, Any]],
-) -> Mapping[type, Mapping[str, Any]]:
-    """Return a deeply read-only ``MappingProxyType`` snapshot of ``source``.
-
-    BOTH the outer field-class -> entry mapping AND each nested entry are wrapped
-    in a ``MappingProxyType`` view, so neither level can be mutated in place: a
-    consumer nested edit (``proxy[field][key] = ...``) or outer edit
-    (``proxy[field] = ...``) raises ``TypeError`` at its source rather than
-    silently succeeding. The nested ``extra`` callables are shared, read-only
-    lambdas carried BY REFERENCE (they are never invoked to build the snapshot,
-    and a lambda has no mutable state a copy would protect), matching upstream's
-    own aliasing of them across ``dict(cls.FILTER_DEFAULTS)`` shallow copies.
-    """
-    return MappingProxyType(
-        {field_cls: MappingProxyType(dict(entry)) for field_cls, entry in source.items()},
-    )
-
-
-# Blocker 2 (``docs/feedback.md``): django-filter's
-# ``filterset.BaseFilterSet.FILTER_DEFAULTS`` is a LIVE, mutable, process-shared
-# dict that is BOTH the canonical generation policy AND django-filter's public
-# extension hook. It is therefore neither "pure" nor "unmodified" while a consumer
-# can mutate it -- or one of its nested entries -- in place. The whole-entry
-# ownership oracle (``FilterSet._generation_origin_for_field``) and the capability
-# gate (``FilterSet._is_generation_capable``) both need a comparison target that
-# CANNOT drift: an ``extra``-only consumer customization must reach the comparison
-# as a DISTINCT object (so it is classified consumer-owned), and a nested in-place
-# mutation of a shared entry must never be able to make a consumer policy read back
-# as the framework default (or, worse, contaminate every OTHER filterset
-# process-wide by mutating the one shared object both sides compare).
+# Blocker 1 + High 3 (``docs/feedback.md``): package ownership must NOT be derived
+# from whatever happens to sit in django-filter's LIVE, mutable, process-shared
+# ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at import time. Snapshotting (even
+# freezing) that global does not establish who AUTHORED its contents: any consumer,
+# reusable app, or init hook that mutated the global -- a ``filter_class`` swap OR an
+# ``extra`` provider swap -- BEFORE this module is imported would be frozen into the
+# "package" baseline and reclassified as trusted package policy. Import order is
+# realistic (installing the app imports the package root, which does NOT import
+# ``filters.sets``), so the snapshot cannot be the ownership anchor.
 #
-# ``_PACKAGE_FILTER_DEFAULTS`` is a package-owned FROZEN snapshot taken ONCE at
-# import (outer map + every nested entry are ``MappingProxyType`` views), so any
-# attempted mutation raises loudly at its source instead of silently
-# contaminating the baseline. It is installed as the class-level
-# ``FilterSet.FILTER_DEFAULTS`` and is the SINGLE value generation and ownership
-# both compare against, so the two can never disagree about what "the framework
-# default" is. django-filter reads ``FILTER_DEFAULTS`` only through
-# ``dict(cls.FILTER_DEFAULTS)`` (a fresh shallow copy) plus entry ``.get`` and
-# never mutates it or its entries (verified in the installed
-# ``django_filters.filterset.BaseFilterSet.filter_for_lookup``), so a frozen
-# ``Mapping`` is fully compatible. A consumer that genuinely wants to customize
-# generation REPLACES an entry in a shallow copy (a NEW object -> unambiguously
-# consumer-owned) rather than mutating shared package state.
-_PACKAGE_FILTER_DEFAULTS: Mapping[type, Mapping[str, Any]] = _freeze_filter_defaults(
-    filterset.BaseFilterSet.FILTER_DEFAULTS,
+# The durable architecture separates THREE concepts (the review demands this):
+#
+#   1. ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` -- a package-AUTHORED plain-``dict``
+#      generation-policy table that mirrors django-filter 25.2's
+#      ``FILTER_FOR_DBFIELD_DEFAULTS`` EXACTLY but is our OWN object graph, built
+#      from stable importable django-filter filter CLASSES and PACKAGE-OWNED,
+#      module-level ``extra`` provider functions -- never read from the mutable
+#      global. It is installed as the public ``FilterSet.FILTER_DEFAULTS``. Being a
+#      plain, deepcopyable ``dict`` restores django-filter's inherited consumer
+#      customization seam (``copy.deepcopy(cls.FILTER_DEFAULTS)`` /
+#      ``dict(cls.FILTER_DEFAULTS)`` / ``[cls][key] = ...``), which the previous
+#      nested-``MappingProxyType`` install broke on every Python version (High 3).
+#      django-filter reads ``FILTER_DEFAULTS`` only through
+#      ``dict(cls.FILTER_DEFAULTS)`` (a fresh shallow copy) plus entry ``.get`` and
+#      never mutates it (verified in the installed
+#      ``django_filters.filterset.BaseFilterSet.filter_for_lookup``), so a plain
+#      dict is a faithful drop-in.
+#
+#   2. ``_PACKAGE_POLICY_BASELINE`` -- a PRIVATE, immutable, NORMALIZED baseline
+#      (``MappingProxyType`` of ``_NormalizedPolicyEntry`` records) built from the
+#      package's OWN public table, never from the global. It is never installed as a
+#      class attr, never exposed, and never deepcopied by consumers, so
+#      ``MappingProxyType`` here is correct -- it is the immutable ownership anchor.
+#      Because every ``extra`` provider is a package-owned module-level function
+#      identity, a ``_NormalizedPolicyEntry`` equality (``==``) is a genuine
+#      ownership signal: a pristine selection re-derives the SAME (filter_class,
+#      provider) identities, while any consumer entry carries a different
+#      ``filter_class`` and/or a different (consumer) provider or ``None``.
+#
+#   3. Selection provenance -- the ownership oracle
+#      (``FilterSet._generation_origin_for_field``) compares the EFFECTIVE selection
+#      (``FILTER_DEFAULTS`` merged with ``Meta.filter_overrides``) to the baseline by
+#      normalized VALUE, not by object identity. With High 3 the public dict and the
+#      private baseline are now DISTINCT object graphs, so object identity between a
+#      selected raw entry and a baseline record can never hold; the anchor is a
+#      normalized value comparison. This is import-order-immune (the baseline derives
+#      from OUR table, never the global), catches ``filter_class`` AND
+#      ``extra``-provider overrides (whole entry), and treats a consumer entry whose
+#      (filter_class, extra) is byte-equal to the package policy as
+#      framework-equivalent (safe -- the generated filter is identical to the
+#      package's own).
+
+
+def _forward_relation_extra(field: Any) -> dict[str, Any]:
+    """Package-owned mirror of upstream's ``OneToOneField`` / ``ForeignKey`` extra.
+
+    A forward single-valued relation resolves its choice queryset and joins on the
+    remote field name (``field.remote_field.field_name``); a nullable relation carries
+    the configured empty-choice label. Reading the field attributes exactly as
+    upstream's default lambda does keeps generation byte-identical to using
+    django-filter's own table.
+    """
+    return {
+        "queryset": filterset.remote_queryset(field),
+        "to_field_name": field.remote_field.field_name,
+        "null_label": _df_settings.NULL_CHOICE_LABEL if field.null else None,
+    }
+
+
+def _forward_m2m_extra(field: Any) -> dict[str, Any]:
+    """Package-owned mirror of upstream's ``ManyToManyField`` extra (queryset only)."""
+    return {"queryset": filterset.remote_queryset(field)}
+
+
+def _reverse_o2o_extra(field: Any) -> dict[str, Any]:
+    """Package-owned mirror of upstream's ``OneToOneRel`` extra.
+
+    A reverse one-to-one omits ``to_field_name`` (the reverse descriptor has no
+    remote field name to join on) but keeps the null label for a nullable relation.
+    """
+    return {
+        "queryset": filterset.remote_queryset(field),
+        "null_label": _df_settings.NULL_CHOICE_LABEL if field.null else None,
+    }
+
+
+def _reverse_rel_extra(field: Any) -> dict[str, Any]:
+    """Package-owned mirror of upstream's ``ManyToOneRel`` / ``ManyToManyRel`` extra."""
+    return {"queryset": filterset.remote_queryset(field)}
+
+
+# The package-AUTHORED public generation-policy table (Blocker 1 + High 3). Mirrors
+# django-filter 25.2 ``FILTER_FOR_DBFIELD_DEFAULTS`` exactly, but as OUR OWN plain
+# ``dict`` of plain ``dict`` entries referencing stable importable filter classes and
+# the package-owned ``extra`` providers above -- NOT a snapshot of the mutable global.
+# Installed as ``FilterSet.FILTER_DEFAULTS`` (deepcopyable + customizable, restoring
+# django-filter's inherited extension seam).
+_PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type, dict[str, Any]] = {
+    models.AutoField: {"filter_class": NumberFilter},
+    models.CharField: {"filter_class": CharFilter},
+    models.TextField: {"filter_class": CharFilter},
+    models.BooleanField: {"filter_class": BooleanFilter},
+    models.DateField: {"filter_class": DateFilter},
+    models.DateTimeField: {"filter_class": DateTimeFilter},
+    models.TimeField: {"filter_class": TimeFilter},
+    models.DurationField: {"filter_class": DurationFilter},
+    models.DecimalField: {"filter_class": NumberFilter},
+    models.SmallIntegerField: {"filter_class": NumberFilter},
+    models.IntegerField: {"filter_class": NumberFilter},
+    models.PositiveIntegerField: {"filter_class": NumberFilter},
+    models.PositiveSmallIntegerField: {"filter_class": NumberFilter},
+    models.FloatField: {"filter_class": NumberFilter},
+    models.NullBooleanField: {"filter_class": BooleanFilter},
+    models.SlugField: {"filter_class": CharFilter},
+    models.EmailField: {"filter_class": CharFilter},
+    models.FilePathField: {"filter_class": CharFilter},
+    models.URLField: {"filter_class": CharFilter},
+    models.GenericIPAddressField: {"filter_class": CharFilter},
+    models.CommaSeparatedIntegerField: {"filter_class": CharFilter},
+    models.UUIDField: {"filter_class": UUIDFilter},
+    # Forward relationships.
+    models.OneToOneField: {"filter_class": ModelChoiceFilter, "extra": _forward_relation_extra},
+    models.ForeignKey: {"filter_class": ModelChoiceFilter, "extra": _forward_relation_extra},
+    models.ManyToManyField: {
+        "filter_class": ModelMultipleChoiceFilter,
+        "extra": _forward_m2m_extra,
+    },
+    # Reverse relationships.
+    OneToOneRel: {"filter_class": ModelChoiceFilter, "extra": _reverse_o2o_extra},
+    ManyToOneRel: {"filter_class": ModelMultipleChoiceFilter, "extra": _reverse_rel_extra},
+    ManyToManyRel: {"filter_class": ModelMultipleChoiceFilter, "extra": _reverse_rel_extra},
+}
+
+
+@dataclass(frozen=True)
+class _NormalizedPolicyEntry:
+    """Immutable normalized record of one generation-policy entry.
+
+    The ownership-bearing content django-filter selects off a ``FILTER_DEFAULTS``
+    entry: the ``filter_class`` (a class identity) and the ``extra`` provider (a
+    module-level function identity, or ``None``). Two entries are ownership-equal iff
+    both members are equal -- so a pristine re-derivation of the package table equals
+    the baseline, while any consumer ``filter_class`` swap OR ``extra``-provider swap
+    diverges. Frozen, so it is safe as an immutable baseline value.
+    """
+
+    filter_class: Any = None
+    extra: Any = None
+
+
+def _normalize_policy_entry(entry: Any) -> _NormalizedPolicyEntry | None:
+    """Return the ``_NormalizedPolicyEntry`` for a raw ``FILTER_DEFAULTS`` entry.
+
+    ``None`` for a missing entry (no policy for the class), so a missing selection on
+    one side compares unequal to a present entry on the other. The two ownership
+    members (``filter_class`` / ``extra`` provider) are read by key exactly as
+    django-filter reads them, so the normalized value captures the whole selection.
+    """
+    if entry is None:
+        return None
+    return _NormalizedPolicyEntry(entry.get("filter_class"), entry.get("extra"))
+
+
+# The PRIVATE, immutable, normalized ownership anchor (Blocker 1). Built from the
+# package's OWN public table, never from the mutable global, so import order can never
+# taint it. Never installed as a class attr and never exposed to consumers, so the
+# ``MappingProxyType`` is correct here (unlike the public table, this is never
+# deepcopied or customized). The ownership oracle compares the effective selection
+# against this by normalized VALUE.
+_PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = MappingProxyType(
+    {
+        cls: _normalize_policy_entry(entry)
+        for cls, entry in _PUBLIC_PACKAGE_FILTER_DEFAULTS.items()
+    },
 )
 
 
@@ -449,112 +578,228 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 # unaudited filter class behind a framework origin, resolves to NO profile, is
 # marked ineligible by ``_candidate_metadata_for``, never mints a token, and
 # therefore falls back to the outer invocation until it is audited and added here.
+#
+# Family recognition is EXACT-CLASS (``docs/feedback.md`` Blocker 2): a profile is
+# minted from a known generation decision, never rediscovered from arbitrary
+# ancestry. An unregistered subclass of an audited base -- whose overridden
+# ``.filter`` or added state is unsigned -- receives NO profile. The only two
+# recognized shapes are (a) exact audited / package-owned classes (registry keys)
+# and (b) django-filter's genuine empty-body dynamic ``in`` / ``range`` CSV classes
+# over an exact-audited scalar family, validated structurally in
+# ``_family_profile_for``.
+#
+# The runtime reads are EXECUTABLE and live in ONE place (``docs/feedback.md`` Medium 4,
+# refined by the Sixth-review hybrid simplification): the single canonical
+# ``_ALL_SEMANTIC_EXTRACTORS`` tuple of named ``_SemanticExtractor`` functions IS the schema
+# ``_fingerprint_of`` signs. A profile is now a bare family IDENTITY (no per-family extractor
+# tuple / ``relevant_reads``): the fingerprint signs the whole canonical union for every
+# family (fail-safe; per-family narrowing could go fail-open), and the per-seam behavioral
+# audit that each signed field gates routing lives in the ``test_signature_matrix_*`` tests.
 # ======================================================================
+
+
+def _effective_callable_pair(filter_instance: Any, name: str) -> tuple[Any, Any]:
+    """Return the (instance-override, class-descriptor) halves of a dispatch helper.
+
+    The ONE deepcopy-stable way to sign an effective django-filter callable
+    (``.filter`` and every helper it dispatches through -- ``get_method`` /
+    ``get_filter_predicate`` / ``is_noop``): the instance-level ``__dict__`` swap
+    (``None`` on a genuine leaf and its untampered ``copy.deepcopy``, since deepcopy
+    copies ``__dict__`` verbatim and never synthesizes a method key) paired with the
+    concrete class's function (the SAME object across every deepcopy, since the class
+    is not copied). Never the bound method -- its ``__self__`` differs per deepcopy
+    and would fail every genuine request closed. Compared by equality only.
+    """
+    return (filter_instance.__dict__.get(name), getattr(type(filter_instance), name, None))
+
+
+def _effective_to_field_name(filter_instance: Any) -> Any:
+    """Return the EFFECTIVE ``to_field_name`` django-filter reads at execution.
+
+    ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` build their predicate from
+    ``self.field.to_field_name`` -- the lazily built, cached form field -- NOT from
+    ``extra["to_field_name"]`` (round-5 Blocker 2). The two can diverge: a consumer
+    can mutate the built field's ``to_field_name`` after form construction without
+    touching ``extra``, redirecting the effective relation target while the
+    constructor copy is unchanged. Signing the constructor proxy therefore left the
+    authorization boundary incomplete; this signs the value the runtime consumes.
+
+    Accessing ``.field`` forces (and caches) the form-field build. That is exactly
+    what django-filter does during filtering, so:
+
+    * at REQUEST time the caller passes the live per-request instance -- itself a
+      disposable ``copy.deepcopy`` of the class-level leaf -- so this reads the SAME
+      field object ``get_filter_predicate`` will read (a live mutation is observed);
+    * at BUILD time the caller passes a disposable ``copy.deepcopy`` (see the
+      ``get_filters._build`` capture site) so forcing the build never mutates or
+      caches a field on the shared class-level instance.
+
+    The built form field is not identity/value-stable across ``copy.deepcopy``, but
+    the primitive ``str`` / ``None`` it exposes IS: an untampered deepcopy rebuilds
+    the field from the same ``extra`` and re-derives the same ``to_field_name``. A
+    filter family whose form field carries no ``to_field_name`` (a plain ``Filter``,
+    or the GlobalID multi-choice backed by ``_GlobalIDMultipleChoiceField``, which
+    matches by decoded pk and never reads ``to_field_name``) yields ``None`` on both
+    sides, so this is inert for those families.
+    """
+    return getattr(getattr(filter_instance, "field", None), "to_field_name", None)
+
+
+class _SemanticExtractor(NamedTuple):
+    """One named reader of a single ``_CandidateFingerprint`` semantic field.
+
+    ``extract(filter_instance)`` reproduces EXACTLY one LIVE read ``_fingerprint_of``
+    signs. The extractors live in ONE canonical tuple (``_ALL_SEMANTIC_EXTRACTORS``) that
+    IS the fingerprint schema (``docs/feedback.md`` Medium 4, refined by the Sixth-review
+    hybrid simplification), rather than being scattered across per-family tuples that
+    could drift from the fields actually signed; the schema test pins the extractor names
+    to EXACTLY the ``_CandidateFingerprint`` semantic fields. Every ``extract`` reads via
+    ``getattr`` with a safe default (or the shared ``_effective_*`` helpers, which do the
+    same), so an extractor never raises -- even on a bare ``object.__new__(cls)`` -- and
+    its value is byte-identical to the direct read on any genuine django-filter instance.
+    """
+
+    name: str
+    extract: Callable[[Any], Any]
+
+
+# THE canonical semantic schema: the SINGLE source of truth for ``_CandidateFingerprint``
+# (``docs/feedback.md`` Sixth-review hybrid simplification). ``_fingerprint_of`` runs this
+# ONE tuple for EVERY recognized family and signs EXACTLY these names (plus ``family``, which
+# it sets directly). It is deliberately the UNION of every family's effective reads, NOT a
+# per-family narrowing: signing MORE state than a given family needs is always fail-safe,
+# whereas narrowing to a per-family subset could go fail-OPEN if a future family audit
+# omitted a runtime read. Every ``extract`` reads via ``getattr`` with a safe default (or the
+# ``_effective_*`` helpers, which do the same), so extraction never raises -- even on a bare
+# ``object.__new__(cls)`` -- and is byte-identical to the direct read on a genuine
+# django-filter instance. Names are UNIQUE (asserted by the schema test), so the
+# ``{name: extract(...)}`` build in ``_fingerprint_of`` can never silently drop a field.
+#
+# The comment groups are documentation only (there are no per-group constants): CORE reads on
+# every routed family's ``.filter`` call graph -- the generated class + ORM target
+# (``filter_class`` / ``field_name`` / ``lookup_expr``), the consumer-``method`` delegation,
+# the filter/exclude selection (``exclude`` plus the effective ``.filter`` and ``get_method``
+# override/descriptor halves -- ``Filter.filter`` calls ``self.get_method(qs)`` in every
+# family) and the framework fan-out ``distinct``; the MULTI-CHOICE OR(default)/AND
+# (``conjoined``) vector -- the per-value predicate builder and no-op decision (each in both
+# deepcopy-stable halves) plus the ``conjoined`` / ``always_filter`` / ``null_value`` knobs;
+# and the RELATION reads -- the effective ``to_field_name`` (the live built form field, not
+# the constructor copy -- round-5 Blocker 2) and the GlobalID ``pk_qualified`` decision.
+_ALL_SEMANTIC_EXTRACTORS: tuple[_SemanticExtractor, ...] = (
+    # Core.
+    _SemanticExtractor("filter_class", type),
+    _SemanticExtractor("field_name", lambda inst: getattr(inst, "field_name", None)),
+    _SemanticExtractor("lookup_expr", lambda inst: getattr(inst, "lookup_expr", None)),
+    _SemanticExtractor("method", lambda inst: getattr(inst, "method", None)),
+    _SemanticExtractor("exclude", lambda inst: bool(getattr(inst, "exclude", False))),
+    _SemanticExtractor("distinct", lambda inst: bool(getattr(inst, "distinct", False))),
+    _SemanticExtractor(
+        "filter_override",
+        lambda inst: _effective_callable_pair(inst, "filter")[0],
+    ),
+    _SemanticExtractor(
+        "filter_descriptor",
+        lambda inst: _effective_callable_pair(inst, "filter")[1],
+    ),
+    _SemanticExtractor(
+        "get_method_override",
+        lambda inst: _effective_callable_pair(inst, "get_method")[0],
+    ),
+    _SemanticExtractor(
+        "get_method_descriptor",
+        lambda inst: _effective_callable_pair(inst, "get_method")[1],
+    ),
+    # Multi-choice OR/AND vector.
+    _SemanticExtractor(
+        "get_filter_predicate_override",
+        lambda inst: _effective_callable_pair(inst, "get_filter_predicate")[0],
+    ),
+    _SemanticExtractor(
+        "get_filter_predicate_descriptor",
+        lambda inst: _effective_callable_pair(inst, "get_filter_predicate")[1],
+    ),
+    _SemanticExtractor(
+        "is_noop_override",
+        lambda inst: _effective_callable_pair(inst, "is_noop")[0],
+    ),
+    _SemanticExtractor(
+        "is_noop_descriptor",
+        lambda inst: _effective_callable_pair(inst, "is_noop")[1],
+    ),
+    _SemanticExtractor("conjoined", lambda inst: bool(getattr(inst, "conjoined", False))),
+    _SemanticExtractor("always_filter", lambda inst: bool(getattr(inst, "always_filter", False))),
+    _SemanticExtractor("null_value", lambda inst: getattr(inst, "null_value", None)),
+    # Relation reads.
+    _SemanticExtractor("to_field_name", _effective_to_field_name),
+    _SemanticExtractor(
+        "pk_qualified",
+        lambda inst: bool(getattr(inst, _GLOBALID_RELATION_PK_ATTR, False)),
+    ),
+)
 
 
 @dataclass(frozen=True)
 class _FilterFamilyProfile:
-    """Immutable behavior profile of ONE supported generated filter family.
+    """Immutable IDENTITY of ONE supported generated filter family.
 
-    Fields:
+    A bare, hashable family tag -- nothing more. The exact-class registry
+    (``_FILTER_FAMILY_REGISTRY``) maps each supported class to its profile,
+    ``_family_profile_for`` returns it, and ``_fingerprint_of`` signs it as
+    ``_CandidateFingerprint.family`` (defence in depth beyond the eligibility gate: a
+    request-time swap to a different-profile or unaudited family diverges the signature
+    on top of ``filter_class``).
 
-    - ``name`` -- a stable identifier for messages and tests.
-    - ``relevant_reads`` -- the ``_CandidateFingerprint`` field names this family's
-      routed ``.filter`` behavior actually depends on, derived from the per-family
-      effective-read audit on ``_fingerprint_of``. Every family reads
-      ``_CORE_FAMILY_READS`` (the generated class + ORM target, the
-      consumer-``method`` delegation, the filter/exclude selection incl. the
-      effective ``.filter`` / ``get_method`` halves, the framework fan-out
-      ``distinct`` flag, and the matched ``family`` identity); a family with an
-      OR/AND vector, a relation target, a ``null_value`` sentinel, or a GlobalID
-      pk-qualification adds its own reads.
-
-    ``relevant_reads`` is the executable inventory the ``_CandidateFingerprint`` /
-    ``_fingerprint_of`` / ``FilterSet._apply_flat_leaves`` docstrings point to. It
-    is NOT itself the request-time gate: ``_fingerprint_of`` signs the
-    deepcopy-stable UNION of every audited read for ALL families (so a mis-audit of
-    one family can never open a fail-open hole -- signing MORE is always fail-safe),
-    and a profile's declared reads are the per-family MINIMUM that union must cover
-    (asserted by test). A profile is a module-level singleton, so storing it on
-    ``_CandidateFingerprint.family`` is deepcopy-stable by identity AND by value
-    (frozen-dataclass equality re-derives the same profile from an untampered
-    per-request deepcopy of the leaf).
+    It carries NO per-family read inventory (``docs/feedback.md`` Sixth-review hybrid
+    simplification): the fingerprint signs the SINGLE canonical
+    ``_ALL_SEMANTIC_EXTRACTORS`` union for EVERY family, because signing more than a
+    family needs is fail-safe while per-family narrowing could go fail-open if a future
+    audit omitted a runtime read. The per-seam behavioral audit -- proving each signed
+    field actually gates routing -- lives in the ``test_signature_matrix_*`` tests, not
+    in duplicated production machinery. A module-level singleton, so a
+    ``_CandidateFingerprint.family`` slot is deepcopy-stable by identity AND by frozen
+    value (an untampered per-request deepcopy re-derives the SAME profile).
     """
 
     name: str
-    relevant_reads: frozenset[str]
 
 
-# The ``_CandidateFingerprint`` reads present on EVERY routed family's ``.filter``
-# call graph: the generated class + ORM target (``filter_class`` / ``field_name`` /
-# ``lookup_expr``), the consumer-``method`` delegation, the filter/exclude
-# selection (``exclude`` plus the effective ``.filter`` and ``get_method``
-# override/descriptor halves -- ``Filter.filter`` calls ``self.get_method(qs)`` in
-# every family), the framework fan-out ``distinct`` flag, and the matched
-# ``family`` identity.
-_CORE_FAMILY_READS: frozenset[str] = frozenset(
-    {
-        "filter_class",
-        "field_name",
-        "lookup_expr",
-        "method",
-        "exclude",
-        "distinct",
-        "filter_override",
-        "filter_descriptor",
-        "get_method_override",
-        "get_method_descriptor",
-        "family",
-    },
-)
+# Behavior-family identities. Families with identical effective behavior MAY share one
+# profile object (e.g. scalar and dynamic-CSV sequence lookups): a request-time class swap
+# between two members of a shared profile still diverges the fingerprint via
+# ``filter_class``, so sharing never weakens the authorization boundary.
+_SCALAR_LOOKUP_PROFILE = _FilterFamilyProfile("scalar_lookup")
+_SEQUENCE_LOOKUP_PROFILE = _FilterFamilyProfile("sequence_lookup")
+_CHOICE_PROFILE = _FilterFamilyProfile("choice")
+_MODEL_CHOICE_PROFILE = _FilterFamilyProfile("model_choice")
+_MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile("multiple_choice")
+_MODEL_MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile("model_multiple_choice")
+_GLOBALID_PROFILE = _FilterFamilyProfile("globalid")
+_GLOBALID_MULTIPLE_PROFILE = _FilterFamilyProfile("globalid_multiple")
 
-# The ``MultipleChoiceFilter`` OR(default)/AND(``conjoined``) vector: the per-value
-# predicate builder and the no-op decision (each in both deepcopy-stable halves)
-# plus the ``conjoined`` / ``always_filter`` / ``null_value`` knobs that steer them.
-_MULTI_CHOICE_READS: frozenset[str] = frozenset(
-    {
-        "get_filter_predicate_override",
-        "get_filter_predicate_descriptor",
-        "is_noop_override",
-        "is_noop_descriptor",
-        "conjoined",
-        "always_filter",
-        "null_value",
-    },
-)
-
-# Behavior profiles. Families with an identical read inventory SHARE one profile
-# object: a request-time class swap between two members of a shared profile still
-# diverges the fingerprint via ``filter_class``, so sharing never weakens the
-# authorization boundary.
-_SCALAR_LOOKUP_PROFILE = _FilterFamilyProfile("scalar_lookup", _CORE_FAMILY_READS)
-_SEQUENCE_LOOKUP_PROFILE = _FilterFamilyProfile("sequence_lookup", _CORE_FAMILY_READS)
-_CHOICE_PROFILE = _FilterFamilyProfile("choice", _CORE_FAMILY_READS | {"null_value"})
-_MODEL_CHOICE_PROFILE = _FilterFamilyProfile(
-    "model_choice",
-    _CORE_FAMILY_READS | {"null_value", "to_field_name"},
-)
-_MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile(
-    "multiple_choice",
-    _CORE_FAMILY_READS | _MULTI_CHOICE_READS | {"to_field_name"},
-)
-_MODEL_MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile(
-    "model_multiple_choice",
-    _CORE_FAMILY_READS | _MULTI_CHOICE_READS | {"to_field_name"},
-)
-_GLOBALID_PROFILE = _FilterFamilyProfile("globalid", _CORE_FAMILY_READS | {"pk_qualified"})
-_GLOBALID_MULTIPLE_PROFILE = _FilterFamilyProfile(
-    "globalid_multiple",
-    _CORE_FAMILY_READS | _MULTI_CHOICE_READS | {"pk_qualified"},
+# Every distinct family identity, in a stable order -- the CLOSED set a registered class or
+# a structurally-recognized dynamic CSV class may resolve to. The structurally-recognized
+# dynamic ``in`` / ``range`` CSV classes resolve to ``_SEQUENCE_LOOKUP_PROFILE``, already in
+# this tuple.
+_ALL_FAMILY_PROFILES: tuple[_FilterFamilyProfile, ...] = (
+    _SCALAR_LOOKUP_PROFILE,
+    _SEQUENCE_LOOKUP_PROFILE,
+    _CHOICE_PROFILE,
+    _MODEL_CHOICE_PROFILE,
+    _MULTIPLE_CHOICE_PROFILE,
+    _MODEL_MULTIPLE_CHOICE_PROFILE,
+    _GLOBALID_PROFILE,
+    _GLOBALID_MULTIPLE_PROFILE,
 )
 
 
-# Ordered supported-base-family -> profile registry. ``Filter`` itself is
-# DELIBERATELY absent: registering the universal base would make the MRO walk in
-# ``_family_profile_for`` match every filter and defeat the fail-closed boundary.
-# Ordering is most-specific-first for readability; resolution precedence is
-# enforced by the MRO walk (most-derived registered ancestor wins), not by the
-# mapping's order.
+# Exact-class supported-family -> profile registry. Resolution is by EXACT type
+# (``_family_profile_for`` never walks the MRO), so mapping ORDER is cosmetic. ``Filter``
+# itself is DELIBERATELY absent (an exact bare ``Filter`` is not a supported family), and
+# so are ``BaseInFilter`` / ``BaseRangeFilter``: their ONLY job was to feed the retired
+# MRO walk for django-filter's dynamic ``in`` / ``range`` CSV classes; that job now
+# belongs to the structural validator in ``_family_profile_for``, which references those
+# two bases directly. An arbitrary subclass of any key below is NOT audited (its
+# overridden ``.filter`` / added state is unsigned) and therefore resolves to NO profile.
 _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
     {
         # Package Relay-GlobalID relation families.
@@ -563,26 +808,26 @@ _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
         # Package typed sequence / integer families. Their effective ``.filter``
         # (including a consumer ``method=`` install that swaps in a custom
         # ``FilterMethod``) is signed by the core descriptor pair; a set ``method``
-        # also makes the leaf ineligible outright.
+        # also makes the leaf ineligible outright. These are STATIC package classes
+        # (they carry their own ``.filter`` etc.), so they are matched by exact key
+        # here -- they would FAIL the empty-body dynamic-CSV check and MUST be caught
+        # before it.
         IntegerInFilter: _SEQUENCE_LOOKUP_PROFILE,
         IntegerRangeFilter: _SEQUENCE_LOOKUP_PROFILE,
         ListFilter: _SEQUENCE_LOOKUP_PROFILE,
         ArrayFilter: _SEQUENCE_LOOKUP_PROFILE,
         RangeFilter: _SEQUENCE_LOOKUP_PROFILE,
-        # Model-choice families -- registered BEFORE their choice bases so the MRO
-        # walk resolves the most specific (a ``to_field`` / ``queryset`` read the
-        # base choice profiles omit).
+        # Model-choice families and their choice bases, each an exact key with its own
+        # profile (a ``ModelChoiceFilter`` reads a ``to_field`` a bare ``ChoiceFilter``
+        # does not, so they are distinct entries -- exact match keeps them separate).
         ModelMultipleChoiceFilter: _MODEL_MULTIPLE_CHOICE_PROFILE,
         ModelChoiceFilter: _MODEL_CHOICE_PROFILE,
         MultipleChoiceFilter: _MULTIPLE_CHOICE_PROFILE,
         ChoiceFilter: _CHOICE_PROFILE,
-        # django-filter CSV sequence bases -- upstream's dynamic
-        # ``ConcreteInFilter`` / ``ConcreteRangeFilter`` subclasses inherit these
-        # through the MRO walk (their own dynamic class is never a registry key).
-        BaseInFilter: _SEQUENCE_LOOKUP_PROFILE,
-        BaseRangeFilter: _SEQUENCE_LOOKUP_PROFILE,
         # Plain-lookup scalar Filter families, each enumerated by class (they share
-        # only ``Filter`` as a base, which must never be a key).
+        # only ``Filter`` as a base, which must never be a key). A scalar key here is
+        # also the audited scalar base the dynamic-CSV validator accepts as the SECOND
+        # base of a genuine ``ConcreteInFilter`` / ``ConcreteRangeFilter``.
         CharFilter: _SCALAR_LOOKUP_PROFILE,
         NumberFilter: _SCALAR_LOOKUP_PROFILE,
         BooleanFilter: _SCALAR_LOOKUP_PROFILE,
@@ -595,28 +840,95 @@ _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
 )
 
 
-def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
-    """Return the behavior profile of ``filter_instance``'s supported base family.
+# The exact own-attribute-name set of a GENUINE empty-body dynamic CSV class. django-filter
+# builds ``ConcreteInFilter`` / ``ConcreteRangeFilter`` with a ``class ... : pass`` statement,
+# so such a class's OWN ``vars`` carry only the interpreter's structural dunders (``__doc__`` /
+# ``__module__`` always; ``__firstlineno__`` / ``__static_attributes__`` on 3.13+). This
+# reference is computed ONCE from a ``pass``-body ``class`` statement over ``Filter`` (which,
+# like every scalar family, provides ``__dict__`` / ``__weakref__``, so a subclass inherits
+# rather than owns them) -- matching how a real dynamic class is built. Comparing against it
+# tracks the RUNNING interpreter's structural dunders instead of hardcoding a version-coupled
+# allowlist, so any body member that adds state or behavior -- dunder-named (``__evil_state__``,
+# an overridden ``__getattribute__`` / ``__init_subclass__``, ``__slots__``) OR not
+# (``reverse``, ``filter``) -- surfaces as an extra own name and fails the check closed
+# (``docs/feedback.md`` Sixth-review bug hunt: a dunder-named member must not slip through).
+class _EmptyBodyDynamicCsvReference(Filter):
+    pass
 
-    Walks ``type(filter_instance).__mro__`` in order and returns the profile of the
-    FIRST class that is a registered family, so the most-derived registered ancestor
-    wins: ``IntegerInFilter`` over ``BaseInFilter``, ``GlobalIDMultipleChoiceFilter``
-    / ``ModelMultipleChoiceFilter`` over ``MultipleChoiceFilter``, ``ModelChoiceFilter``
-    over ``ChoiceFilter``, and a dynamic ``ConcreteInFilter`` over ``Filter`` via its
-    ``BaseInFilter`` base.
 
-    Returns ``None`` when no registered family appears in the MRO -- a bare
-    ``Filter`` subclass, or any family the framework has not audited. That ``None``
-    is the fail-closed signal ``_candidate_metadata_for`` and ``_fingerprint_of``
-    consume: no profile -> the leaf is ineligible AND its ``family`` signature
-    diverges from any audited candidate, so an unaudited family can never reach the
-    correlated adapter (``docs/feedback.md`` High 4).
+_EMPTY_BODY_DYNAMIC_CSV_ATTRS: frozenset[str] = frozenset(vars(_EmptyBodyDynamicCsvReference))
+
+
+def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
+    """Return the sequence profile IFF ``klass`` is a genuine dynamic ``in``/``range`` CSV class.
+
+    django-filter builds ``class ConcreteInFilter(BaseInFilter, <scalar>): pass`` (and the
+    ``BaseRangeFilter`` variant) per consumer ``in`` / ``range`` lookup on a scalar field
+    -- a NEW class object each call, so it can never be a ``_FILTER_FAMILY_REGISTRY`` key,
+    yet it is genuine framework machinery and must still route. Rather than trust every
+    descendant of ``BaseInFilter`` / ``BaseRangeFilter`` (the retired MRO walk -- an open
+    ancestry allowlist, ``docs/feedback.md`` Blocker 2), this validates the EXACT MRO and
+    class body, so anything a future django-filter release or a consumer adds fails closed:
+
+    - ``klass.__bases__`` is exactly a 2-tuple whose FIRST element IS ``BaseInFilter`` or
+      ``BaseRangeFilter`` (a genuine dynamic class has exactly ``(BaseInFilter, <scalar>)``);
+    - the SECOND base (the ``<scalar>``) is itself an EXACT key in
+      ``_FILTER_FAMILY_REGISTRY`` -- an audited scalar family, never an unaudited one; and
+    - the dynamic class introduces NO own body beyond the interpreter's structural dunders:
+      the NAME set of ``vars(klass)`` equals ``_EMPTY_BODY_DYNAMIC_CSV_ATTRS`` (the own-name
+      set of a ``pass``-body reference built the same way) EXACTLY. A genuine dynamic class is
+      a ``class ... : pass`` (only structural dunders in its own ``vars``); ANY added member --
+      whether non-dunder (``reverse``, ``filter``) OR dunder-named state/behavior
+      (``__evil_state__``, an overridden ``__getattribute__`` / ``__init_subclass__``,
+      ``__slots__``) -- surfaces as an extra own name and fails closed. An exact-set compare
+      (not a "startswith/endswith ``__``" test) is what keeps dunder-named members from
+      slipping through, and deriving the reference from a live ``pass``-body class keeps the
+      check immune to per-version structural dunders instead of hardcoding an allowlist.
+
+    A consumer hand-crafting this exact empty-body shape over an audited scalar is
+    behaviorally identical to a package-generated one (pure CSV-of-scalar semantics, no
+    unsigned state), so granting it the sequence profile is safe -- and it cannot route
+    anyway unless the ownership oracle independently marks it framework-origin.
     """
-    for klass in type(filter_instance).__mro__:
-        profile = _FILTER_FAMILY_REGISTRY.get(klass)
-        if profile is not None:
-            return profile
-    return None
+    bases = klass.__bases__
+    if len(bases) != 2:
+        return None
+    csv_base, scalar_base = bases
+    if csv_base is not BaseInFilter and csv_base is not BaseRangeFilter:
+        return None
+    if scalar_base not in _FILTER_FAMILY_REGISTRY:
+        return None
+    if frozenset(vars(klass)) != _EMPTY_BODY_DYNAMIC_CSV_ATTRS:
+        return None
+    return _SEQUENCE_LOOKUP_PROFILE
+
+
+def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
+    """Return the behavior profile of ``filter_instance``'s supported filter family.
+
+    Resolution is fail-closed and never rediscovered from arbitrary ancestry
+    (``docs/feedback.md`` Blocker 2):
+
+    1. EXACT match first -- ``_FILTER_FAMILY_REGISTRY[type(filter_instance)]``. No MRO
+       walk, so an unregistered subclass of an audited base (whose overridden ``.filter``
+       or added state is unsigned) is NOT accepted through its ancestor.
+    2. Otherwise, structurally-validated dynamic-CSV recognition -- django-filter's genuine
+       empty-body ``ConcreteInFilter`` / ``ConcreteRangeFilter`` over an exact-audited
+       scalar family resolves to ``_SEQUENCE_LOOKUP_PROFILE`` (see
+       ``_dynamic_csv_profile_for``); anything that adds a method, descriptor, or
+       state-bearing attribute fails closed.
+    3. Otherwise ``None``.
+
+    ``None`` is the fail-closed signal ``_candidate_metadata_for`` and ``_fingerprint_of``
+    consume: no profile -> the leaf is ineligible AND its ``family`` signature diverges
+    from any audited candidate, so an unaudited family can never reach the correlated
+    adapter. Upgrading django-filter therefore cannot add a routable default class merely
+    through inheritance.
+    """
+    profile = _FILTER_FAMILY_REGISTRY.get(type(filter_instance))
+    if profile is not None:
+        return profile
+    return _dynamic_csv_profile_for(type(filter_instance))
 
 
 @dataclass(frozen=True)
@@ -741,53 +1053,6 @@ class _CandidateFingerprint:
     family: _FilterFamilyProfile | None = None
 
 
-def _effective_callable_pair(filter_instance: Any, name: str) -> tuple[Any, Any]:
-    """Return the (instance-override, class-descriptor) halves of a dispatch helper.
-
-    The ONE deepcopy-stable way to sign an effective django-filter callable
-    (``.filter`` and every helper it dispatches through -- ``get_method`` /
-    ``get_filter_predicate`` / ``is_noop``): the instance-level ``__dict__`` swap
-    (``None`` on a genuine leaf and its untampered ``copy.deepcopy``, since deepcopy
-    copies ``__dict__`` verbatim and never synthesizes a method key) paired with the
-    concrete class's function (the SAME object across every deepcopy, since the class
-    is not copied). Never the bound method -- its ``__self__`` differs per deepcopy
-    and would fail every genuine request closed. Compared by equality only.
-    """
-    return (filter_instance.__dict__.get(name), getattr(type(filter_instance), name, None))
-
-
-def _effective_to_field_name(filter_instance: Any) -> Any:
-    """Return the EFFECTIVE ``to_field_name`` django-filter reads at execution.
-
-    ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` build their predicate from
-    ``self.field.to_field_name`` -- the lazily built, cached form field -- NOT from
-    ``extra["to_field_name"]`` (round-5 Blocker 2). The two can diverge: a consumer
-    can mutate the built field's ``to_field_name`` after form construction without
-    touching ``extra``, redirecting the effective relation target while the
-    constructor copy is unchanged. Signing the constructor proxy therefore left the
-    authorization boundary incomplete; this signs the value the runtime consumes.
-
-    Accessing ``.field`` forces (and caches) the form-field build. That is exactly
-    what django-filter does during filtering, so:
-
-    * at REQUEST time the caller passes the live per-request instance -- itself a
-      disposable ``copy.deepcopy`` of the class-level leaf -- so this reads the SAME
-      field object ``get_filter_predicate`` will read (a live mutation is observed);
-    * at BUILD time the caller passes a disposable ``copy.deepcopy`` (see the
-      ``get_filters._build`` capture site) so forcing the build never mutates or
-      caches a field on the shared class-level instance.
-
-    The built form field is not identity/value-stable across ``copy.deepcopy``, but
-    the primitive ``str`` / ``None`` it exposes IS: an untampered deepcopy rebuilds
-    the field from the same ``extra`` and re-derives the same ``to_field_name``. A
-    filter family whose form field carries no ``to_field_name`` (a plain ``Filter``,
-    or the GlobalID multi-choice backed by ``_GlobalIDMultipleChoiceField``, which
-    matches by decoded pk and never reads ``to_field_name``) yields ``None`` on both
-    sides, so this is inert for those families.
-    """
-    return getattr(getattr(filter_instance, "field", None), "to_field_name", None)
-
-
 def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
     """Return the ``_CandidateFingerprint`` of ``filter_instance`` from its LIVE attrs.
 
@@ -841,19 +1106,24 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
       caller fingerprints a disposable deepcopy so forcing the build never mutates
       the shared class-level instance. See ``_effective_to_field_name``.
     - ``family`` = ``_family_profile_for(filter_instance)`` -- the matched
-      supported-family profile from ``_FILTER_FAMILY_REGISTRY`` (``docs/feedback.md``
-      High 4). Deepcopy-stable: the profile is a module-level singleton resolved from
-      ``type(filter_instance).__mro__``, and ``copy.deepcopy`` does NOT copy the
-      class, so an untampered deepcopy re-derives the SAME profile. A live class swap
-      to a different-profile or unaudited family diverges it (defence in depth beyond
-      the eligibility gate, which already withholds a token from a no-profile leaf).
+      supported-family profile (``docs/feedback.md`` Blocker 2), set DIRECTLY (not via
+      an extractor) to avoid circularity. Deepcopy-stable: the profile is a
+      module-level singleton resolved by EXACT class (or the structural dynamic-CSV
+      validator), and ``copy.deepcopy`` does NOT copy the class, so an untampered
+      deepcopy re-derives the SAME profile. A live class swap to a different-profile or
+      unaudited family diverges it (defence in depth beyond the eligibility gate, which
+      already withholds a token from a no-profile leaf).
 
-    This function signs the deepcopy-stable UNION of every audited read for ALL
-    families (the fields above), not a per-family narrowing: signing MORE is always
-    fail-safe, so a mis-audit of one family cannot open a fail-open hole. The
-    ``_FILTER_FAMILY_REGISTRY`` profiles declare the per-family MINIMUM this union
-    must cover; the eligibility gate (``_candidate_metadata_for``) and this ``family``
-    field are what fail an UNKNOWN family closed.
+    Every other field is populated by running ``_ALL_SEMANTIC_EXTRACTORS`` -- the ONE
+    canonical tuple of ``_SemanticExtractor`` functions that IS the fingerprint schema
+    (``docs/feedback.md`` Medium 4, refined by the Sixth-review hybrid simplification) --
+    so the read audit is genuinely EXECUTED rather than described in prose. This function
+    signs the deepcopy-stable canonical union for EVERY family, never a per-family
+    narrowing: signing MORE is always fail-safe, so a mis-audit of one family cannot open
+    a fail-open hole (per-family narrowing could, if a future audit omitted a read). The
+    eligibility gate (``_candidate_metadata_for``) and this ``family`` field are what fail
+    an UNKNOWN family closed; the per-seam proof that each signed field gates routing is
+    the ``test_signature_matrix_*`` behavioral suite.
 
     Effective-read audit (round-5 Blocker 2) -- every runtime read of the supported
     generated families (enumerated in ``_FILTER_FAMILY_REGISTRY``) was traced to
@@ -882,44 +1152,19 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
       ``pk_qualified`` marker are already signed, and the effective-``to_field_name``
       read is inert for them (the ``_GlobalIDMultipleChoiceField`` carries none).
 
-    Adding a NEW supported family means registering it in
-    ``_FILTER_FAMILY_REGISTRY`` with its ``relevant_reads`` and, if it introduces a
-    new effective-read vector, extending this audit and ``_CandidateFingerprint``
-    (not a per-marker gate); a family whose effective state cannot be signed
-    deepcopy-stably must be left out of the registry (no profile -> ineligible).
+    Adding a NEW supported family means registering its EXACT class in
+    ``_FILTER_FAMILY_REGISTRY`` mapped to a bare ``_FilterFamilyProfile`` identity and, if
+    it introduces a new effective-read vector, adding a new ``_SemanticExtractor`` to the
+    canonical ``_ALL_SEMANTIC_EXTRACTORS`` tuple AND a matching ``_CandidateFingerprint``
+    field (not a per-marker gate), plus a ``test_signature_matrix_*`` behavioral row for
+    that read; a family whose effective state cannot be signed deepcopy-stably must be left
+    out of the registry (no profile -> ineligible).
     """
-    get_method_override, get_method_descriptor = _effective_callable_pair(
-        filter_instance,
-        "get_method",
-    )
-    predicate_override, predicate_descriptor = _effective_callable_pair(
-        filter_instance,
-        "get_filter_predicate",
-    )
-    is_noop_override, is_noop_descriptor = _effective_callable_pair(filter_instance, "is_noop")
-    filter_override, filter_descriptor = _effective_callable_pair(filter_instance, "filter")
-    return _CandidateFingerprint(
-        filter_class=type(filter_instance),
-        field_name=filter_instance.field_name,
-        lookup_expr=filter_instance.lookup_expr,
-        method=getattr(filter_instance, "method", None),
-        exclude=bool(getattr(filter_instance, "exclude", False)),
-        distinct=bool(getattr(filter_instance, "distinct", False)),
-        filter_override=filter_override,
-        filter_descriptor=filter_descriptor,
-        pk_qualified=bool(getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False)),
-        conjoined=bool(getattr(filter_instance, "conjoined", False)),
-        always_filter=bool(getattr(filter_instance, "always_filter", False)),
-        null_value=getattr(filter_instance, "null_value", None),
-        get_method_override=get_method_override,
-        get_method_descriptor=get_method_descriptor,
-        get_filter_predicate_override=predicate_override,
-        get_filter_predicate_descriptor=predicate_descriptor,
-        is_noop_override=is_noop_override,
-        is_noop_descriptor=is_noop_descriptor,
-        to_field_name=_effective_to_field_name(filter_instance),
-        family=_family_profile_for(filter_instance),
-    )
+    values = {
+        extractor.name: extractor.extract(filter_instance)
+        for extractor in _ALL_SEMANTIC_EXTRACTORS
+    }
+    return _CandidateFingerprint(**values, family=_family_profile_for(filter_instance))
 
 
 @dataclass(frozen=True)
@@ -1252,15 +1497,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     conditional before owner binding lands.
     """
 
-    # The package-owned FROZEN generation-policy baseline (Blocker 2,
+    # The package-AUTHORED public generation-policy table (Blocker 1 + High 3,
     # ``docs/feedback.md``). Installed in place of django-filter's mutable,
-    # process-shared ``BaseFilterSet.FILTER_DEFAULTS`` so both generation and the
-    # ownership/capability oracles compare against a value that cannot drift or be
-    # mutated in place; see ``_PACKAGE_FILTER_DEFAULTS``. An unmodified subclass
-    # inherits this by identity (``_is_generation_capable`` checks it); django-filter
-    # only ever ``dict(cls.FILTER_DEFAULTS)``-copies it and reads entries, so the
-    # frozen ``MappingProxyType`` is a drop-in for the mutable dict.
-    FILTER_DEFAULTS: ClassVar[Mapping[type, Mapping[str, Any]]] = _PACKAGE_FILTER_DEFAULTS
+    # process-shared ``BaseFilterSet.FILTER_DEFAULTS`` -- but as our OWN plain,
+    # deepcopyable ``dict`` (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``), NOT a snapshot of
+    # the global -- so package ownership derives from a table this module authored and
+    # the inherited django-filter customization seam (``deepcopy`` / ``dict(...)`` /
+    # ``[cls][key] = ...``) keeps working. An unmodified subclass inherits this by
+    # identity (``_is_generation_capable`` checks it); ownership is decided against the
+    # PRIVATE normalized ``_PACKAGE_POLICY_BASELINE`` by value, not against this public
+    # object's identity.
+    FILTER_DEFAULTS: ClassVar[dict[type, dict[str, Any]]] = _PUBLIC_PACKAGE_FILTER_DEFAULTS
 
     # Binding seam - populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
@@ -1776,23 +2023,27 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            ``super().filter_for_lookup`` does -- one ``try_dbfield`` MRO walk over
            ``dict(cls.FILTER_DEFAULTS)`` updated with ``cls._meta.filter_overrides``
            (merge order preserved, so a more-derived ``FILTER_DEFAULTS`` entry shadows
-           a less-derived override) -- and compare that selected entry by object
-           identity against the ``_PACKAGE_FILTER_DEFAULTS`` selection: the package-owned
-           FROZEN generation-policy baseline, NOT django-filter's mutable, shared
-           ``BaseFilterSet.FILTER_DEFAULTS`` (Blocker 2). Comparing against a frozen
-           baseline is what makes whole-entry identity a real ownership boundary: an
-           unmodified subclass inherits ``_PACKAGE_FILTER_DEFAULTS`` by identity, so its
-           merged selection IS the same frozen nested proxy as ``base_entry`` and
-           identity holds; a nested in-place MUTATION of the baseline can no longer make
-           a consumer policy read back as the framework default because the frozen proxy
-           raises ``TypeError`` on the attempted mutation, so only an explicit
-           REPLACEMENT (a new object) ever reaches this comparison as a distinct entry.
-           A DIFFERENT entry object therefore means a consumer seam genuinely governs
-           the selection: either a ``Meta.filter_overrides`` entry that actually wins the
-           merged walk OR a class-level ``FILTER_DEFAULTS`` shadow that replaced the entry
-           (round-5 Blocker 1). Whole-entry identity catches an ``extra``-only override
-           (restricted queryset, ``to_field_name``, requiredness), not just a
-           ``filter_class`` change; a SAME (frozen) object is ``framework_default``.
+           a less-derived override) -- then NORMALIZE that selected entry
+           (``_normalize_policy_entry``) and compare it BY VALUE against the normalized
+           ``_PACKAGE_POLICY_BASELINE`` selection: the PRIVATE, immutable, package-owned
+           baseline derived from ``_PUBLIC_PACKAGE_FILTER_DEFAULTS``, NOT django-filter's
+           mutable, shared ``BaseFilterSet.FILTER_DEFAULTS`` and NOT the public table's
+           object identity (Blocker 1 + High 3). With High 3 the public table and the
+           private baseline are DISTINCT object graphs, so object identity could never
+           hold between a selected raw entry and a baseline record; the ownership anchor
+           is a normalized VALUE comparison of the ownership-bearing members
+           (``filter_class`` + the ``extra`` provider identity). A pristine selection
+           re-derives the SAME (filter_class, provider) pair the baseline holds, so it is
+           ``framework_default``; a consumer seam that genuinely governs the selection --
+           a ``Meta.filter_overrides`` entry that wins the merged walk OR a class-level
+           ``FILTER_DEFAULTS`` shadow that replaced the entry -- carries a different
+           ``filter_class`` and/or a different (consumer) ``extra`` provider, so its
+           normalized value diverges and it is ``override_generated``. Whole-entry
+           normalization catches an ``extra``-only override (restricted queryset,
+           ``to_field_name``, requiredness), not just a ``filter_class`` change. This is
+           import-order-immune: the baseline derives from OUR table, so a consumer
+           mutation of django-filter's global before this module was imported cannot
+           taint it (Blocker 1).
 
         This is the SINGLE ownership oracle both ``filter_for_lookup`` (which
         decides whether to convert a Relay-node relation to a package GlobalID
@@ -1823,37 +2074,37 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``override_generated`` -- declining a legitimate Relay conversion (wire-shape
         # regression) and dropping a genuine framework leaf from routing (false-closed).
         #
-        # Comparing the merged SELECTION by object identity against the package-owned
-        # FROZEN ``_PACKAGE_FILTER_DEFAULTS`` selection subsumes BOTH consumer-selection
-        # seams in one check:
+        # Comparing the merged SELECTION by NORMALIZED VALUE against the private,
+        # package-owned ``_PACKAGE_POLICY_BASELINE`` selection subsumes BOTH
+        # consumer-selection seams in one check:
         #   * ``Meta.filter_overrides`` -- when an override entry ACTUALLY governs the
         #     selection class (upstream would select it), the merged walk returns that
-        #     override object, which is not the frozen base object -> ``override_generated``.
+        #     override entry; its normalized (filter_class, extra) pair differs from the
+        #     baseline record -> ``override_generated``.
         #   * a class-level ``FILTER_DEFAULTS`` shadow (round-5 Blocker 1) -- a subclass
-        #     that reassigns ``FILTER_DEFAULTS`` changes the whole generation policy;
-        #     its REPLACED entry is an independent object -> ``override_generated``,
+        #     that reassigns ``FILTER_DEFAULTS`` changes the whole generation policy; its
+        #     REPLACED entry normalizes to a different value -> ``override_generated``,
         #     while an untouched shallow ``{**FilterSet.FILTER_DEFAULTS, Field: {...}}``
-        #     copy carries the SAME frozen nested proxy for every unchanged class, so
-        #     those stay ``framework_default``.
-        # The baseline is FROZEN (Blocker 2), so a consumer CANNOT defeat this by
-        # shallow-copying and then mutating a shared nested entry in place: the mutation
-        # raises ``TypeError`` at its source, so the only way an entry reaches this
-        # comparison as a distinct object is an explicit replacement, which is exactly
-        # what should be classified consumer-owned. The compared entry is the single
-        # ownership-bearing value django-filter selects (its ``filter_class`` AND its
-        # ``extra`` provider -- a restricted relation queryset, a ``to_field_name``,
+        #     copy carries the SAME (filter_class, provider) pair for every unchanged
+        #     class, so those normalize equal to the baseline and stay
+        #     ``framework_default``.
+        # The baseline is derived from the package's OWN ``_PUBLIC_PACKAGE_FILTER_DEFAULTS``
+        # table (never from django-filter's mutable global), and the comparison is by
+        # VALUE, so import order cannot taint it and the public table and baseline being
+        # distinct object graphs (High 3) does not matter: a pristine selection re-derives
+        # the baseline's (filter_class, provider) pair. The compared members are the
+        # single ownership-bearing values django-filter selects (its ``filter_class`` AND
+        # its ``extra`` provider -- a restricted relation queryset, a ``to_field_name``,
         # requiredness), so an ``extra``-only override is caught, not just a
-        # ``filter_class`` change. ``dict(cls.FILTER_DEFAULTS)`` is a shallow copy, so on
-        # an unmodified subclass (whose ``FILTER_DEFAULTS`` IS ``_PACKAGE_FILTER_DEFAULTS``
-        # by inheritance) the merged selection is the SAME frozen object as the base
-        # selection and identity holds.
+        # ``filter_class`` change.
         overrides = getattr(cls._meta, "filter_overrides", None)
         merged_defaults = dict(cls.FILTER_DEFAULTS)
         if overrides:
             merged_defaults.update(overrides)
         selected_entry = try_dbfield(merged_defaults.get, selection_cls)
-        base_entry = try_dbfield(_PACKAGE_FILTER_DEFAULTS.get, selection_cls)
-        if selected_entry is not base_entry:
+        selected_norm = _normalize_policy_entry(selected_entry)
+        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)
+        if selected_norm != base_norm:
             return "override_generated"
         return "framework_default"
 
@@ -1879,12 +2130,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           package-generated.
         * ``FILTER_DEFAULTS`` override -- the class-level generation hook: a
           consumer shadowing ``FILTER_DEFAULTS`` changes which filter classes the
-          default path selects; an unmodified subclass inherits the package-owned
-          FROZEN ``_PACKAGE_FILTER_DEFAULTS`` baseline by identity (Blocker 2), so
-          any class that reassigned ``FILTER_DEFAULTS`` is non-capable and mints no
-          token. Comparing against the frozen package baseline (not django-filter's
-          mutable ``BaseFilterSet.FILTER_DEFAULTS``) means the identity a consumer
-          would have to preserve to look capable cannot itself be mutated in place.
+          default path selects; an unmodified subclass inherits the package-authored
+          public ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` table by identity (Blocker 1 +
+          High 3), so any class that reassigned ``FILTER_DEFAULTS`` is non-capable and
+          mints no token. Comparing against the package-authored public table (not
+          django-filter's mutable ``BaseFilterSet.FILTER_DEFAULTS``, and not a snapshot
+          of it) means capability tracks whether the class still uses the exact table
+          this module authored. Value-level ownership of an individual entry is a
+          separate concern handled by ``_generation_origin_for_field`` against the
+          private normalized baseline; this identity check is the coarse
+          whole-table-replacement gate.
         * ``__init__`` override -- the standard place a consumer replaces or mutates
           ``self.filters`` per request (round-4 Blocker 1). A subclass that defines
           its own ``__init__`` can swap a generated leaf for its own filter object
@@ -1903,7 +2158,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             getattr(cls.filter_for_field, "__func__", None) is FilterSet.filter_for_field.__func__
             and getattr(cls.filter_for_lookup, "__func__", None)
             is FilterSet.filter_for_lookup.__func__
-            and cls.FILTER_DEFAULTS is _PACKAGE_FILTER_DEFAULTS
+            and cls.FILTER_DEFAULTS is _PUBLIC_PACKAGE_FILTER_DEFAULTS
             and cls.__init__ is FilterSet.__init__
         )
 

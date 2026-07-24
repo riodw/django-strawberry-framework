@@ -418,6 +418,7 @@ Source: `tests/`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _relation_fixtures.py         # Shared TEST-ONLY relation fixture models for row-preserving-predicate work.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
@@ -435,7 +436,10 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 ├── test_list_field.py            # DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
+├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
+├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_routers.py               # Channels router tests for HTTP/WebSocket routing, wrappers, lazy imports, and request context.
@@ -623,6 +627,7 @@ Source: `tests/ (+ planned card paths)`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _relation_fixtures.py         # Shared TEST-ONLY relation fixture models for row-preserving-predicate work.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
@@ -640,7 +645,10 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 ├── test_list_field.py            # DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
+├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
+├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_routers.py               # Channels router tests for HTTP/WebSocket routing, wrappers, lazy imports, and request context.

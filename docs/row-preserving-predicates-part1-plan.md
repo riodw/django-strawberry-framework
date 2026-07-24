@@ -506,13 +506,104 @@ framework-stamped record — fail closed by construction.
 The candidate metadata row (built only for proven generated candidates)
 carries: the final classified path rooted at the owning
 `FilterSet._meta.model` (Slice A), the provenance record (origin +
-framework-added-`distinct` bit), and the inner-invocation eligibility
-bit. Eligible = framework-generated leaf (direct or expanded, per the
+framework-added-`distinct` bit), the capability token and the canonical
+semantic signature (`django_strawberry_framework/filters/sets.py::_CandidateFingerprint`;
+see the authorization state machine below), and the inner-invocation
+eligibility bit. Eligible = framework-generated leaf (direct or expanded, per the
 provenance record), no consumer `method`, no consumer-origin `distinct`,
 path crosses a many-side hop. Eligibility is never inferred from a class
 name or from `method is None`. Ineligible leaves keep today's behavior
 byte-for-byte — the failure mode is a missed optimization, never a
 changed result set.
+
+**The authorization state machine (normative — Blockers 1 and 2).** Frozen
+provenance alone does **not** grant eligibility. Correcting Rev 8's simpler
+"frozen provenance is the gate" mechanics, a generated leaf is routed
+through the correlated adapter only when every stage below holds; any
+missing or mismatched stage falls back to the original outer invocation:
+
+```text
+generation site
+    -> construction provenance
+declaration/expansion ownership boundary
+    -> origin transition
+atomic snapshot build
+    -> path plan + canonical semantic signature + capability
+per-request deepcopy
+    -> live signature verification
+match
+    -> correlated invocation
+missing/mismatch
+    -> original outer invocation
+```
+
+- **Origin transition at the declaration-ownership boundary (Blocker 1).**
+  Declaration ownership — not the presence of a private attribute — is the
+  authorization boundary.
+  `django_strawberry_framework/filters/sets.py::FilterSetMetaclass.__new__`
+  transitions **every own class-body declaration** to `origin="declared"`
+  unconditionally and strips any generation token the assigned object
+  carried, so a `Filter` borrowed or deepcopied from another FilterSet
+  cannot smuggle a stale `framework_default` / `package_replacement` stamp
+  (and its live token) into a consumer-owned declaration. Only **inherited**
+  declarations keep the provenance record their owning class already stamped
+  (the `provenance is None` fallback merely backfills an inherited record
+  that is somehow absent). Own vs inherited is computed from the class body
+  captured before `super().__new__` empties `attrs`, never from whether a
+  token happens to exist.
+- **Relay-conversion ownership boundary (round-4 Blocker 2).** Filter
+  ownership is resolved **once, before any Relay transformation**, through the
+  single origin oracle
+  `django_strawberry_framework/filters/sets.py::FilterSet._generation_origin_for_field`
+  (which both `filter_for_lookup` and `filter_for_field` consume, rather than
+  independently rediscovering the selection). A Relay-node relation is converted
+  to a package `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter` **only when the
+  upstream selection is the proven framework default**. A consumer-selected
+  relation filter — via `Meta.filter_overrides` or a shadowed class-level
+  `FILTER_DEFAULTS` — is returned **unchanged**, stays `origin="override_generated"`
+  (ineligible, never a candidate), and keeps ownership of the wire shape. **Relay
+  wire-shape policy:** under the byte-for-byte rule the consumer override owns the
+  GraphQL input shape for that relation; the framework must not silently force it
+  back to a package GlobalID primitive. (The owner's OWN primary key remains a
+  GlobalID regardless — that shape is mandated by Relay `Node` conformance, not a
+  framework default a consumer repossesses.)
+- **Token vs signature — provenance vs semantics (Blocker 2).** Two
+  independent slots gate routing. The capability **token** proves
+  *provenance*: the live instance descends from a framework generation site
+  through an unbroken package-owned chain, and the owning class was
+  generation-capable at build time (an override of `filter_for_field` /
+  `filter_for_lookup` / `FILTER_DEFAULTS` / `__init__` leaves the token `None` —
+  `__init__` is the standard place a consumer replaces `self.filters` per request,
+  round-4 Blocker 1). The canonical **semantic signature**
+  (`django_strawberry_framework/filters/sets.py::_CandidateFingerprint`,
+  derived by `_fingerprint_of`) proves *semantics did not drift* over a **finite,
+  enumerated** boundary — the effective behavior of the supported generated
+  django-filter families, no more and no less: the effective `.filter` **call
+  graph** (`.filter` itself plus the helpers it dispatches through —
+  `get_method`, `get_filter_predicate`, `is_noop` — each in an instance-override
+  and class-descriptor half), the non-pk-`to_field` pk-qualification marker and
+  `to_field_name` (from constructor state), the core fields (`field_name`,
+  `lookup_expr`, `method`, `exclude`, `distinct`), and the django-filter execution
+  knobs that change the compiled predicate (`conjoined`, `always_filter`,
+  `null_value`). State that is not identity/value-stable across `copy.deepcopy`
+  (querysets, the built form field) is represented only by its deepcopy-stable
+  constructor state. Token and signature are frozen together into the atomic
+  snapshot; a matching token alone is explicitly insufficient.
+- **Live signature verification, fail closed.** Immediately before
+  correlated invocation,
+  `django_strawberry_framework/filters/sets.py::FilterSet._apply_flat_leaves`
+  recomputes the signature from the **live per-request deepcopy** and
+  compares it — together with the live token — against the frozen snapshot.
+  Every captured field is deepcopy-stable, so an untampered request
+  re-derives an equal signature and is never falsely rejected. A match
+  routes the leaf through one correlated `EXISTS`; a mismatch on any covered
+  seam — a flipped pk-qualification marker, a replaced `.filter` or a swapped
+  `get_method` / `get_filter_predicate` / `is_noop`, a mutated knob, an
+  unstamped or divergent token, or an absent snapshot row — fails closed and
+  runs the original `self.filters[name].filter(queryset, value)`
+  byte-for-byte. Fail-closed within the enumerated boundary is total: the failure
+  mode is a missed optimization, never a changed result set and never a
+  finalization error for a working declared filter.
 
 **Build-site mechanics** (Fable review M1, retained):
 
@@ -722,7 +813,12 @@ before the old behavior is removed:
 - the negated split-across-rows range counterexample from the first review
   (baseline `exclude(children__value__gte=1, children__value__lte=9)`
   keeps split-row parents excluded);
-- `exclude=True` single-lookup leaves;
+- the **`exclude=True` invariant** (locked by
+  `tests/filters/test_sets.py::test_generated_flat_leaves_never_carry_exclude`):
+  generated candidates are non-excluding; `not` remains an **outer `pk__in`
+  complement** through the unchanged logic-tree path; and a
+  consumer-declared or mutated `exclude=True` filter fails closed and never
+  enters the correlated adapter;
 - `in=[]`, mixed valid/invalid integer `in`, GlobalID list handling;
 - direct, `and`, `or`, `not` GraphQL filter-tree positions — with every
   consumer-visible behavior here that the fakeshop schema can reach also

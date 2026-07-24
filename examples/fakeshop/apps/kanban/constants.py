@@ -235,6 +235,8 @@ TRACKED_FILE_PATHS = (
     "tests/test_lateral_pg_parity.py",
     "tests/test_list_field.py",
     "tests/test_permissions.py",
+    "tests/test_pg_explain_artifact_footer.py",
+    "tests/test_predicate_pg_explain.py",
     "tests/test_registry.py",
     "tests/test_relation_fixtures.py",
     "tests/test_relay_connection.py",

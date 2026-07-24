@@ -40,9 +40,12 @@ from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
     _GlobalIDMultipleChoiceField,
 )
+from django_strawberry_framework.filters.inputs import convert_filter_to_input_annotation
 from django_strawberry_framework.filters.sets import (
+    _GENERATION_TOKEN_ATTR,
     _MODEL_CHOICE_ONLY_EXTRAS,
     FilterGenerationProvenance,
+    _fingerprint_of,
     _lookups_for_field,
     filter_generation_provenance,
 )
@@ -500,6 +503,200 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
     assert getattr(resolved, _GLOBALID_RELATION_PK_ATTR, False) is not True
 
 
+# ---------------------------------------------------------------------------
+# High 3 (feedback.md): a forward, single-valued Relay relation ``in`` lookup
+# is list-shaped over the wire, so the PRODUCTION generation path must emit
+# ``GlobalIDMultipleChoiceFilter`` -- NOT the scalar ``GlobalIDFilter`` that a
+# cardinality-only reselection produced. These tests drive the real
+# ``FilterSet.get_filters()`` generation path (not a hand-built primitive) so
+# they prove the generated class, its list-shaped input annotation, and its
+# execution. Red->green: before the fix, ``shelf__in`` / ``target__in``
+# generated ``GlobalIDFilter`` and rejected the list at decode time
+# ("Invalid GlobalID: [...] is not a valid GlobalID ...").
+# ---------------------------------------------------------------------------
+
+
+def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk():
+    """Forward Relay FK ``in`` over an ordinary FK-to-pk generates a list filter (High 3).
+
+    The generated ``shelf__in`` leaf must be ``GlobalIDMultipleChoiceFilter`` with a
+    ``list[str]`` input annotation, while the sibling ``shelf`` (exact) leaf stays the
+    scalar ``GlobalIDFilter`` -- proving the cardinality-selected non-``in`` shape is
+    byte-identical and only the lookup-aware ``in`` shape changed.
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(ShelfType, ShelfType.__django_strawberry_definition__)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf": ["exact", "in"]}
+
+    field = library_models.Book._meta.get_field("shelf")
+    generated = BookFilter.get_filters()
+
+    in_leaf = generated["shelf__in"]
+    assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
+    assert convert_filter_to_input_annotation(in_leaf, field) == list[str] | None
+    # An ordinary FK-to-pk relation carries no pk-qualification marker.
+    assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR, False) is not True
+
+    exact_leaf = generated["shelf"]
+    assert isinstance(exact_leaf, GlobalIDFilter)
+    assert not isinstance(exact_leaf, GlobalIDMultipleChoiceFilter)
+    assert convert_filter_to_input_annotation(exact_leaf, field) == str | None
+
+
+@pytest.mark.django_db
+def test_generated_forward_fk_in_execution_matches_requested_targets():
+    """The generated forward-FK ``in`` leaf unions the requested targets (High 3).
+
+    Also pins the package's established list semantics for the generated leaf: an
+    empty list matches nothing and a malformed member rejects the whole input with
+    the offending index named.
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(ShelfType, ShelfType.__django_strawberry_definition__)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf": ["in"]}
+
+    in_leaf = BookFilter.get_filters()["shelf__in"]
+    assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
+
+    branch = library_models.Branch.objects.create(name="Central")
+    shelf_a = library_models.Shelf.objects.create(code="A", branch=branch)
+    shelf_b = library_models.Shelf.objects.create(code="B", branch=branch)
+    shelf_c = library_models.Shelf.objects.create(code="C", branch=branch)
+    library_models.Book.objects.create(title="book-a", shelf=shelf_a)
+    library_models.Book.objects.create(title="book-b", shelf=shelf_b)
+    library_models.Book.objects.create(title="book-c", shelf=shelf_c)
+
+    requested = [
+        strawberry.relay.to_base64("ShelfType", str(shelf_a.pk)),
+        strawberry.relay.to_base64("ShelfType", str(shelf_b.pk)),
+    ]
+    result = in_leaf.filter(library_models.Book.objects.all(), requested)
+    assert set(result.values_list("title", flat=True)) == {"book-a", "book-b"}
+    # Matches the explicit whole-list ``shelf__in`` ORM (never a per-element OR).
+    expected = library_models.Book.objects.filter(shelf__in=[shelf_a.pk, shelf_b.pk])
+    assert set(result.values_list("pk", flat=True)) == set(
+        expected.values_list("pk", flat=True),
+    )
+
+    # Empty list is a restrictive membership predicate: it matches nothing.
+    assert in_leaf.filter(library_models.Book.objects.all(), []).count() == 0
+
+    # A malformed member rejects the whole input with the offending index named.
+    with pytest.raises(GraphQLError, match="index 1"):
+        in_leaf.filter(
+            library_models.Book.objects.all(),
+            [strawberry.relay.to_base64("ShelfType", str(shelf_a.pk)), "not-a-globalid"],
+        )
+
+
+def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
+    """Forward Relay FK ``in`` over a non-pk ``to_field`` is pk-qualified (High 3).
+
+    ``RpToFieldChild.target`` binds on ``RpToFieldTarget.code`` (a non-pk column), so
+    the generated ``target__in`` leaf must be a ``GlobalIDMultipleChoiceFilter`` that
+    STILL carries the boolean ``_GLOBALID_RELATION_PK_ATTR`` marker (stamped after the
+    lookup-aware class is chosen) so its predicate derives ``target__pk__in`` and
+    compares the target primary key a Relay GlobalID carries. The sibling exact leaf
+    keeps the marked scalar ``GlobalIDFilter`` shape.
+    """
+
+    class TargetType(DjangoType):
+        class Meta:
+            model = RpToFieldTarget
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+
+    class ChildFilter(FilterSet):
+        class Meta:
+            model = RpToFieldChild
+            fields = {"target": ["exact", "in"]}
+
+    field = RpToFieldChild._meta.get_field("target")
+    generated = ChildFilter.get_filters()
+
+    in_leaf = generated["target__in"]
+    assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
+    assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
+    assert convert_filter_to_input_annotation(in_leaf, field) == list[str] | None
+
+    exact_leaf = generated["target"]
+    assert isinstance(exact_leaf, GlobalIDFilter)
+    assert not isinstance(exact_leaf, GlobalIDMultipleChoiceFilter)
+    assert getattr(exact_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
+    """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk (High 3).
+
+    The FK stores / joins on ``code`` but a Relay GlobalID carries the target's pk, so
+    the pk-qualified ``target__pk__in`` predicate returns the children of the encoded
+    targets, whereas the raw ``target__in`` (pk values against the ``code`` column)
+    matches nothing -- the red->green proof that ``pk != code`` matters.
+    """
+    from django.db import connection
+
+    class TargetType(DjangoType):
+        class Meta:
+            model = RpToFieldTarget
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+
+    class ChildFilter(FilterSet):
+        class Meta:
+            model = RpToFieldChild
+            fields = {"target": ["in"]}
+
+    in_leaf = ChildFilter.get_filters()["target__in"]
+    assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
+    assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
+
+    with relation_fixture_tables(connection):
+        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
+        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
+        gamma = RpToFieldTarget.objects.create(code="GAMMA", label="G")
+        RpToFieldChild.objects.create(target=alpha, name="a-child")
+        RpToFieldChild.objects.create(target=beta, name="b-child")
+        RpToFieldChild.objects.create(target=gamma, name="g-child")
+        assert alpha.pk != alpha.code
+
+        requested = [
+            strawberry.relay.to_base64("TargetType", str(alpha.pk)),
+            strawberry.relay.to_base64("TargetType", str(beta.pk)),
+        ]
+        result = in_leaf.filter(RpToFieldChild.objects.all(), requested)
+        assert set(result.values_list("name", flat=True)) == {"a-child", "b-child"}
+        expected = RpToFieldChild.objects.filter(target__pk__in=[alpha.pk, beta.pk])
+        assert set(result.values_list("pk", flat=True)) == set(
+            expected.values_list("pk", flat=True),
+        )
+
+        # The raw non-pk path compares the pk values against the stored ``code``
+        # column and matches nothing -- why the ``__pk`` qualification is required.
+        wrong = RpToFieldChild.objects.filter(target__in=[str(alpha.pk), str(beta.pk)])
+        assert wrong.count() == 0
+
+
 @pytest.mark.django_db(transaction=True)
 def test_expanded_related_filter_derives_pk_path_from_live_field_name():
     """Finding 2: an expanded ``to_field`` GlobalID leaf compiles against the rebased path.
@@ -570,6 +767,471 @@ def test_expanded_related_filter_derives_pk_path_from_live_field_name():
         # PARENT model, which has no ``target`` field -> FieldError.
         with pytest.raises(FieldError):
             list(RpToFieldTarget.objects.filter(target__pk=str(t1.pk)))
+
+
+def _passthrough_filter(qs, value):
+    """A stand-in ``.filter`` callable that returns the queryset unchanged."""
+    return qs
+
+
+@pytest.mark.django_db(transaction=True)
+def test_expanded_to_field_leaf_live_signature_gates_correlated_exists():
+    """Blocker 2 end-to-end: the canonical semantic signature is the ONE auth gate.
+
+    Exercises the expanded ``children__target`` shape through the PARENT
+    ``FilterSet`` and its ``.qs`` -> ``FilterSet._apply_flat_leaves`` live gate --
+    NOT ``expanded_leaf.filter()`` in isolation like
+    ``test_expanded_related_filter_derives_pk_path_from_live_field_name``, which
+    never instantiates the parent or runs the authorization check. The leaf is a
+    ``GlobalIDFilter`` on ``RpToFieldChild.target`` (a forward FK on the non-pk
+    ``to_field="code"``), reached across the reverse to-many ``children`` prefix,
+    so it is eligible for the correlated adapter AND pk-marked.
+
+    Red->green vs the pre-fix ``_CandidateFingerprint`` (feedback.md Blocker 2):
+    before the semantic signature covered the pk-qualification marker and the
+    effective ``.filter`` implementation, flipping ``_GLOBALID_RELATION_PK_ATTR``
+    or replacing ``.filter`` on the LIVE per-request instance left the fingerprint
+    (and token) still matching, so the tampered filter was STILL routed through
+    ``EXISTS`` and compiled the known-wrong raw-``to_field`` comparison. Now every
+    such drift diverges the signature and fails closed to the outer invocation.
+    """
+    from django.db import connection
+
+    class TargetType(DjangoType):
+        class Meta:
+            model = RpToFieldTarget
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+
+    class ChildFilter(FilterSet):
+        class Meta:
+            model = RpToFieldChild
+            fields = {"target": ["exact"]}
+
+    class ParentFilter(FilterSet):
+        children = RelatedFilter(ChildFilter)
+
+        class Meta:
+            model = RpToFieldTarget
+            fields = {"code": ["exact"]}
+
+    # Publish the atomic expansion snapshot (sets ``base_filters`` + candidate
+    # rows). The expanded to_field leaf is an eligible, token-bearing, pk-marked
+    # candidate; its FROZEN signature now records the pk-qualification decision.
+    ParentFilter.get_filters()
+    candidate = ParentFilter._expansion_snapshot().candidates["children__target"]
+    assert candidate.eligible is True
+    assert candidate.token is not None
+    assert candidate.fingerprint is not None
+    assert candidate.fingerprint.pk_qualified is True
+
+    with relation_fixture_tables(connection):
+        t1 = RpToFieldTarget.objects.create(code="C1", label="one")
+        RpToFieldChild.objects.create(target=t1, name="t1-child")
+        t2 = RpToFieldTarget.objects.create(code="C2", label="two")
+        RpToFieldChild.objects.create(target=t2, name="t2-child")
+        t3 = RpToFieldTarget.objects.create(code="C3", label="three")  # no children
+        # The auto pk and the FK-stored ``code`` to_field column differ, so ONLY the
+        # ``__pk`` qualification returns the right row.
+        assert t1.pk != t1.code
+        encoded = strawberry.relay.to_base64("TargetType", str(t1.pk))
+        outer = RpToFieldTarget.objects.order_by("id")
+
+        def _build_fs():
+            return ParentFilter(
+                data={"children__target": encoded},
+                queryset=outer,
+                request=HttpRequest(),
+            )
+
+        # (1) UNTOUCHED live instance -> authorized -> ONE correlated EXISTS, the
+        #     pk-qualified rows (only ``t1``, whose child's ``target`` pk is ``t1``).
+        clean_fs = _build_fs()
+        clean_qs = clean_fs.qs
+        assert len(_reserved_aliases(clean_qs)) == 1
+        assert str(clean_qs.query).upper().count("EXISTS") == 1
+        assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk]
+        # It was authorized BECAUSE the live signature + token match the frozen row.
+        clean_leaf = clean_fs.filters["children__target"]
+        assert getattr(clean_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+        assert _fingerprint_of(clean_leaf) == candidate.fingerprint
+
+        # (2) FLIP the pk-marker on the LIVE per-request instance -> FAIL CLOSED.
+        #     No reserved EXISTS alias attaches; the (now-tampered) predicate runs as
+        #     the plain outer JOIN invocation, never blessed into the adapter.
+        flipped_fs = _build_fs()
+        flipped_leaf = flipped_fs.filters["children__target"]
+        setattr(flipped_leaf, _GLOBALID_RELATION_PK_ATTR, False)
+        # (4) TOKEN ALONE is INSUFFICIENT: the token still equals the frozen row's
+        #     token, but the signature diverged, so the leaf is not routed.
+        assert getattr(flipped_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+        assert _fingerprint_of(flipped_leaf) != candidate.fingerprint
+        flipped_qs = flipped_fs.qs
+        assert _reserved_aliases(flipped_qs) == []
+        assert "EXISTS" not in str(flipped_qs.query).upper()
+
+        # (3) REPLACE the live ``.filter`` callable -> FAIL CLOSED. The instance-level
+        #     override diverges the signature (frozen ``filter_override`` is ``None``);
+        #     the outer invocation runs the override (a passthrough), so no reserved
+        #     EXISTS alias attaches and every row is returned unfiltered.
+        replaced_fs = _build_fs()
+        replaced_leaf = replaced_fs.filters["children__target"]
+        replaced_leaf.filter = _passthrough_filter
+        assert getattr(replaced_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+        assert _fingerprint_of(replaced_leaf) != candidate.fingerprint
+        replaced_qs = replaced_fs.qs
+        assert _reserved_aliases(replaced_qs) == []
+        assert "EXISTS" not in str(replaced_qs.query).upper()
+        assert list(replaced_qs.order_by("id").values_list("pk", flat=True)) == [
+            t1.pk,
+            t2.pk,
+            t3.pk,
+        ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
+    """Round-4 High 3: the expanded non-pk-``to_field`` ``in`` leaf through the adapter.
+
+    The only regression that composes all three recently corrected mechanisms at
+    once -- lookup-aware ``in``, non-pk pk-qualification, and live candidate
+    authorization -- over the reverse to-many ``children`` prefix. The prior High-3
+    ``in`` tests invoked the generated CHILD leaf directly on the child queryset;
+    this expands ``children__target__in`` across the reverse hop through the PARENT
+    ``FilterSet`` and its ``.qs`` -> ``_apply_flat_leaves`` gate. Proves the
+    expanded live class + list annotation, marker + token survival through
+    deepcopy/rebasing, one correlated ``EXISTS`` (no outer join / ``DISTINCT``),
+    correct rows for two encoded target pks (where ``pk != code``), and restrictive
+    empty-list behavior through the adapter.
+    """
+    from django.db import connection
+
+    class TargetType(DjangoType):
+        class Meta:
+            model = RpToFieldTarget
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+
+    class ChildFilter(FilterSet):
+        class Meta:
+            model = RpToFieldChild
+            fields = {"target": ["in"]}
+
+    class ParentFilter(FilterSet):
+        children = RelatedFilter(ChildFilter)
+
+        class Meta:
+            model = RpToFieldTarget
+            fields = {"code": ["exact"]}
+
+    ParentFilter.get_filters()
+    candidate = ParentFilter._expansion_snapshot().candidates["children__target__in"]
+    assert candidate.eligible is True
+    assert candidate.token is not None
+    assert candidate.fingerprint is not None
+    assert candidate.fingerprint.pk_qualified is True
+
+    expanded_leaf = ParentFilter.get_filters()["children__target__in"]
+    assert isinstance(expanded_leaf, GlobalIDMultipleChoiceFilter)
+    assert getattr(expanded_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
+    child_target_field = RpToFieldChild._meta.get_field("target")
+    assert (
+        convert_filter_to_input_annotation(expanded_leaf, child_target_field) == list[str] | None
+    )
+
+    with relation_fixture_tables(connection):
+        t1 = RpToFieldTarget.objects.create(code="C1", label="one")
+        RpToFieldChild.objects.create(target=t1, name="c1")
+        t2 = RpToFieldTarget.objects.create(code="C2", label="two")
+        RpToFieldChild.objects.create(target=t2, name="c2")
+        t3 = RpToFieldTarget.objects.create(code="C3", label="three")  # no children
+        assert t1.pk != t1.code
+        requested = [
+            strawberry.relay.to_base64("TargetType", str(t1.pk)),
+            strawberry.relay.to_base64("TargetType", str(t2.pk)),
+        ]
+        outer = RpToFieldTarget.objects.order_by("id")
+
+        clean_fs = ParentFilter(
+            data={"children__target__in": requested},
+            queryset=outer,
+            request=HttpRequest(),
+        )
+        clean_qs = clean_fs.qs
+        # Marker + token survived the deepcopy/rebasing onto the live instance.
+        live = clean_fs.filters["children__target__in"]
+        assert getattr(live, _GENERATION_TOKEN_ATTR, None) == candidate.token
+        assert getattr(live, _GLOBALID_RELATION_PK_ATTR, None) is True
+        assert _fingerprint_of(live) == candidate.fingerprint
+        # One correlated EXISTS; no outer join (root table only) and no DISTINCT.
+        assert len(_reserved_aliases(clean_qs)) == 1
+        sql = str(clean_qs.query).upper()
+        assert sql.count("EXISTS") == 1
+        assert "DISTINCT" not in sql
+        outer_tables = sorted({j.table_name for j in clean_qs.query.alias_map.values()})
+        assert outer_tables == [RpToFieldTarget._meta.db_table]
+        # Correct rows: t3 has no child, so only the two encoded (by pk) targets match.
+        assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk, t2.pk]
+
+        # Restrictive empty list THROUGH the adapter: the leaf is still routed (it is
+        # an eligible token-matched candidate), invoked on the inner root, and yields
+        # ``inner_root.none()``; ``attach_exists`` composes ``Exists(none)``, which
+        # Django folds to a constant-false predicate. The result is 0 rows out of the
+        # 3 seeded targets -- restrictive, NOT the no-op that would return all rows.
+        empty_qs = ParentFilter(
+            data={"children__target__in": []},
+            queryset=outer,
+            request=HttpRequest(),
+        ).qs
+        assert RpToFieldTarget.objects.count() == 3
+        assert list(empty_qs.values_list("pk", flat=True)) == []
+
+
+# ---------------------------------------------------------------------------
+# Round-4 Blocker 2 (feedback.md): a consumer-selected relation filter over a
+# Relay-node target -- chosen via ``Meta.filter_overrides`` OR a shadowed
+# class-level ``FILTER_DEFAULTS`` -- must be honored byte-for-byte. Before the
+# fix, ``filter_for_lookup`` unconditionally replaced ANY Relay-node relation
+# with a package GlobalID primitive and ``filter_for_field`` stamped it
+# ``package_replacement``, DISCARDING the consumer's filter class AND marking the
+# leaf eligible. Now ownership is resolved once (``_generation_origin_for_field``)
+# BEFORE any Relay conversion: only the proven framework default is converted; a
+# consumer selection is returned unchanged, stays ``override_generated``, and
+# never gets a candidate row.
+# ---------------------------------------------------------------------------
+
+
+def test_blocker2_direct_m2m_relation_override_on_relay_target_is_honored():
+    """A ``Meta.filter_overrides`` M2M relation filter over a Relay target is kept."""
+    import django_filters
+    from django.db import models as django_models
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
+        pass
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+            filter_overrides = {
+                django_models.ManyToManyField: {"filter_class": CustomRelationFilter},
+            }
+
+    leaf = BookFilter.get_filters()["genres"]
+    # The consumer's class survives -- NOT replaced by GlobalIDMultipleChoiceFilter.
+    assert isinstance(leaf, CustomRelationFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    # override_generated is not framework-generated, so it gets NO candidate row.
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "genres" not in snapshot.candidates
+
+
+def test_blocker2_direct_forward_fk_relation_override_on_relay_target_is_honored():
+    """A ``Meta.filter_overrides`` forward-FK filter over a Relay target is kept."""
+    import django_filters
+    from django.db import models as django_models
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(ShelfType, ShelfType.__django_strawberry_definition__)
+
+    class CustomFKFilter(django_filters.ModelChoiceFilter):
+        pass
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf": ["exact"]}
+            filter_overrides = {
+                django_models.ForeignKey: {"filter_class": CustomFKFilter},
+            }
+
+    leaf = BookFilter.get_filters()["shelf"]
+    assert isinstance(leaf, CustomFKFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "shelf" not in snapshot.candidates
+
+
+def test_blocker2_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
+    """A shadowed class-level ``FILTER_DEFAULTS`` relation override is honored too.
+
+    The capability check already withholds a token from a ``FILTER_DEFAULTS``
+    shadow (``generation_capable=False``), but before the fix the Relay conversion
+    STILL discarded the consumer's class and stamped ``package_replacement``. The
+    ownership oracle now detects the shadow and leaves the selection unchanged.
+    """
+    import django_filters
+    from django.db import models as django_models
+    from django_filters import filterset as df_filterset
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
+        pass
+
+    class BookFilter(FilterSet):
+        FILTER_DEFAULTS = {
+            **df_filterset.BaseFilterSet.FILTER_DEFAULTS,
+            django_models.ManyToManyField: {
+                "filter_class": CustomRelationFilter,
+                "extra": lambda f: {
+                    "queryset": library_models.Genre._default_manager.all(),
+                },
+            },
+        }
+
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+
+    leaf = BookFilter.get_filters()["genres"]
+    assert isinstance(leaf, CustomRelationFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    assert record.generation_capable is False
+    snapshot = BookFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "genres" not in snapshot.candidates
+
+
+def test_blocker2_related_filter_expansion_preserves_child_relation_override():
+    """An expanded ``<related>__<relation>`` leaf inherits the child's override.
+
+    The child ``BookFilter`` overrides its own Relay-node M2M relation
+    (``genres``) via ``Meta.filter_overrides``. When a parent expands it across
+    ``book`` (Loan -> Book), the expanded ``book__genres`` leaf must keep the
+    consumer's class and its ``override_generated`` origin, so it never becomes a
+    correlated-EXISTS candidate.
+    """
+    import django_filters
+    from django.db import models as django_models
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
+        pass
+
+    class ChildBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+            filter_overrides = {
+                django_models.ManyToManyField: {"filter_class": CustomRelationFilter},
+            }
+
+    class LoanParentFilter(FilterSet):
+        book = RelatedFilter(ChildBookFilter, field_name="book")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    expanded = LoanParentFilter.get_filters()
+    leaf = expanded["book__genres"]
+    assert isinstance(leaf, CustomRelationFilter)
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "override_generated"
+    snapshot = LoanParentFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "book__genres" not in snapshot.candidates
+
+
+@pytest.mark.django_db
+def test_blocker2_honored_override_runs_outer_with_no_reserved_alias():
+    """End-to-end: the honored consumer M2M filter runs OUTER, not through EXISTS.
+
+    ``Book.genres`` is a to-many hop, so a framework GlobalID replacement would be
+    an eligible correlated-EXISTS candidate. With the consumer override honored,
+    the leaf is ``override_generated``/ineligible: the request runs the consumer's
+    ``ModelMultipleChoiceFilter`` on the OUTER queryset (a plain relation JOIN with
+    the framework's fan-out ``distinct``), attaching NO reserved predicate alias
+    and NO ``EXISTS``. The rows are the consumer filter's own membership result,
+    proving its semantics ran rather than being smuggled into the adapter.
+    """
+    import django_filters
+    from django.db import models as django_models
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+
+    class CustomRelationFilter(django_filters.ModelMultipleChoiceFilter):
+        pass
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+            filter_overrides = {
+                django_models.ManyToManyField: {
+                    "filter_class": CustomRelationFilter,
+                    "extra": lambda f: {
+                        "queryset": library_models.Genre._default_manager.all(),
+                    },
+                },
+            }
+
+    BookFilter.get_filters()
+    snapshot = BookFilter._expansion_snapshot()
+    assert "genres" not in snapshot.candidates
+
+    genre_a = library_models.Genre.objects.create(name="A")
+    genre_b = library_models.Genre.objects.create(name="B")
+    branch = library_models.Branch.objects.create(name="Central")
+    shelf = library_models.Shelf.objects.create(code="S", branch=branch)
+    book1 = library_models.Book.objects.create(title="book-1", shelf=shelf)
+    book1.genres.add(genre_a)
+    book2 = library_models.Book.objects.create(title="book-2", shelf=shelf)
+    book2.genres.add(genre_b)
+    book3 = library_models.Book.objects.create(title="book-3", shelf=shelf)
+    book3.genres.add(genre_a, genre_b)
+
+    # The consumer's ModelMultipleChoiceField cleans a raw pk list -- a shape the
+    # discarded GlobalID primitive would have rejected -- proving the consumer
+    # filter runs.
+    result = BookFilter(
+        data={"genres": [str(genre_a.pk)]},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert _reserved_aliases(result) == []
+    assert "EXISTS" not in str(result.query).upper()
+    assert set(result.values_list("title", flat=True)) == {"book-1", "book-3"}
 
 
 def test_filter_for_field_picks_scalar_filter_for_non_relay_target():
@@ -5009,6 +5671,157 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 
 
 # ---------------------------------------------------------------------------
+# Blocker 1 -- own class-body declaration is an UNCONDITIONAL origin transition
+#
+# ``FilterSetMetaclass.__new__`` distinguishes an OWN declaration (a
+# ``django_filters.Filter`` assigned directly in THIS class body) from an
+# INHERITED one. An own declaration transitions to ``origin="declared"`` and
+# sheds any generation token REGARDLESS of a borrowed framework stamp, so a
+# consumer that deepcopies an eligible generated leaf into a new class body can
+# never be re-authorized through the correlated ``EXISTS`` adapter. Inherited
+# declarations keep their already-``declared`` record (the ``if provenance is
+# None`` fallback only backfills one that somehow lacks a record).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
+    """Blocker 1 (red->green): a borrowed eligible generated leaf fails closed.
+
+    django-filter's declarative machinery lets a consumer deepcopy a filter
+    instance obtained from another filterset's ``base_filters`` -- which still
+    carries an ``origin="framework_default"`` stamp AND a live generation token --
+    and assign it as a class attribute. Before the fix the metaclass preserved the
+    framework origin (it stamped ``declared`` only when NO record existed), so the
+    candidate builder minted a fresh token and routed the now-consumer declaration
+    through the correlated adapter with its ``distinct`` suppressed. The
+    declaration-ownership boundary now transitions the own declaration to
+    ``declared`` unconditionally and strips the token, so it earns no routable
+    candidate row and runs on the OUTER queryset.
+    """
+    import copy
+
+    from django_strawberry_framework.filters.sets import _GENERATION_TOKEN_ATTR
+
+    # Obtain an ELIGIBLE generated leaf: a framework ``CharFilter`` whose ORM path
+    # crosses the reverse-FK ``Book.loans`` to-many hop, carrying
+    # ``origin="framework_default"`` and a live generation token.
+    class SourceBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+
+    assert SourceBookFilter._is_generation_capable() is True
+    SourceBookFilter.get_filters()
+    source_leaf = SourceBookFilter.base_filters["loans__note__icontains"]
+    source_record = filter_generation_provenance(source_leaf)
+    assert source_record.origin == "framework_default"
+    assert source_record.generation_capable is True
+    assert getattr(source_leaf, _GENERATION_TOKEN_ATTR, None) is not None
+
+    borrowed = copy.deepcopy(source_leaf)
+    # Precondition the fix must correct: the deepcopy still reads as an eligible
+    # framework leaf -- origin AND token both survive ``copy.deepcopy``.
+    assert filter_generation_provenance(borrowed).origin == "framework_default"
+    assert getattr(borrowed, _GENERATION_TOKEN_ATTR, None) is not None
+
+    class DeclaredReuse(FilterSet):
+        loans__note__icontains = borrowed
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["icontains"]}
+
+    own_decl = DeclaredReuse.declared_filters["loans__note__icontains"]
+    assert own_decl is borrowed
+    # (a) origin transitioned to ``declared`` REGARDLESS of the borrowed stamp.
+    assert filter_generation_provenance(own_decl).origin == "declared"
+    # (b) the borrowed generation token was stripped from the instance __dict__.
+    assert _GENERATION_TOKEN_ATTR not in own_decl.__dict__
+    assert getattr(own_decl, _GENERATION_TOKEN_ATTR, None) is None
+
+    # (c) the candidate snapshot yields NO routable row (declared -> no row).
+    DeclaredReuse.get_filters()
+    snapshot = DeclaredReuse._expansion_snapshot()
+    assert "loans__note__icontains" not in snapshot.candidates
+
+    # (d) at request time the leaf runs on the OUTER queryset: no reserved
+    # predicate / EXISTS alias is attached, and the original outer invocation
+    # (JOIN + framework ``distinct``) yields the matched row.
+    matched_pk, _other_pk = _seed_two_books_one_cardio_loan()
+    result = DeclaredReuse(
+        data={"loans__note__icontains": "cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert _reserved_aliases(result) == []
+    assert list(result.order_by("id").values_list("pk", flat=True)) == [matched_pk]
+
+
+def test_blocker1_inherited_declared_filter_retains_declared_record_unchanged():
+    """Positive control: an INHERITED declared filter keeps its ``declared`` record.
+
+    A subclass that does not re-declare the filter must not restamp or mangle the
+    inherited declaration: it is the SAME instance, and its record (stamped once by
+    the base class's metaclass run) is retained untouched.
+    """
+    import django_filters
+
+    class BaseDeclaredFilter(FilterSet):
+        title_search = django_filters.CharFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    base_decl = BaseDeclaredFilter.declared_filters["title_search"]
+    base_record = filter_generation_provenance(base_decl)
+    assert base_record == FilterGenerationProvenance(origin="declared")
+
+    class SubDeclaredFilter(BaseDeclaredFilter):
+        pass
+
+    inherited = SubDeclaredFilter.declared_filters["title_search"]
+    # Same instance, same record object -- not re-stamped by the subclass run.
+    assert inherited is base_decl
+    assert filter_generation_provenance(inherited) is base_record
+    assert filter_generation_provenance(inherited) == FilterGenerationProvenance(origin="declared")
+
+
+def test_blocker1_inherited_declaration_without_record_is_backfilled():
+    """The ``if provenance is None`` fallback backfills a record-less inheritance.
+
+    Blocker 1 keeps the fallback for an inherited declaration that somehow reaches
+    the subclass metaclass run without a provenance record: it is stamped
+    ``declared`` (never left record-less), while an inherited declaration that DOES
+    carry a record is untouched (covered by the positive control above).
+    """
+    import django_filters
+
+    from django_strawberry_framework.filters.sets import _GENERATION_PROVENANCE_ATTR
+
+    class BaseDeclaredFilter(FilterSet):
+        title_search = django_filters.CharFilter(field_name="title")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    base_decl = BaseDeclaredFilter.declared_filters["title_search"]
+    # Strip the record stamped at base creation to simulate an inherited
+    # declaration that reaches the subclass metaclass run without one.
+    base_decl.__dict__.pop(_GENERATION_PROVENANCE_ATTR, None)
+    assert filter_generation_provenance(base_decl) is None
+
+    class SubDeclaredFilter(BaseDeclaredFilter):
+        pass
+
+    inherited = SubDeclaredFilter.declared_filters["title_search"]
+    assert inherited is base_decl
+    assert filter_generation_provenance(inherited) == FilterGenerationProvenance(origin="declared")
+
+
+# ---------------------------------------------------------------------------
 # Candidate metadata built inside ONE immutable expansion snapshot
 #
 # ``FilterSet.get_filters`` publishes the expanded filters AND a
@@ -5407,6 +6220,124 @@ def _reserved_aliases(queryset):
 
 
 @pytest.mark.django_db
+def test_blocker1_get_filter_predicate_swap_fails_closed_pre_fanned_multiplicity():
+    """Round-4 Blocker 1: a helper-seam mutation (get_filter_predicate) fails closed.
+
+    A generated ``Book.genres`` ``ModelMultipleChoiceFilter`` (Genre is NOT a Relay
+    node here, so the leaf stays the review's exact family, not a GlobalID) is an
+    eligible direct-M2M correlated-``EXISTS`` candidate. A consumer swaps the LIVE
+    per-request instance's ``get_filter_predicate`` -- a normal django-filter
+    extension seam -- WITHOUT touching ``.filter``. Before the fix the fingerprint
+    (and token) still matched, so the leaf was STILL routed through the correlated
+    adapter, which suppresses the framework fan-out ``distinct`` and PRESERVES a
+    pre-fanned incoming row multiplicity. Now the effective-call-graph signature
+    diverges, so the leaf fails closed to the ORIGINAL outer invocation
+    (``ModelMultipleChoiceFilter.filter``, honoring ``distinct``), collapsing the
+    pre-fan; no reserved ``EXISTS`` alias attaches. Asserts token-equality with
+    signature-mismatch, the original outer result, and alias absence.
+    """
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres": ["exact"]}
+
+    BookFilter.get_filters()
+    candidate = BookFilter._expansion_snapshot().candidates["genres"]
+    assert candidate.eligible is True
+    assert candidate.token is not None
+
+    genre = library_models.Genre.objects.create(name="G")
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="book-1")
+    book.genres.add(genre)
+    # TWO loans (distinct patrons -- Loan is unique per book+patron) for the SAME
+    # book, so a join to ``loans`` pre-fans the outer row twice.
+    patron_a = library_models.Patron.objects.create(name="pa", email="a@example.com")
+    patron_b = library_models.Patron.objects.create(name="pb", email="b@example.com")
+    library_models.Loan.objects.create(book=book, patron=patron_a, note="l1")
+    library_models.Loan.objects.create(book=book, patron=patron_b, note="l2")
+
+    def _pre_fanned():
+        # A relation JOIN with NO distinct: the one book appears once per loan.
+        return library_models.Book.objects.filter(loans__isnull=False).order_by("id")
+
+    assert _pre_fanned().count() == 2  # the pre-fan
+
+    def _build_fs():
+        return BookFilter(
+            data={"genres": [str(genre.pk)]},
+            queryset=_pre_fanned(),
+            request=HttpRequest(),
+        )
+
+    # (1) UNTOUCHED live instance -> authorized -> routed through EXISTS, which
+    #     PRESERVES the pre-fanned multiplicity (two rows for the one book).
+    clean_fs = _build_fs()
+    clean_qs = clean_fs.qs
+    assert len(_reserved_aliases(clean_qs)) == 1
+    assert str(clean_qs.query).upper().count("EXISTS") == 1
+    assert list(clean_qs.values_list("pk", flat=True)) == [book.pk, book.pk]
+    clean_leaf = clean_fs.filters["genres"]
+    assert getattr(clean_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(clean_leaf) == candidate.fingerprint
+
+    # (2) SWAP get_filter_predicate on the LIVE instance (same predicate result) ->
+    #     token still equal but the signature diverges -> FAIL CLOSED -> the original
+    #     outer invocation honors the framework distinct and collapses the pre-fan to
+    #     ONE row; NO reserved alias attaches.
+    swapped_fs = _build_fs()
+    swapped_leaf = swapped_fs.filters["genres"]
+    original_predicate = swapped_leaf.get_filter_predicate
+    swapped_leaf.get_filter_predicate = lambda value: original_predicate(value)
+    assert getattr(swapped_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
+    assert _fingerprint_of(swapped_leaf) != candidate.fingerprint
+    swapped_qs = swapped_fs.qs
+    assert _reserved_aliases(swapped_qs) == []
+    assert "EXISTS" not in str(swapped_qs.query).upper()
+    assert list(swapped_qs.values_list("pk", flat=True)) == [book.pk]
+
+
+@pytest.mark.django_db
+def test_capability_gate_init_override_fails_closed():
+    """Seam 4 (round-4 Blocker 1): a consumer ``__init__`` override is not capable.
+
+    ``__init__`` is the standard place a consumer replaces or mutates
+    ``self.filters`` per request. A subclass that defines its own ``__init__`` is
+    NOT generation-capable, so no token is minted for its eligible
+    ``loans__note__icontains`` leaf and the request runs the ORIGINAL outer
+    invocation instead of a correlated ``EXISTS`` -- fail closed regardless of what
+    the ``__init__`` body does.
+    """
+    matched_pk, _other_pk = _seed_two_books_one_cardio_loan()
+
+    class InitOverrideFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    assert InitOverrideFilter._is_generation_capable() is False
+    InitOverrideFilter.get_filters()
+    row = InitOverrideFilter._expansion_snapshot().candidates["loans__note__icontains"]
+    # The path is still eligible, but no capability token was minted.
+    assert row.eligible is True
+    assert row.token is None
+    assert row.fingerprint is None
+
+    result = InitOverrideFilter(
+        data={"loans__note__icontains": "Cardio"},
+        queryset=library_models.Book.objects.order_by("id"),
+        request=HttpRequest(),
+    ).qs
+    assert _reserved_aliases(result) == []
+    # Fails closed to the plain outer invocation, which still returns the match.
+    assert list(result.order_by("id").values_list("pk", flat=True)) == [matched_pk]
+
+
+@pytest.mark.django_db
 def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
     """Seam 1: ``filter_for_field`` super()+mutate -> not capable -> outer, not routed.
 
@@ -5521,13 +6452,14 @@ def test_capability_gate_class_level_filter_defaults_override_fails_closed():
 def test_capability_gate_replaces_instance_at_init_fails_closed():
     """Seam 4 (ReplacesAtInit): a consumer ``__init__`` swaps in a different filter.
 
-    The class itself is capable, so the frozen ``genres__name__icontains`` row
-    carries a token + fingerprint for the generated genre leaf. But
-    ``__init__`` replaces the LIVE ``self.filters`` entry with an unstamped
-    ``title`` filter after the deepcopy. The live instance carries no token and a
-    divergent fingerprint (``field_name='title'`` vs the frozen
-    ``field_name='genres__name'``), so routing fails closed to the outer
-    invocation.
+    ``__init__`` is the standard place a consumer replaces ``self.filters`` per
+    request, so overriding it is itself a generation-capability BREAK (round-4
+    Blocker 1): the class mints NO token or fingerprint for its otherwise-eligible
+    ``genres__name__icontains`` leaf, so routing fails closed at the capability
+    gate -- independent of whatever the ``__init__`` body does to the live
+    instance. The end-to-end result is unchanged from the prior contract (the
+    replaced TITLE filter runs on the outer queryset), but the fail-closed
+    MECHANISM is now the capability gate rather than a live token/fingerprint miss.
     """
     shelf = _library_shelf()
     by_title = library_models.Book.objects.create(shelf=shelf, title="Cardiology Handbook")
@@ -5547,26 +6479,20 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
                 lookup_expr="icontains",
             )
 
-    assert ReplacingFilter._is_generation_capable() is True
+    # The ``__init__`` override alone makes the class non-capable: no token / no
+    # fingerprint is minted, so the leaf can never be routed.
+    assert ReplacingFilter._is_generation_capable() is False
     ReplacingFilter.get_filters()
     frozen = ReplacingFilter._expansion_snapshot().candidates["genres__name__icontains"]
-    assert frozen.token is not None
-    assert frozen.fingerprint.field_name == "genres__name"
+    assert frozen.eligible is True
+    assert frozen.token is None
+    assert frozen.fingerprint is None
 
     instance = ReplacingFilter(
         data={"genres__name__icontains": "cardio"},
         queryset=library_models.Book.objects.order_by("id"),
         request=HttpRequest(),
     )
-    from django_strawberry_framework.filters.sets import (
-        _GENERATION_TOKEN_ATTR,
-        _fingerprint_of,
-    )
-
-    live = instance.filters["genres__name__icontains"]
-    assert getattr(live, _GENERATION_TOKEN_ATTR, None) is None
-    assert _fingerprint_of(live).field_name == "title"
-
     result = instance.qs
     assert _reserved_aliases(result) == []
     # The outer path runs the replaced TITLE filter: matches by title only.

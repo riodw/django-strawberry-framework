@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn
 
 from django.db import models
-from django_filters import filterset
+from django_filters import Filter, filterset
 from django_filters.exceptions import FieldLookupError
 from django_filters.utils import get_model_field, resolve_field, try_dbfield
 from graphql import GraphQLError
@@ -252,17 +252,19 @@ class FilterGenerationProvenance:
     record (``filter_generation_provenance`` returns ``None``), so it is never
     treated as framework-generated.
 
-    Known residual: a consumer that overrides ``filter_for_field``, calls
-    ``super()``, and then MUTATES the returned instance (e.g. flips
-    ``.distinct``) keeps the framework stamp, and this record cannot detect it.
-    Eligibility does NOT reconcile the recorded ``framework_added_distinct`` bit
-    against the instance's live ``.distinct``; it is decided purely from the
-    classified path, the provenance origin, and the absence of a consumer
-    ``method`` (see ``CandidateFilterMetadata.eligible``). That residual is
-    harmless: an eligible leaf is routed through the row-preserving correlated
-    ``EXISTS`` invocation, a pure selection over the incoming queryset whose
-    result does not depend on any ``.distinct`` a consumer mutated onto the
-    stamped instance.
+    This record proves ORIGIN; it is not, on its own, the authorization gate. A
+    consumer that overrides ``filter_for_field``, calls ``super()``, and MUTATES the
+    returned instance keeps the framework stamp, but that no longer authorizes
+    anything: routing additionally requires a capability token (withheld from any
+    class that overrode a generation seam -- ``filter_for_field`` /
+    ``filter_for_lookup`` / ``FILTER_DEFAULTS`` / ``__init__`` -- see
+    ``FilterSet._is_generation_capable``) AND a live semantic signature match (see
+    ``_CandidateFingerprint``, which covers the effective ``.filter`` call graph of
+    the supported generated families). A super()+mutate subclass is non-capable, so
+    its leaf is never routed regardless of what the record says. The exact,
+    finite boundary is documented once on ``_CandidateFingerprint`` and
+    ``FilterSet._is_generation_capable``; this class is not the place a total-safety
+    claim is made.
 
     Fields:
 
@@ -364,19 +366,55 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 
 @dataclass(frozen=True)
 class _CandidateFingerprint:
-    """Immutable semantic identity of a generated filter instance.
+    """Immutable, SINGLE-SOURCE semantic signature of a generated filter instance.
 
     Captured at the capable build from the class-level ``base_filters`` instance
-    and re-derived from the LIVE per-request instance immediately before
-    correlated invocation. A mismatch means the live filter is no longer the
-    instance the frozen candidate row was built for (a consumer replaced or
-    mutated it), so routing must fail closed to the outer invocation.
+    (``get_filters._build``) and re-derived from the LIVE per-request instance
+    immediately before correlated invocation (``FilterSet._apply_flat_leaves``). A
+    mismatch means the live filter is no longer the instance the frozen candidate
+    row was built for -- a consumer replaced or mutated it -- so routing must fail
+    closed to the outer invocation.
 
-    Covers exactly the semantic state that changes what rows the filter matches
-    or how it composes: the generated filter class, the ORM ``field_name`` and
-    ``lookup_expr`` it targets, whether it delegates to a consumer ``method``,
-    and its ``exclude`` / ``distinct`` decisions. The token (a separate slot)
-    proves provenance; this fingerprint proves the semantics did not drift.
+    This signature is the ONE authorization gate for semantic drift; the token (a
+    separate slot) proves provenance, and this fingerprint proves the semantics
+    did not drift. Every piece of state that can change the package-generated
+    predicate lives here so ``_apply_flat_leaves`` never has to scatter per-marker
+    checks (``docs/feedback.md`` Blocker 2). The signature covers:
+
+    - the generated filter CLASS, the ORM ``field_name`` and ``lookup_expr`` it
+      targets, whether it delegates to a consumer ``method``, and its ``exclude``
+      / ``distinct`` decisions (the original core fields);
+    - the EFFECTIVE filter implementation, split into two deepcopy-stable halves
+      (``filter_override`` / ``filter_descriptor``) so both an instance-level
+      ``.filter`` swap and a class-level ``.filter`` monkeypatch fail closed;
+    - the EFFECTIVE dynamic-dispatch call graph ``.filter`` routes through
+      (``get_method`` / ``get_filter_predicate`` / ``is_noop``, each in the same two
+      halves), so a consumer mutating behavior through a normal django-filter helper
+      seam without touching ``.filter`` fails closed too;
+    - the non-pk-``to_field`` pk-qualification decision (``pk_qualified``), which
+      swings the compiled predicate between ``<relation>=<pk>`` and
+      ``<relation>__pk=<pk>``, plus the effective relation target
+      (``to_field_name``, from constructor state);
+    - the django-filter execution knobs generated instances carry that affect how
+      the filter matches (``conjoined`` / ``always_filter`` / ``null_value``).
+
+    This is the FINITE integrity boundary for the supported generated django-filter
+    families: the effective behavior of a package-generated leaf is the (class,
+    path, lookup, method, exclude, distinct) tuple plus the effective ``.filter``
+    call graph and its execution knobs. Post-construction mutation of any of these
+    diverges the signature; a consumer ``FilterSet.__init__`` override -- the other
+    place ``self.filters`` is customized -- is gated separately at build time by
+    ``FilterSet._is_generation_capable`` (no token is minted), so the two together
+    close every documented customization seam. State that is not identity- or
+    value-comparable across ``copy.deepcopy`` (querysets, the built form field) is
+    represented only by its deepcopy-stable constructor state, never by the object.
+
+    Every field is deepcopy-stable: an untampered per-request deepcopy of the
+    frozen class-level instance re-derives an EQUAL signature (so genuine requests
+    are never falsely failed closed), while any post-build mutation or wholesale
+    replacement diverges (so a tampered instance can never reach the correlated
+    ``EXISTS`` adapter). The per-field ``why-deepcopy-stable`` rationale is on
+    ``_fingerprint_of``.
     """
 
     filter_class: type
@@ -387,16 +425,121 @@ class _CandidateFingerprint:
     method: Any
     exclude: bool
     distinct: bool
+    # The EFFECTIVE ``.filter`` implementation, in two halves (both callables / None,
+    # compared by equality only, mirroring the ``method`` idiom). ``filter_override``
+    # is the instance-level ``__dict__`` swap; ``filter_descriptor`` is the concrete
+    # class's unbound ``filter`` function. NEVER the bound method (its ``__self__``
+    # differs on every deepcopy -- see ``_fingerprint_of``). Defaulted so any existing
+    # positional / keyword construction of this frozen dataclass stays valid.
+    filter_override: Any = None
+    filter_descriptor: Any = None
+    # The non-pk-``to_field`` pk-qualification decision (base.py::
+    # ``_GLOBALID_RELATION_PK_ATTR``); a plain bool on the instance.
+    pk_qualified: bool = False
+    # django-filter execution knobs present on generated filter instances that change
+    # how the filter matches; compared by equality (``null_value`` may be non-bool).
+    conjoined: bool = False
+    always_filter: bool = False
+    null_value: Any = None
+    # The EFFECTIVE dynamic-dispatch call graph the generated ``.filter``
+    # implementation routes through on the live instance (round-4 Blocker 1).
+    # Capturing only the top-level ``.filter`` descriptor missed the helpers it
+    # dispatches through: a consumer can mutate a generated filter's behavior via a
+    # normal django-filter extension seam WITHOUT touching ``.filter`` itself. Each
+    # helper is captured in the SAME two deepcopy-stable halves as ``filter_override``
+    # / ``filter_descriptor`` (instance ``__dict__`` swap + concrete-class function),
+    # covering the documented seams for every supported generated family:
+    #   * ``get_method``          -- swings ``filter`` versus ``exclude``;
+    #   * ``get_filter_predicate`` -- the lookup / relation target the predicate builds
+    #     (the ``ModelMultipleChoiceFilter`` pre-fanned-multiplicity vector); and
+    #   * ``is_noop``             -- whether a restrictive leaf is applied at all.
+    get_method_override: Any = None
+    get_method_descriptor: Any = None
+    get_filter_predicate_override: Any = None
+    get_filter_predicate_descriptor: Any = None
+    is_noop_override: Any = None
+    is_noop_descriptor: Any = None
+    # The effective relation target the form field is built from, represented by the
+    # deepcopy-stable CONSTRUCTOR state ``extra["to_field_name"]`` (a str / None), NEVER
+    # the lazily built form field -- querysets and form fields are not identity- or
+    # value-comparable across ``copy.deepcopy`` (a queryset ``==`` even executes), so
+    # only the construction seam that determines ``field.to_field_name`` is signed.
+    to_field_name: Any = None
+
+
+def _effective_callable_pair(filter_instance: Any, name: str) -> tuple[Any, Any]:
+    """Return the (instance-override, class-descriptor) halves of a dispatch helper.
+
+    The ONE deepcopy-stable way to sign an effective django-filter callable
+    (``.filter`` and every helper it dispatches through -- ``get_method`` /
+    ``get_filter_predicate`` / ``is_noop``): the instance-level ``__dict__`` swap
+    (``None`` on a genuine leaf and its untampered ``copy.deepcopy``, since deepcopy
+    copies ``__dict__`` verbatim and never synthesizes a method key) paired with the
+    concrete class's function (the SAME object across every deepcopy, since the class
+    is not copied). Never the bound method -- its ``__self__`` differs per deepcopy
+    and would fail every genuine request closed. Compared by equality only.
+    """
+    return (filter_instance.__dict__.get(name), getattr(type(filter_instance), name, None))
 
 
 def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
     """Return the ``_CandidateFingerprint`` of ``filter_instance`` from its LIVE attrs.
 
-    Reads the instance's current ``field_name`` / ``lookup_expr`` / ``method`` /
-    ``exclude`` / ``distinct`` (and concrete class) so a post-build mutation or
-    wholesale replacement is observable as a fingerprint divergence at the
-    request-time authorization check.
+    Reads the instance's current state so a post-build mutation or wholesale
+    replacement is observable as a fingerprint divergence at the request-time
+    authorization check. Every captured value is deepcopy-stable -- an untampered
+    per-request deepcopy re-derives an EQUAL signature -- because the LIVE
+    per-request instance IS django-filter's ``copy.deepcopy`` of the class-level
+    ``base_filters`` instance, so a value that the deepcopy would alter would
+    falsely fail every genuine request closed:
+
+    - ``field_name`` / ``lookup_expr`` / ``method`` / ``exclude`` / ``distinct`` --
+      plain instance values ``copy.deepcopy`` carries by value.
+    - ``filter_override`` = ``filter_instance.__dict__.get("filter")``: a genuine
+      generated leaf has NO ``"filter"`` instance key (``.filter`` is a class
+      method), so this is ``None`` on the frozen capture AND on every untampered
+      deepcopy (``deepcopy`` copies ``__dict__`` verbatim and never synthesizes the
+      key); an instance whose ``.filter`` was reassigned reads the override
+      callable, so ``None`` (frozen) != override (live) -> mismatch.
+    - ``filter_descriptor`` = ``getattr(type(filter_instance), "filter", None)``:
+      the unbound function on the concrete class. ``copy.deepcopy`` does NOT copy
+      the class, so ``type(deepcopy(x)) is type(x)`` and the descriptor is the SAME
+      function object across every deepcopy (equal); a class-level monkeypatch
+      between build and request swaps the function and mismatches. Captured as the
+      class descriptor, NEVER the bound method ``filter_instance.filter`` -- a bound
+      method compares equal only when ``__func__`` AND ``__self__`` match, and
+      ``__self__`` differs on every deepcopy, which would fail every request closed.
+    - ``pk_qualified`` = ``getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR,
+      False)``: a plain bool ``deepcopy`` carries by value; flipping it on the live
+      instance mismatches (the whole point of Blocker 2).
+    - ``conjoined`` / ``always_filter`` / ``null_value``: read via ``getattr`` with a
+      safe default so absence is UNIFORM across frozen and live. On the
+      ``MultipleChoiceFilter`` family ``conjoined`` / ``null_value`` are ``__init__``
+      instance attrs (deepcopied by value) and ``always_filter`` is a class attr
+      (not deepcopied -- ``getattr`` reads the same class value); a plain ``Filter``
+      (e.g. ``GlobalIDFilter``) carries none, so ``getattr`` returns the default on
+      both. Either way an untampered deepcopy is equal.
+    - ``get_method`` / ``get_filter_predicate`` / ``is_noop`` -- each in the same two
+      halves as ``.filter`` via ``_effective_callable_pair``: the instance
+      ``__dict__`` swap (``None`` on a genuine leaf and its untampered deepcopy) and
+      the concrete-class function (identical object across deepcopy, since the class
+      is not copied). A consumer assigning any of these on the live instance
+      diverges the corresponding override half.
+    - ``to_field_name`` = ``(filter_instance.extra or {}).get("to_field_name")``: a
+      str / None in the ``extra`` dict, deepcopied by value. The built form field is
+      never read (it is not identity/value-stable across deepcopy), so only this
+      construction seam is signed.
     """
+    get_method_override, get_method_descriptor = _effective_callable_pair(
+        filter_instance,
+        "get_method",
+    )
+    predicate_override, predicate_descriptor = _effective_callable_pair(
+        filter_instance,
+        "get_filter_predicate",
+    )
+    is_noop_override, is_noop_descriptor = _effective_callable_pair(filter_instance, "is_noop")
+    filter_override, filter_descriptor = _effective_callable_pair(filter_instance, "filter")
     return _CandidateFingerprint(
         filter_class=type(filter_instance),
         field_name=filter_instance.field_name,
@@ -404,6 +547,19 @@ def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
         method=getattr(filter_instance, "method", None),
         exclude=bool(getattr(filter_instance, "exclude", False)),
         distinct=bool(getattr(filter_instance, "distinct", False)),
+        filter_override=filter_override,
+        filter_descriptor=filter_descriptor,
+        pk_qualified=bool(getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False)),
+        conjoined=bool(getattr(filter_instance, "conjoined", False)),
+        always_filter=bool(getattr(filter_instance, "always_filter", False)),
+        null_value=getattr(filter_instance, "null_value", None),
+        get_method_override=get_method_override,
+        get_method_descriptor=get_method_descriptor,
+        get_filter_predicate_override=predicate_override,
+        get_filter_predicate_descriptor=predicate_descriptor,
+        is_noop_override=is_noop_override,
+        is_noop_descriptor=is_noop_descriptor,
+        to_field_name=(getattr(filter_instance, "extra", None) or {}).get("to_field_name"),
     )
 
 
@@ -611,15 +767,46 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
             new_class.base_filters = filterset.BaseFilterSet.get_filters.__func__(new_class)
 
         # Stamp consumer-declared filter attributes with a ``declared`` provenance
-        # record -- the single best site: ``declared_filters`` is the authoritative
-        # declarative collection, these instances never route through
-        # ``filter_for_field`` (django-filter's ``get_filters`` copies them in
-        # verbatim), and the metaclass runs once per class. NEVER overwrite an
-        # existing record: an inherited declaration was already stamped by its
-        # owning class's metaclass run, and a declared filter must never be
-        # restamped by later machinery.
-        for declaration in new_class.declared_filters.values():
-            if filter_generation_provenance(declaration) is None:
+        # record. ``declared_filters`` is the authoritative declarative collection,
+        # these instances never route through ``filter_for_field`` (django-filter's
+        # ``get_filters`` copies them in verbatim), and the metaclass runs once per
+        # class. The authoritative boundary is declaration OWNERSHIP, not the mere
+        # presence of a provenance record (Blocker 1):
+        #
+        # * An OWN declaration -- a ``django_filters.Filter`` (``RelatedFilter`` is
+        #   a ``Filter`` subclass) assigned directly in THIS class body -- makes
+        #   its filter object consumer-owned REGARDLESS of any provenance or token
+        #   it already carries, so it transitions UNCONDITIONALLY to
+        #   ``origin="declared"`` and its generation token is STRIPPED.
+        #   django-filter's declarative machinery lets a consumer deepcopy/borrow a
+        #   filter instance obtained from another filterset's ``base_filters``
+        #   (which may still carry a framework ``framework_default`` /
+        #   ``package_replacement`` stamp AND a live ``_GENERATION_TOKEN_ATTR``) and
+        #   assign it here; keeping the old stamp would let ``_candidate_metadata_for``
+        #   / ``get_filters._build`` re-authorize a now-consumer declaration through
+        #   the correlated ``EXISTS`` adapter. The token strip mirrors
+        #   ``_expand_related_filter``'s drop on expansion copies.
+        # * An INHERITED declaration was already stamped ``declared`` by its owning
+        #   class's metaclass run and must NOT be restamped; the
+        #   ``if provenance is None`` fallback only backfills an inherited
+        #   declaration that somehow lacks a record.
+        #
+        # ``new_class.declared_filters`` is the merged MRO map (own + inherited);
+        # own-ness is computed from the class body (``class_items``, captured at the
+        # top of ``__new__`` before ``super().__new__`` popped the ``Filter``
+        # attributes out of ``attrs``), never from whether a private attribute
+        # happens to exist.
+        own_declared_names = {
+            attr_name for attr_name, attr_value in class_items if isinstance(attr_value, Filter)
+        }
+        for declaration_name, declaration in new_class.declared_filters.items():
+            if declaration_name in own_declared_names:
+                _stamp_generation_provenance(
+                    declaration,
+                    FilterGenerationProvenance(origin="declared"),
+                )
+                declaration.__dict__.pop(_GENERATION_TOKEN_ATTR, None)
+            elif filter_generation_provenance(declaration) is None:
                 _stamp_generation_provenance(
                     declaration,
                     FilterGenerationProvenance(origin="declared"),
@@ -1063,10 +1250,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``_expand_related_filter``. A leaf generated by a non-capable child
         # then stays fail-closed even when a capable parent expands it.
         generation_capable = cls._is_generation_capable()
+        # The ONE ownership verdict (round-4 Blocker 2), computed once and reused by
+        # the Relay-relation branch below so ownership is never independently
+        # rediscovered after the conversion decision in ``filter_for_lookup``.
+        default_origin = cls._generation_origin_for_field(field, lookup_expr)
         _stamp_generation_provenance(
             default,
             FilterGenerationProvenance(
-                origin=cls._generation_origin_for_field(field, lookup_expr),
+                origin=default_origin,
                 framework_added_distinct=framework_added_distinct,
                 generation_capable=generation_capable,
             ),
@@ -1111,7 +1302,28 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         target_type = cls._resolve_relation_target_type(field, field_name)
         if target_type is None or not implements_relay_node(target_type):
             return default
-        relay_filter_class = cls._relay_filter_class_for_field(field)
+        # Honor a consumer-selected relation override BEFORE any Relay conversion
+        # (round-4 Blocker 2). ``default_origin`` is the shared ownership verdict; a
+        # non-``framework_default`` origin means the consumer selected this filter
+        # class through ``Meta.filter_overrides`` or a shadowed ``FILTER_DEFAULTS``,
+        # so ``filter_for_lookup`` already declined to convert it and ``default`` IS
+        # the consumer's instance (not a GlobalID). Return it UNCHANGED: the consumer
+        # owns the wire shape byte-for-byte and the leaf stays override_generated
+        # (ineligible), never discarded and re-stamped ``package_replacement``.
+        if default_origin != "framework_default":
+            return default
+        # Preserve the lookup-aware class ``filter_for_lookup`` already chose rather
+        # than independently reselecting by cardinality (High 3 root cause).
+        # ``super().filter_for_field`` builds ``default`` from the class OUR
+        # ``filter_for_lookup`` returned for this (field, lookup) pair, and control
+        # only reaches here once ``field`` is confirmed a Relay-node relation, so
+        # ``type(default)`` is already the correct Relay primitive:
+        # ``GlobalIDMultipleChoiceFilter`` for an ``in`` lookup (a forward FK ``in``
+        # is list-shaped over the wire) and the cardinality-selected class
+        # (``GlobalIDFilter`` / ``GlobalIDMultipleChoiceFilter``) for every other
+        # lookup. Re-calling ``_relay_filter_class_for_field`` dropped a forward-FK
+        # ``in`` back to the scalar ``GlobalIDFilter`` and rejected the list.
+        relay_filter_class = type(default)
         relay_replacement = relay_filter_class(
             field_name=default.field_name,
             lookup_expr=default.lookup_expr,
@@ -1162,14 +1374,20 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            an eligible framework leaf).
         2. The selection class is the resolved output field's class -- except for
            ``isnull``, which upstream re-selects against ``models.BooleanField``.
-        3. If a non-empty ``Meta.filter_overrides`` governs that SELECTION class
-           (``try_dbfield`` MRO walk), the leaf is consumer-origin
-           (``override_generated``); otherwise it is ``framework_default``.
+        3. If a non-empty ``Meta.filter_overrides`` OR a shadowed class-level
+           ``FILTER_DEFAULTS`` governs that SELECTION class with a filter class
+           other than the base default (``try_dbfield`` MRO walk on each), the leaf
+           is consumer-origin (``override_generated``); otherwise it is
+           ``framework_default``.
 
-        Resolving on the output field (not the unresolved model field) is what
-        closes Blocker 2: an ``isnull`` leaf whose model field is e.g. a
-        ``TextField`` is selected by a ``BooleanField`` override upstream, and
-        this oracle now agrees.
+        This is the SINGLE ownership oracle both ``filter_for_lookup`` (which
+        decides whether to convert a Relay-node relation to a package GlobalID
+        primitive) and ``filter_for_field`` (which reads the resulting stamp) route
+        through, so a consumer-selected relation override is never independently
+        rediscovered or silently reclassified (round-4 Blocker 2). Resolving on the
+        output field (not the unresolved model field) also handles ``isnull``: a
+        leaf whose model field is e.g. a ``TextField`` is selected by a
+        ``BooleanField`` override upstream, and this oracle agrees.
         """
         try:
             resolved_field, lookup_type = resolve_field(field, lookup_expr or "exact")
@@ -1179,6 +1397,21 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         overrides = getattr(cls._meta, "filter_overrides", None)
         if overrides and try_dbfield(overrides.get, selection_cls):
             return "override_generated"
+        # A class-level ``FILTER_DEFAULTS`` shadow is the OTHER consumer-selection
+        # seam (Blocker 2): a subclass that reassigns ``FILTER_DEFAULTS`` changes
+        # which filter class the default path selects, exactly like
+        # ``Meta.filter_overrides`` but at class scope. ``super().filter_for_lookup``
+        # walks the MERGED ``cls.FILTER_DEFAULTS`` for ``field.__class__``, so a
+        # shadow that maps this selection field to a DIFFERENT filter class than the
+        # unmodified base default is consumer-origin -- and its product must not be
+        # forced back to a package GlobalID primitive. Identity-compared against the
+        # base map so an untouched subclass (inheriting ``FILTER_DEFAULTS`` by
+        # identity) skips the walk entirely.
+        if cls.FILTER_DEFAULTS is not filterset.BaseFilterSet.FILTER_DEFAULTS:
+            shadowed = try_dbfield(dict(cls.FILTER_DEFAULTS).get, selection_cls) or {}
+            base = try_dbfield(filterset.BaseFilterSet.FILTER_DEFAULTS.get, selection_cls) or {}
+            if shadowed.get("filter_class") is not base.get("filter_class"):
+                return "override_generated"
         return "framework_default"
 
     @classmethod
@@ -1205,6 +1438,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           consumer shadowing ``FILTER_DEFAULTS`` changes which filter classes the
           default path selects; an unmodified subclass inherits
           ``BaseFilterSet.FILTER_DEFAULTS`` by identity.
+        * ``__init__`` override -- the standard place a consumer replaces or mutates
+          ``self.filters`` per request (round-4 Blocker 1). A subclass that defines
+          its own ``__init__`` can swap a generated leaf for its own filter object
+          AFTER the per-request deepcopy, which the fingerprint alone cannot always
+          see; gating capability here means no token is minted for such a class, so
+          the applicator fails closed regardless. ``__init__`` is an instance method,
+          so it is compared by object identity directly (an unmodified subclass
+          inherits ``FilterSet.__init__`` by identity; ``FilterSet`` itself does not
+          define one, so this is ``filterset.BaseFilterSet.__init__``).
 
         ``FilterSet`` is referenced by name (not ``super()`` / ``__class__``)
         because this runs after class definition, when the module global is
@@ -1215,6 +1457,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             and getattr(cls.filter_for_lookup, "__func__", None)
             is FilterSet.filter_for_lookup.__func__
             and cls.FILTER_DEFAULTS is filterset.BaseFilterSet.FILTER_DEFAULTS
+            and cls.__init__ is FilterSet.__init__
         )
 
     @classmethod
@@ -1278,6 +1521,27 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
         if target_type is None or not implements_relay_node(target_type):
             return default_class, params
+        # Resolve OWNERSHIP before any Relay transformation (round-4 Blocker 2). A
+        # consumer that selected its OWN relation filter -- via ``Meta.filter_overrides``
+        # or a shadowed class-level ``FILTER_DEFAULTS`` -- owns the wire shape under
+        # the plan's byte-for-byte rule; the framework must NOT silently replace that
+        # selection with a package GlobalID primitive. ``super().filter_for_lookup``
+        # already returned the consumer's class in ``default_class``, so returning it
+        # unchanged both preserves the consumer's filter AND keeps the leaf
+        # consumer-origin (the ``_generation_origin_for_field`` oracle stamps
+        # ``override_generated`` on ``filter_for_field``'s ``default``, so it is
+        # ineligible). Only the proven framework default is converted below.
+        if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
+            return default_class, params
+        if lookup_type == "in":
+            # A relay-relation ``in`` lookup consumes a LIST of GlobalIDs, so it must
+            # keep the multi-choice primitive regardless of relation cardinality -- a
+            # forward, single-valued FK ``in`` is still list-shaped over the wire
+            # (High 3). This mirrors the own-PK ``in`` branch above; a
+            # cardinality-only reselection dropped a forward-FK ``in`` back to the
+            # scalar ``GlobalIDFilter`` and rejected the list at decode time. Relation
+            # cardinality still decides every non-``in`` (exact) shape below.
+            return GlobalIDMultipleChoiceFilter, _strip_model_choice_extras(params)
         return cls._relay_filter_class_for_field(field), _strip_model_choice_extras(params)
 
     @classmethod
@@ -2276,9 +2540,19 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           ``__init__`` that replaced the instance with a different / unstamped
           filter fails here); and
         * the live instance's ``_fingerprint_of`` matching the frozen
-          ``fingerprint`` (a post-build mutation of ``field_name`` /
-          ``lookup_expr`` / ``method`` / ``exclude`` / ``distinct`` -- or of the
-          shared mapping the deepcopy came from -- fails here).
+          ``fingerprint`` -- the SINGLE canonical semantic signature over the FINITE
+          effective-behavior boundary of the supported generated django-filter
+          families (the core ``field_name`` / ``lookup_expr`` / ``method`` /
+          ``exclude`` / ``distinct``, the effective ``.filter`` call graph --
+          ``.filter`` itself plus ``get_method`` / ``get_filter_predicate`` /
+          ``is_noop`` -- the non-pk-``to_field`` pk-qualification marker and
+          ``to_field_name``, and the ``conjoined`` / ``always_filter`` /
+          ``null_value`` knobs; see ``_CandidateFingerprint``), so a post-build
+          mutation through any of those seams, or a wholesale replacement of the live
+          instance (or of the shared mapping the deepcopy came from), fails here. New
+          effective-behavior state is added to ``_fingerprint_of`` (not to a
+          per-marker conditional in this gate); the ``__init__`` seam is closed
+          upstream by the capability token, not here.
 
         Any failure runs the ORIGINAL
         ``self.filters[name].filter(queryset, value)`` byte-for-byte, preserving

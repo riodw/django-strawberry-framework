@@ -770,10 +770,12 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         # filter time (immune to ``_expand_related_filter`` rebasing) for a
         # non-pk-``to_field`` forward relation; every other target passes
         # ``field_name=None``, leaving the predicate byte-identical to the raw
-        # ``{field_name__in: node_ids}`` form. A framework-generated multiple-choice
-        # filter only ever targets a many-side relation (never a single-valued
-        # forward FK), so the flag is present here only when a caller hand-stamps it,
-        # but the ``in`` path honors it for symmetry with ``GlobalIDFilter``.
+        # ``{field_name__in: node_ids}`` form. Framework generation stamps the flag on
+        # this filter for a forward, single-valued FK bound on a non-pk ``to_field``
+        # whose ``in`` lookup is list-shaped (High 3): ``filter_for_field`` selects
+        # ``GlobalIDMultipleChoiceFilter`` for such an ``in`` and then applies the
+        # marker, so the pk-qualified path is honored identically to
+        # ``GlobalIDFilter``'s single-value ``in``.
         marked = getattr(self, _GLOBALID_RELATION_PK_ATTR, False)
         pk_field_name = f"{self.field_name}__pk" if marked else None
         return _apply_lookup_predicate(self, qs, node_ids, field_name=pk_field_name)

@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 14)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 15)
 
 ## Identity and completion ownership
 
@@ -63,7 +63,8 @@ Python 3.10 + `Django==5.2.0` acceptance floor. Rev 8 enacts the first
 round-1 review ([`feedback.md`][feedback]): live capability-token
 authorization for routing a leaf through the correlated adapter (only a
 LIVE per-request token + fingerprint match, never a frozen candidate row,
-grants routing), resolved-field origin captured at generation time,
+grants routing — **retired in Rev 15**, which moves the whole verdict to build
+time), resolved-field origin captured at generation time,
 GlobalID relation filtering pk-qualified against a `to_field` (FK-to-non-pk)
 target, the tests-local `to_field` / composite-pk fixture models added for
 those acceptance rows, the **test-scoped `FAKESHOP_TEST_LOAN_CONNECTION`**
@@ -132,11 +133,12 @@ replaces the round-7 MRO walk with **exact-class match** plus structurally-valid
 recognition of django-filter's genuine dynamic `ConcreteInFilter` / `ConcreteRangeFilter`
 (`django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`), so an unaudited
 SUBCLASS of a registered base now correctly resolves to no profile and fails closed — the
-claim the round-7 MRO walk overstated (Blocker 2). Each `_FilterFamilyProfile` now owns
+claim the round-7 MRO walk overstated (Blocker 2). Each `_FilterFamilyProfile` then owned
 executable `_SemanticExtractor` extractors whose emitted names ARE its (computed)
-`relevant_reads`, and `_fingerprint_of` builds the fingerprint by running their
+`relevant_reads`, and `_fingerprint_of` built the fingerprint by running their
 de-duplicated union (`_ALL_SEMANTIC_EXTRACTORS`), making the semantic audit executable
-rather than declared (Medium 4; further simplified in Rev 14). This plan,
+rather than declared (Medium 4; simplified in Rev 14 and **retired entirely in Rev 15**,
+which removes the fingerprint). This plan,
 [spec-027][spec-027-filters]'s test-count wording, and the live-test README are reconciled to
 that final boundary (Medium 5).
 
@@ -151,18 +153,73 @@ where a DUNDER-named state/behavior member (`__evil_state__`, an overridden `__g
 "startswith/endswith `__`" test had exempted; and a drift-guard test pins
 `_PUBLIC_PACKAGE_FILTER_DEFAULTS` to the installed django-filter's
 `FILTER_FOR_DBFIELD_DEFAULTS`, so a future release that changes the table fails loudly instead
-of generating from a stale mirror. The scope simplification collapses Rev 13's per-family
-extractor tuples: `_FilterFamilyProfile` is now a bare family IDENTITY (no `extractors` field,
-no computed `relevant_reads`), and the fingerprint schema is ONE canonical
-`django_strawberry_framework/filters/sets.py::_ALL_SEMANTIC_EXTRACTORS` tuple that
-`_fingerprint_of` runs for EVERY family. This is behavior-preserving at the trust boundary —
-the fingerprint still signs the conservative whole-schema union for every family, never a
-per-family narrowing (which could go fail-open if a future audit omitted a runtime read) —
-while removing machinery that was never a runtime gate (`_fingerprint_of` always signed the
-union, not per-profile tuples). The per-family read AUDIT that each signed field actually
-gates routing lives where it belongs: the behavioral `test_signature_matrix_*` suite, which
-mutates every signed seam and proves signature divergence + fail-closed routing, rather than a
-duplicated production read table.
+of generating from a stale mirror. The scope simplification collapsed Rev 13's per-family
+extractor tuples: `_FilterFamilyProfile` became a bare family IDENTITY (no `extractors`
+field, no computed `relevant_reads`), and the fingerprint schema became ONE canonical
+`_ALL_SEMANTIC_EXTRACTORS` tuple that `_fingerprint_of` ran for EVERY family — the
+conservative whole-schema union, never a per-family narrowing (which could go fail-open if a
+future audit omitted a runtime read).
+
+**Rev 15 supersedes the fingerprint entirely** (see below): the profile survives as the
+family-identity half of the eligibility check, but the fingerprint, its extractor schema,
+and the behavioral `test_signature_matrix_*` suite that audited it are all removed, because
+the only thing they detected — post-build mutation — is out of contract.
+
+Rev 15 enacts the seventh adversarial review ([`feedback.md`][feedback]) and the
+maintainer's accompanying **contract decision**, which NARROWS this feature's scope rather
+than extending its machinery. The review proved the request-time integrity gate answered the
+wrong question: it detected drift *after* the build-time capture, but a consumer who mutates
+a registered django-filter class *before* the FilterSet snapshot is built has that mutation
+captured on BOTH sides, so it was authorized and routed (reproduced end-to-end: an
+ordering-only `CharFilter.filter` monkeypatch rewritten into `EXISTS`, where the ordering is
+discarded). The maintainer's resolution is explicitly NOT to vendor or reimplement
+django-filter behavior, NOT to forbid custom filters, and NOT to add a consumer
+"safe-for-`EXISTS`" registry. Instead:
+
+- **The optimizer's contract is stated positively and narrowly.** The row-preserving
+  rewrite applies ONLY to untouched, framework-generated filters from an explicitly
+  AUDITED django-filter release range. Consumer-declared filters, custom subclasses,
+  `method=` filters, `Meta.filter_overrides`, shadowed `FILTER_DEFAULTS`, overridden
+  generation hooks, and filters replaced or mutated in `__init__` remain FULLY SUPPORTED
+  and execute through django-filter's original outer-query path, unchanged. They simply do
+  not receive the optimization.
+- **Routing is a BUILD-TIME verdict, frozen once.** The capability token and the semantic
+  fingerprint are RETIRED, replaced by a single frozen boolean
+  `django_strawberry_framework/filters/sets.py::CandidateFilterMetadata.routable` =
+  `eligible AND` owning-class-capable `AND provenance.generation_capable AND`
+  audited-release. `FilterSet._apply_flat_leaves` consults only that bit. Every supported
+  customization seam is refused at build time, which is where each was already detectable.
+- **Process-wide monkeypatching of django-filter's own classes is UNSUPPORTED.** Code able
+  to replace `CharFilter.filter` can equally replace this package's own methods, so no
+  in-process signature can constitute a trust boundary against hostile runtime mutation.
+  The framework protects DOCUMENTED extension points; it does not attempt to defend against
+  arbitrary Python runtime modification. Machinery whose sole purpose was detecting such
+  mutation was therefore removed as complexity without a defensible guarantee
+  (`_CandidateFingerprint`, `_fingerprint_of`, `_ALL_SEMANTIC_EXTRACTORS`,
+  `_SemanticExtractor`, the `_effective_*` read helpers, and the whole
+  `_GENERATION_TOKEN_ATTR` apparatus — a net reduction of roughly 360 production lines and
+  870 test lines).
+- **Dependency compatibility and optimizer eligibility are separated (High 2).**
+  `pyproject.toml` keeps `django-filter>=25.2` UNBOUNDED so consumer applications never hit
+  a resolution conflict; a package-wide `<26` bound is unnecessary for this feature. What is
+  bounded is OPTIMIZER eligibility:
+  `django_strawberry_framework/filters/sets.py::_AUDITED_DJANGO_FILTER_RANGE` (currently
+  `[25.2, 27)` — the 25.x and 26.x families the suite actually exercises, at CI's 25.2 and
+  the compatibility floor's 26.1), evaluated ONCE at import by
+  `django_strawberry_framework/filters/sets.py::_release_is_audited` and read per FilterSet
+  BUILD, never per query. On an unaudited release every leaf becomes non-routable and
+  filtering falls back wholesale to upstream behavior with IDENTICAL results — only the
+  optimization is unavailable. Version parsing fails CLOSED (an unparseable version is not
+  audited). Widening the range is an AUDIT, not a version bump: the SQL-shape and
+  semantic-parity suite must pass against the new release first, and a CI tripwire test
+  fails when the lock moves outside the audited range.
+
+Two review findings **dissolved** under this architecture rather than being fixed: Medium 3
+(make behavioral/equivalence coverage of the fingerprint schema executable) and Medium 4
+(the "known-family class swap" fixture exercised an unknown family) were both artifacts of
+the fingerprint, which no longer exists — there is no signed schema to cover and no
+live-swap defense to label. Medium 5's documentation reconciliation is enacted here and in
+the glossary.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -603,34 +660,33 @@ framework-stamped record — fail closed by construction.
 The candidate metadata row (built only for proven generated candidates)
 carries: the final classified path rooted at the owning
 `FilterSet._meta.model` (Slice A), the provenance record (origin +
-framework-added-`distinct` bit), the capability token and the canonical
-semantic signature (`django_strawberry_framework/filters/sets.py::_CandidateFingerprint`;
-see the authorization state machine below), and the inner-invocation
-eligibility bit. Eligible = framework-generated leaf (direct or expanded, per the
-provenance record), no consumer `method`, no consumer-origin `distinct`,
-path crosses a many-side hop. Eligibility is never inferred from a class
-name or from `method is None`. Ineligible leaves keep today's behavior
-byte-for-byte — the failure mode is a missed optimization, never a
-changed result set.
+framework-added-`distinct` bit), the leaf-intrinsic `eligible` bit, and the frozen
+`routable` verdict (see the authorization state machine below). Eligible =
+framework-generated leaf (direct or expanded, per the provenance record), no consumer
+`method`, an AUDITED supported family, and a path that crosses a many-side hop.
+Eligibility is never inferred from a class name or from `method is None`. Ineligible
+and non-routable leaves keep today's behavior byte-for-byte — the failure mode is a
+missed optimization, never a changed result set.
 
-**The authorization state machine (normative — Blockers 1 and 2).** Frozen
-provenance alone does **not** grant eligibility. Correcting Rev 8's simpler
-"frozen provenance is the gate" mechanics, a generated leaf is routed
-through the correlated adapter only when every stage below holds; any
-missing or mismatched stage falls back to the original outer invocation:
+**The authorization state machine (normative).** Frozen provenance alone does **not**
+grant routability. A generated leaf is routed through the correlated adapter only when
+every stage below holds; any missing stage falls back to the original outer invocation.
+The decision is made ONCE, at build time, and frozen — there is no request-time
+re-verification (Rev 15):
 
 ```text
 generation site
-    -> construction provenance
+    -> construction provenance (origin + generating class's capability)
 declaration/expansion ownership boundary
     -> origin transition
 atomic snapshot build
-    -> path plan + canonical semantic signature + capability
+    -> path plan + eligibility + owning-class capability + audited release
+    -> frozen `routable` verdict
 per-request deepcopy
-    -> live signature verification
-match
+    -> read the frozen verdict
+routable
     -> correlated invocation
-missing/mismatch
+not routable / no snapshot row
     -> original outer invocation
 ```
 
@@ -639,15 +695,14 @@ missing/mismatch
   authorization boundary.
   `django_strawberry_framework/filters/sets.py::FilterSetMetaclass.__new__`
   transitions **every own class-body declaration** to `origin="declared"`
-  unconditionally and strips any generation token the assigned object
-  carried, so a `Filter` borrowed or deepcopied from another FilterSet
+  unconditionally, so a `Filter` borrowed or deepcopied from another FilterSet
   cannot smuggle a stale `framework_default` / `package_replacement` stamp
-  (and its live token) into a consumer-owned declaration. Only **inherited**
+  into a consumer-owned declaration. Only **inherited**
   declarations keep the provenance record their owning class already stamped
   (the `provenance is None` fallback merely backfills an inherited record
   that is somehow absent). Own vs inherited is computed from the class body
   captured before `super().__new__` empties `attrs`, never from whether a
-  token happens to exist.
+  private attribute happens to exist.
 - **Relay-conversion ownership boundary (round-4 Blocker 2).** Filter
   ownership is resolved **once, before any Relay transformation**, through the
   single origin oracle
@@ -684,8 +739,8 @@ missing/mismatch
   derives from the package's own table and is compared by value, it is
   **import-order-immune**: a consumer mutating `BaseFilterSet.FILTER_DEFAULTS` before OR
   after package import cannot taint it, closing at its source the round-7 defect of
-  capturing a consumer's pre-import mutation as trusted package policy and minting a token
-  for it.
+  capturing a consumer's pre-import mutation as trusted package policy and treating it as
+  routable.
   Merge order is load-bearing: a more-derived `FILTER_DEFAULTS` default shadows a
   less-derived override (e.g. a `OneToOneField` selection keeps the base default even
   when `filter_overrides` supplies a `ForeignKey` entry), so an earlier revision that
@@ -733,85 +788,64 @@ missing/mismatch
   `FieldError`. A consumer-selected relation override (`Meta.filter_overrides` / shadowed
   `FILTER_DEFAULTS`, resolved above) is exempt: its class may intentionally implement a
   nonstandard lookup, so it is returned unchanged and never subject to this policy.
-- **Token vs signature — provenance vs semantics (Blocker 2).** Two
-  independent slots gate routing. The capability **token** proves
-  *provenance*: the live instance descends from a framework generation site
-  through an unbroken package-owned chain, and the owning class was
-  generation-capable at build time (an override of `filter_for_field` /
-  `filter_for_lookup` / `FILTER_DEFAULTS` / `__init__` leaves the token `None` —
-  `__init__` is the standard place a consumer replaces `self.filters` per request,
-  round-4 Blocker 1). The canonical **semantic signature**
-  (`django_strawberry_framework/filters/sets.py::_CandidateFingerprint`,
-  derived by `_fingerprint_of`) proves *semantics did not drift* over a **finite,
-  enumerated** boundary — the effective behavior of the supported generated
-  django-filter families, no more and no less. That supported-family boundary is
-  itself **executable, not prose**:
-  `django_strawberry_framework/filters/sets.py::_FILTER_FAMILY_REGISTRY` — a frozen
-  `type -> _FilterFamilyProfile` map — is the SINGLE executable source of
-  truth for which generated families are supported. `_family_profile_for` matches it by
-  **exact class first** (`_FILTER_FAMILY_REGISTRY[type(instance)]`, no MRO walk); with no
-  exact key it falls back to
-  `django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`, which
-  structurally recognizes ONLY django-filter's genuine empty-body dynamic
-  `ConcreteInFilter` / `ConcreteRangeFilter` — exactly `(BaseInFilter | BaseRangeFilter,
-  <an exact-registered scalar family>)` bases and an own attribute-NAME set identical to a
-  `pass`-body reference (`_EMPTY_BODY_DYNAMIC_CSV_ATTRS`), so a DUNDER-named state/behavior
-  member fails closed too (Rev 14) — and returns `None` otherwise. The matched profile is signed
-  into the fingerprint as its `family` slot. An unknown or ambiguous family — including an
-  unaudited SUBCLASS of a registered base, which the retired MRO walk wrongly accepted
-  through its most-derived registered ancestor (feedback Blocker 2) — resolves to
-  no profile (`_family_profile_for(...) is None`), which makes the leaf ineligible AND
-  diverges its `family` signature from any audited candidate, so an unaudited family
-  fails closed and can never reach the correlated adapter; upgrading django-filter
-  therefore cannot add a routable default class merely through inheritance. The remaining signed members:
-  the effective `.filter` **call graph** (`.filter` itself plus the helpers it dispatches
-  through —
-  `get_method`, `get_filter_predicate`, `is_noop` — each in an instance-override
-  and class-descriptor half), the non-pk-`to_field` pk-qualification marker and the
-  **effective** `to_field_name` — the value the model-choice predicate reads off the
-  built form field at execution, not the constructor copy (round-5 Blocker 2; the
-  two diverge when a consumer mutates the built field post-validation, and the
-  runtime honors the built field) — the core fields (`field_name`, `lookup_expr`,
-  `method`, `exclude`, `distinct`), and the django-filter execution knobs that change
-  the compiled predicate (`conjoined`, `always_filter`, `null_value`). State that is
-  not identity/value-stable across `copy.deepcopy` (querysets, the built form field)
-  is represented only by a deepcopy-stable primitive: the effective `to_field_name`
-  is signed as the built field's `str` / `None`, captured on a **disposable
-  deepcopy** at build time (so forcing the lazy form-field build never mutates the
-  shared class-level leaf) and read from the live built field at request time. Token
-  and signature are frozen together into the atomic snapshot; a matching token alone
-  is explicitly insufficient. This finite boundary is the single canonical inventory
-  — `_FILTER_FAMILY_REGISTRY` enumerates the supported families executably and
-  `_CandidateFingerprint` / `_fingerprint_of` carry the per-instance signature; the
-  glossary and this plan summarize them. The signature schema is itself executable and
-  lives in ONE place (feedback Medium 4, simplified in Rev 14): a single canonical
-  `_ALL_SEMANTIC_EXTRACTORS` tuple of named `_SemanticExtractor` functions that
-  `_fingerprint_of` runs for EVERY recognized family — a `_FilterFamilyProfile` is now a
-  bare family identity, not an extractor owner. The schema test pins the extractor names to
-  EXACTLY the `_CandidateFingerprint` semantic fields (and requires them unique), so a
-  signed field with no extractor — or vice versa — fails; the fingerprint deliberately
-  signs the whole canonical union for every family (fail-safe; per-family narrowing could
-  go fail-open). Every enumerated member has a fail-closed acceptance row in the
-  parameterized signature matrix (`tests/filters/test_sets.py`, round-5 High 3) — the
-  behavioral per-seam audit that each signed field actually gates routing. An
-  audit of the remaining effective reads (documented on `_fingerprint_of`) confirms
-  the non-signed helper reads — `is_noop`'s `required` / choices and the GlobalID
-  filters' owner-decode read — are not result-set vectors for a *routed* leaf.
-- **Live signature verification, fail closed.** Immediately before
-  correlated invocation,
-  `django_strawberry_framework/filters/sets.py::FilterSet._apply_flat_leaves`
-  recomputes the signature from the **live per-request deepcopy** and
-  compares it — together with the live token — against the frozen snapshot.
-  Every captured field is deepcopy-stable, so an untampered request
-  re-derives an equal signature and is never falsely rejected. A match
-  routes the leaf through one correlated `EXISTS`; a mismatch on any covered
-  seam — a flipped pk-qualification marker, a replaced `.filter` or a swapped
-  `get_method` / `get_filter_predicate` / `is_noop`, a mutated knob, an
-  unstamped or divergent token, or an absent snapshot row — fails closed and
-  runs the original `self.filters[name].filter(queryset, value)`
-  byte-for-byte. Fail-closed within the enumerated boundary is total: the failure
-  mode is a missed optimization, never a changed result set and never a
-  finalization error for a working declared filter.
+- **The frozen `routable` verdict — what makes a leaf optimizable (Rev 15).** ONE
+  boolean, computed at build time and stored on
+  `django_strawberry_framework/filters/sets.py::CandidateFilterMetadata.routable`, is the
+  whole gate. It is the conjunction of four independently-verified facts:
+  - **Provenance.** The leaf carries a framework-generated origin
+    (`framework_default` / `package_replacement`) stamped at its construction site, so a
+    consumer-returned or declared object is excluded by construction.
+  - **Capability of the owning AND generating class.**
+    `django_strawberry_framework/filters/sets.py::FilterSet._is_generation_capable`
+    proves the class building the snapshot overrode none of `filter_for_field` /
+    `filter_for_lookup` / `FILTER_DEFAULTS` / `__init__`, and
+    `FilterGenerationProvenance.generation_capable` — captured at the generation site and
+    inherited through `_expand_related_filter` — proves the same of the class that
+    actually generated the instance. The second conjunct matters for a leaf a capable
+    PARENT expanded out of a non-capable `RelatedFilter` CHILD. `__init__` is the
+    standard place a consumer replaces `self.filters` per request (round-4 Blocker 1);
+    since routing is decided at build time, that gate is now the ONLY thing closing this
+    seam, which is why it must not be weakened.
+  - **An AUDITED supported family.**
+    `django_strawberry_framework/filters/sets.py::_FILTER_FAMILY_REGISTRY` — a frozen
+    `type -> _FilterFamilyProfile` map — is the SINGLE executable source of truth for
+    which generated families this package has reviewed against the correlated rewrite.
+    `_family_profile_for` matches it by **exact class first**
+    (`_FILTER_FAMILY_REGISTRY[type(instance)]`, no MRO walk); with no exact key it falls
+    back to `django_strawberry_framework/filters/sets.py::_dynamic_csv_profile_for`, which
+    structurally recognizes ONLY django-filter's genuine empty-body dynamic
+    `ConcreteInFilter` / `ConcreteRangeFilter` — exactly `(BaseInFilter | BaseRangeFilter,
+    <an exact-registered scalar family>)` bases and an own attribute-NAME set identical to
+    a `pass`-body reference (`_EMPTY_BODY_DYNAMIC_CSV_ATTRS`), so a DUNDER-named
+    state/behavior member fails closed too (Rev 14) — and returns `None` otherwise. An
+    unknown family, INCLUDING an unaudited SUBCLASS of a registered base (which the
+    retired MRO walk wrongly accepted through its ancestor), resolves to no profile and
+    is ineligible. A consumer subclass is a supported customization whose behavior this
+    package has not reviewed; it runs on the outer queryset. Upgrading django-filter
+    therefore cannot add a routable default class merely through inheritance.
+  - **An AUDITED django-filter release (High 2).**
+    `django_strawberry_framework/filters/sets.py::_DJANGO_FILTER_OPTIMIZER_AUDITED`, from
+    `_release_is_audited` against `_AUDITED_DJANGO_FILTER_RANGE`. Outside the range NO
+    leaf is routable, so an unreviewed upstream release can never become eligible
+    silently. See the Rev 15 note above for why this gates the optimization rather than
+    the dependency.
+
+  Plus the leaf-intrinsic shape: the ORM path crosses a many-side hop and the leaf
+  carries no consumer `method` (a `method=` filter delegates to consumer code whose
+  semantics the adapter must never smuggle into a subquery).
+- **No request-time re-verification, by design (Rev 15).** `_apply_flat_leaves` reads the
+  frozen bit and nothing else. Every SUPPORTED customization seam is already detectable at
+  build time and is refused there, so a request-time signature would add no coverage for
+  any in-contract case. The only thing it could detect is post-build mutation of a live
+  filter instance or of django-filter's own classes — and that is explicitly OUT OF
+  CONTRACT: code able to replace `CharFilter.filter` can equally replace this package's
+  methods, so such a check is not a trust boundary, merely the appearance of one. Removing
+  it deleted the token, the fingerprint, and their schema without weakening any documented
+  guarantee. Fail-closed remains total for everything the contract covers: a non-routable
+  leaf, or a name with no snapshot row, runs the original
+  `self.filters[name].filter(queryset, value)` byte-for-byte, so the failure mode is a
+  missed optimization, never a changed result set and never a finalization error for a
+  working declared filter.
 
 **Build-site mechanics** (Fable review M1, retained):
 

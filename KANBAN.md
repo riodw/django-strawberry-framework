@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-22
+Last refreshed: 2026-07-25
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.14` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.15` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -81,11 +81,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**71.4% complete** toward `1.0.0` - 45 of 63 cards done (72.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**67.2% complete** toward `1.0.0` - 45 of 67 cards done (67.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 45/48 (93.8%) | 92.6% |
+| Alpha (pre-0.1.0) | 45/52 (86.5%) | 84.7% |
 | Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
@@ -95,6 +95,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
+| `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md) |
 | `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-064-visibility_boundary-0_0_14.md](docs/spec-064-visibility_boundary-0_0_14.md) |
 | `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
@@ -143,11 +144,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
-
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package"></a>
 ### [TODO-ALPHA-045-0.0.15 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
@@ -202,6 +199,73 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
+
+<a id="transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation"></a>
+### [WIP-ALPHA-065-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
+
+- Priority: Critical
+- Status: WIP
+- Relative size: L
+- Spec: [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md)
+
+#### Planning note
+
+Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
+
+#### Scope
+
+- S1: redesign the router protocol split (required Django-ASGI HTTP ownership; remove direct Channels HTTP; exact WebSocket routing via websocket_url_pattern).
+- S2: package-owned cumulative request-body cap on the GraphQL HTTP path + documented proxy/server cap.
+- S9: strict UTF-8 wire decode before json.loads; translate UnicodeDecodeError to the controlled 400; invert UTF-16/32/BOM success tests to 400; decide and document the UTF-8-BOM policy; reconcile _cross_web_patches._patched_body against the new HTTP path.
+- S11: WebSocket consumer-class/factory injection seam + per-operation session revalidation hook (reload the actor before execution; close/reject on an invalid session; optional explicit bounded cache window).
+- S12 (transport slice only): migration note (old vs new asgi.py + the required urlpatterns entry) + transport deployment guidance (CSRF, cache/Vary, security headers, IDE/GET controls). The broader S12 deployment-contract docs belong to the later cards' doc slices.
+
+#### Definition of done
+
+- [ ] Router HTTP branch no longer instantiates GraphQLHTTPConsumer; django_application is required and omitting it fails at construction; websocket_url_pattern exact-matches; WebSocket Origin/auth wrappers + consumer injection seam in place.
+- [ ] Cumulative request-body cap enforced pre-parse on GraphQL HTTP + documented proxy/server cap.
+- [ ] Wire JSON is UTF-8-only; UTF-16/32 success tests inverted to 400.
+- [ ] WebSocket per-operation session revalidation via the injection seam.
+- [ ] Migration note + transport deployment docs authored; spec-041 amended.
+- [ ] Full suite green at 100% coverage (maintainer/CI gate); ruff + trailing-comma clean; manage.py check + makemigrations --check clean.
+
+#### Architectural posture
+
+- RECOMMENDED DIRECTION (maintainer-pinned; the spec turns each bullet into a numbered Decision with alternatives-rejected rationale). Clean protocol split as an explicit alpha breaking change: the 0.0.14 byte-compatible upstream constructor contract is intentionally broken. The documented API freeze begins at 1.0.0, so correcting a confirmed security-boundary error during alpha is preferable to preserving an unsafe migration convenience.
+- HTTP dispatches directly to a REQUIRED consumer-supplied Django ASGI application. The router must NOT instantiate or route to GraphQLHTTPConsumer. The GraphQL HTTP endpoint is declared in the consumer's Django URLconf using the normal Strawberry Django view, so it inherits the full MIDDLEWARE stack.
+- Require django_application rather than deriving it internally; the consumer calls get_asgi_application() at the normal point in asgi.py (avoids Django init-order ambiguity). Omitting django_application must fail clearly at construction -- do not retain an unsafe compatibility fallback.
+- WebSocket remains the package-owned Channels composition: exact GraphQL route -> AllowedHostsOriginValidator -> AuthMiddlewareStack -> Strawberry's WebSocket consumer. Rename/narrow url_pattern to a WebSocket-only websocket_url_pattern with exact matching as the secure default; Django URLconf independently owns HTTP path matching.
+- Add a WebSocket consumer-class/factory injection seam for S11 without implementing a second GraphQL protocol engine; the injected class must still sit inside the package's Host/Origin and authentication wrappers. Per-operation session revalidation is a WebSocket concern layered through that seam and must not delay or complicate the S1 HTTP correction.
+- S1 does not dispose of S2: still define and test an explicit cumulative request-body limit (count received bytes, do not trust Content-Length; reject at the limit before JSON parse / schema execution) and document the reverse-proxy / ASGI-server limit. Routing through Django restores the authoritative middleware lifecycle but must not be represented as automatically providing every transport resource bound.
+
+#### Why it matters
+
+- S1 (Blocker): routers.py wires the HTTP branch as AuthMiddlewareStack(URLRouter([re_path(url_pattern, GraphQLHTTPConsumer.as_asgi(...))])). That turns the session cookie into an authenticated actor but bypasses Django's MIDDLEWARE entirely -- SecurityMiddleware, CsrfViewMiddleware, CommonMiddleware / ALLOWED_HOSTS, and all consumer tenant/rate-limit/audit/cache/security-header middleware. Confirmed by source and a probe (POST Host: evil.example -> 200).
+- S1 route overmatch: url_pattern default '^graphql' is a prefix regex, so /graphql-admin and /graphqlanything are claimed by the GraphQL consumer before the Django fallback -- a path the deployment believes Django owns.
+- S2 (Blocker): the routed AsyncHttpConsumer buffers the whole body via b''.join(self.body) with no application cap; DATA_UPLOAD_MAX_MEMORY_SIZE is never consulted because Django's ASGI handler is bypassed. Unauthenticated memory amplification before JSON parsing or schema execution.
+- S9 (Medium): _cross_web_patches._patched_body returns raw bytes so json.loads auto-detects UTF-16/32; RFC 8259 requires UTF-8 on the wire. Accepting other encodings creates a proxy/WAF/access-log parser differential.
+- S11 (Medium): the WebSocket scope user is captured at handshake and never revalidated; a logout/password-reset/disable/revocation from another request or admin action is not reflected on the established connection.
+- S1 and S2 block moving off the current 'not production' alpha posture; a framework's secure architecture cannot depend on every consumer independently discovering these gaps.
+
+#### Test plan
+
+- Django middleware / configured security headers execute on the GraphQL HTTP route; a project middleware sentinel runs; a hostile Host is rejected on HTTP (not only WebSocket).
+- Cookie-authenticated mutations cover missing, wrong, and correct CSRF tokens (Client(enforce_csrf_checks=True)).
+- An authenticated GET response is non-cacheable or varies on Cookie.
+- /graphql and /graphql/ match per an explicit policy while /graphql-admin and /graphqlanything reach Django or 404.
+- Body cap: no Content-Length; declared below/at/above; declared-small-but-streamed-over; multi-fragment crossing; JSON / malformed JSON / multipart; an early 413 proving neither JSON parse nor schema execution ran; parity across the py3.10 / Django 5.2.0 floor and the current stack.
+- S9: UTF-16/32 (BOM and BOM-less) -> 400; ordinary UTF-8 preserved; malformed UTF-8 -> 400; the chosen UTF-8-BOM direction.
+- S11: establish a socket, revoke/flush/disable via a separate request, prove the next operation is denied without reconnecting; existing WebSocket Origin/auth direction tests remain intact.
+
+#### Open question
+
+- Where the app-level body cap lives on the new Django-view HTTP path (a package GraphQL-view subclass vs. documented DATA_UPLOAD_MAX_MEMORY_SIZE + a thin wrapper): the spec decides.
+- Whether the package ships a thin GraphQL HTTP view wrapper or points consumers directly at strawberry-django's GraphQLView: the spec decides and documents the exact urlpatterns entry.
+- UTF-8 BOM: accept-and-strip vs reject (RFC 8259 permits either): the spec picks one and documents it.
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="boundary_hardening_and_system_wide_dry_squeeze"></a>
 ### [TODO-ALPHA-046-0.0.16 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
@@ -315,6 +379,174 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts
+
+<a id="execution_resource_policy_central_budget_object_value_cardinality_walker"></a>
+### [TODO-ALPHA-066-0.0.16 - Execution resource policy: central budget object + value-cardinality walker](KANBAN.html#execution_resource_policy_central_budget_object_value_cardinality_walker)
+
+- Priority: High
+- Status: To Do
+- Relative size: L
+
+#### Planning note
+
+Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
+
+#### Dependencies
+
+- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- New immutable resource-policy object + schema-construction normalization + context threading.
+- Value-budget walker over coerced inputs (iterative, cycle-safe, py3.10).
+- types/base.py DEFAULT_RELATION_SHAPE 'both' -> 'connection'; DjangoListField bound.
+
+#### Definition of done
+
+- [ ] Immutable resource policy consumed by schema/fields/optimizer/transports; per-field narrowing only.
+- [ ] Value-budget walker rejects before ORM access; DEFAULT_RELATION_SHAPE default is 'connection'; raw lists bounded.
+- [ ] Full suite green at 100% coverage; hygiene clean; docs fold-in.
+
+#### Architectural posture
+
+- One immutable resource-policy object consumed by DjangoSchema, collection fields, the optimizer, and the transports: max document tokens, max selection/alias count after fragment expansion, max depth, max page size, max raw-list rows, max aggregate collection cost, optional execution deadline. Normalize and validate once at schema construction; thread the immutable result through request context (mirror the optimizer's DST_OPTIMIZER_* context seam). Per-field overrides may only narrow unless an explicit trusted-schema declaration widens.
+- Extend the policy with one iterative, cycle-safe value-budget walker charging total input nodes, container width, membership-list items, node-refetch ids, relation ids per mutation and in aggregate, nested serializer rows, upload count / per-file bytes / aggregate bytes, and scalar byte size where a parser/validator is nonlinear. Stop before decoding ids or touching the ORM once the budget is exhausted.
+- Change the secure default for many-side relations from 'both' to 'connection'. A raw list requires explicit opt-in and an enforced maximum; DjangoListField gets a required/effective bound (documenting it as dangerous is not enough).
+
+#### Why it matters
+
+- S3 (High): neither the package nor the example installs a token / query-depth / complexity / selection-count limiter, and there is no page-size / raw-list-row / aggregate-row budget. DjangoListField evaluates an unbounded queryset, and DEFAULT_RELATION_SHAPE='both' exposes a raw many-side list alongside the bounded connection, so a client bypasses the connection cap via the list sibling.
+- S4 (High): document limits do not constrain variable-supplied values. A tiny query can carry an unlimited ids list (DjangoNodesField preserves duplicates positionally), unlimited in-lookup values, an and/or filter tree of unbounded width/node count, unlimited M2M ids, wide nested serializer lists, and uploads with no aggregate byte / file-count / per-file cap.
+
+#### Dependencies
+
+- Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first.
+
+#### Test plan
+
+- Token / expanded-selection / alias / depth / aggregate-cost boundaries; fragments and directives cannot evade accounting; the same field under many aliases is charged many times.
+- A connection's relay_max_results cannot be bypassed through a generated list sibling; raw root and relation lists stop at the configured maximum.
+- Each input family under/at/over boundary, including a tiny query with a large variable payload; duplicate ids; empty lists; multiple bounded fields whose aggregate exceeds the request budget; proof of zero ORM work after rejection; sync/async parity with one typed error code.
+
+#### Open question
+
+- Default budget values (token/selection/depth/page/rows/cost) and which are settings-overridable vs schema-construction-only: the spec pins concrete numbers.
+- Whether 'both'->'connection' needs a one-release deprecation shim or is a clean alpha break like card 065: the spec decides.
+
+#### Card references
+
+- Dependency: Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+<a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
+### [TODO-ALPHA-067-0.0.17 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
+
+- Priority: High
+- Status: To Do
+- Relative size: M
+
+#### Planning note
+
+Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
+
+#### Dependencies
+
+- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- converters.py: remove DjangoFileType.path from the default field set (name/size/url remain; opt-in path).
+- extensions/debug.py: settings.DEBUG fail-closed gate + allow_unsafe_production ack + payload caps.
+- schema.py: DjangoSchema production error policy (log + correlation id + stable message under DEBUG=False).
+
+#### Definition of done
+
+- [ ] path removed from the safe default; debug extension fails closed under DEBUG=False with an explicit ack; DjangoSchema has a production error policy.
+- [ ] Full suite green at 100% coverage; hygiene clean; migration note + docs fold-in.
+
+#### Architectural posture
+
+- Remove path from the public generated type's safe default (default output limited to name/size/url). A filesystem path requires an explicit server-owned field or a loud Meta opt-in; do not mask path failures while still exposing successful absolute paths. Justified pre-1.0 compatibility break + migration note.
+- DjangoDebugExtension fails closed when settings.DEBUG is false unless an explicit constructor acknowledgement (DjangoDebugExtension(allow_unsafe_production=True)); add the __init__ it currently lacks and preserve fresh-per-operation instances. Cap the number and serialized byte size of SQL and exception rows.
+- DjangoSchema gets a first-class production error policy: under DEBUG=False, unexpected exceptions log server-side with a correlation identifier and return a stable, non-sensitive message; deliberate client-facing framework errors (validation envelopes, audited GraphQLError codes) retain their contract; consumer code may explicitly opt out.
+
+#### Why it matters
+
+- S5 (High): DjangoFileType.path returns FieldFile.path and its description says 'the absolute filesystem path'; DjangoImageType inherits it. Every generated file/image output offers clients a server-internal path (usernames, release dirs, container mounts, tenant layout) whenever the storage backend supports one.
+- S8 (Medium): DjangoDebugExtension returns interpolated SQL values, exception messages/types, and traceback paths, and operates independently of settings.DEBUG -- a single production schema-list entry silently activates the disclosure. It has no __init__ today.
+- S10 (Medium): DjangoSchema centralizes mutation integrity but offers no production error policy; unhandled resolver/hook exceptions return their literal message to clients unless the consumer adds MaskErrors or overrides process_errors.
+
+#### Dependencies
+
+- Sequenced behind card 065 in the staged security program (independent code).
+
+#### Test plan
+
+- Default SDL lacks path; remote-storage failures still degrade safely for retained fields; any explicit path opt-in is absent unless deliberately declared.
+- DEBUG=False rejects the debug extension by default; the explicit acknowledgement works; fresh-instance isolation intact; payload limits truncate deterministically; the aggregate fakeshop schema stays debug-free.
+- Error policy distinguishes parse/validation errors, audited client-safe GraphQL errors, permission denials, and unexpected resolver/hook exceptions; sync/async parity; the correlation id (not the sensitive original message) reaches the client.
+
+#### Open question
+
+- The opt-in shape for an explicit filesystem-path field (Meta key vs server-only field): the spec decides.
+- Correlation-id format + where it is logged, and whether the stable client message is configurable: the spec pins it.
+
+#### Card references
+
+- Dependency: Sequenced behind card 065 in the staged security program (independent code). -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+<a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
+### [TODO-ALPHA-068-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
+
+- Priority: High
+- Status: To Do
+- Relative size: M
+
+#### Planning note
+
+Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
+
+#### Dependencies
+
+- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
+- Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
+- .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
+
+#### Definition of done
+
+- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
+- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
+
+#### Architectural posture
+
+- Refresh uv.lock to at least Django 5.2.16 and 6.0.7 for their respective Python markers. KEEP the exact Django 5.2.0 compatibility CI cell but label it compatibility-only and never use it for deployment examples or security assertions -- compatibility support and secure-deployment support are different contracts.
+- Add an automated dependency audit on pull requests and a scheduled run (audit the production resolution + optional extras; handle the intentional 5.2.0 compatibility environment separately); add automated update coverage for Python dependencies and GitHub Actions. State that production users must install the newest patch in their supported Django series; the Django>=5.2 floor is not a secure-version recommendation.
+- CI least privilege: top-level permissions: contents: read, with only the exact additional grant to the one step/job that needs it; persist-credentials: false on every non-pushing checkout; pin every action to a reviewed full commit SHA (keep the readable version comment); pin the Postgres image by digest; add timeout-minutes to every networked/test job.
+
+#### Why it matters
+
+- S6 (High): uv.lock resolves Django 5.2.14 (py<3.12) and 6.0.5 (py>=3.12), but the Django project shipped security releases 5.2.16 and 6.0.7 (CVE-2026-48588, a shared-cache private-data exposure) plus 5.2.15/6.0.6 fixing five more issues in the currently locked versions. No dependency-audit command, scheduled security workflow, or update configuration exists.
+- S7 (Medium): the test job grants contents: write though only the Coveralls upload consumes the token (which does not need repo-write); checkout persists its credential by default; first-party actions use mutable major tags and Postgres uses postgres:16; networked/test jobs have no timeout-minutes.
+
+#### Dependencies
+
+- Sequenced behind card 065 in the staged security program; S6 independently urgent.
+
+#### Test plan
+
+- The dependency audit runs on the production resolution + extras and handles the 5.2.0 environment separately; the refreshed lock still resolves the whole matrix.
+- CI permission and pin assertions where mechanically testable; the exact 5.2.0 compatibility cell still proves API compatibility with the advertised floor.
+
+#### Open question
+
+- pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
+
+#### Card references
+
+- Dependency: Sequenced behind card 065 in the staged security program; S6 independently urgent. -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 ## To Do - Beta (1.0.0)
 

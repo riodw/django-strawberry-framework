@@ -6,18 +6,31 @@ applied at app-load time by
 
 The patch replaces the **sync** ``DjangoHTTPRequestAdapter.body`` so it
 always returns the raw request bytes (the async ``get_body`` contract)
-instead of UTF-8-decoding first. That both stops undecodable bodies from
-raising ``UnicodeDecodeError`` before ``parse_json`` and keeps
-UTF-8-decodable non-UTF-8 JSON (BOM-less UTF-16/32, UTF-8 BOM) on the
-bytes path ``json.loads`` accepts.
+instead of UTF-8-decoding first. That return contract is unchanged by
+spec-065; what changed is where the bytes go next. Handing them over raw
+stops an undecodable body from raising ``UnicodeDecodeError`` inside a
+*property*, where no ``except`` can translate it, and delivers them to
+``_strawberry_patches.py::_patched_parse_json``, which decodes them once
+with strict UTF-8 (spec-065 Decision 9).
+
+The two patches own one joint contract, so the rows below are written as
+two halves rather than one: the adapter hands the bytes over unexamined,
+and the *rejection* of a non-UTF-8 body - BOM-less UTF-16/32 and a UTF-8
+BOM included - belongs to the wrapper's decode or to the ``json.loads``
+it delegates to. The full per-encoding matrix (which mechanism refused
+which byte shape) lives in ``tests/test_strawberry_patches.py``; this
+module pins the raw-bytes half plus the fact that those exact bytes then
+reach a ``400``.
 """
 
 from unittest import mock
 
 import pytest
-from cross_web import DjangoHTTPRequestAdapter
+from cross_web import DjangoHTTPRequestAdapter, HTTPException
+from strawberry.http.base import BaseView
 
 from django_strawberry_framework import _cross_web_patches as patches
+from django_strawberry_framework import _strawberry_patches as strawberry_patches
 
 
 class _FakeRequest:
@@ -66,25 +79,48 @@ def test_body_returns_raw_bytes_for_valid_utf8():
 
 
 def test_body_returns_raw_bytes_for_invalid_utf8():
-    """A non-UTF-8 body is returned as raw bytes (so ``parse_json`` can 400 it)."""
+    """A non-UTF-8 body is returned as raw bytes, so the strict decode can 400 it.
+
+    The adapter must not examine the bytes at all. Upstream's eager decode
+    raises here - inside a ``property``, outside any ``except`` that could turn
+    it into a response - which is the whole reason this getter exists. Handing
+    the bytes over unexamined puts the raise one frame later, inside
+    ``_patched_parse_json``, where it becomes a controlled ``400``.
+    """
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(b"\xff\xfe\xfa"))
     assert adapter.body == b"\xff\xfe\xfa"
 
 
 def test_body_returns_raw_bytes_for_utf8_bom():
-    """UTF-8 BOM must stay bytes - decoded ``str`` makes ``json.loads`` reject the body."""
+    """UTF-8 BOM stays bytes here; the wrapper's parse is what rejects it.
+
+    Two halves of one joint contract. The adapter's half is unchanged - raw
+    bytes, no inspection. The rejection is the wrapper's, and spec-065 Decision
+    10 chose it over stripping the BOM; it costs no branch, because the bytes
+    decode cleanly and upstream's own ``json.loads`` refuses the leading
+    U+FEFF.
+    """
     raw = b"\xef\xbb\xbf" + b'{"a": 1}'
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
+    with pytest.raises(HTTPException) as excinfo:
+        strawberry_patches._patched_parse_json(BaseView(), adapter.body)
+    assert excinfo.value.status_code == 400
+
 
 def test_body_returns_raw_bytes_for_utf16_le_without_bom():
-    """BOM-less UTF-16-LE is UTF-8-decodable (NUL-padded ASCII); must still be bytes.
+    """BOM-less UTF-16-LE stays bytes here; the wrapper's parse is what rejects it.
 
-    Upstream's ``.decode()`` succeeds and returns a NUL-studded ``str`` that
-    ``json.loads`` rejects. The permanent ``encode("utf-16")`` e2e case includes
-    a BOM that forces ``UnicodeDecodeError`` and masked this gap.
+    ``encode("utf-16-le")`` is NUL-padded ASCII, hence UTF-8-decodable, so
+    upstream's ``.decode()`` still *succeeds* - the sanity assertion below is
+    the live proof that the sync adapter really does bare-decode, i.e. that
+    this patch is still required. What survives of that bug is gap (1): a
+    decode inside a property raises where nothing can translate it. It is no
+    longer a wrong *success*, because under the wire contract our own strict
+    decode reaches the same NUL-studded ``str`` and upstream's ``json.loads``
+    refuses it either way - which the second half asserts on these exact bytes.
     """
     raw = '{"query":"{ __typename }"}'.encode("utf-16-le")
     # Sanity: upstream still "succeeds" into a str - that is the bug shape.
@@ -95,6 +131,10 @@ def test_body_returns_raw_bytes_for_utf16_le_without_bom():
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
+
+    with pytest.raises(HTTPException) as excinfo:
+        strawberry_patches._patched_parse_json(BaseView(), adapter.body)
+    assert excinfo.value.status_code == 400
 
 
 def test_patch_is_installed_false_when_symbol_missing():

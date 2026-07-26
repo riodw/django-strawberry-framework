@@ -107,6 +107,22 @@ HIDE_FLAT_FILTERS_KEY = "HIDE_FLAT_FILTERS"
 # applies downstream.
 RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
 
+# Cumulative request-body ceiling, IN BYTES, for the GraphQL HTTP path served
+# by ``views.py``'s two views (spec-065 Decision 7; resolved and validated in
+# ``views.py::_resolved_max_request_body_bytes``, overridable per mount with
+# ``as_view(max_request_body_bytes=...)``). The bound is on bytes the
+# application actually RECEIVED, not on the client's ``Content-Length``
+# declaration. Defaults to ``1_048_576`` (1 MiB): a GraphQL request body is a
+# query document, whose legitimate size is orders of magnitude below Django's
+# upload-shaped ``DATA_UPLOAD_MAX_MEMORY_SIZE``, which is why the endpoint does
+# not inherit that project-wide knob. ``None`` disables the package cap and
+# leaves only Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` and the
+# deployment-layer (reverse-proxy / ASGI-server) cap - and that deployment cap
+# is REQUIRED ALONGSIDE this one, never an alternative to it, because no
+# application-level ceiling can stop the bytes from being received
+# (spec-065 Decision 8).
+MAX_REQUEST_BODY_BYTES_KEY = "MAX_REQUEST_BODY_BYTES"
+
 
 # Sentinel for "no live ``django.conf.settings`` object has been bound yet"
 # (distinct from ``None``, which is a valid live value meaning "no settings").
@@ -430,6 +446,21 @@ def relay_globalid_strategy_setting() -> str | Callable[..., str] | None:
     a thin reader that does not validate domain values.
     """
     return getattr(settings, RELAY_GLOBALID_STRATEGY_KEY, None)
+
+
+def max_request_body_bytes_setting() -> int | None:
+    """The configured cumulative GraphQL request-body ceiling, in bytes.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["MAX_REQUEST_BODY_BYTES"]``, defaulting
+    to ``1_048_576`` (1 MiB) when the key (or the whole settings dict) is
+    absent. ``None`` is a meaningful configured value here - it disables the
+    package cap (spec-065 Decision 7 step 4). Consumed by
+    ``views.py::_resolved_max_request_body_bytes``, the lower two rungs of the
+    ``max_request_body_bytes=`` view kwarg > this setting > default precedence
+    ladder, which is also where the value is validated - ``conf.py`` stays a
+    thin reader that does not validate domain values.
+    """
+    return getattr(settings, MAX_REQUEST_BODY_BYTES_KEY, 1_048_576)
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

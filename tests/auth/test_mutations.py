@@ -1446,9 +1446,44 @@ def _auth_router_schema():
 
 
 def _channels_router(schema):
-    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+    """Compose GraphQL on BOTH Channels protocols - this suite's own transport harness.
 
-    return DjangoGraphQLProtocolRouter(schema)
+    Through ``0.0.14`` this borrowed the package's ``DjangoGraphQLProtocolRouter``,
+    whose HTTP branch was exactly the composition below. spec-065 Decision 2 gave
+    HTTP to the consumer's own Django ASGI application, so the router no longer
+    serves GraphQL over HTTP and cannot be the harness for a Channels-HTTP auth
+    round trip.
+
+    The Channels-HTTP auth surface itself is unchanged and still shipped:
+    ``auth/sessions.py``'s ``Transport.CHANNELS_HTTP`` arm serves any consumer who
+    mounts Strawberry's ``GraphQLHTTPConsumer`` themselves, which is precisely the
+    shape composed here. Every assertion in the tests below therefore keeps its
+    original subject; only the harness that supplies the transport moved from the
+    package into this file.
+    """
+    from channels.auth import AuthMiddlewareStack
+    from channels.routing import ProtocolTypeRouter, URLRouter
+    from channels.security.websocket import AllowedHostsOriginValidator
+    from django.urls import re_path
+    from strawberry.channels import GraphQLHTTPConsumer, GraphQLWSConsumer
+
+    graphql_path = r"^graphql/?$"
+    return ProtocolTypeRouter(
+        {
+            "http": AuthMiddlewareStack(
+                URLRouter(
+                    [re_path(graphql_path, GraphQLHTTPConsumer.as_asgi(schema=schema))],
+                ),
+            ),
+            "websocket": AllowedHostsOriginValidator(
+                AuthMiddlewareStack(
+                    URLRouter(
+                        [re_path(graphql_path, GraphQLWSConsumer.as_asgi(schema=schema))],
+                    ),
+                ),
+            ),
+        },
+    )
 
 
 async def _ch_post(

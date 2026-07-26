@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from itertools import count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, NoReturn
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn
 
+import django_filters
 from django.db import models
 from django.db.models.fields.related import ManyToManyRel, ManyToOneRel, OneToOneRel
 from django_filters import (
@@ -399,6 +399,68 @@ _PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = Mapping
 )
 
 
+# ======================================================================
+# Audited ``django-filter`` release range for the OPTIMIZER (``docs/feedback.md``
+# High 2).
+#
+# This gates the row-preserving correlated-``EXISTS`` OPTIMIZATION only -- never
+# whether filtering works. The package dependency stays deliberately UNBOUNDED
+# (``django-filter>=25.2`` in ``pyproject.toml``) so a consumer application never
+# hits a resolution conflict; what is bounded is the range whose generated filter
+# families, helper call graphs, form-field construction and relation reads this
+# package has actually reviewed and covers with SQL-shape + semantic-parity tests.
+#
+# On a release OUTSIDE the audited range every leaf is non-routable, so each one
+# runs django-filter's ORIGINAL outer-query invocation: identical result rows,
+# JOIN + outer ``DISTINCT`` instead of the correlated subquery. Filtering is
+# fully functional; only the optimization is declined. That is the fail-closed
+# posture -- an unreviewed upstream release can never become eligible silently.
+#
+# The verdict is computed ONCE at import and read per FilterSet BUILD (see
+# ``FilterSet.get_filters``), never per query.
+#
+# WIDENING THIS RANGE IS AN AUDIT, NOT A VERSION BUMP: the new release must pass
+# the existing SQL-shape and semantic-parity suite (the generated default table,
+# every registered family's call graph, dynamic ``in`` / ``range`` construction,
+# and the effective relation-target reads) BEFORE the upper bound moves.
+#
+# Audited today: the 25.x and 26.x families -- the package test suite runs against
+# django-filter 25.2 (the locked development / CI version) and 26.1 (the
+# Python 3.10 + Django 5.2.0 compatibility-floor cell).
+_AUDITED_DJANGO_FILTER_RANGE: tuple[tuple[int, ...], tuple[int, ...]] = ((25, 2), (27,))
+
+
+def _release_is_audited(raw_version: str) -> bool:
+    """Return whether ``raw_version`` falls in the audited optimizer range.
+
+    Takes the version STRING (not the installed module) so the parse and the
+    range edges are directly unit-testable without touching global state.
+
+    Parsing FAILS CLOSED. The leading dot-separated numeric segments are read and
+    the scan stops at the first non-numeric one, so a development / pre-release
+    spelling (``"26.1.dev0"``) compares as its numeric prefix ``(26, 1)``. A
+    version with NO leading numeric segment yields an empty prefix, which cannot
+    be ``>=`` the lower bound, so an unparseable version is NOT audited.
+    ``str.isdecimal`` (not ``isdigit``) is the guard because ``isdigit`` accepts
+    characters ``int()`` rejects, which would raise instead of failing closed.
+    """
+    parsed: list[int] = []
+    for segment in raw_version.split("."):
+        if not segment.isdecimal():
+            break
+        parsed.append(int(segment))
+    lower, upper = _AUDITED_DJANGO_FILTER_RANGE
+    return lower <= tuple(parsed) < upper
+
+
+# Evaluated ONCE at import: the installed release either is or is not audited for
+# the lifetime of the process, so re-deriving it per build (let alone per query)
+# would buy nothing. ``FilterSet.get_filters`` reads this constant.
+_DJANGO_FILTER_OPTIMIZER_AUDITED: bool = _release_is_audited(
+    getattr(django_filters, "__version__", ""),
+)
+
+
 # Private instance-attribute slot the frozen generation-provenance record is
 # persisted under (see ``FilterGenerationProvenance``). Kept off the public
 # surface so it reads as framework-internal metadata; survives ``copy.deepcopy``
@@ -451,19 +513,17 @@ class FilterGenerationProvenance:
     record (``filter_generation_provenance`` returns ``None``), so it is never
     treated as framework-generated.
 
-    This record proves ORIGIN; it is not, on its own, the authorization gate. A
+    This record proves ORIGIN; it is not, on its own, the routing verdict. A
     consumer that overrides ``filter_for_field``, calls ``super()``, and MUTATES the
-    returned instance keeps the framework stamp, but that no longer authorizes
-    anything: routing additionally requires a capability token (withheld from any
-    class that overrode a generation seam -- ``filter_for_field`` /
-    ``filter_for_lookup`` / ``FILTER_DEFAULTS`` / ``__init__`` -- see
-    ``FilterSet._is_generation_capable``) AND a live semantic signature match (see
-    ``_CandidateFingerprint``, which covers the effective ``.filter`` call graph of
-    the supported generated families). A super()+mutate subclass is non-capable, so
-    its leaf is never routed regardless of what the record says. The exact,
-    finite boundary is documented once on ``_CandidateFingerprint`` and
-    ``FilterSet._is_generation_capable``; this class is not the place a total-safety
-    claim is made.
+    returned instance keeps the framework stamp, but that authorizes nothing:
+    routability additionally requires the class to have overridden NO generation seam
+    (``filter_for_field`` / ``filter_for_lookup`` / ``FILTER_DEFAULTS`` /
+    ``__init__`` -- see ``FilterSet._is_generation_capable``), the leaf to be an
+    audited family on a to-many path, and the installed ``django-filter`` release to
+    be audited. A super()+mutate subclass is non-capable, so its leaf is never routed
+    regardless of what this record says. The whole verdict is assembled once, at build
+    time, in ``CandidateFilterMetadata.routable``; this class is not the place a
+    total-safety claim is made.
 
     Fields:
 
@@ -520,37 +580,6 @@ def _stamp_generation_provenance(filter_instance: Any, record: FilterGenerationP
     setattr(filter_instance, _GENERATION_PROVENANCE_ATTR, record)
 
 
-# Private instance-attribute slot the per-build capability TOKEN is stamped
-# under. Unlike the frozen provenance record (which is provenance/audit only),
-# the token is the LIVE authorization proof the flat-leaf applicator checks at
-# request time: only a filter minted-and-stamped through the package-owned,
-# unmodified generation path (``FilterSet._is_generation_capable``) carries a
-# token, and only a live per-request instance whose token EQUALS the frozen
-# candidate row's token may be routed through the correlated ``EXISTS`` adapter.
-# An INT (not an opaque object) so it survives ``copy.deepcopy`` by VALUE --
-# django-filter deepcopies ``base_filters`` into per-request ``self.filters``,
-# and a fresh object would compare unequal under ``is`` after the copy. The
-# authorization compares by ``==``, never ``is``.
-_GENERATION_TOKEN_ATTR = "_dst_generation_token"
-
-# Monotonic per-build token source. Each capable build of one eligible leaf
-# draws the NEXT integer, so no two candidate rows across the process share a
-# token and a stale row can never authorize a differently-built live instance.
-_generation_token_counter = count(1)
-
-
-def _stamp_generation_token(filter_instance: Any, token: int) -> None:
-    """Persist the capability ``token`` on ``filter_instance`` under the private slot.
-
-    Stamped on the class-level ``base_filters`` instance during the capable
-    build so django-filter's per-request ``copy.deepcopy`` carries the integer
-    by value onto ``self.filters[name]``; the applicator then matches the live
-    value against the frozen candidate row's token (mirrors
-    ``_stamp_generation_provenance``).
-    """
-    setattr(filter_instance, _GENERATION_TOKEN_ATTR, token)
-
-
 # Provenance origins that mark a leaf as FRAMEWORK-GENERATED (direct or
 # expanded): the UNMODIFIED default path (``framework_default``) and the
 # package's own GlobalID replacement branches (``package_replacement``). Only
@@ -568,174 +597,34 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 # supported generated django-filter families (``docs/feedback.md`` High 4).
 #
 # A framework-generated many-side leaf is routable through the correlated
-# ``EXISTS`` adapter ONLY if its filter class belongs to a family whose runtime
-# reads have been AUDITED and captured deepcopy-stably in ``_CandidateFingerprint``
-# (the per-family effective-read audit on ``_fingerprint_of``). Enumerating those
-# families here -- rather than describing "the supported generated families" in
-# prose across the plan / glossary / dataclass / fingerprint / applicator -- makes
-# the integrity boundary EXECUTABLE and fail-CLOSED: a novel family introduced by
-# a future unbounded ``django-filter`` release, or by any path that places an
-# unaudited filter class behind a framework origin, resolves to NO profile, is
-# marked ineligible by ``_candidate_metadata_for``, never mints a token, and
-# therefore falls back to the outer invocation until it is audited and added here.
+# ``EXISTS`` adapter ONLY if its filter class belongs to a family this package has
+# AUDITED: whose ``.filter`` call graph, form-field construction and relation reads
+# were reviewed against the correlated rewrite and are covered by the SQL-shape and
+# semantic-parity suite. Enumerating those families here -- rather than describing
+# "the supported generated families" in prose across the plan / glossary /
+# dataclass / applicator -- makes the eligibility boundary EXECUTABLE and
+# fail-CLOSED: a novel family introduced by a future ``django-filter`` release, or
+# by any path that places an unaudited filter class behind a framework origin,
+# resolves to NO profile, is marked ineligible by ``_candidate_metadata_for``, is
+# therefore never routable, and falls back to django-filter's original outer
+# invocation until it is audited and added here.
 #
 # Family recognition is EXACT-CLASS (``docs/feedback.md`` Blocker 2): a profile is
 # minted from a known generation decision, never rediscovered from arbitrary
-# ancestry. An unregistered subclass of an audited base -- whose overridden
-# ``.filter`` or added state is unsigned -- receives NO profile. The only two
+# ancestry. An unregistered subclass of an audited base is a CONSUMER-owned class
+# whose behavior this package has not reviewed, so it receives NO profile -- it
+# stays fully supported and simply runs on the outer queryset. The only two
 # recognized shapes are (a) exact audited / package-owned classes (registry keys)
 # and (b) django-filter's genuine empty-body dynamic ``in`` / ``range`` CSV classes
 # over an exact-audited scalar family, validated structurally in
 # ``_family_profile_for``.
 #
-# The runtime reads are EXECUTABLE and live in ONE place (``docs/feedback.md`` Medium 4,
-# refined by the Sixth-review hybrid simplification): the single canonical
-# ``_ALL_SEMANTIC_EXTRACTORS`` tuple of named ``_SemanticExtractor`` functions IS the schema
-# ``_fingerprint_of`` signs. A profile is now a bare family IDENTITY (no per-family extractor
-# tuple / ``relevant_reads``): the fingerprint signs the whole canonical union for every
-# family (fail-safe; per-family narrowing could go fail-open), and the per-seam behavioral
-# audit that each signed field gates routing lives in the ``test_signature_matrix_*`` tests.
+# A profile is a bare family IDENTITY. There is deliberately no per-family runtime
+# read table and no request-time re-verification of a leaf's behavior: routing is
+# decided ONCE at build time (see ``CandidateFilterMetadata``), and process-wide
+# mutation of django-filter's own classes is out of contract (see
+# ``FilterSet._apply_flat_leaves``).
 # ======================================================================
-
-
-def _effective_callable_pair(filter_instance: Any, name: str) -> tuple[Any, Any]:
-    """Return the (instance-override, class-descriptor) halves of a dispatch helper.
-
-    The ONE deepcopy-stable way to sign an effective django-filter callable
-    (``.filter`` and every helper it dispatches through -- ``get_method`` /
-    ``get_filter_predicate`` / ``is_noop``): the instance-level ``__dict__`` swap
-    (``None`` on a genuine leaf and its untampered ``copy.deepcopy``, since deepcopy
-    copies ``__dict__`` verbatim and never synthesizes a method key) paired with the
-    concrete class's function (the SAME object across every deepcopy, since the class
-    is not copied). Never the bound method -- its ``__self__`` differs per deepcopy
-    and would fail every genuine request closed. Compared by equality only.
-    """
-    return (filter_instance.__dict__.get(name), getattr(type(filter_instance), name, None))
-
-
-def _effective_to_field_name(filter_instance: Any) -> Any:
-    """Return the EFFECTIVE ``to_field_name`` django-filter reads at execution.
-
-    ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` build their predicate from
-    ``self.field.to_field_name`` -- the lazily built, cached form field -- NOT from
-    ``extra["to_field_name"]`` (round-5 Blocker 2). The two can diverge: a consumer
-    can mutate the built field's ``to_field_name`` after form construction without
-    touching ``extra``, redirecting the effective relation target while the
-    constructor copy is unchanged. Signing the constructor proxy therefore left the
-    authorization boundary incomplete; this signs the value the runtime consumes.
-
-    Accessing ``.field`` forces (and caches) the form-field build. That is exactly
-    what django-filter does during filtering, so:
-
-    * at REQUEST time the caller passes the live per-request instance -- itself a
-      disposable ``copy.deepcopy`` of the class-level leaf -- so this reads the SAME
-      field object ``get_filter_predicate`` will read (a live mutation is observed);
-    * at BUILD time the caller passes a disposable ``copy.deepcopy`` (see the
-      ``get_filters._build`` capture site) so forcing the build never mutates or
-      caches a field on the shared class-level instance.
-
-    The built form field is not identity/value-stable across ``copy.deepcopy``, but
-    the primitive ``str`` / ``None`` it exposes IS: an untampered deepcopy rebuilds
-    the field from the same ``extra`` and re-derives the same ``to_field_name``. A
-    filter family whose form field carries no ``to_field_name`` (a plain ``Filter``,
-    or the GlobalID multi-choice backed by ``_GlobalIDMultipleChoiceField``, which
-    matches by decoded pk and never reads ``to_field_name``) yields ``None`` on both
-    sides, so this is inert for those families.
-    """
-    return getattr(getattr(filter_instance, "field", None), "to_field_name", None)
-
-
-class _SemanticExtractor(NamedTuple):
-    """One named reader of a single ``_CandidateFingerprint`` semantic field.
-
-    ``extract(filter_instance)`` reproduces EXACTLY one LIVE read ``_fingerprint_of``
-    signs. The extractors live in ONE canonical tuple (``_ALL_SEMANTIC_EXTRACTORS``) that
-    IS the fingerprint schema (``docs/feedback.md`` Medium 4, refined by the Sixth-review
-    hybrid simplification), rather than being scattered across per-family tuples that
-    could drift from the fields actually signed; the schema test pins the extractor names
-    to EXACTLY the ``_CandidateFingerprint`` semantic fields. Every ``extract`` reads via
-    ``getattr`` with a safe default (or the shared ``_effective_*`` helpers, which do the
-    same), so an extractor never raises -- even on a bare ``object.__new__(cls)`` -- and
-    its value is byte-identical to the direct read on any genuine django-filter instance.
-    """
-
-    name: str
-    extract: Callable[[Any], Any]
-
-
-# THE canonical semantic schema: the SINGLE source of truth for ``_CandidateFingerprint``
-# (``docs/feedback.md`` Sixth-review hybrid simplification). ``_fingerprint_of`` runs this
-# ONE tuple for EVERY recognized family and signs EXACTLY these names (plus ``family``, which
-# it sets directly). It is deliberately the UNION of every family's effective reads, NOT a
-# per-family narrowing: signing MORE state than a given family needs is always fail-safe,
-# whereas narrowing to a per-family subset could go fail-OPEN if a future family audit
-# omitted a runtime read. Every ``extract`` reads via ``getattr`` with a safe default (or the
-# ``_effective_*`` helpers, which do the same), so extraction never raises -- even on a bare
-# ``object.__new__(cls)`` -- and is byte-identical to the direct read on a genuine
-# django-filter instance. Names are UNIQUE (asserted by the schema test), so the
-# ``{name: extract(...)}`` build in ``_fingerprint_of`` can never silently drop a field.
-#
-# The comment groups are documentation only (there are no per-group constants): CORE reads on
-# every routed family's ``.filter`` call graph -- the generated class + ORM target
-# (``filter_class`` / ``field_name`` / ``lookup_expr``), the consumer-``method`` delegation,
-# the filter/exclude selection (``exclude`` plus the effective ``.filter`` and ``get_method``
-# override/descriptor halves -- ``Filter.filter`` calls ``self.get_method(qs)`` in every
-# family) and the framework fan-out ``distinct``; the MULTI-CHOICE OR(default)/AND
-# (``conjoined``) vector -- the per-value predicate builder and no-op decision (each in both
-# deepcopy-stable halves) plus the ``conjoined`` / ``always_filter`` / ``null_value`` knobs;
-# and the RELATION reads -- the effective ``to_field_name`` (the live built form field, not
-# the constructor copy -- round-5 Blocker 2) and the GlobalID ``pk_qualified`` decision.
-_ALL_SEMANTIC_EXTRACTORS: tuple[_SemanticExtractor, ...] = (
-    # Core.
-    _SemanticExtractor("filter_class", type),
-    _SemanticExtractor("field_name", lambda inst: getattr(inst, "field_name", None)),
-    _SemanticExtractor("lookup_expr", lambda inst: getattr(inst, "lookup_expr", None)),
-    _SemanticExtractor("method", lambda inst: getattr(inst, "method", None)),
-    _SemanticExtractor("exclude", lambda inst: bool(getattr(inst, "exclude", False))),
-    _SemanticExtractor("distinct", lambda inst: bool(getattr(inst, "distinct", False))),
-    _SemanticExtractor(
-        "filter_override",
-        lambda inst: _effective_callable_pair(inst, "filter")[0],
-    ),
-    _SemanticExtractor(
-        "filter_descriptor",
-        lambda inst: _effective_callable_pair(inst, "filter")[1],
-    ),
-    _SemanticExtractor(
-        "get_method_override",
-        lambda inst: _effective_callable_pair(inst, "get_method")[0],
-    ),
-    _SemanticExtractor(
-        "get_method_descriptor",
-        lambda inst: _effective_callable_pair(inst, "get_method")[1],
-    ),
-    # Multi-choice OR/AND vector.
-    _SemanticExtractor(
-        "get_filter_predicate_override",
-        lambda inst: _effective_callable_pair(inst, "get_filter_predicate")[0],
-    ),
-    _SemanticExtractor(
-        "get_filter_predicate_descriptor",
-        lambda inst: _effective_callable_pair(inst, "get_filter_predicate")[1],
-    ),
-    _SemanticExtractor(
-        "is_noop_override",
-        lambda inst: _effective_callable_pair(inst, "is_noop")[0],
-    ),
-    _SemanticExtractor(
-        "is_noop_descriptor",
-        lambda inst: _effective_callable_pair(inst, "is_noop")[1],
-    ),
-    _SemanticExtractor("conjoined", lambda inst: bool(getattr(inst, "conjoined", False))),
-    _SemanticExtractor("always_filter", lambda inst: bool(getattr(inst, "always_filter", False))),
-    _SemanticExtractor("null_value", lambda inst: getattr(inst, "null_value", None)),
-    # Relation reads.
-    _SemanticExtractor("to_field_name", _effective_to_field_name),
-    _SemanticExtractor(
-        "pk_qualified",
-        lambda inst: bool(getattr(inst, _GLOBALID_RELATION_PK_ATTR, False)),
-    ),
-)
 
 
 @dataclass(frozen=True)
@@ -743,30 +632,24 @@ class _FilterFamilyProfile:
     """Immutable IDENTITY of ONE supported generated filter family.
 
     A bare, hashable family tag -- nothing more. The exact-class registry
-    (``_FILTER_FAMILY_REGISTRY``) maps each supported class to its profile,
-    ``_family_profile_for`` returns it, and ``_fingerprint_of`` signs it as
-    ``_CandidateFingerprint.family`` (defence in depth beyond the eligibility gate: a
-    request-time swap to a different-profile or unaudited family diverges the signature
-    on top of ``filter_class``).
+    (``_FILTER_FAMILY_REGISTRY``) maps each supported class to its profile and
+    ``_family_profile_for`` returns it; ``None`` from that lookup is the fail-closed
+    signal ``_candidate_metadata_for`` consumes to mark a leaf ineligible.
 
-    It carries NO per-family read inventory (``docs/feedback.md`` Sixth-review hybrid
-    simplification): the fingerprint signs the SINGLE canonical
-    ``_ALL_SEMANTIC_EXTRACTORS`` union for EVERY family, because signing more than a
-    family needs is fail-safe while per-family narrowing could go fail-open if a future
-    audit omitted a runtime read. The per-seam behavioral audit -- proving each signed
-    field actually gates routing -- lives in the ``test_signature_matrix_*`` tests, not
-    in duplicated production machinery. A module-level singleton, so a
-    ``_CandidateFingerprint.family`` slot is deepcopy-stable by identity AND by frozen
-    value (an untampered per-request deepcopy re-derives the SAME profile).
+    It carries NO per-family read inventory and no executable behavior description. The
+    profile answers exactly one question -- "is this leaf's class one of the audited
+    generated families?" -- which is the eligibility half of the build-time routing
+    verdict (``CandidateFilterMetadata``). A module-level singleton per family, so
+    identity comparison is meaningful in tests and the set of families is closed.
     """
 
     name: str
 
 
 # Behavior-family identities. Families with identical effective behavior MAY share one
-# profile object (e.g. scalar and dynamic-CSV sequence lookups): a request-time class swap
-# between two members of a shared profile still diverges the fingerprint via
-# ``filter_class``, so sharing never weakens the authorization boundary.
+# profile object (e.g. scalar and dynamic-CSV sequence lookups): the profile answers only
+# "is this an audited generated family?", and both members are audited, so sharing never
+# widens what is routable.
 _SCALAR_LOOKUP_PROFILE = _FilterFamilyProfile("scalar_lookup")
 _SEQUENCE_LOOKUP_PROFILE = _FilterFamilyProfile("sequence_lookup")
 _CHOICE_PROFILE = _FilterFamilyProfile("choice")
@@ -798,8 +681,9 @@ _ALL_FAMILY_PROFILES: tuple[_FilterFamilyProfile, ...] = (
 # so are ``BaseInFilter`` / ``BaseRangeFilter``: their ONLY job was to feed the retired
 # MRO walk for django-filter's dynamic ``in`` / ``range`` CSV classes; that job now
 # belongs to the structural validator in ``_family_profile_for``, which references those
-# two bases directly. An arbitrary subclass of any key below is NOT audited (its
-# overridden ``.filter`` / added state is unsigned) and therefore resolves to NO profile.
+# two bases directly. An arbitrary subclass of any key below is NOT audited (it may
+# override ``.filter`` or add state this package never reviewed) and therefore resolves
+# to NO profile.
 _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
     {
         # Package Relay-GlobalID relation families.
@@ -887,7 +771,7 @@ def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
 
     A consumer hand-crafting this exact empty-body shape over an audited scalar is
     behaviorally identical to a package-generated one (pure CSV-of-scalar semantics, no
-    unsigned state), so granting it the sequence profile is safe -- and it cannot route
+    added state), so granting it the sequence profile is safe -- and it cannot route
     anyway unless the ownership oracle independently marks it framework-origin.
     """
     bases = klass.__bases__
@@ -910,8 +794,9 @@ def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
     (``docs/feedback.md`` Blocker 2):
 
     1. EXACT match first -- ``_FILTER_FAMILY_REGISTRY[type(filter_instance)]``. No MRO
-       walk, so an unregistered subclass of an audited base (whose overridden ``.filter``
-       or added state is unsigned) is NOT accepted through its ancestor.
+       walk, so an unregistered subclass of an audited base is NOT accepted through its
+       ancestor: a consumer subclass may override ``.filter`` or add state this package
+       has never reviewed against the correlated rewrite.
     2. Otherwise, structurally-validated dynamic-CSV recognition -- django-filter's genuine
        empty-body ``ConcreteInFilter`` / ``ConcreteRangeFilter`` over an exact-audited
        scalar family resolves to ``_SEQUENCE_LOOKUP_PROFILE`` (see
@@ -919,11 +804,10 @@ def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
        state-bearing attribute fails closed.
     3. Otherwise ``None``.
 
-    ``None`` is the fail-closed signal ``_candidate_metadata_for`` and ``_fingerprint_of``
-    consume: no profile -> the leaf is ineligible AND its ``family`` signature diverges
-    from any audited candidate, so an unaudited family can never reach the correlated
-    adapter. Upgrading django-filter therefore cannot add a routable default class merely
-    through inheritance.
+    ``None`` is the fail-closed signal ``_candidate_metadata_for`` consumes: no profile ->
+    the leaf is ineligible, so it is never routable and runs django-filter's original
+    outer invocation. Upgrading django-filter therefore cannot add a routable default
+    class merely through inheritance.
     """
     profile = _FILTER_FAMILY_REGISTRY.get(type(filter_instance))
     if profile is not None:
@@ -932,252 +816,20 @@ def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
 
 
 @dataclass(frozen=True)
-class _CandidateFingerprint:
-    """Immutable, SINGLE-SOURCE semantic signature of a generated filter instance.
-
-    Captured at the capable build from the class-level ``base_filters`` instance
-    (``get_filters._build``) and re-derived from the LIVE per-request instance
-    immediately before correlated invocation (``FilterSet._apply_flat_leaves``). A
-    mismatch means the live filter is no longer the instance the frozen candidate
-    row was built for -- a consumer replaced or mutated it -- so routing must fail
-    closed to the outer invocation.
-
-    This signature is the ONE authorization gate for semantic drift; the token (a
-    separate slot) proves provenance, and this fingerprint proves the semantics
-    did not drift. Every piece of state that can change the package-generated
-    predicate lives here so ``_apply_flat_leaves`` never has to scatter per-marker
-    checks (``docs/feedback.md`` Blocker 2). The signature covers:
-
-    - the generated filter CLASS, the ORM ``field_name`` and ``lookup_expr`` it
-      targets, whether it delegates to a consumer ``method``, and its ``exclude``
-      / ``distinct`` decisions (the original core fields);
-    - the EFFECTIVE filter implementation, split into two deepcopy-stable halves
-      (``filter_override`` / ``filter_descriptor``) so both an instance-level
-      ``.filter`` swap and a class-level ``.filter`` monkeypatch fail closed;
-    - the EFFECTIVE dynamic-dispatch call graph ``.filter`` routes through
-      (``get_method`` / ``get_filter_predicate`` / ``is_noop``, each in the same two
-      halves), so a consumer mutating behavior through a normal django-filter helper
-      seam without touching ``.filter`` fails closed too;
-    - the non-pk-``to_field`` pk-qualification decision (``pk_qualified``), which
-      swings the compiled predicate between ``<relation>=<pk>`` and
-      ``<relation>__pk=<pk>``, plus the effective relation target
-      (``to_field_name``, read from the live built form field the model-choice
-      predicate consumes, not the constructor copy -- round-5 Blocker 2);
-    - the django-filter execution knobs generated instances carry that affect how
-      the filter matches (``conjoined`` / ``always_filter`` / ``null_value``).
-
-    This is the FINITE integrity boundary for the supported generated django-filter
-    families: the effective behavior of a package-generated leaf is the (class,
-    path, lookup, method, exclude, distinct) tuple plus the effective ``.filter``
-    call graph and its execution knobs. The set of supported families is NOT prose:
-    it is enumerated executably in ``_FILTER_FAMILY_REGISTRY`` and matched by
-    ``_family_profile_for``, whose result is signed as ``family`` -- a leaf whose
-    class resolves to no registered family is ineligible (never a candidate) and,
-    as defence in depth, would diverge this signature. Post-construction mutation of
-    any of these diverges the signature; a consumer ``FilterSet.__init__`` override -- the other
-    place ``self.filters`` is customized -- is gated separately at build time by
-    ``FilterSet._is_generation_capable`` (no token is minted), so the two together
-    close every documented customization seam. State that is not identity- or
-    value-comparable across ``copy.deepcopy`` (querysets, the built form field) is
-    represented only by its deepcopy-stable constructor state, never by the object.
-
-    Every field is deepcopy-stable: an untampered per-request deepcopy of the
-    frozen class-level instance re-derives an EQUAL signature (so genuine requests
-    are never falsely failed closed), while any post-build mutation or wholesale
-    replacement diverges (so a tampered instance can never reach the correlated
-    ``EXISTS`` adapter). The per-field ``why-deepcopy-stable`` rationale is on
-    ``_fingerprint_of``.
-    """
-
-    filter_class: type
-    field_name: str
-    lookup_expr: str
-    # A str, a callable, or None (django-filter accepts either a method name or a
-    # consumer callable for ``.method``); read live and compared by equality only.
-    method: Any
-    exclude: bool
-    distinct: bool
-    # The EFFECTIVE ``.filter`` implementation, in two halves (both callables / None,
-    # compared by equality only, mirroring the ``method`` idiom). ``filter_override``
-    # is the instance-level ``__dict__`` swap; ``filter_descriptor`` is the concrete
-    # class's unbound ``filter`` function. NEVER the bound method (its ``__self__``
-    # differs on every deepcopy -- see ``_fingerprint_of``). Defaulted so any existing
-    # positional / keyword construction of this frozen dataclass stays valid.
-    filter_override: Any = None
-    filter_descriptor: Any = None
-    # The non-pk-``to_field`` pk-qualification decision (base.py::
-    # ``_GLOBALID_RELATION_PK_ATTR``); a plain bool on the instance.
-    pk_qualified: bool = False
-    # django-filter execution knobs present on generated filter instances that change
-    # how the filter matches; compared by equality (``null_value`` may be non-bool).
-    conjoined: bool = False
-    always_filter: bool = False
-    null_value: Any = None
-    # The EFFECTIVE dynamic-dispatch call graph the generated ``.filter``
-    # implementation routes through on the live instance (round-4 Blocker 1).
-    # Capturing only the top-level ``.filter`` descriptor missed the helpers it
-    # dispatches through: a consumer can mutate a generated filter's behavior via a
-    # normal django-filter extension seam WITHOUT touching ``.filter`` itself. Each
-    # helper is captured in the SAME two deepcopy-stable halves as ``filter_override``
-    # / ``filter_descriptor`` (instance ``__dict__`` swap + concrete-class function),
-    # covering the documented seams for every supported generated family:
-    #   * ``get_method``          -- swings ``filter`` versus ``exclude``;
-    #   * ``get_filter_predicate`` -- the lookup / relation target the predicate builds
-    #     (the ``ModelMultipleChoiceFilter`` pre-fanned-multiplicity vector); and
-    #   * ``is_noop``             -- whether a restrictive leaf is applied at all.
-    get_method_override: Any = None
-    get_method_descriptor: Any = None
-    get_filter_predicate_override: Any = None
-    get_filter_predicate_descriptor: Any = None
-    is_noop_override: Any = None
-    is_noop_descriptor: Any = None
-    # The EFFECTIVE relation target django-filter's model-choice predicate reads at
-    # execution: the live ``field.to_field_name`` off the built form field (round-5
-    # Blocker 2), captured via ``_effective_to_field_name``. NOT the constructor copy
-    # ``extra["to_field_name"]`` -- the two diverge when a consumer mutates the built
-    # field after construction, and the runtime honors the built field. The form field
-    # itself is not identity/value-comparable across ``copy.deepcopy`` (a queryset
-    # ``==`` even executes), but the primitive str / None it exposes IS deepcopy-stable
-    # (an untampered deepcopy rebuilds the same value from ``extra``), so only that
-    # primitive is signed -- never the field object.
-    to_field_name: Any = None
-    # The matched supported-family behavior profile (``_family_profile_for``), or
-    # ``None`` when the live class resolves to no registered family (a bare
-    # ``Filter`` subclass or an unaudited future family -- ``docs/feedback.md``
-    # High 4). Deepcopy-stable: the profile is a module-level singleton, so an
-    # untampered per-request deepcopy of the leaf re-derives the SAME profile
-    # (identical by identity, and equal by frozen-dataclass value even if copied).
-    # Eligibility already withholds a token from a no-profile leaf; signing the
-    # family here is defence in depth, so a request-time swap to a different-profile
-    # or unaudited family diverges the signature in addition to ``filter_class``.
-    family: _FilterFamilyProfile | None = None
-
-
-def _fingerprint_of(filter_instance: Any) -> _CandidateFingerprint:
-    """Return the ``_CandidateFingerprint`` of ``filter_instance`` from its LIVE attrs.
-
-    Reads the instance's current state so a post-build mutation or wholesale
-    replacement is observable as a fingerprint divergence at the request-time
-    authorization check. Every captured value is deepcopy-stable -- an untampered
-    per-request deepcopy re-derives an EQUAL signature -- because the LIVE
-    per-request instance IS django-filter's ``copy.deepcopy`` of the class-level
-    ``base_filters`` instance, so a value that the deepcopy would alter would
-    falsely fail every genuine request closed:
-
-    - ``field_name`` / ``lookup_expr`` / ``method`` / ``exclude`` / ``distinct`` --
-      plain instance values ``copy.deepcopy`` carries by value.
-    - ``filter_override`` = ``filter_instance.__dict__.get("filter")``: a genuine
-      generated leaf has NO ``"filter"`` instance key (``.filter`` is a class
-      method), so this is ``None`` on the frozen capture AND on every untampered
-      deepcopy (``deepcopy`` copies ``__dict__`` verbatim and never synthesizes the
-      key); an instance whose ``.filter`` was reassigned reads the override
-      callable, so ``None`` (frozen) != override (live) -> mismatch.
-    - ``filter_descriptor`` = ``getattr(type(filter_instance), "filter", None)``:
-      the unbound function on the concrete class. ``copy.deepcopy`` does NOT copy
-      the class, so ``type(deepcopy(x)) is type(x)`` and the descriptor is the SAME
-      function object across every deepcopy (equal); a class-level monkeypatch
-      between build and request swaps the function and mismatches. Captured as the
-      class descriptor, NEVER the bound method ``filter_instance.filter`` -- a bound
-      method compares equal only when ``__func__`` AND ``__self__`` match, and
-      ``__self__`` differs on every deepcopy, which would fail every request closed.
-    - ``pk_qualified`` = ``getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR,
-      False)``: a plain bool ``deepcopy`` carries by value; flipping it on the live
-      instance mismatches (the whole point of Blocker 2).
-    - ``conjoined`` / ``always_filter`` / ``null_value``: read via ``getattr`` with a
-      safe default so absence is UNIFORM across frozen and live. On the
-      ``MultipleChoiceFilter`` family ``conjoined`` / ``null_value`` are ``__init__``
-      instance attrs (deepcopied by value) and ``always_filter`` is a class attr
-      (not deepcopied -- ``getattr`` reads the same class value); a plain ``Filter``
-      (e.g. ``GlobalIDFilter``) carries none, so ``getattr`` returns the default on
-      both. Either way an untampered deepcopy is equal.
-    - ``get_method`` / ``get_filter_predicate`` / ``is_noop`` -- each in the same two
-      halves as ``.filter`` via ``_effective_callable_pair``: the instance
-      ``__dict__`` swap (``None`` on a genuine leaf and its untampered deepcopy) and
-      the concrete-class function (identical object across deepcopy, since the class
-      is not copied). A consumer assigning any of these on the live instance
-      diverges the corresponding override half.
-    - ``to_field_name`` = ``_effective_to_field_name(filter_instance)`` = the live
-      ``filter_instance.field.to_field_name`` (round-5 Blocker 2). django-filter's
-      model-choice predicate reads the built form field's ``to_field_name``, which a
-      consumer can mutate after construction WITHOUT touching ``extra``; signing the
-      constructor copy missed that runtime read. The built field is not
-      identity/value-stable across deepcopy, but the primitive it exposes is: at
-      request time this reads the live field (a mutation diverges); at build time the
-      caller fingerprints a disposable deepcopy so forcing the build never mutates
-      the shared class-level instance. See ``_effective_to_field_name``.
-    - ``family`` = ``_family_profile_for(filter_instance)`` -- the matched
-      supported-family profile (``docs/feedback.md`` Blocker 2), set DIRECTLY (not via
-      an extractor) to avoid circularity. Deepcopy-stable: the profile is a
-      module-level singleton resolved by EXACT class (or the structural dynamic-CSV
-      validator), and ``copy.deepcopy`` does NOT copy the class, so an untampered
-      deepcopy re-derives the SAME profile. A live class swap to a different-profile or
-      unaudited family diverges it (defence in depth beyond the eligibility gate, which
-      already withholds a token from a no-profile leaf).
-
-    Every other field is populated by running ``_ALL_SEMANTIC_EXTRACTORS`` -- the ONE
-    canonical tuple of ``_SemanticExtractor`` functions that IS the fingerprint schema
-    (``docs/feedback.md`` Medium 4, refined by the Sixth-review hybrid simplification) --
-    so the read audit is genuinely EXECUTED rather than described in prose. This function
-    signs the deepcopy-stable canonical union for EVERY family, never a per-family
-    narrowing: signing MORE is always fail-safe, so a mis-audit of one family cannot open
-    a fail-open hole (per-family narrowing could, if a future audit omitted a read). The
-    eligibility gate (``_candidate_metadata_for``) and this ``family`` field are what fail
-    an UNKNOWN family closed; the per-seam proof that each signed field gates routing is
-    the ``test_signature_matrix_*`` behavioral suite.
-
-    Effective-read audit (round-5 Blocker 2) -- every runtime read of the supported
-    generated families (enumerated in ``_FILTER_FAMILY_REGISTRY``) was traced to
-    confirm the signature signs the value the implementation actually consumes, not a
-    construction proxy:
-
-    - ``get_filter_predicate`` (``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter``)
-      reads ``self.field.to_field_name`` -> signed as the effective read above (its
-      callable is also signed, so a swap of the method itself diverges too).
-    - ``is_noop`` (``MultipleChoiceFilter``) reads ``always_filter``,
-      ``extra["required"]`` and the field choices: it returns ``True`` (skip the
-      filter) when ``always_filter`` is falsy AND ``required`` is truthy AND the
-      submitted value covers EVERY choice -- so, contrary to a naive reading, it CAN
-      return ``True`` for a non-empty value. It is still not a result-set vector for a
-      ROUTED leaf, by equivalence rather than by never firing: when ``is_noop`` skips,
-      the leaf's ``.filter`` returns its argument unchanged, which on the routed path
-      is the correlated inner root (so the applicator attaches nothing and the OUTER is
-      unchanged) and on the unrouted path is the outer queryset (upstream ``return
-      qs``) -- identical rows either way. So mutating ``required`` / choices cannot
-      diverge a routed leaf from its outer semantics. ``always_filter`` (which forces
-      ``is_noop`` to ``False``) IS signed, and ``is_noop`` itself (both halves) is
-      signed, so a swap of the method still fails closed.
-    - the GlobalID relation filters read their live parent/owner definition during
-      decode/validation, which affects which GlobalIDs are ACCEPTED, not the outer
-      row multiplicity the adapter preserves; their ``.filter`` call graph and the
-      ``pk_qualified`` marker are already signed, and the effective-``to_field_name``
-      read is inert for them (the ``_GlobalIDMultipleChoiceField`` carries none).
-
-    Adding a NEW supported family means registering its EXACT class in
-    ``_FILTER_FAMILY_REGISTRY`` mapped to a bare ``_FilterFamilyProfile`` identity and, if
-    it introduces a new effective-read vector, adding a new ``_SemanticExtractor`` to the
-    canonical ``_ALL_SEMANTIC_EXTRACTORS`` tuple AND a matching ``_CandidateFingerprint``
-    field (not a per-marker gate), plus a ``test_signature_matrix_*`` behavioral row for
-    that read; a family whose effective state cannot be signed deepcopy-stably must be left
-    out of the registry (no profile -> ineligible).
-    """
-    values = {
-        extractor.name: extractor.extract(filter_instance)
-        for extractor in _ALL_SEMANTIC_EXTRACTORS
-    }
-    return _CandidateFingerprint(**values, family=_family_profile_for(filter_instance))
-
-
-@dataclass(frozen=True)
 class CandidateFilterMetadata:
     """Frozen row-preserving-candidate metadata for ONE framework-generated leaf.
 
     Built inside the atomic expansion snapshot (``ExpansionSnapshot``) for every
     framework-generated leaf (direct or expanded) of a ``FilterSet``; the
-    flat-leaf applicator (``FilterSet._apply_flat_leaves``) reads it to decide
-    whether a ``cleaned_data`` name is an eligible row-preserving candidate. A
+    flat-leaf applicator (``FilterSet._apply_flat_leaves``) reads ``routable`` to
+    decide whether a ``cleaned_data`` name takes the correlated-``EXISTS`` path. A
     leaf whose provenance origin is not
     framework-generated (declared / ``override_generated`` / unstamped) gets NO
     row at all -- fail closed, an absent name is a non-candidate.
+
+    The routing decision is made ONCE, HERE, at build time and frozen. There is no
+    request-time re-verification of a leaf's behavior; see ``routable`` below and
+    ``FilterSet._apply_flat_leaves`` for why that is the whole contract.
 
     Fields:
 
@@ -1190,42 +842,55 @@ class CandidateFilterMetadata:
     - ``provenance`` -- the frozen ``FilterGenerationProvenance`` record stamped
       on the leaf at generation (origin + framework-added-``distinct`` bit +
       expansion breadcrumbs).
-    - ``eligible`` -- whether the leaf may be routed through the row-preserving
-      correlated-EXISTS invocation. ``True`` requires: a framework-generated
-      origin (guaranteed here by construction, since only such leaves get a
-      row), the ORM path crosses a many-side hop
+    - ``eligible`` -- the LEAF-INTRINSIC half of the verdict: whether THIS leaf's own
+      shape admits the row-preserving rewrite. ``True`` requires: a
+      framework-generated origin (guaranteed here by construction, since only such
+      leaves get a row), the ORM path crosses a many-side hop
       (``path_plan.first_many_index is not None``), the leaf carries no
-      consumer ``method``, AND its filter class resolves to a recognized supported
+      consumer ``method``, AND its filter class resolves to an audited supported
       family (``_family_profile_for`` is not ``None``). The last conjunct is the
       executable fail-closed boundary (``docs/feedback.md`` High 4): an unaudited
-      family placed behind a framework origin -- e.g. by a future unbounded
-      ``django-filter`` release -- has no profile and is ineligible, so it is never
-      routed until its runtime reads are audited and it is registered in
+      family placed behind a framework origin -- e.g. a consumer subclass, or a class
+      introduced by a future ``django-filter`` release -- has no profile and is
+      ineligible, so it is never routed until it is audited and registered in
       ``_FILTER_FAMILY_REGISTRY``. No consumer-origin ``distinct`` check is needed: a
       consumer-origin ``distinct`` can exist only on a ``declared`` /
       ``override_generated`` leaf, which is already ineligible by origin and
       never reaches this record.
-    - ``fingerprint`` -- the ``_CandidateFingerprint`` captured from the
-      class-level generated instance at a CAPABLE build; ``None`` otherwise
-      (ineligible row, or a build whose class overrode a generation seam).
-    - ``token`` -- the per-build capability integer stamped on the generated
-      ``base_filters`` instance at a CAPABLE build; ``None`` otherwise.
+    - ``routable`` -- the FROZEN build-time routing verdict, and the ONLY thing the
+      applicator consults. ``True`` iff ALL of:
 
-    ``eligible`` alone NO LONGER authorizes routing. The applicator additionally
-    requires (a) the owning class proved generation-capable at build time (so
-    ``token`` is not ``None``), (b) the LIVE per-request instance carries a
-    token EQUAL to ``token``, and (c) the live instance's ``_fingerprint_of``
-    matches ``fingerprint``. Any consumer customization seam (a generation-seam
-    override, a replaced or mutated per-request instance) fails one of those and
-    falls back to the original outer invocation. A row whose ``token`` is
-    ``None`` is never routed regardless of ``eligible``.
+      * ``eligible`` (above);
+      * the OWNING filterset class is generation-capable
+        (``FilterSet._is_generation_capable`` -- it overrode none of
+        ``filter_for_field`` / ``filter_for_lookup`` / ``FILTER_DEFAULTS`` /
+        ``__init__``);
+      * ``provenance.generation_capable`` -- the class that actually GENERATED this
+        instance was capable, which matters for a leaf a capable parent expanded out
+        of a NON-capable ``RelatedFilter`` child; and
+      * the installed ``django-filter`` release is inside the audited optimizer range
+        (``_DJANGO_FILTER_OPTIMIZER_AUDITED``).
+
+      A row with ``routable is False`` is never routed: its filter runs
+      django-filter's ORIGINAL outer invocation, unchanged. That is the whole
+      fail-closed contract -- every SUPPORTED consumer customization seam (a declared
+      filter, a custom subclass, ``method=``, ``Meta.filter_overrides``, a shadowed
+      ``FILTER_DEFAULTS``, an overridden generation hook, an ``__init__`` that
+      replaces or mutates ``self.filters``) is refused HERE, at build time, and keeps
+      working exactly as authored -- it simply does not receive the optimization.
+
+    Deliberately NOT modelled: post-build mutation of a live per-request filter
+    instance, or of ``django-filter``'s own classes. Process-wide monkeypatching is
+    out of contract (``docs/feedback.md`` Seventh review): code able to replace
+    ``CharFilter.filter`` can equally replace this package's own methods, so no
+    in-process signature could make it a trust boundary. This package protects the
+    DOCUMENTED extension points above.
     """
 
     path_plan: ClassifiedPath
     provenance: FilterGenerationProvenance
     eligible: bool
-    fingerprint: _CandidateFingerprint | None = None
-    token: int | None = None
+    routable: bool = False
 
 
 @dataclass(frozen=True)
@@ -1247,12 +912,13 @@ class ExpansionSnapshot:
       ``CandidateFilterMetadata`` for EVERY framework-generated leaf (direct or
       expanded). Names of declared / override / unstamped leaves are absent.
 
-    The read-only mapping is a convenience, NOT the correctness backstop:
-    ``base_filters`` (and thus each per-request deepcopy) remains mutable by
-    design, so post-build mutation is still possible. The actual guarantee that
-    a mutated or replaced filter cannot be routed through the correlated adapter
-    is the LIVE per-request token + fingerprint check in ``_apply_flat_leaves``,
-    not the immutability of any dict.
+    The read-only mapping keeps a snapshot HOLDER from rewriting the published
+    classification; it is not a claim that the filter objects themselves are frozen.
+    ``base_filters`` (and thus each per-request deepcopy) remains mutable by design,
+    because django-filter requires that. What makes routing safe is that the verdict
+    was computed from the generation record BEFORE publication and is frozen in
+    ``CandidateFilterMetadata.routable`` -- not the immutability of any dict, and not
+    an inspection of the live instance at request time.
 
     The snapshot slot is registered in ``FilterSet._lifecycle.extra`` so
     ``registry.clear()`` resets filters and metadata together (finding 3). It is
@@ -1293,11 +959,15 @@ def _candidate_metadata_for(model: type, filter_instance: Any) -> CandidateFilte
 
     Eligibility is read off the plan + instance per
     ``CandidateFilterMetadata.eligible``: a many-side path, no consumer ``method``,
-    AND a recognized supported family (``_family_profile_for`` is not ``None``). An
+    AND an audited supported family (``_family_profile_for`` is not ``None``). An
     unaudited / ambiguous family resolves to no profile and is ineligible -- so a
-    future ``django-filter`` release that places a novel class behind a framework
-    origin fails CLOSED to the outer invocation until it is registered
-    (``docs/feedback.md`` High 4).
+    consumer subclass, or a future ``django-filter`` release that places a novel class
+    behind a framework origin, fails CLOSED to the outer invocation until it is
+    registered (``docs/feedback.md`` High 4).
+
+    This function computes only the leaf-INTRINSIC half. The owning class's
+    generation capability and the audited-release check are applied by
+    ``FilterSet.get_filters`` when it freezes ``CandidateFilterMetadata.routable``.
     """
     provenance = filter_generation_provenance(filter_instance)
     if provenance is None or provenance.origin not in _FRAMEWORK_GENERATED_ORIGINS:
@@ -1392,21 +1062,21 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         #
         # * An OWN declaration -- a ``django_filters.Filter`` (``RelatedFilter`` is
         #   a ``Filter`` subclass) assigned directly in THIS class body -- makes
-        #   its filter object consumer-owned REGARDLESS of any provenance or token
-        #   it already carries, so it transitions UNCONDITIONALLY to
-        #   ``origin="declared"`` and its generation token is STRIPPED.
-        #   django-filter's declarative machinery lets a consumer deepcopy/borrow a
-        #   filter instance obtained from another filterset's ``base_filters``
-        #   (which may still carry a framework ``framework_default`` /
-        #   ``package_replacement`` stamp AND a live ``_GENERATION_TOKEN_ATTR``) and
-        #   assign it here; keeping the old stamp would let ``_candidate_metadata_for``
-        #   / ``get_filters._build`` re-authorize a now-consumer declaration through
-        #   the correlated ``EXISTS`` adapter. The token strip mirrors
-        #   ``_expand_related_filter``'s drop on expansion copies.
+        #   its filter object consumer-owned REGARDLESS of any provenance it
+        #   already carries, so it transitions UNCONDITIONALLY to
+        #   ``origin="declared"``. django-filter's declarative machinery lets a
+        #   consumer deepcopy/borrow a filter instance obtained from another
+        #   filterset's ``base_filters`` (which may still carry a framework
+        #   ``framework_default`` / ``package_replacement`` stamp) and assign it
+        #   here; keeping the old stamp would let ``_candidate_metadata_for`` /
+        #   ``get_filters._build`` re-authorize a now-consumer declaration through
+        #   the correlated ``EXISTS`` adapter.
         # * An INHERITED declaration was already stamped ``declared`` by its owning
-        #   class's metaclass run and must NOT be restamped; the
-        #   ``if provenance is None`` fallback only backfills an inherited
-        #   declaration that somehow lacks a record.
+        #   class's metaclass run, so restamping it is a no-op; the
+        #   ``provenance is None`` arm only BACKFILLS an inherited declaration that
+        #   somehow lacks a record.
+        #
+        # Both arms want the same ``declared`` record, so they are one condition.
         #
         # ``new_class.declared_filters`` is the merged MRO map (own + inherited);
         # own-ness is computed from the class body (``class_items``, captured at the
@@ -1417,13 +1087,10 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
             attr_name for attr_name, attr_value in class_items if isinstance(attr_value, Filter)
         }
         for declaration_name, declaration in new_class.declared_filters.items():
-            if declaration_name in own_declared_names:
-                _stamp_generation_provenance(
-                    declaration,
-                    FilterGenerationProvenance(origin="declared"),
-                )
-                declaration.__dict__.pop(_GENERATION_TOKEN_ATTR, None)
-            elif filter_generation_provenance(declaration) is None:
+            if (
+                declaration_name in own_declared_names
+                or filter_generation_provenance(declaration) is None
+            ):
                 _stamp_generation_provenance(
                     declaration,
                     FilterGenerationProvenance(origin="declared"),
@@ -1452,14 +1119,6 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
         new_name = f"{filter_name}__{child_name}"
         field_copy = copy.deepcopy(field)
         field_copy.field_name = f"{f.field_name}__{field.field_name}"
-        # A capable CHILD stamps ``_GENERATION_TOKEN_ATTR`` on its own
-        # class-level instance during its own capable build, and ``deepcopy``
-        # carries that token by value onto ``field_copy``. Drop it: the PARENT's
-        # ``get_filters._build`` is the sole authority that mints a token for an
-        # expanded leaf (and only when the child's ``generation_capable`` bit is
-        # set), so a child-minted token must never survive to be mistaken for a
-        # parent mint on a leaf the parent chose NOT to authorize.
-        field_copy.__dict__.pop(_GENERATION_TOKEN_ATTR, None)
         # Inherit the CHILD leaf's frozen provenance record and APPEND the child
         # filter's name as an expansion breadcrumb, without mutating the child's
         # record (a new frozen record via ``replace``). Origin +
@@ -1654,55 +1313,43 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 # framework-generated leaf; an absent name is a non-candidate at
                 # the fail-closed consumption site.
                 #
-                # The capability GATE is computed once per build: only a class
-                # that did NOT override the package generation seams may mint a
-                # capability token + fingerprint onto an eligible row. A
-                # non-capable class (a ``filter_for_field`` /
-                # ``filter_for_lookup`` / ``FILTER_DEFAULTS`` override) stores
-                # every row WITHOUT a token, so ``_apply_flat_leaves`` fails
-                # closed to the outer invocation even for a path-eligible leaf.
+                # The routing verdict is FROZEN here, once per build, onto
+                # ``CandidateFilterMetadata.routable`` -- the only thing
+                # ``_apply_flat_leaves`` consults. Two build-wide conjuncts are
+                # computed once:
+                #
+                # * ``cls._is_generation_capable()`` -- this class overrode none of
+                #   the package generation seams (``filter_for_field`` /
+                #   ``filter_for_lookup`` / ``FILTER_DEFAULTS`` / ``__init__``). A
+                #   class that overrode any of them stores every row NON-routable,
+                #   so its filters run django-filter's original outer invocation
+                #   even for a path-eligible leaf. That is the supported-seam
+                #   refusal: the customization keeps working, it just does not
+                #   receive the optimization.
+                # * ``_DJANGO_FILTER_OPTIMIZER_AUDITED`` -- the installed
+                #   ``django-filter`` release is inside the audited optimizer range.
+                #   On an unaudited release NOTHING is routable, so filtering falls
+                #   back wholesale to upstream behavior with identical results.
                 #
                 # ``capable`` reflects THIS filterset (the parent building the
                 # snapshot). A leaf reached via ``_expand_related_filter`` was
                 # generated by a CHILD, whose capability is captured at the
                 # generation site on ``row.provenance.generation_capable`` and
                 # travels through expansion. Requiring it too keeps a
-                # non-capable child's leaf token-less even when expanded into a
+                # non-capable child's leaf non-routable even when expanded into a
                 # capable parent, so the child's custom filter is never routed
                 # through the correlated ``EXISTS`` adapter (a DIRECT leaf's
                 # ``generation_capable`` equals the parent's ``capable``, so the
                 # extra conjunct is a no-op there).
-                capable = cls._is_generation_capable()
+                capable = cls._is_generation_capable() and _DJANGO_FILTER_OPTIMIZER_AUDITED
                 for filter_name, filter_instance in all_filters.items():
                     row = _candidate_metadata_for(model, filter_instance)
                     if row is None:
                         continue
-                    if capable and row.eligible and row.provenance.generation_capable:
-                        token = next(_generation_token_counter)
-                        # Stamp the token on the class-level instance so
-                        # django-filter's per-request deepcopy carries it by
-                        # value onto ``self.filters[name]``.
-                        _stamp_generation_token(filter_instance, token)
-                        # Fingerprint a disposable deepcopy, NOT the shared
-                        # class-level instance: capturing the effective
-                        # ``field.to_field_name`` (round-5 Blocker 2) forces the
-                        # lazy form-field build, which must not mutate/cache a
-                        # ``_field`` on the class-level leaf that every per-request
-                        # deepcopy would then inherit. The deepcopy re-derives a
-                        # byte-identical signature (every field is deepcopy-stable)
-                        # and is discarded. This mirrors django-filter's own
-                        # per-request deepcopy, so the frozen signature equals a
-                        # genuine request's live signature.
-                        candidates[filter_name] = replace(
-                            row,
-                            fingerprint=_fingerprint_of(copy.deepcopy(filter_instance)),
-                            token=token,
-                        )
-                    else:
-                        # Not capable, or an ineligible leaf: keep the row as-is
-                        # with token/fingerprint ``None`` so it can never be
-                        # routed (fail closed at the applicator).
-                        candidates[filter_name] = row
+                    candidates[filter_name] = replace(
+                        row,
+                        routable=capable and row.eligible and row.provenance.generation_capable,
+                    )
             # TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2):
             # wire `construct_search(all_filters)` from
             # `django_strawberry_framework.filters.inputs.LOOKUP_PREFIXES` here.
@@ -2112,12 +1759,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _is_generation_capable(cls) -> bool:
         """Return True iff this class has NOT overridden the package generation seams.
 
-        The class-level half of the Blocker-1 fail-closed authorization: a
-        candidate row may mint a capability token ONLY when the class that built
-        it is proven to generate filters through the package's own, unmodified
-        machinery. Each check closes one documented django-filter customization
-        seam through which a consumer could otherwise route its own filter
-        semantics into the correlated ``EXISTS`` adapter:
+        The class-level half of the fail-closed routing verdict
+        (``CandidateFilterMetadata.routable``): a leaf is routable ONLY when the class
+        that built it is proven to generate filters through the package's own,
+        unmodified machinery. Each check closes one DOCUMENTED django-filter
+        customization seam through which a consumer could otherwise route its own
+        filter semantics into the correlated ``EXISTS`` adapter. A class that trips
+        any of them keeps working exactly as authored -- its filters simply run
+        django-filter's original outer invocation instead of being rewritten:
 
         * ``filter_for_field`` override -- the ``super()``-and-mutate seam: a
           consumer subclass that calls ``super().filter_for_field(...)`` and then
@@ -2133,22 +1782,23 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           default path selects; an unmodified subclass inherits the package-authored
           public ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` table by identity (Blocker 1 +
           High 3), so any class that reassigned ``FILTER_DEFAULTS`` is non-capable and
-          mints no token. Comparing against the package-authored public table (not
-          django-filter's mutable ``BaseFilterSet.FILTER_DEFAULTS``, and not a snapshot
-          of it) means capability tracks whether the class still uses the exact table
-          this module authored. Value-level ownership of an individual entry is a
-          separate concern handled by ``_generation_origin_for_field`` against the
-          private normalized baseline; this identity check is the coarse
-          whole-table-replacement gate.
+          nothing it generates is routable. Comparing against the package-authored
+          public table (not django-filter's mutable ``BaseFilterSet.FILTER_DEFAULTS``,
+          and not a snapshot of it) means capability tracks whether the class still
+          uses the exact table this module authored. Value-level ownership of an
+          individual entry is a separate concern handled by
+          ``_generation_origin_for_field`` against the private normalized baseline;
+          this identity check is the coarse whole-table-replacement gate.
         * ``__init__`` override -- the standard place a consumer replaces or mutates
           ``self.filters`` per request (round-4 Blocker 1). A subclass that defines
           its own ``__init__`` can swap a generated leaf for its own filter object
-          AFTER the per-request deepcopy, which the fingerprint alone cannot always
-          see; gating capability here means no token is minted for such a class, so
-          the applicator fails closed regardless. ``__init__`` is an instance method,
-          so it is compared by object identity directly (an unmodified subclass
-          inherits ``FilterSet.__init__`` by identity; ``FilterSet`` itself does not
-          define one, so this is ``filterset.BaseFilterSet.__init__``).
+          AFTER the per-request deepcopy. Since routing is decided at BUILD time, this
+          seam is closed HERE and only here: such a class is non-capable, so none of
+          its leaves is routable and the swapped-in filter runs on the outer queryset.
+          ``__init__`` is an instance method, so it is compared by object identity
+          directly (an unmodified subclass inherits ``FilterSet.__init__`` by identity;
+          ``FilterSet`` itself does not define one, so this is
+          ``filterset.BaseFilterSet.__init__``).
 
         ``FilterSet`` is referenced by name (not ``super()`` / ``__class__``)
         because this runs after class definition, when the module global is
@@ -3279,43 +2929,35 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         Iterates ``self.form.cleaned_data`` in insertion order (upstream's
         order). A name is routed through the correlated ``EXISTS`` adapter ONLY
-        when the LIVE per-request filter proves capability, not merely when the
-        frozen candidate row is ``eligible``. Routing requires ALL of:
+        when its frozen candidate row says so: ``candidate.routable``, the
+        BUILD-TIME verdict computed in ``FilterSet.get_filters`` and published in
+        the immutable ``ExpansionSnapshot``. That single bit already requires the
+        leaf to be an audited generated family on a to-many path with no consumer
+        ``method``, the owning AND generating classes to have overridden none of the
+        package generation seams, and the installed ``django-filter`` release to be
+        inside the audited optimizer range; see
+        ``CandidateFilterMetadata.routable``.
 
-        * a present candidate row that is ``eligible``;
-        * a non-``None`` frozen ``token`` (the owning class was
-          generation-capable at build time -- an override of
-          ``filter_for_field`` / ``filter_for_lookup`` / ``FILTER_DEFAULTS``
-          leaves the token ``None``);
-        * the LIVE ``self.filters[name]`` carrying a
-          ``_GENERATION_TOKEN_ATTR`` EQUAL to that token (a consumer
-          ``__init__`` that replaced the instance with a different / unstamped
-          filter fails here); and
-        * the live instance's ``_fingerprint_of`` matching the frozen
-          ``fingerprint`` -- the SINGLE canonical semantic signature over the FINITE
-          effective-behavior boundary of the supported generated django-filter
-          families, which are enumerated executably in ``_FILTER_FAMILY_REGISTRY``
-          (an unrecognized family is already made ineligible upstream by
-          ``_candidate_metadata_for`` and, as defence in depth, diverges the
-          ``family`` field of this signature). The signature covers the matched
-          ``family`` plus the core ``field_name`` / ``lookup_expr`` / ``method`` /
-          ``exclude`` / ``distinct``, the effective ``.filter`` call graph --
-          ``.filter`` itself plus ``get_method`` / ``get_filter_predicate`` /
-          ``is_noop`` -- the non-pk-``to_field`` pk-qualification marker and
-          ``to_field_name``, and the ``conjoined`` / ``always_filter`` /
-          ``null_value`` knobs; see ``_CandidateFingerprint``. So a post-build
-          mutation through any of those seams, or a wholesale replacement of the live
-          instance (or of the shared mapping the deepcopy came from), fails here. New
-          effective-behavior state is added to ``_fingerprint_of`` (not to a
-          per-marker conditional in this gate); the ``__init__`` seam is closed
-          upstream by the capability token, not here.
+        There is deliberately NO request-time re-verification of the live filter's
+        behavior. The optimizer's contract is narrow and stated positively: only
+        UNTOUCHED, framework-generated filters from the audited ``django-filter``
+        range are rewritten. Every SUPPORTED customization seam -- a declared filter,
+        a custom subclass, ``method=``, ``Meta.filter_overrides``, a shadowed
+        ``FILTER_DEFAULTS``, an overridden generation hook, an ``__init__`` that
+        replaces or mutates ``self.filters`` -- is refused at BUILD time, so it never
+        reaches this loop as routable. Process-wide monkeypatching of django-filter's
+        own classes is OUT OF CONTRACT (``docs/feedback.md`` Seventh review): code
+        able to replace ``CharFilter.filter`` can equally replace this package's
+        methods, so an in-process signature check cannot be a trust boundary, and
+        maintaining one bought complexity without a defensible guarantee.
 
-        Any failure runs the ORIGINAL
+        A non-routable name runs the ORIGINAL
         ``self.filters[name].filter(queryset, value)`` byte-for-byte, preserving
         custom methods / consumer ``distinct`` / custom classes and the exact
-        upstream ``QuerySet`` return assertion. This is what makes every
+        upstream ``QuerySet`` return assertion. That is what makes every
         django-filter customization seam fail CLOSED to the outer invocation
-        rather than smuggling consumer semantics into the correlated subquery.
+        rather than smuggling consumer semantics into the correlated subquery: the
+        failure mode is a declined optimization, never a changed result set.
 
         A routed framework-generated to-many leaf is invoked against
         ``correlated_inner_root(queryset)`` through the distinct-suppressing
@@ -3362,13 +3004,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         for name, value in self.form.cleaned_data.items():
             candidate = candidates.get(name)
             filter_instance = self.filters[name]
-            routed = (
-                candidate is not None
-                and candidate.eligible
-                and candidate.token is not None
-                and getattr(filter_instance, _GENERATION_TOKEN_ATTR, None) == candidate.token
-                and _fingerprint_of(filter_instance) == candidate.fingerprint
-            )
+            routed = candidate is not None and candidate.routable
             if not routed:
                 queryset = filter_instance.filter(queryset, value)
                 assert isinstance(queryset, models.QuerySet), (

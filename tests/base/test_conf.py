@@ -358,11 +358,14 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
     pytest-django's ``SettingsWrapper.__delattr__`` deletes the key on a
     ``UserSettingsHolder`` without emitting ``setting_changed`` for that key.
     A signal-only cache would keep serving the prior mapping (wrong
-    ``APPLY_UPSTREAM_PATCHES`` / endpoint / strategy / hide-flat values).
+    ``APPLY_UPSTREAM_PATCHES`` / endpoint / strategy / hide-flat / body-cap
+    values). Every accessor with a default belongs in this enumeration: a key
+    added without a row here leaves the sweep silently stale.
     Django-backed live sync rebuilds from the absent key as empty settings.
     """
     from django_strawberry_framework.conf import (
         hide_flat_filters_setting,
+        max_request_body_bytes_setting,
         nested_connection_strategy_setting,
         testing_endpoint_setting,
     )
@@ -373,12 +376,14 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
         "NESTED_CONNECTION_STRATEGY": "eager",
         "TESTING_ENDPOINT": "/custom/",
         "HIDE_FLAT_FILTERS": True,
+        "MAX_REQUEST_BODY_BYTES": 4096,
     }
     assert conf.settings.FILTER_KEY == "x"
     assert upstream_patches_enabled("django") is False
     assert nested_connection_strategy_setting() == "eager"
     assert testing_endpoint_setting() == "/custom/"
     assert hide_flat_filters_setting() is True
+    assert max_request_body_bytes_setting() == 4096
 
     del settings.DJANGO_STRAWBERRY_FRAMEWORK
 
@@ -389,6 +394,7 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
     assert nested_connection_strategy_setting() == "windowed"
     assert testing_endpoint_setting() == "/graphql/"
     assert hide_flat_filters_setting() is False
+    assert max_request_body_bytes_setting() == 1_048_576
 
 
 def test_django_backed_resync_fails_loud_after_silent_bad_replacement(settings):

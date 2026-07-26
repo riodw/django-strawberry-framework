@@ -28,9 +28,13 @@ The module also owns:
   ``None.cycle_key()`` ``AttributeError``);
 * the per-scope ``asyncio.Lock`` primitive and its single acquisition helper that
   the login / logout state machines serialize their same-scope mutations under;
-* the session-engine capability answers (login is unsupported on any WebSocket;
-  logout is unsupported on a signed-cookie-engine WebSocket) the later stages
-  gate on.
+* the configured session store's resolution (``session_store_class``) and the
+  session-engine capability answers built on it (login is unsupported on any
+  WebSocket; logout is unsupported on a signed-cookie-engine WebSocket) the
+  later stages gate on. ``session_store_class`` has one caller outside this
+  module - ``consumers.py::_refreshed_actor``, which reloads a WebSocket
+  connection's session during the per-operation actor revalidation (spec-065
+  Decision 11) - so the engine expression stays single-sited.
 """
 
 from __future__ import annotations
@@ -200,6 +204,24 @@ async def scope_session_lock(adapter: ChannelsRequestAdapter) -> AsyncIterator[a
         yield lock
 
 
+def session_store_class() -> type:
+    """Resolve the configured ``SESSION_ENGINE``'s ``SessionStore`` class.
+
+    The ONE expression that reads the deployment's session engine
+    (``import_string(f"{settings.SESSION_ENGINE}.SessionStore")``). Two callers
+    share it: ``uses_signed_cookie_sessions`` below, which answers a capability
+    question about the class, and
+    ``consumers.py::_refreshed_actor``, which instantiates it to reload a
+    connection's session during the per-operation WebSocket revalidation
+    (spec-065 Decision 11). Both go through Django's own ``import_string`` so a
+    consumer-authored engine subclass resolves identically.
+    """
+    from django.conf import settings
+    from django.utils.module_loading import import_string
+
+    return import_string(f"{settings.SESSION_ENGINE}.SessionStore")
+
+
 def uses_signed_cookie_sessions() -> bool:
     """True when the configured session engine is Django's signed-cookie engine.
 
@@ -210,14 +232,11 @@ def uses_signed_cookie_sessions() -> bool:
     deployment subclassing that engine (which shares its no-server-side-record
     limitation) is recognized too.
     """
-    from django.conf import settings
     from django.contrib.sessions.backends.signed_cookies import (
         SessionStore as SignedCookieSessionStore,
     )
-    from django.utils.module_loading import import_string
 
-    store_cls = import_string(f"{settings.SESSION_ENGINE}.SessionStore")
-    return issubclass(store_cls, SignedCookieSessionStore)
+    return issubclass(session_store_class(), SignedCookieSessionStore)
 
 
 def login_supported(transport: Transport) -> bool:

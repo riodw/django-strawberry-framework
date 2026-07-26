@@ -1,25 +1,48 @@
-"""Channels ASGI router: GraphQL on HTTP + WebSocket in one import (spec-041).
+"""Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
 
 ``DjangoGraphQLProtocolRouter`` is the package's Channels transport helper - a
-``channels.routing.ProtocolTypeRouter`` subclass wiring Strawberry's Channels
-consumers onto both protocols with Django's ``AuthMiddlewareStack`` (sessions +
-``scope["user"]`` on both) and ``AllowedHostsOriginValidator`` (the WebSocket
-origin check) composed in, exactly the upstream
-``strawberry_django.routers.AuthGraphQLProtocolTypeRouter`` composition under a
-distinctly-ours name (spec-041 Decisions 3 and 6).
+``channels.routing.ProtocolTypeRouter`` subclass whose ``"http"`` value IS the
+consumer's own Django ASGI application, dispatched directly with no wrapper.
+Every HTTP request therefore traverses the project's real ``MIDDLEWARE`` - the
+``ALLOWED_HOSTS`` host check, CSRF, security headers, cache policy, and every
+consumer-authored middleware - exactly as it does under WSGI. The router does
+not serve GraphQL over HTTP at all: the GraphQL HTTP endpoint is
+``views.py::DjangoGraphQLView``, declared in the consumer's own URLconf
+(spec-065 Decisions 2, 3 and 6).
+
+The ``"websocket"`` value is the package's Channels composition:
+``AllowedHostsOriginValidator`` (the origin check) wrapping
+``AuthMiddlewareStack`` (sessions + ``scope["user"]``) wrapping a ``URLRouter``
+holding one ``re_path`` onto a GraphQL WebSocket consumer, matched by
+``websocket_url_pattern`` - exact at both ends by default (spec-065 Decision 4;
+spec-041 Decisions 3 and 5).
+
+Which consumer sits at the end of that chain is the ``websocket_consumer_class``
+seam (spec-065 Decision 11): by default ``consumers.py``'s revalidating
+``GraphQLWSConsumer`` subclass, otherwise a consumer class or factory the
+project injects. The two wrappers are the ROUTER's either way, so an injected
+consumer cannot escape Host/Origin validation or authentication.
 
 ``channels`` is a SOFT dependency (spec-041 Decision 5): importing this module
 is channels-free, and the router class materializes lazily through the PEP 562
 module ``__getattr__`` behind the ``require_channels()`` guard - the
 install-hint ``ImportError`` fires at the consumer's
 ``from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter``
-line (their ``asgi.py``), never at ``import django_strawberry_framework``.
+line (their ``asgi.py``), never at ``import django_strawberry_framework``. The
+HTTP half of the card needs none of it: ``views.py`` is channels-free, so a
+WSGI-only project adopts the GraphQL view without the soft dependency.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .consumers import (
+    _DEFAULT_REVALIDATION_WINDOW,
+    build_revalidating_consumer_class,
+    resolved_revalidation_window,
+)
+from .exceptions import ConfigurationError
 from .utils.imports import require_optional_module
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -53,7 +76,52 @@ _CHANNELS_BROKEN_HINT = (
 _STRAWBERRY_CHANNELS_BROKEN_HINT = (
     "DjangoGraphQLProtocolRouter could not import Strawberry's Channels consumers. It "
     "requires both `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the "
-    "`strawberry.channels` consumers (GraphQLHTTPConsumer / GraphQLWSConsumer) importable."
+    "`strawberry.channels` consumer (GraphQLWSConsumer) importable."
+)
+
+# The construction-time failure for an unusable ``django_application`` (spec-065
+# Decision 3 / Error shapes). Names all three facts a migrant needs: what the
+# removed mode was actually doing, that it is REMOVED rather than flagged, and
+# the two-place repair (the asgi.py argument AND the URLconf entry - migration is
+# no longer one line). Omitting the argument entirely is Python's own
+# ``TypeError``, deliberately, so a required parameter fails as one.
+_MISSING_DJANGO_APPLICATION_HINT = (
+    "DjangoGraphQLProtocolRouter requires a usable Django ASGI application for its `http` "
+    "branch. A 0.0.14 deployment that passed `django_application=None` (or omitted it) "
+    "served GraphQL over HTTP through a Channels consumer, OUTSIDE Django's middleware "
+    "stack: no ALLOWED_HOSTS host check, no CSRF protection, and no security headers on "
+    "the one route that accepts session credentials. That mode is REMOVED, not flagged. "
+    "Repair it in two places: pass "
+    "`django_application=django.core.asgi.get_asgi_application()` from your asgi.py, and "
+    "serve GraphQL HTTP from your URLconf with `path('graphql/', "
+    "django_strawberry_framework.views.DjangoGraphQLView.as_view(schema=schema))`."
+)
+
+# The construction-time failure for an unusable ``websocket_consumer_class``
+# (spec-065 Decision 11). Names both accepted shapes and their calling
+# conventions, because the seam's whole safety argument is that the router - not
+# the consumer - applies the Host/Origin and auth wrappers around whatever is
+# injected. The received value is appended at the raise site.
+_UNUSABLE_WEBSOCKET_CONSUMER_HINT = (
+    "websocket_consumer_class must be either a strawberry.channels.GraphQLWSConsumer "
+    "subclass (mounted through its own `as_asgi(schema=schema)`) or a factory callable "
+    "invoked as `factory(schema=schema)` that returns the ASGI application to mount; "
+    "None selects the package's own revalidating consumer. Either way the router still "
+    "wraps the result in AllowedHostsOriginValidator and AuthMiddlewareStack, so an "
+    "injected consumer opts out of revalidation, never out of the wrappers."
+)
+
+# Rejecting the combination rather than ignoring the window: a knob that does
+# nothing is worse than an error (spec-065 Edge cases
+# #"``websocket_revalidation_window`` is meaningless when a custom class is
+# injected"). An explicit ``0.0`` alongside an injected class stays legal - it
+# configures nothing either way.
+_WINDOW_WITH_INJECTED_CONSUMER_HINT = (
+    "websocket_revalidation_window configures the package's own WebSocket consumer, so "
+    "it cannot be combined with a positive value and websocket_consumer_class: an "
+    "injected consumer class owns its own revalidation policy. Drop the window (or pass "
+    "0.0) and implement the policy in the injected class, or drop the class to use the "
+    "package consumer."
 )
 
 # The built router class, cached by ``_build_router_class()``. A module global so
@@ -72,6 +140,45 @@ def require_channels() -> Any:
     guard so eviction-based absence tests can re-hit it in one process.
     """
     return require_optional_module("channels", install_hint=_CHANNELS_INSTALL_HINT)
+
+
+def _websocket_application(
+    candidate: Any,
+    *,
+    schema: BaseSchema,
+    package_consumer_class: type[Any],
+    base_consumer_class: type[Any],
+    revalidation_window: float,
+) -> Any:
+    """Resolve the WebSocket branch's ASGI application from the injection seam.
+
+    Exactly three accepted shapes (spec-065 Decision 11): ``None`` selects the
+    package's own revalidating consumer and hands it the validated window; a
+    ``GraphQLWSConsumer`` subclass is mounted through its own
+    ``as_asgi(schema=schema)``; any other callable is a factory, invoked as
+    ``factory(schema=schema)``, whose return value is mounted as-is. Everything
+    else raises ``ConfigurationError``.
+
+    The class test comes first on purpose: a class IS callable, so testing
+    ``callable`` first would route a non-consumer class into the factory branch
+    and call it with an unexpected keyword instead of naming the real mistake.
+    Lives here rather than inline in ``__init__`` so the class builder does not
+    grow a four-branch selector, and takes ``base_consumer_class`` as an argument
+    because ``GraphQLWSConsumer`` is only in scope inside that builder.
+    """
+    if candidate is None:
+        return package_consumer_class.as_asgi(
+            schema=schema,
+            revalidation_window=revalidation_window,
+        )
+    if isinstance(candidate, type):
+        if issubclass(candidate, base_consumer_class):
+            return candidate.as_asgi(schema=schema)
+    elif callable(candidate):
+        return candidate(schema=schema)
+    raise ConfigurationError(
+        f"{_UNUSABLE_WEBSOCKET_CONSUMER_HINT} Got {type(candidate).__name__} {candidate!r}.",
+    )
 
 
 def _build_router_class() -> type[Any]:
@@ -97,59 +204,140 @@ def _build_router_class() -> type[Any]:
     except ImportError as exc:
         raise ImportError(_CHANNELS_BROKEN_HINT) from exc
     try:
-        from strawberry.channels import GraphQLHTTPConsumer, GraphQLWSConsumer
+        from strawberry.channels import GraphQLWSConsumer
     except ImportError as exc:
         raise ImportError(_STRAWBERRY_CHANNELS_BROKEN_HINT) from exc
 
     from django.urls import re_path
 
-    class DjangoGraphQLProtocolRouter(ProtocolTypeRouter):
-        """GraphQL on both HTTP and WebSocket, with Django auth sessions on the scope.
+    # Built once, inside the same guarded builder, so the package consumer class
+    # is cached with ``_ROUTER_CLASS`` and dies with it: a module-level cache in
+    # ``consumers.py`` would survive the eviction-simulated absence tests and hand
+    # a fresh router a subclass derived from a dead ``GraphQLWSConsumer``.
+    package_consumer_class = build_revalidating_consumer_class(GraphQLWSConsumer)
 
-        The one-import ASGI entrypoint (spec-041 Decision 6 - the composition and
-        constructor signature are byte-compatible with upstream
-        ``strawberry_django.routers.AuthGraphQLProtocolTypeRouter``)::
+    class DjangoGraphQLProtocolRouter(ProtocolTypeRouter):
+        """GraphQL over WebSocket, with the consumer's Django application owning HTTP.
+
+        The ASGI entrypoint, which now pairs with one URLconf entry (spec-065
+        Decisions 2, 3, 4 and 6)::
+
+            # myproject/asgi.py
+            import os
+
+            os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 
             from django.core.asgi import get_asgi_application
 
-            django_asgi = get_asgi_application()
+            django_asgi = get_asgi_application()   # Django is fully initialized here
 
             from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
             from myproject.schema import schema
 
             application = DjangoGraphQLProtocolRouter(
                 schema,
-                django_application=django_asgi,
+                django_application=django_asgi,    # REQUIRED
             )
 
-        Every HTTP and WebSocket request matching ``url_pattern`` (a ``re_path``
-        regex, default ``"^graphql"``) routes to Strawberry's Channels consumers
-        over ``schema`` (passed through untouched, extensions intact); both
-        branches carry ``AuthMiddlewareStack`` so the session machinery and
-        ``scope["user"]`` are present; the WebSocket branch is wrapped in
-        ``AllowedHostsOriginValidator`` (cross-origin - and missing-``Origin`` -
-        handshakes are denied against ``ALLOWED_HOSTS``); non-GraphQL HTTP paths
-        fall through to ``django_application`` when provided (HTTP-branch only,
-        after the GraphQL route).
+            # myproject/urls.py
+            from django.urls import path
+
+            from django_strawberry_framework.views import DjangoGraphQLView
+
+            urlpatterns = [
+                path("graphql/", DjangoGraphQLView.as_view(schema=schema)),
+            ]
+
+        ``django_application`` is required and becomes the ``"http"`` value
+        verbatim - no ``URLRouter``, no ``re_path``, no ``AuthMiddlewareStack``,
+        and no GraphQL consumer - so HTTP runs Django's own request lifecycle.
+        Omitting it raises ``TypeError``; ``None`` or any non-callable raises
+        ``ConfigurationError`` naming the migration. The router never calls
+        ``get_asgi_application()`` itself: *when* that runs is load-bearing
+        (it calls ``django.setup()``), so it stays the consumer's explicit,
+        visible decision.
+
+        ``websocket_url_pattern`` governs the WebSocket branch ONLY and is
+        exact at both ends by default (``r"^graphql/?$"``), so - with Channels'
+        leading-slash strip - ``/graphql`` and ``/graphql/`` match while
+        ``/graphql-admin``, ``/graphqlanything``, and ``/graphql/extra`` do not.
+        HTTP path matching belongs entirely to the Django URLconf, so the two
+        declarations are independent by design: a project that moves its GraphQL
+        URL changes both.
+
+        The WebSocket branch carries ``AuthMiddlewareStack`` (the session
+        machinery and ``scope["user"]``) inside ``AllowedHostsOriginValidator``,
+        which denies cross-origin - and missing-``Origin`` - handshakes against
+        ``ALLOWED_HOSTS``. ``schema`` passes through untouched, extensions
+        intact.
+
+        ``websocket_consumer_class`` is the WebSocket consumer injection seam
+        (spec-065 Decision 11), accepting either a
+        ``strawberry.channels.GraphQLWSConsumer`` subclass - mounted through its
+        own ``as_asgi(schema=schema)`` - or a factory callable invoked as
+        ``factory(schema=schema)`` that returns the ASGI application to mount.
+        Anything else raises ``ConfigurationError``. Whatever is injected, the
+        two wrappers above are applied by the ROUTER around it, so an injected
+        consumer opts out of the package's revalidation but never out of
+        Host/Origin validation or authentication.
+
+        ``None`` (the default) selects the package's own
+        ``consumers.py::GraphQLWebSocketConsumer``, which revalidates the session
+        actor before every operation and rejects the operation - not the socket -
+        when the session is no longer valid.
+        ``websocket_revalidation_window`` is the accepted revocation delay in
+        seconds for that consumer: ``0.0`` (the default) revalidates every
+        operation, and a positive value trades one session read per authenticated
+        operation for a named number of seconds during which a revoked session
+        still executes. It configures the package's consumer only, so pairing a
+        positive window with ``websocket_consumer_class`` is a construction error
+        rather than a silently ignored knob. See
+        ``consumers.py::GraphQLWebSocketConsumer`` for the maximum-connection-
+        lifetime statement and the knobs an injected class can set.
         """
 
         def __init__(
             self,
             schema: BaseSchema,
-            django_application: ASGIHandler | None = None,
-            url_pattern: str = "^graphql",
+            django_application: ASGIHandler,
+            *,
+            websocket_url_pattern: str = r"^graphql/?$",
+            websocket_consumer_class: Any = None,
+            websocket_revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
         ) -> None:
-            http_urls = [re_path(url_pattern, GraphQLHTTPConsumer.as_asgi(schema=schema))]
-            if django_application is not None:
-                http_urls.append(re_path(r"^", django_application))
+            # One guard for both failure shapes Error shapes gives one message:
+            # ``callable(None)`` is already False, so the migrant who carried
+            # ``django_application=None`` over from 0.0.14 lands on the prose
+            # here rather than on a bare ``TypeError``.
+            if not callable(django_application):
+                raise ConfigurationError(_MISSING_DJANGO_APPLICATION_HINT)
+
+            # Validated on its own terms first, so a bad value is a bad value
+            # whatever else was passed; only then is the combination judged.
+            window = resolved_revalidation_window(websocket_revalidation_window)
+            if websocket_consumer_class is not None and window > 0.0:
+                raise ConfigurationError(_WINDOW_WITH_INJECTED_CONSUMER_HINT)
+
+            websocket_application = _websocket_application(
+                websocket_consumer_class,
+                schema=schema,
+                package_consumer_class=package_consumer_class,
+                base_consumer_class=GraphQLWSConsumer,
+                revalidation_window=window,
+            )
 
             super().__init__(
                 {
-                    "http": AuthMiddlewareStack(URLRouter(http_urls)),
+                    "http": django_application,
                     "websocket": AllowedHostsOriginValidator(
                         AuthMiddlewareStack(
                             URLRouter(
-                                [re_path(url_pattern, GraphQLWSConsumer.as_asgi(schema=schema))],
+                                [
+                                    re_path(
+                                        websocket_url_pattern,
+                                        websocket_application,
+                                    ),
+                                ],
                             ),
                         ),
                     ),

@@ -6,9 +6,9 @@ from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
 from django.urls import path
 from django.views.decorators.csrf import ensure_csrf_cookie
-from strawberry.django.views import GraphQLView
 
 from config.schema import schema
+from django_strawberry_framework.views import DjangoGraphQLView
 
 
 def index(request):
@@ -60,10 +60,15 @@ urlpatterns = [
     # as the ``x-csrftoken`` header on every POST (see its ``graphiql.html``), so the
     # CsrfViewMiddleware check passes. The test suite never hit this (``django.test.Client``
     # doesn't enforce CSRF). Unlike ``csrf_exempt``, the endpoint stays CSRF-protected.
+    #
+    # The mount is the package's own ``DjangoGraphQLView`` rather than Strawberry's
+    # (spec-065 Decision 6): it is the package-owned Django view the migration note
+    # names, and mounting it here is what makes the transport-boundary regressions
+    # earnable over fakeshop's real ``/graphql/``.
     path(
         "graphql/",
         ensure_csrf_cookie(
-            GraphQLView.as_view(
+            DjangoGraphQLView.as_view(
                 schema=schema,
                 graphql_ide="graphiql",
                 multipart_uploads_enabled=True,

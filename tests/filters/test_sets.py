@@ -56,10 +56,9 @@ from django_strawberry_framework.filters.base import (
 from django_strawberry_framework.filters.inputs import convert_filter_to_input_annotation
 from django_strawberry_framework.filters.sets import (
     _ALL_FAMILY_PROFILES,
-    _ALL_SEMANTIC_EXTRACTORS,
+    _AUDITED_DJANGO_FILTER_RANGE,
     _EMPTY_BODY_DYNAMIC_CSV_ATTRS,
     _FILTER_FAMILY_REGISTRY,
-    _GENERATION_TOKEN_ATTR,
     _MODEL_CHOICE_ONLY_EXTRAS,
     _PACKAGE_POLICY_BASELINE,
     _PUBLIC_PACKAGE_FILTER_DEFAULTS,
@@ -67,15 +66,12 @@ from django_strawberry_framework.filters.sets import (
     CandidateFilterMetadata,
     FilterGenerationProvenance,
     _candidate_metadata_for,
-    _CandidateFingerprint,
     _family_profile_for,
-    _fingerprint_of,
     _lookups_for_field,
     _normalize_policy_entry,
     _NormalizedPolicyEntry,
-    _SemanticExtractor,
+    _release_is_audited,
     _stamp_generation_provenance,
-    _stamp_generation_token,
     filter_generation_provenance,
 )
 from django_strawberry_framework.optimizer.predicates import correlated_inner_root
@@ -992,31 +988,23 @@ def test_consumer_override_relation_nonstandard_lookup_not_rejected():
     assert isinstance(leaf, CustomM2M)
 
 
-def _passthrough_filter(qs, value):
-    """A stand-in ``.filter`` callable that returns the queryset unchanged."""
-    return qs
-
-
 @pytest.mark.django_db(transaction=True)
-def test_expanded_to_field_leaf_live_signature_gates_correlated_exists():
-    """Blocker 2 end-to-end: the canonical semantic signature is the ONE auth gate.
+def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
+    """An expanded non-pk-``to_field`` GlobalID leaf routes and compiles ``__pk``.
 
     Exercises the expanded ``children__target`` shape through the PARENT
-    ``FilterSet`` and its ``.qs`` -> ``FilterSet._apply_flat_leaves`` live gate --
+    ``FilterSet`` and its ``.qs`` -> ``FilterSet._apply_flat_leaves`` --
     NOT ``expanded_leaf.filter()`` in isolation like
     ``test_expanded_related_filter_derives_pk_path_from_live_field_name``, which
-    never instantiates the parent or runs the authorization check. The leaf is a
+    never instantiates the parent. The leaf is a
     ``GlobalIDFilter`` on ``RpToFieldChild.target`` (a forward FK on the non-pk
     ``to_field="code"``), reached across the reverse to-many ``children`` prefix,
-    so it is eligible for the correlated adapter AND pk-marked.
+    so it is routable AND pk-marked.
 
-    Red->green vs the pre-fix ``_CandidateFingerprint`` (feedback.md Blocker 2):
-    before the semantic signature covered the pk-qualification marker and the
-    effective ``.filter`` implementation, flipping ``_GLOBALID_RELATION_PK_ATTR``
-    or replacing ``.filter`` on the LIVE per-request instance left the fingerprint
-    (and token) still matching, so the tampered filter was STILL routed through
-    ``EXISTS`` and compiled the known-wrong raw-``to_field`` comparison. Now every
-    such drift diverges the signature and fails closed to the outer invocation.
+    The pk-qualification is what makes this correct rather than merely fast: the
+    auto pk and the FK-stored ``code`` column differ, so only the ``__pk``
+    qualification returns the right row. Asserts ONE correlated ``EXISTS`` and the
+    pk-qualified row set.
     """
     from django.db import connection
 
@@ -1040,14 +1028,11 @@ def test_expanded_to_field_leaf_live_signature_gates_correlated_exists():
             fields = {"code": ["exact"]}
 
     # Publish the atomic expansion snapshot (sets ``base_filters`` + candidate
-    # rows). The expanded to_field leaf is an eligible, token-bearing, pk-marked
-    # candidate; its FROZEN signature now records the pk-qualification decision.
+    # rows). The expanded to_field leaf is an eligible, pk-marked, ROUTABLE candidate.
     ParentFilter.get_filters()
     candidate = ParentFilter._expansion_snapshot().candidates["children__target"]
     assert candidate.eligible is True
-    assert candidate.token is not None
-    assert candidate.fingerprint is not None
-    assert candidate.fingerprint.pk_qualified is True
+    assert candidate.routable is True
 
     with relation_fixture_tables(connection):
         t1 = RpToFieldTarget.objects.create(code="C1", label="one")
@@ -1068,49 +1053,13 @@ def test_expanded_to_field_leaf_live_signature_gates_correlated_exists():
                 request=HttpRequest(),
             )
 
-        # (1) UNTOUCHED live instance -> authorized -> ONE correlated EXISTS, the
-        #     pk-qualified rows (only ``t1``, whose child's ``target`` pk is ``t1``).
+        # Routed -> ONE correlated EXISTS, returning the pk-qualified rows (only
+        # ``t1``, whose child's ``target`` pk is ``t1``).
         clean_fs = _build_fs()
         clean_qs = clean_fs.qs
         assert len(_reserved_aliases(clean_qs)) == 1
         assert str(clean_qs.query).upper().count("EXISTS") == 1
         assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk]
-        # It was authorized BECAUSE the live signature + token match the frozen row.
-        clean_leaf = clean_fs.filters["children__target"]
-        assert getattr(clean_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-        assert _fingerprint_of(clean_leaf) == candidate.fingerprint
-
-        # (2) FLIP the pk-marker on the LIVE per-request instance -> FAIL CLOSED.
-        #     No reserved EXISTS alias attaches; the (now-tampered) predicate runs as
-        #     the plain outer JOIN invocation, never blessed into the adapter.
-        flipped_fs = _build_fs()
-        flipped_leaf = flipped_fs.filters["children__target"]
-        setattr(flipped_leaf, _GLOBALID_RELATION_PK_ATTR, False)
-        # (4) TOKEN ALONE is INSUFFICIENT: the token still equals the frozen row's
-        #     token, but the signature diverged, so the leaf is not routed.
-        assert getattr(flipped_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-        assert _fingerprint_of(flipped_leaf) != candidate.fingerprint
-        flipped_qs = flipped_fs.qs
-        assert _reserved_aliases(flipped_qs) == []
-        assert "EXISTS" not in str(flipped_qs.query).upper()
-
-        # (3) REPLACE the live ``.filter`` callable -> FAIL CLOSED. The instance-level
-        #     override diverges the signature (frozen ``filter_override`` is ``None``);
-        #     the outer invocation runs the override (a passthrough), so no reserved
-        #     EXISTS alias attaches and every row is returned unfiltered.
-        replaced_fs = _build_fs()
-        replaced_leaf = replaced_fs.filters["children__target"]
-        replaced_leaf.filter = _passthrough_filter
-        assert getattr(replaced_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-        assert _fingerprint_of(replaced_leaf) != candidate.fingerprint
-        replaced_qs = replaced_fs.qs
-        assert _reserved_aliases(replaced_qs) == []
-        assert "EXISTS" not in str(replaced_qs.query).upper()
-        assert list(replaced_qs.order_by("id").values_list("pk", flat=True)) == [
-            t1.pk,
-            t2.pk,
-            t3.pk,
-        ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1123,7 +1072,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
     ``in`` tests invoked the generated CHILD leaf directly on the child queryset;
     this expands ``children__target__in`` across the reverse hop through the PARENT
     ``FilterSet`` and its ``.qs`` -> ``_apply_flat_leaves`` gate. Proves the
-    expanded live class + list annotation, marker + token survival through
+    expanded live class + list annotation, marker survival through
     deepcopy/rebasing, one correlated ``EXISTS`` (no outer join / ``DISTINCT``),
     correct rows for two encoded target pks (where ``pk != code``), and restrictive
     empty-list behavior through the adapter.
@@ -1152,9 +1101,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
     ParentFilter.get_filters()
     candidate = ParentFilter._expansion_snapshot().candidates["children__target__in"]
     assert candidate.eligible is True
-    assert candidate.token is not None
-    assert candidate.fingerprint is not None
-    assert candidate.fingerprint.pk_qualified is True
+    assert candidate.routable is True
 
     expanded_leaf = ParentFilter.get_filters()["children__target__in"]
     assert isinstance(expanded_leaf, GlobalIDMultipleChoiceFilter)
@@ -1183,11 +1130,10 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
             request=HttpRequest(),
         )
         clean_qs = clean_fs.qs
-        # Marker + token survived the deepcopy/rebasing onto the live instance.
+        # The pk-qualification marker survived the deepcopy/rebasing onto the live
+        # instance (it is what makes the expanded leaf compile ``__pk``).
         live = clean_fs.filters["children__target__in"]
-        assert getattr(live, _GENERATION_TOKEN_ATTR, None) == candidate.token
         assert getattr(live, _GLOBALID_RELATION_PK_ATTR, None) is True
-        assert _fingerprint_of(live) == candidate.fingerprint
         # One correlated EXISTS; no outer join (root table only) and no DISTINCT.
         assert len(_reserved_aliases(clean_qs)) == 1
         sql = str(clean_qs.query).upper()
@@ -1199,7 +1145,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
         assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk, t2.pk]
 
         # Restrictive empty list THROUGH the adapter: the leaf is still routed (it is
-        # an eligible token-matched candidate), invoked on the inner root, and yields
+        # a routable candidate), invoked on the inner root, and yields
         # ``inner_root.none()``; ``attach_exists`` composes ``Exists(none)``, which
         # Django folds to a constant-false predicate. The result is 0 rows out of the
         # 3 seeded targets -- restrictive, NOT the no-op that would return all rows.
@@ -1298,8 +1244,8 @@ def test_blocker2_direct_forward_fk_relation_override_on_relay_target_is_honored
 def test_blocker2_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     """A shadowed class-level ``FILTER_DEFAULTS`` relation override is honored too.
 
-    The capability check already withholds a token from a ``FILTER_DEFAULTS``
-    shadow (``generation_capable=False``), but before the fix the Relay conversion
+    The capability check already makes a ``FILTER_DEFAULTS`` shadow non-routable
+    (``generation_capable=False``), but before the fix the Relay conversion
     STILL discarded the consumer's class and stamped ``package_replacement``. The
     ownership oracle now detects the shadow and leaves the selection unchanged.
     """
@@ -5912,8 +5858,8 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 #
 # ``FilterSetMetaclass.__new__`` distinguishes an OWN declaration (a
 # ``django_filters.Filter`` assigned directly in THIS class body) from an
-# INHERITED one. An own declaration transitions to ``origin="declared"`` and
-# sheds any generation token REGARDLESS of a borrowed framework stamp, so a
+# INHERITED one. An own declaration transitions to ``origin="declared"``
+# REGARDLESS of a borrowed framework stamp, so a
 # consumer that deepcopies an eligible generated leaf into a new class body can
 # never be re-authorized through the correlated ``EXISTS`` adapter. Inherited
 # declarations keep their already-``declared`` record (the ``if provenance is
@@ -5927,22 +5873,20 @@ def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
 
     django-filter's declarative machinery lets a consumer deepcopy a filter
     instance obtained from another filterset's ``base_filters`` -- which still
-    carries an ``origin="framework_default"`` stamp AND a live generation token --
-    and assign it as a class attribute. Before the fix the metaclass preserved the
-    framework origin (it stamped ``declared`` only when NO record existed), so the
-    candidate builder minted a fresh token and routed the now-consumer declaration
+    carries an ``origin="framework_default"`` stamp -- and assign it as a class
+    attribute. Before the fix the metaclass preserved the framework origin (it
+    stamped ``declared`` only when NO record existed), so the candidate builder
+    treated the now-consumer declaration as framework-generated and routed it
     through the correlated adapter with its ``distinct`` suppressed. The
     declaration-ownership boundary now transitions the own declaration to
-    ``declared`` unconditionally and strips the token, so it earns no routable
-    candidate row and runs on the OUTER queryset.
+    ``declared`` unconditionally, so it earns no candidate row at all and runs on
+    the OUTER queryset.
     """
     import copy
 
-    from django_strawberry_framework.filters.sets import _GENERATION_TOKEN_ATTR
-
     # Obtain an ELIGIBLE generated leaf: a framework ``CharFilter`` whose ORM path
     # crosses the reverse-FK ``Book.loans`` to-many hop, carrying
-    # ``origin="framework_default"`` and a live generation token.
+    # ``origin="framework_default"``.
     class SourceBookFilter(FilterSet):
         class Meta:
             model = library_models.Book
@@ -5954,13 +5898,11 @@ def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
     source_record = filter_generation_provenance(source_leaf)
     assert source_record.origin == "framework_default"
     assert source_record.generation_capable is True
-    assert getattr(source_leaf, _GENERATION_TOKEN_ATTR, None) is not None
 
     borrowed = copy.deepcopy(source_leaf)
     # Precondition the fix must correct: the deepcopy still reads as an eligible
-    # framework leaf -- origin AND token both survive ``copy.deepcopy``.
+    # framework leaf -- the origin stamp survives ``copy.deepcopy``.
     assert filter_generation_provenance(borrowed).origin == "framework_default"
-    assert getattr(borrowed, _GENERATION_TOKEN_ATTR, None) is not None
 
     class DeclaredReuse(FilterSet):
         loans__note__icontains = borrowed
@@ -5973,11 +5915,8 @@ def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
     assert own_decl is borrowed
     # (a) origin transitioned to ``declared`` REGARDLESS of the borrowed stamp.
     assert filter_generation_provenance(own_decl).origin == "declared"
-    # (b) the borrowed generation token was stripped from the instance __dict__.
-    assert _GENERATION_TOKEN_ATTR not in own_decl.__dict__
-    assert getattr(own_decl, _GENERATION_TOKEN_ATTR, None) is None
 
-    # (c) the candidate snapshot yields NO routable row (declared -> no row).
+    # (b) the candidate snapshot yields NO row at all (declared -> no row).
     DeclaredReuse.get_filters()
     snapshot = DeclaredReuse._expansion_snapshot()
     assert "loans__note__icontains" not in snapshot.candidates
@@ -6425,15 +6364,22 @@ def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 1 - live capability gate (token + fingerprint), NOT name-only.
+# Build-time capability gate, NOT name-only.
 #
-# An eligible frozen candidate row authorizes correlated-``EXISTS`` routing ONLY
-# when the LIVE per-request filter proves capability: the owning class did not
-# override a generation seam (so the row carries a token), the live instance
-# carries the SAME token, and its live fingerprint matches the frozen one. Each
-# django-filter customization seam below must fail CLOSED to the original outer
-# invocation -- no ``_dst_predicate_`` alias, correct outer rows. A positive
-# control proves the gate does not over-block an unmodified package leaf.
+# An eligible frozen candidate row is ROUTABLE only when the class that owns AND
+# the class that generated it overrode none of the package generation seams
+# (``filter_for_field`` / ``filter_for_lookup`` / ``FILTER_DEFAULTS`` /
+# ``__init__``) and the installed django-filter release is audited. Each
+# django-filter customization seam below is a SUPPORTED extension point: it keeps
+# working exactly as the consumer authored it, and must simply fail CLOSED to the
+# original outer invocation -- no ``_dst_predicate_`` alias, correct outer rows --
+# rather than having its semantics rewritten into a correlated subquery. A
+# positive control proves the gate does not over-block an unmodified package leaf.
+#
+# Every refusal is decided at BUILD time and frozen on
+# ``CandidateFilterMetadata.routable``; there is no request-time integrity check,
+# because post-build mutation of a live filter (or of django-filter's own classes)
+# is out of contract -- see ``FilterSet._apply_flat_leaves``.
 # ---------------------------------------------------------------------------
 
 
@@ -6465,92 +6411,13 @@ def _reserved_aliases(queryset):
 
 
 @pytest.mark.django_db
-def test_blocker1_get_filter_predicate_swap_fails_closed_pre_fanned_multiplicity():
-    """Round-4 Blocker 1: a helper-seam mutation (get_filter_predicate) fails closed.
-
-    A generated ``Book.genres`` ``ModelMultipleChoiceFilter`` (Genre is NOT a Relay
-    node here, so the leaf stays the review's exact family, not a GlobalID) is an
-    eligible direct-M2M correlated-``EXISTS`` candidate. A consumer swaps the LIVE
-    per-request instance's ``get_filter_predicate`` -- a normal django-filter
-    extension seam -- WITHOUT touching ``.filter``. Before the fix the fingerprint
-    (and token) still matched, so the leaf was STILL routed through the correlated
-    adapter, which suppresses the framework fan-out ``distinct`` and PRESERVES a
-    pre-fanned incoming row multiplicity. Now the effective-call-graph signature
-    diverges, so the leaf fails closed to the ORIGINAL outer invocation
-    (``ModelMultipleChoiceFilter.filter``, honoring ``distinct``), collapsing the
-    pre-fan; no reserved ``EXISTS`` alias attaches. Asserts token-equality with
-    signature-mismatch, the original outer result, and alias absence.
-    """
-
-    class BookFilter(FilterSet):
-        class Meta:
-            model = library_models.Book
-            fields = {"genres": ["exact"]}
-
-    BookFilter.get_filters()
-    candidate = BookFilter._expansion_snapshot().candidates["genres"]
-    assert candidate.eligible is True
-    assert candidate.token is not None
-
-    genre = library_models.Genre.objects.create(name="G")
-    shelf = _library_shelf()
-    book = library_models.Book.objects.create(shelf=shelf, title="book-1")
-    book.genres.add(genre)
-    # TWO loans (distinct patrons -- Loan is unique per book+patron) for the SAME
-    # book, so a join to ``loans`` pre-fans the outer row twice.
-    patron_a = library_models.Patron.objects.create(name="pa", email="a@example.com")
-    patron_b = library_models.Patron.objects.create(name="pb", email="b@example.com")
-    library_models.Loan.objects.create(book=book, patron=patron_a, note="l1")
-    library_models.Loan.objects.create(book=book, patron=patron_b, note="l2")
-
-    def _pre_fanned():
-        # A relation JOIN with NO distinct: the one book appears once per loan.
-        return library_models.Book.objects.filter(loans__isnull=False).order_by("id")
-
-    assert _pre_fanned().count() == 2  # the pre-fan
-
-    def _build_fs():
-        return BookFilter(
-            data={"genres": [str(genre.pk)]},
-            queryset=_pre_fanned(),
-            request=HttpRequest(),
-        )
-
-    # (1) UNTOUCHED live instance -> authorized -> routed through EXISTS, which
-    #     PRESERVES the pre-fanned multiplicity (two rows for the one book).
-    clean_fs = _build_fs()
-    clean_qs = clean_fs.qs
-    assert len(_reserved_aliases(clean_qs)) == 1
-    assert str(clean_qs.query).upper().count("EXISTS") == 1
-    assert list(clean_qs.values_list("pk", flat=True)) == [book.pk, book.pk]
-    clean_leaf = clean_fs.filters["genres"]
-    assert getattr(clean_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(clean_leaf) == candidate.fingerprint
-
-    # (2) SWAP get_filter_predicate on the LIVE instance (same predicate result) ->
-    #     token still equal but the signature diverges -> FAIL CLOSED -> the original
-    #     outer invocation honors the framework distinct and collapses the pre-fan to
-    #     ONE row; NO reserved alias attaches.
-    swapped_fs = _build_fs()
-    swapped_leaf = swapped_fs.filters["genres"]
-    original_predicate = swapped_leaf.get_filter_predicate
-    swapped_leaf.get_filter_predicate = lambda value: original_predicate(value)
-    assert getattr(swapped_leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(swapped_leaf) != candidate.fingerprint
-    swapped_qs = swapped_fs.qs
-    assert _reserved_aliases(swapped_qs) == []
-    assert "EXISTS" not in str(swapped_qs.query).upper()
-    assert list(swapped_qs.values_list("pk", flat=True)) == [book.pk]
-
-
-@pytest.mark.django_db
 def test_capability_gate_init_override_fails_closed():
     """Seam 4 (round-4 Blocker 1): a consumer ``__init__`` override is not capable.
 
     ``__init__`` is the standard place a consumer replaces or mutates
     ``self.filters`` per request. A subclass that defines its own ``__init__`` is
-    NOT generation-capable, so no token is minted for its eligible
-    ``loans__note__icontains`` leaf and the request runs the ORIGINAL outer
+    NOT generation-capable, so its eligible
+    ``loans__note__icontains`` leaf is not routable and the request runs the ORIGINAL outer
     invocation instead of a correlated ``EXISTS`` -- fail closed regardless of what
     the ``__init__`` body does.
     """
@@ -6567,10 +6434,9 @@ def test_capability_gate_init_override_fails_closed():
     assert InitOverrideFilter._is_generation_capable() is False
     InitOverrideFilter.get_filters()
     row = InitOverrideFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    # The path is still eligible, but no capability token was minted.
+    # The path is still eligible, but the class is not capable -> not routable.
     assert row.eligible is True
-    assert row.token is None
-    assert row.fingerprint is None
+    assert row.routable is False
 
     result = InitOverrideFilter(
         data={"loans__note__icontains": "Cardio"},
@@ -6615,10 +6481,9 @@ def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
     assert MutatingFilter._is_generation_capable() is False
     MutatingFilter.get_filters()
     row = MutatingFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    # The path is still eligible, but no capability token was minted.
+    # The path is still eligible, but the class is not capable -> not routable.
     assert row.eligible is True
-    assert row.token is None
-    assert row.fingerprint is None
+    assert row.routable is False
 
     result = MutatingFilter(
         data={"loans__note__icontains": "cardio"},
@@ -6654,7 +6519,7 @@ def test_capability_gate_filter_for_lookup_override_fails_closed():
     leaf = LookupOverrideFilter.get_filters()["loans__note__icontains"]
     assert isinstance(leaf, CustomGenerated)
     row = LookupOverrideFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    assert row.token is None
+    assert row.routable is False
 
     result = LookupOverrideFilter(
         data={"loans__note__icontains": "cardio"},
@@ -6682,7 +6547,7 @@ def test_capability_gate_class_level_filter_defaults_override_fails_closed():
     assert DefaultsOverrideFilter._is_generation_capable() is False
     DefaultsOverrideFilter.get_filters()
     row = DefaultsOverrideFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    assert row.token is None
+    assert row.routable is False
 
     result = DefaultsOverrideFilter(
         data={"loans__note__icontains": "cardio"},
@@ -6699,12 +6564,12 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
 
     ``__init__`` is the standard place a consumer replaces ``self.filters`` per
     request, so overriding it is itself a generation-capability BREAK (round-4
-    Blocker 1): the class mints NO token or fingerprint for its otherwise-eligible
-    ``genres__name__icontains`` leaf, so routing fails closed at the capability
-    gate -- independent of whatever the ``__init__`` body does to the live
-    instance. The end-to-end result is unchanged from the prior contract (the
-    replaced TITLE filter runs on the outer queryset), but the fail-closed
-    MECHANISM is now the capability gate rather than a live token/fingerprint miss.
+    Blocker 1): its otherwise-eligible ``genres__name__icontains`` leaf is NOT
+    routable, so routing fails closed at the build-time capability gate --
+    independent of whatever the ``__init__`` body does to the live instance. The
+    replaced TITLE filter runs on the outer queryset, exactly as the consumer
+    authored it. This build-time gate is the ONLY mechanism closing this seam,
+    which is why it must not be weakened.
     """
     shelf = _library_shelf()
     by_title = library_models.Book.objects.create(shelf=shelf, title="Cardiology Handbook")
@@ -6724,14 +6589,13 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
                 lookup_expr="icontains",
             )
 
-    # The ``__init__`` override alone makes the class non-capable: no token / no
-    # fingerprint is minted, so the leaf can never be routed.
+    # The ``__init__`` override alone makes the class non-capable, so the leaf can
+    # never be routed.
     assert ReplacingFilter._is_generation_capable() is False
     ReplacingFilter.get_filters()
     frozen = ReplacingFilter._expansion_snapshot().candidates["genres__name__icontains"]
     assert frozen.eligible is True
-    assert frozen.token is None
-    assert frozen.fingerprint is None
+    assert frozen.routable is False
 
     instance = ReplacingFilter(
         data={"genres__name__icontains": "cardio"},
@@ -6745,58 +6609,12 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
 
 
 @pytest.mark.django_db
-def test_capability_gate_live_mutation_diverges_fingerprint_fails_closed():
-    """Seam 5: mutating the live ``self.filters`` entry diverges the fingerprint.
-
-    A capable class with an eligible ``loans__note__icontains`` leaf. The live
-    per-request instance's ``distinct`` is flipped to ``False`` before ``.qs``, so
-    the live fingerprint no longer matches the frozen one and routing fails
-    closed. The outer invocation then runs WITHOUT the framework ``distinct``, so
-    a book with TWO matching loans fans out to a duplicate row -- observably
-    different from the single-row correlated-``EXISTS`` result, and proof the
-    stale row did not authorize routing.
-    """
-    shelf = _library_shelf()
-    matched = library_models.Book.objects.create(shelf=shelf, title="Matched")
-    library_models.Loan.objects.create(
-        book=matched,
-        patron=library_models.Patron.objects.create(name="pa", email="a"),
-        note="Cardio one",
-    )
-    library_models.Loan.objects.create(
-        book=matched,
-        patron=library_models.Patron.objects.create(name="pb", email="b"),
-        note="Cardio two",
-    )
-
-    class BookLoanFilter(FilterSet):
-        class Meta:
-            model = library_models.Book
-            fields = {"loans__note": ["icontains"]}
-
-    BookLoanFilter.get_filters()
-    instance = BookLoanFilter(
-        data={"loans__note__icontains": "cardio"},
-        queryset=library_models.Book.objects.order_by("id"),
-        request=HttpRequest(),
-    )
-    # Diverge the live fingerprint by dropping the framework-added distinct.
-    instance.filters["loans__note__icontains"].distinct = False
-
-    result = instance.qs
-    assert _reserved_aliases(result) == []
-    # No distinct + a JOIN over two matching loans fans out to duplicate rows.
-    assert list(result.order_by("id").values_list("pk", flat=True)) == [matched.pk, matched.pk]
-
-
-@pytest.mark.django_db
 def test_capability_gate_positive_control_unmodified_leaf_is_routed():
     """Positive control: an unmodified package eligible to-many leaf IS routed.
 
-    Proves the gate does not over-block: a capable class's frozen row carries a
-    token, the live deepcopied instance carries the SAME token (survived
-    ``copy.deepcopy`` by value), the live fingerprint matches, and the request
-    composes as a single distinct-free correlated ``EXISTS``.
+    Proves the gate does not over-block: a capable class's frozen row is routable,
+    and the request composes as a single distinct-free correlated ``EXISTS``
+    returning the correct row.
     """
     matched_pk, _other_pk = _seed_two_books_one_cardio_loan()
 
@@ -6809,24 +6627,13 @@ def test_capability_gate_positive_control_unmodified_leaf_is_routed():
     BookLoanFilter.get_filters()
     frozen = BookLoanFilter._expansion_snapshot().candidates["loans__note__icontains"]
     assert frozen.eligible is True
-    assert frozen.token is not None
-    assert frozen.fingerprint is not None
+    assert frozen.routable is True
 
     instance = BookLoanFilter(
         data={"loans__note__icontains": "cardio"},
         queryset=library_models.Book.objects.order_by("id"),
         request=HttpRequest(),
     )
-    from django_strawberry_framework.filters.sets import (
-        _GENERATION_TOKEN_ATTR,
-        _fingerprint_of,
-    )
-
-    live = instance.filters["loans__note__icontains"]
-    # Token survived the per-request deepcopy by VALUE and matches the frozen row.
-    assert getattr(live, _GENERATION_TOKEN_ATTR, None) == frozen.token
-    assert _fingerprint_of(live) == frozen.fingerprint
-
     result = instance.qs
     assert _reserved_aliases(result) == ["_dst_predicate_0"]
     assert result.query.distinct is False
@@ -6878,8 +6685,8 @@ def test_is_generation_capable_false_for_plain_function_seam_override():
 # building the snapshot, but an expanded leaf was generated by the CHILD. The
 # child's capability is captured at its generation site on
 # ``FilterGenerationProvenance.generation_capable`` and inherited through
-# ``_expand_related_filter``; the mint gate requires it, so a non-capable
-# child's leaf expanded into a capable parent stays token-less (fail closed)
+# ``_expand_related_filter``; the routable verdict requires it, so a non-capable
+# child's leaf expanded into a capable parent stays non-routable (fail closed)
 # while a fully-capable pair still routes through the correlated ``EXISTS``.
 # ---------------------------------------------------------------------------
 
@@ -6920,10 +6727,10 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     The custom child class is an unaudited ``CharFilter`` subclass, so under the
     exact-class family gate (feedback.md Blocker 2) it resolves to NO profile and
     the expanded ``loans__note__icontains`` row is INELIGIBLE -- a fail-closed
-    FAMILY-gate layer that subsumes the token gate: even were it eligible, the
-    propagated ``generation_capable=False`` would still withhold the token. Either
-    way no token/fingerprint is minted, so the consumer's custom child filter is
-    never routed through the correlated ``EXISTS`` adapter.
+    FAMILY-gate layer that subsumes the capability gate: even were it eligible, the
+    propagated ``generation_capable=False`` would still make it non-routable. Either
+    way the consumer's custom child filter is never routed through the correlated
+    ``EXISTS`` adapter.
 
     At request time the leaf therefore runs the ORIGINAL child filter on the
     OUTER queryset: with no framework ``distinct`` on the flattened leaf, a book
@@ -6960,15 +6767,14 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     ParentBookFilter.get_filters()
     # The expanded leaf is the consumer's custom class and framework-origin, but
     # fail-closed on TWO agreeing layers: ineligible (unaudited subclass resolves
-    # to no family) AND no token (the child was not generation-capable).
+    # to no family) AND non-routable (the child was not generation-capable).
     leaf = ParentBookFilter.get_filters()["loans__note__icontains"]
     assert isinstance(leaf, CustomChildGenerated)
     assert _family_profile_for(leaf) is None  # unaudited subclass -> no family (Blocker 2)
     row = ParentBookFilter._expansion_snapshot().candidates["loans__note__icontains"]
     assert row.eligible is False  # ...so the leaf never becomes an eligible candidate
     assert row.provenance.generation_capable is False  # ...and the child bit propagated
-    assert row.token is None
-    assert row.fingerprint is None
+    assert row.routable is False
 
     result = ParentBookFilter(
         data={"loans__note__icontains": "cardio"},
@@ -6988,11 +6794,8 @@ def test_capability_gate_related_filter_expands_capable_child_is_routed():
 
     The mirror of the fail-closed expansion test. With a fully capable child
     ``FilterSet`` (no generation-seam override), the expanded
-    ``loans__note__icontains`` row carries ``generation_capable=True`` and the
-    capable parent mints a token + fingerprint. The parent is the sole authority
-    on the expanded leaf's token: any child-minted token is popped in
-    ``_expand_related_filter`` before the parent re-mints, and the parent's token
-    survives the per-request deepcopy by value. The request composes as a single
+    ``loans__note__icontains`` row carries ``generation_capable=True``, so the
+    capable parent freezes it ROUTABLE. The request composes as a single
     distinct-free correlated ``EXISTS``, proving the fix does not over-block the
     legitimate expansion case.
     """
@@ -7017,25 +6820,13 @@ def test_capability_gate_related_filter_expands_capable_child_is_routed():
     row = ParentBookFilter._expansion_snapshot().candidates["loans__note__icontains"]
     assert row.eligible is True
     assert row.provenance.generation_capable is True
-    assert row.token is not None
-    assert row.fingerprint is not None
+    assert row.routable is True
 
     instance = ParentBookFilter(
         data={"loans__note__icontains": "cardio"},
         queryset=library_models.Book.objects.order_by("id"),
         request=HttpRequest(),
     )
-    from django_strawberry_framework.filters.sets import (
-        _GENERATION_TOKEN_ATTR,
-        _fingerprint_of,
-    )
-
-    live = instance.filters["loans__note__icontains"]
-    # The parent's token survived the per-request deepcopy by value; the child's
-    # token (popped in ``_expand_related_filter``) never rode along.
-    assert getattr(live, _GENERATION_TOKEN_ATTR, None) == row.token
-    assert _fingerprint_of(live) == row.fingerprint
-
     result = instance.qs
     # Routed through the correlated adapter: one reserved EXISTS alias, no outer
     # distinct, and the two matching loans collapse to a single row.
@@ -7119,8 +6910,8 @@ def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligi
 
     On the SAME class that carries a ``BooleanField`` override, the plain
     ``loans__note__icontains`` leaf resolves to a ``TextField`` selection the
-    override does NOT govern, so it stays ``framework_default`` and eligible (a
-    capability token is minted). This proves per-leaf precision -- a
+    override does NOT govern, so it stays ``framework_default``, eligible AND
+    routable. This proves per-leaf precision -- a
     ``filter_overrides`` entry does NOT blanket-demote every leaf on the class.
     """
     import django_filters
@@ -7146,7 +6937,7 @@ def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligi
     assert filter_generation_provenance(icontains).origin == "framework_default"
     row = candidates["loans__note__icontains"]
     assert row.eligible is True
-    assert row.token is not None
+    assert row.routable is True
 
 
 def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup():
@@ -7172,16 +6963,13 @@ def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup():
 
 
 # ======================================================================
-# Round-5 High 3: parameterized fail-closed signature acceptance matrix
+# Row-preservation harness: a PRE-FANNED outer queryset.
 # ----------------------------------------------------------------------
-# The Part 1 plan enumerates a FINITE authorization boundary; round-5 High 3
-# requires an acceptance row for EVERY enumerated signature member, not only the
-# handful previously exercised. A shared pre-fanned harness proves the SAME four
-# invariants for each mutation: the capability token stays EQUAL, the semantic
-# signature DIVERGES, no reserved ``EXISTS`` alias attaches, and the ORIGINAL
-# outer invocation's result (the framework-``distinct`` collapse of the pre-fan)
-# wins. Helper descriptors are covered in BOTH halves the signature models --
-# instance ``__dict__`` override and class-level descriptor replacement.
+# The row-preserving guarantee is only observable when the INCOMING queryset
+# already carries duplicate rows: the correlated ``EXISTS`` suppresses the
+# framework fan-out ``distinct`` and preserves the caller's multiplicity, whereas
+# the original outer invocation honors ``distinct`` and collapses it. This shared
+# harness makes that difference assertable on real rows.
 # ======================================================================
 
 
@@ -7191,8 +6979,8 @@ class _R5PreFanBookFilter(FilterSet):
     ``Genre`` is NOT registered as a Relay node, so ``genres`` stays the review's
     exact ``ModelMultipleChoiceFilter`` family (the one whose ``get_filter_predicate``
     reads ``field.to_field_name``), generated through the package's own machinery ->
-    eligible, token-bearing. The snapshot is frozen once at import; each test seeds
-    its own rows and re-derives the live signature.
+    eligible and routable. The snapshot is frozen once at import; each test seeds
+    its own rows.
     """
 
     class Meta:
@@ -7204,7 +6992,7 @@ def _r5_prefan_candidate():
     _R5PreFanBookFilter.get_filters()
     candidate = _R5PreFanBookFilter._expansion_snapshot().candidates["genres"]
     assert candidate.eligible is True
-    assert candidate.token is not None
+    assert candidate.routable is True
     return candidate
 
 
@@ -7240,128 +7028,12 @@ def _r5_prefanned_books():
     return library_models.Book.objects.filter(loans__isnull=False).order_by("id")
 
 
-# -- behavioral matrix building blocks (docs/feedback.md High 5) ---------------
-# High 5 requires each routed signature member to carry a GENUINELY behavioral
-# acceptance row: the mutation must alter the ORIGINAL filter's predicate (or its
-# no-op decision) on a PRE-FANNED outer queryset, so a signature that reads the
-# wrong construction proxy would BOTH fail to diverge AND smuggle an observably
-# wrong predicate into the correlated ``EXISTS``. Effect-identical delegates (which
-# only prove the frozen dataclass noticed a changed attribute -- exactly how the
-# prior ``to_field_name`` blocker survived) are replaced. Members that are
-# inert-by-equivalence for a ROUTED leaf per the ``_fingerprint_of`` effective-read
-# audit (``always_filter`` / ``is_noop``) get a documented equivalence test, never a
-# hollow behavioral claim.
-
-
-class _R5CharPreFanFilter(FilterSet):
-    """Scalar harness: an eligible reverse-FK ``loans__note`` ``CharFilter`` leaf.
-
-    The ``_SCALAR_LOOKUP_PROFILE`` family carries the core reads ``field_name`` /
-    ``lookup_expr`` cleanly (a ``ModelMultipleChoiceFilter`` predicate is rigidly
-    instance-shaped, so those two core members are exercised here rather than on the
-    genres harness). Books are pre-fanned by TWO genres (an independent to-many join)
-    so a correlated ``EXISTS`` over ``loans`` preserves the fan while the framework
-    ``distinct`` collapses it on the outer fallback.
-    """
-
-    class Meta:
-        model = library_models.Book
-        fields = {"loans__note": ["icontains"]}
-
-
-def _char_prefan_candidate():
-    _R5CharPreFanFilter.get_filters()
-    candidate = _R5CharPreFanFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    assert candidate.eligible is True
-    assert candidate.token is not None
-    return candidate
-
-
-class _SwapMatchNoneFilter(CharFilter):
-    """A DIFFERENT registered family (scalar) for the wholesale-class-swap row.
-
-    ``CharFilter`` resolves to ``_SCALAR_LOOKUP_PROFILE`` -- a real registered family,
-    distinct from the genres leaf's ``_MODEL_MULTIPLE_CHOICE_PROFILE`` -- so swapping
-    the live instance to it diverges BOTH ``filter_class`` and ``family`` (a swap
-    between two KNOWN families still fails closed, complementing the unknown-family
-    swap test). Its ``.filter`` matches nothing, so the smuggled-vs-fallback outcomes
-    are observably different.
-    """
-
-    def filter(self, qs, value):
-        return qs.none()
-
-
-def _prefan_genre_book(shelf, title, genres):
-    """A ``Book`` with ``genres`` and TWO loans (distinct patrons).
-
-    The to-many ``loans`` join fans the book into two rows -- the pre-fan a correlated
-    ``EXISTS`` preserves and the framework ``distinct`` collapses on the outer
-    fallback.
-    """
-    book = library_models.Book.objects.create(shelf=shelf, title=title)
-    for genre in genres:
-        book.genres.add(genre)
-    for tag in ("a", "b"):
-        patron = library_models.Patron.objects.create(
-            name=f"{title}-{tag}",
-            email=f"{title}-{tag}@example.com",
-        )
-        library_models.Loan.objects.create(book=book, patron=patron, note=f"{title}-{tag}")
-    return book
-
-
-def _prefan_note_book(
-    shelf,
-    title,
-    note,
-    patron_name,
-):
-    """A ``Book`` with TWO genres (the pre-fan) and ONE loan carrying ``note``.
-
-    The genres join is the independent to-many fan; the ``loans__note`` leaf is what
-    routes (its own ``loans`` join lands only on the outer fallback, collapsed by the
-    framework ``distinct``).
-    """
-    book = library_models.Book.objects.create(shelf=shelf, title=title)
-    g1 = library_models.Genre.objects.create(name=f"{title}-g1")
-    g2 = library_models.Genre.objects.create(name=f"{title}-g2")
-    book.genres.add(g1, g2)
-    patron = library_models.Patron.objects.create(name=patron_name, email=f"{patron_name}@e.com")
-    library_models.Loan.objects.create(book=book, patron=patron, note=note)
-    return book
-
-
-class _BehavioralCase(NamedTuple):
-    """One genuinely-behavioral signature-matrix row (docs/feedback.md High 5).
-
-    ``mutate`` receives the request-bound ``FilterSet`` and either mutates the live
-    leaf's value under test or replaces the leaf wholesale. ``unmutated_pks`` is the
-    routed (pre-fan-preserved) baseline the genuine leaf yields; ``mutated_pks`` is
-    the fail-closed outer-fallback result of the MUTATED predicate. They must differ
-    -- that difference is the proof the mutated value is behaviorally relevant, not an
-    effect-identical delegate. ``sql_mode`` selects the fallback SQL-shape assertion
-    (``no_exists`` = plain JOIN+DISTINCT; ``exclude`` = Django's own exclude subquery;
-    ``empty`` = a match-none queryset whose SQL cannot compile).
-    """
-
-    filterset_cls: type
-    leaf_name: str
-    candidate: Any
-    data: dict
-    outer: Any
-    mutate: Any
-    unmutated_pks: list
-    mutated_pks: list
-    sql_mode: str
-
-
 def _r5_prefan_setup():
     """Frozen candidate + a pre-fanned Book/Genre + an unvalidated request filterset.
 
-    The scaffold every signature-matrix test shares: the eligible frozen candidate,
-    the two-loan pre-fanned book, and the request-bound filterset over the pre-fanned
-    queryset. Each caller validates (or not) and reads / mutates the leaf itself.
+    The row-preservation scaffold: the eligible frozen candidate, the two-loan
+    pre-fanned book, and the request-bound filterset over the pre-fanned queryset.
+    Each caller validates (or not) and reads the leaf itself.
     """
     candidate = _r5_prefan_candidate()
     book, genre = _seed_r5_prefan_genre_book()
@@ -7371,466 +7043,6 @@ def _r5_prefan_setup():
         request=HttpRequest(),
     )
     return candidate, book, genre, fs
-
-
-def _assert_prefan_failed_closed(fs, candidate, book):
-    """The four fail-closed invariants shared by every signature-mutation test.
-
-    Token EQUAL, semantic signature DIVERGES, no reserved ``EXISTS`` alias, and the
-    ORIGINAL outer invocation's result (the pre-fan collapsed to one row by the
-    framework ``distinct``) rather than the correlated adapter's preserved pre-fan.
-    """
-    leaf = fs.filters["genres"]
-    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(leaf) != candidate.fingerprint
-    qs = fs.qs
-    assert _reserved_aliases(qs) == []
-    assert "EXISTS" not in str(qs.query).upper()
-    assert list(qs.values_list("pk", flat=True)) == [book.pk]
-
-
-# -- behavioral instance-mutation scenarios (each ALTERS the predicate) ---------
-
-
-def _behavioral_conjoined():
-    shelf = _library_shelf()
-    g1 = library_models.Genre.objects.create(name="conj-g1")
-    g2 = library_models.Genre.objects.create(name="conj-g2")
-    both = _prefan_genre_book(shelf, "conj-both", [g1, g2])
-    one = _prefan_genre_book(shelf, "conj-one", [g1])
-
-    def mutate(fs):
-        # OR (default) -> AND: only the book carrying BOTH genres survives.
-        fs.filters["genres"].conjoined = True
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g1.pk), str(g2.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[
-            both.pk,
-            both.pk,
-            one.pk,
-            one.pk,
-        ],
-        mutated_pks=[both.pk],
-        sql_mode="no_exists",
-    )
-
-
-def _behavioral_null_value():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="nv-g")
-    with_g = _prefan_genre_book(shelf, "nv-with", [g])
-    without = _prefan_genre_book(shelf, "nv-without", [])
-
-    def mutate(fs):
-        # The submitted genre now EQUALS null_value, so filter() coerces it to None
-        # and the predicate becomes ``genres IS NULL`` -- matching the book WITHOUT
-        # genres, not the one that carries ``g``.
-        fs.filters["genres"].null_value = g
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[without.pk],
-        sql_mode="no_exists",
-    )
-
-
-def _behavioral_get_method_exclude():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="gm-g")
-    with_g = _prefan_genre_book(shelf, "gm-with", [g])
-    without = _prefan_genre_book(shelf, "gm-without", [])
-
-    def mutate(fs):
-        # filter -> exclude via the instance ``get_method`` override: the result set
-        # is INVERTED to the books WITHOUT ``g``.
-        fs.filters["genres"].get_method = lambda qs: qs.exclude
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[without.pk],
-        sql_mode="exclude",
-    )
-
-
-def _behavioral_exclude_flag():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="ex-g")
-    with_g = _prefan_genre_book(shelf, "ex-with", [g])
-    without = _prefan_genre_book(shelf, "ex-without", [])
-
-    def mutate(fs):
-        # The core ``exclude`` field (a DIFFERENT signature member than get_method):
-        # get_method reads ``self.exclude``, so the predicate is likewise inverted.
-        fs.filters["genres"].exclude = True
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[without.pk],
-        sql_mode="exclude",
-    )
-
-
-def _behavioral_get_filter_predicate():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="gfp-g")
-    h = library_models.Genre.objects.create(name="gfp-h")
-    with_g = _prefan_genre_book(shelf, "gfp-with-g", [g])
-    with_h = _prefan_genre_book(shelf, "gfp-with-h", [h])
-
-    def mutate(fs):
-        # Rebuild the predicate against a DIFFERENT genre: the matched book changes
-        # from the ``g`` book to the ``h`` book.
-        fs.filters["genres"].get_filter_predicate = lambda v: {"genres": h}
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[with_h.pk],
-        sql_mode="no_exists",
-    )
-
-
-def _behavioral_filter_override():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="fo-g")
-    with_g = _prefan_genre_book(shelf, "fo-with", [g])
-
-    def mutate(fs):
-        # A direct instance ``.filter`` override (the ``filter_override`` half): the
-        # generated predicate is replaced with a match-none.
-        fs.filters["genres"].filter = lambda qs, value: qs.none()
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[],
-        sql_mode="empty",
-    )
-
-
-def _behavioral_method():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="me-g")
-    with_g = _prefan_genre_book(shelf, "me-with", [g])
-
-    def mutate(fs):
-        # Installing a consumer ``method`` swaps in a ``FilterMethod`` (the ``method``
-        # AND ``filter_override`` halves both diverge); it here matches none.
-        fs.filters["genres"].method = lambda qs, name, value: qs.none()
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=_r5_prefan_candidate(),
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[],
-        sql_mode="empty",
-    )
-
-
-def _behavioral_class_swap():
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="cs-g")
-    with_g = _prefan_genre_book(shelf, "cs-with", [g])
-    candidate = _r5_prefan_candidate()
-
-    def mutate(fs):
-        # Wholesale replacement with a DIFFERENT registered family carrying the SAME
-        # token: ``filter_class`` + ``family`` both diverge, so the token check passes
-        # and ONLY the fingerprint refuses routing.
-        swapped = _SwapMatchNoneFilter(field_name="genres", lookup_expr="exact")
-        _stamp_generation_token(swapped, candidate.token)
-        fs.filters["genres"] = swapped
-
-    return _BehavioralCase(
-        filterset_cls=_R5PreFanBookFilter,
-        leaf_name="genres",
-        candidate=candidate,
-        data={"genres": [str(g.pk)]},
-        outer=_r5_prefanned_books(),
-        mutate=mutate,
-        unmutated_pks=[with_g.pk, with_g.pk],
-        mutated_pks=[],
-        sql_mode="empty",
-    )
-
-
-def _behavioral_char_lookup_expr():
-    shelf = _library_shelf()
-    a = _prefan_note_book(shelf, "le-a", note="alpha", patron_name="le-a-patron")
-    b = _prefan_note_book(shelf, "le-b", note="alphabet", patron_name="le-b-patron")
-
-    def mutate(fs):
-        # icontains -> iexact: "alphabet" no longer matches "alpha", so ``b`` drops.
-        fs.filters["loans__note__icontains"].lookup_expr = "iexact"
-
-    return _BehavioralCase(
-        filterset_cls=_R5CharPreFanFilter,
-        leaf_name="loans__note__icontains",
-        candidate=_char_prefan_candidate(),
-        data={"loans__note__icontains": "alpha"},
-        outer=library_models.Book.objects.filter(genres__isnull=False).order_by("id"),
-        mutate=mutate,
-        unmutated_pks=[
-            a.pk,
-            a.pk,
-            b.pk,
-            b.pk,
-        ],
-        mutated_pks=[a.pk],
-        sql_mode="no_exists",
-    )
-
-
-def _behavioral_char_field_name():
-    shelf = _library_shelf()
-    by_note = _prefan_note_book(shelf, "fn-a", note="alpha", patron_name="fn-a-zeta")
-    by_patron = _prefan_note_book(shelf, "fn-c", note="fn-c-zeta", patron_name="alpha-fan")
-
-    def mutate(fs):
-        # Redirect the ORM target from the note column to the patron-name column: the
-        # matched book changes from the note-match to the patron-name-match.
-        fs.filters["loans__note__icontains"].field_name = "loans__patron__name"
-
-    return _BehavioralCase(
-        filterset_cls=_R5CharPreFanFilter,
-        leaf_name="loans__note__icontains",
-        candidate=_char_prefan_candidate(),
-        data={"loans__note__icontains": "alpha"},
-        outer=library_models.Book.objects.filter(genres__isnull=False).order_by("id"),
-        mutate=mutate,
-        unmutated_pks=[by_note.pk, by_note.pk],
-        mutated_pks=[by_patron.pk],
-        sql_mode="no_exists",
-    )
-
-
-def _run_behavioral_matrix_case(case):
-    """Assert the four common invariants + genuine behavioral relevance for one row.
-
-    (1) the UNMUTATED leaf routes through ONE correlated ``EXISTS`` and PRESERVES the
-    pre-fan (the baseline that distinguishes routing from the required outer fallback);
-    (2) the mutated leaf keeps its token but DIVERGES the signature, so it fails closed
-    -- no reserved correlated alias, the documented fallback SQL-shape, and the MUTATED
-    predicate's ordered rows on the outer; (3) the mutated rows DIFFER from the routed
-    baseline, proving the mutated value is behaviorally relevant (not an
-    effect-identical delegate that only trips dataclass equality).
-    """
-    # (1) positive baseline: the genuine leaf routes and preserves the pre-fan.
-    fs_ok = case.filterset_cls(data=case.data, queryset=case.outer, request=HttpRequest())
-    assert fs_ok.form.is_valid()
-    ok_leaf = fs_ok.filters[case.leaf_name]
-    assert getattr(ok_leaf, _GENERATION_TOKEN_ATTR, None) == case.candidate.token
-    assert _fingerprint_of(ok_leaf) == case.candidate.fingerprint
-    ok_qs = fs_ok.qs
-    assert len(_reserved_aliases(ok_qs)) == 1
-    assert str(ok_qs.query).upper().count("EXISTS") == 1
-    assert list(ok_qs.order_by("id").values_list("pk", flat=True)) == case.unmutated_pks
-    # (2) mutated: token equal, signature diverges -> fail closed to the outer.
-    fs = case.filterset_cls(data=case.data, queryset=case.outer, request=HttpRequest())
-    assert fs.form.is_valid()
-    case.mutate(fs)
-    leaf = fs.filters[case.leaf_name]
-    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == case.candidate.token
-    assert _fingerprint_of(leaf) != case.candidate.fingerprint
-    qs = fs.qs
-    assert _reserved_aliases(qs) == []
-    if case.sql_mode == "empty":
-        # A match-none queryset: its query cannot compile (EmptyResultSet), so the
-        # alias absence + the empty ordered rows are the authoritative fallback proof.
-        assert case.mutated_pks == []
-    else:
-        sql = str(qs.query).upper()
-        # The framework fan-out ``distinct`` is HONORED on the outer fallback (the
-        # correlated adapter would have suppressed it) -- the JOIN+DISTINCT shape.
-        assert "DISTINCT" in sql
-        if case.sql_mode == "no_exists":
-            assert "EXISTS" not in sql
-        # sql_mode == "exclude": Django's OWN exclude compiles a subquery that may use
-        # EXISTS; the ADAPTER's absence is proven structurally by the alias check above.
-    assert list(qs.order_by("id").values_list("pk", flat=True)) == case.mutated_pks
-    # (3) behavioral relevance: the mutation actually changed the matched rows.
-    assert case.mutated_pks != case.unmutated_pks
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "scenario",
-    [
-        pytest.param(_behavioral_conjoined, id="conjoined_or_to_and"),
-        pytest.param(_behavioral_null_value, id="null_value_to_isnull"),
-        pytest.param(_behavioral_get_method_exclude, id="get_method_filter_to_exclude"),
-        pytest.param(_behavioral_exclude_flag, id="exclude_flag"),
-        pytest.param(_behavioral_get_filter_predicate, id="get_filter_predicate_redirect"),
-        pytest.param(_behavioral_filter_override, id="filter_override_match_none"),
-        pytest.param(_behavioral_method, id="method_installs_filtermethod"),
-        pytest.param(_behavioral_class_swap, id="wholesale_class_swap"),
-        pytest.param(_behavioral_char_lookup_expr, id="lookup_expr_icontains_to_iexact"),
-        pytest.param(_behavioral_char_field_name, id="field_name_note_to_patron"),
-    ],
-)
-def test_signature_matrix_behavioral_instance_mutation_fails_closed(scenario):
-    """Every routed signature member with a behavioral mutation fails closed (High 5).
-
-    Rebuilds the round-5 instance matrix as GENUINELY behavioral rows: each mutation
-    alters the original filter's predicate on a pre-fanned outer queryset, so a
-    signature reading the wrong construction proxy would BOTH fail to diverge AND
-    smuggle an observably wrong predicate into the correlated ``EXISTS`` (exactly how
-    the prior ``to_field_name`` blocker survived). Covers the multi-choice reads
-    (``conjoined`` OR->AND, ``null_value`` ->isnull, ``get_filter_predicate`` redirect)
-    and the core reads (``get_method`` filter->exclude, ``exclude``, ``.filter``,
-    ``method``, ``filter_class``/``family`` via a wholesale class swap, ``field_name``,
-    ``lookup_expr``).
-    """
-    _run_behavioral_matrix_case(scenario())
-
-
-@pytest.mark.django_db
-def test_signature_matrix_class_descriptor_behavioral_fails_closed():
-    """The concrete-class-function half of the callable profile members, behavioral.
-
-    The signature captures every dispatch helper in two deepcopy-stable halves
-    (instance ``__dict__`` override + concrete-class function); the override half is
-    exercised by ``test_signature_matrix_behavioral_instance_mutation_fails_closed``.
-    This covers the CLASS-function half for ``get_method`` (filter->exclude),
-    ``get_filter_predicate`` (redirect to a different genre) and ``.filter``
-    (match-none) -- each a genuine behavioral inversion, each proven to fail closed to
-    the outer invocation on the pre-fanned queryset (``docs/feedback.md`` High 5).
-    A class-level patch also diverges the frozen candidate's ``*_descriptor`` half,
-    which the baseline candidate captured BEFORE the patch.
-    """
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="cd-g")
-    h = library_models.Genre.objects.create(name="cd-h")
-    with_g = _prefan_genre_book(shelf, "cd-with-g", [g])
-    without = _prefan_genre_book(shelf, "cd-without", [])
-    with_h = _prefan_genre_book(shelf, "cd-with-h", [h])
-    candidate = _r5_prefan_candidate()
-
-    def _fresh_leaf():
-        fs = _R5PreFanBookFilter(
-            data={"genres": [str(g.pk)]},
-            queryset=_r5_prefanned_books(),
-            request=HttpRequest(),
-        )
-        assert fs.form.is_valid()
-        return fs, fs.filters["genres"]
-
-    # Baseline: the genuine class descriptors route and preserve the pre-fan.
-    fs, leaf = _fresh_leaf()
-    assert _fingerprint_of(leaf) == candidate.fingerprint
-    ok_qs = fs.qs
-    assert len(_reserved_aliases(ok_qs)) == 1
-    assert list(ok_qs.order_by("id").values_list("pk", flat=True)) == [with_g.pk, with_g.pk]
-
-    # get_method class function -> exclude (books WITHOUT ``g``).
-    fs, leaf = _fresh_leaf()
-    with mock.patch.object(type(leaf), "get_method", lambda self, qs: qs.exclude):
-        assert _fingerprint_of(leaf) != candidate.fingerprint
-        qs = fs.qs
-        assert _reserved_aliases(qs) == []
-        rows = list(qs.order_by("id").values_list("pk", flat=True))
-        assert rows == [without.pk, with_h.pk]
-
-    # get_filter_predicate class function -> a different genre (the ``h`` book).
-    fs, leaf = _fresh_leaf()
-    with mock.patch.object(type(leaf), "get_filter_predicate", lambda self, v: {"genres": h}):
-        assert _fingerprint_of(leaf) != candidate.fingerprint
-        qs = fs.qs
-        assert _reserved_aliases(qs) == []
-        assert "EXISTS" not in str(qs.query).upper()
-        assert list(qs.order_by("id").values_list("pk", flat=True)) == [with_h.pk]
-
-    # .filter class function -> match none.
-    fs, leaf = _fresh_leaf()
-    with mock.patch.object(type(leaf), "filter", lambda self, qs, value: qs.none()):
-        assert _fingerprint_of(leaf) != candidate.fingerprint
-        qs = fs.qs
-        assert _reserved_aliases(qs) == []
-        assert list(qs.order_by("id").values_list("pk", flat=True)) == []
-
-
-@pytest.mark.django_db
-def test_signature_matrix_always_filter_and_is_noop_are_inert_by_equivalence():
-    """``always_filter`` / ``is_noop`` diverge the signature but carry NO behavioral row.
-
-    Per the per-family effective-read audit on ``_fingerprint_of``: when ``is_noop``
-    skips, ``MultipleChoiceFilter.filter`` returns its argument UNCHANGED (by
-    identity). On the routed path that argument is the correlated inner root, so
-    ``result is inner_root`` attaches nothing and the outer is unchanged; on the
-    unrouted path it is the outer queryset. Identical rows, count, AND alias either
-    way -- so no pre-fanned fixture can make the mutation observable as
-    routing-vs-fallback, and a behavioral claim would be hollow (``docs/feedback.md``
-    High 5). The signature still signs ``always_filter`` and both ``is_noop`` halves
-    purely as defence in depth; this proves that divergence and demonstrates the
-    no-op-returns-identity premise the equivalence rests on.
-    """
-    shelf = _library_shelf()
-    g = library_models.Genre.objects.create(name="noop-g")
-    with_g = _prefan_genre_book(shelf, "noop-with", [g])
-    candidate = _r5_prefan_candidate()
-    outer = _r5_prefanned_books()
-    fs = _R5PreFanBookFilter(
-        data={"genres": [str(g.pk)]},
-        queryset=outer,
-        request=HttpRequest(),
-    )
-    assert fs.form.is_valid()
-    leaf = fs.filters["genres"]
-    value = fs.form.cleaned_data["genres"]
-    # Make is_noop actually FIRE: not always_filter, required, and the submitted value
-    # covers every field choice (exactly one genre exists in this test).
-    leaf.always_filter = False
-    leaf.extra["required"] = True
-    assert leaf.is_noop(outer, value) is True
-    # The no-op returns its argument UNCHANGED by identity -- the premise of the
-    # equivalence (a routed no-op -> result is inner_root -> attach nothing).
-    assert leaf.filter(outer, value) is outer
-    # ``always_filter`` is signed, so the mutation still diverges the signature
-    # (defence in depth) even though no fixture can observe it as routing-vs-fallback.
-    assert _fingerprint_of(leaf) != candidate.fingerprint
-    # And it fails closed: no reserved correlated alias, and the outer is returned
-    # unchanged (the pre-fan is NOT collapsed, because the no-op precedes ``distinct``).
-    qs = fs.qs
-    assert _reserved_aliases(qs) == []
-    assert list(qs.order_by("id").values_list("pk", flat=True)) == [with_g.pk, with_g.pk]
 
 
 def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
@@ -7857,51 +7069,23 @@ def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
 
 
 @pytest.mark.django_db
-def test_signature_matrix_untouched_leaf_routes_and_preserves_prefan():
-    """Positive control: the untampered live leaf re-derives the frozen signature.
+def test_routed_leaf_preserves_prefanned_multiplicity():
+    """Positive control: a routed leaf PRESERVES incoming pre-fanned row multiplicity.
 
-    Proves the round-5 Blocker-2 build-on-deepcopy capture of the effective
-    ``field.to_field_name`` still yields a signature EQUAL to a genuine request's
-    live signature (so genuine requests are never falsely failed closed): the leaf
-    routes through ONE correlated ``EXISTS`` and PRESERVES the pre-fan (two rows).
+    The row-preserving guarantee stated positively. The incoming outer queryset is
+    already fanned (a ``loans`` join with no ``distinct`` doubles the one book), and an
+    untouched framework ``genres`` leaf is routable, so the correlated ``EXISTS``
+    suppresses the framework fan-out ``distinct`` and the caller's own multiplicity
+    survives -- TWO rows, not the one row the original outer invocation would collapse
+    to. This is what the rewrite buys, and it is asserted on real SQL + real rows
+    rather than on any signature.
     """
     candidate, book, _genre, fs = _r5_prefan_setup()
-    leaf = fs.filters["genres"]
-    assert getattr(leaf, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _fingerprint_of(leaf) == candidate.fingerprint
+    assert candidate.routable is True
     qs = fs.qs
     assert len(_reserved_aliases(qs)) == 1
     assert str(qs.query).upper().count("EXISTS") == 1
     assert list(qs.values_list("pk", flat=True)) == [book.pk, book.pk]
-
-
-@pytest.mark.django_db
-def test_blocker2_live_field_to_field_name_mutation_fails_closed_pre_fanned():
-    """Round-5 Blocker 2: a live ``field.to_field_name`` mutation fails closed.
-
-    ``ModelMultipleChoiceFilter.get_filter_predicate`` reads the built form field's
-    ``to_field_name``, NOT ``extra["to_field_name"]``. Before the fix the signature
-    signed the constructor copy, so a post-validation mutation of the LIVE field
-    (``leaf.field.to_field_name = "name"``) left the token AND signature unchanged
-    and the leaf STILL routed through the correlated adapter -- which suppresses the
-    framework ``distinct`` and preserves the pre-fanned Book multiplicity. Signing
-    the effective runtime read now diverges the signature, so the leaf fails closed
-    to the original outer invocation (honoring ``distinct``): the reserved alias is
-    absent and the pre-fan collapses. Asserts token equality, signature mismatch,
-    alias absence, and the original outer result.
-    """
-    candidate, book, _genre, fs = _r5_prefan_setup()
-    # Validation (with the default pk-based field) resolves the submitted value to
-    # the Genre instance; only AFTER that does the consumer mutate the live field.
-    assert fs.form.is_valid()
-    leaf = fs.filters["genres"]
-    assert (leaf.extra or {}).get("to_field_name") is None
-    leaf.field.to_field_name = "name"
-    assert leaf.field.to_field_name == "name"  # the effective runtime target moved
-    # Fails closed to the original outer predicate ({genres: genre.name}, where the
-    # seeded name equals the genre pk): still matches the book, but honors distinct ->
-    # ONE row, not the adapter's preserved [book, book].
-    _assert_prefan_failed_closed(fs, candidate, book)
 
 
 # ======================================================================
@@ -8222,19 +7406,26 @@ def test_high3_inherited_defaults_identity():
 
 
 def test_public_filter_defaults_matches_upstream_django_filter_table():
-    """Drift guard: the package-authored table mirrors upstream ``FILTER_FOR_DBFIELD_DEFAULTS``.
+    """Drift guard: the package table's SHAPE matches upstream ``FILTER_FOR_DBFIELD_DEFAULTS``.
 
     High 3 / Blocker 1 replaced a snapshot of django-filter's mutable global with a
     package-AUTHORED copy. That copy is deliberate duplication, so it can silently drift
     from django-filter across versions (``docs/feedback.md`` Sixth-review bug hunt): a new
     field type, a changed default ``filter_class``, or an added/removed ``extra`` in a
-    future release would go unnoticed. This pins parity to the INSTALLED django-filter so
-    an upgrade that changes the table fails loudly here (a deliberate re-audit), instead of
-    generating filters from a stale mirror. (The version pin itself is a maintainer
-    dependency-policy call; this test is the mechanism that makes drift visible.)
+    future release would go unnoticed.
 
-    Three structural guards over every entry, plus output parity for the six relation
-    ``extra`` providers on representative live fields.
+    SCOPE -- what this actually compares (``docs/feedback.md`` Seventh review, High 2):
+    the key SET, the per-key ``filter_class`` IDENTITY, ``extra`` PRESENCE per key, and for
+    the six relation kinds the provider's OUTPUT keys plus ``to_field_name`` /
+    ``null_label`` / ``queryset.model``. It does NOT compare full queryset semantics
+    (predicates, database alias, hints, ordering), nor anything INSIDE upstream's
+    registered classes -- a release that changes ``CharFilter.filter`` while keeping the
+    table identical passes this test. Behavior inside an audited release is covered by the
+    optimizer's audited-version range (``_release_is_audited``), not here.
+
+    Scope of enforcement: this is a PACKAGE test, so it guards THIS repository's locked
+    run, not a consumer application's installed version. The consumer-facing boundary is
+    the audited-range gate, which disables the optimization on an unaudited release.
     """
     from django.apps import apps
     from django.db import models as dj_models
@@ -8303,7 +7494,7 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 # global. These regressions prove: (a) a consumer mutation of the global BEFORE the
 # package filter module is imported is NOT captured; (b) an ordering filter and (c) an
 # ``exclude=True`` provider installed via ``Meta.filter_overrides`` are consumer-owned
-# and never routed; and (d) pristine package defaults still mint token-bearing
+# and never routed; and (d) pristine package defaults still produce ROUTABLE
 # candidates.
 # ======================================================================
 
@@ -8357,13 +7548,13 @@ def test_blocker1_import_order_does_not_capture_consumer_global_mutation():
 
 
 @pytest.mark.django_db
-def test_blocker1_ordering_override_on_to_many_path_is_override_generated_and_tokenless():
+def test_blocker1_ordering_override_on_to_many_path_is_override_generated_and_unroutable():
     """A consumer ordering CharFilter on a to-many path is consumer-owned and runs outer.
 
     The review's ordering attack: a custom filter whose OUTER ``.filter`` invocation
     changes ordering, installed via ``Meta.filter_overrides`` on a reverse-FK
     (``loans__note``) path. It must be ``override_generated`` (its normalized entry
-    diverges from the package baseline), carry NO candidate row (tokenless -> never
+    diverges from the package baseline), carry NO candidate row (never
     routed), and run on the OUTER queryset so its ``order_by`` takes effect -- the
     correlated ``EXISTS`` adapter would discard subquery ordering, so accidental routing
     would be observably different from the outer invocation.
@@ -8407,8 +7598,8 @@ def test_blocker1_exclude_extra_override_refused_and_pristine_never_excludes():
     ``Meta.filter_overrides`` diverges the normalized entry, so the leaf is
     ``override_generated`` and gets NO candidate row (the gate refuses it) even though
     the generated instance itself carries ``exclude=True``. On the PRISTINE framework
-    path every generated candidate's fingerprint carries ``exclude=False`` -- the
-    standing invariant that generated candidates never carry ``exclude=True``.
+    path every generated candidate leaf carries ``exclude=False`` -- the standing
+    invariant that generated candidates never carry ``exclude=True``.
     """
     from django.db import models as dj_models
 
@@ -8435,20 +7626,21 @@ def test_blocker1_exclude_extra_override_refused_and_pristine_never_excludes():
             model = library_models.Book
             fields = {"loans__note": ["icontains"]}
 
-    PristineFilter.get_filters()
+    pristine_filters = PristineFilter.get_filters()
     candidates = PristineFilter._expansion_snapshot().candidates
     assert candidates  # pristine framework leaves DID produce candidate rows
-    for row in candidates.values():
-        if row.fingerprint is not None:
-            assert row.fingerprint.exclude is False
+    # No pristine framework leaf carries the consumer's ``exclude`` -- read off the
+    # generated instances themselves, which is what django-filter executes.
+    for name in candidates:
+        assert pristine_filters[name].exclude is False
 
 
 @pytest.mark.django_db
-def test_blocker1_pristine_defaults_still_mint_token_bearing_candidate():
-    """Positive control: a pristine framework to-many leaf still mints a token candidate.
+def test_blocker1_pristine_defaults_produce_routable_candidate():
+    """Positive control: a pristine framework to-many leaf is still ROUTABLE.
 
-    Mirrors the review's "prove pristine package defaults still generate token-bearing
-    candidates" so the Blocker-1 fix is not merely closing routing everywhere.
+    Mirrors the review's "prove pristine package defaults still generate routable
+    candidates" so the ownership fix is not merely closing routing everywhere.
     """
 
     class BookFilter(FilterSet):
@@ -8459,9 +7651,8 @@ def test_blocker1_pristine_defaults_still_mint_token_bearing_candidate():
     BookFilter.get_filters()
     row = BookFilter._expansion_snapshot().candidates["loans__note__icontains"]
     assert row.eligible is True
-    assert row.token is not None
-    assert row.fingerprint is not None
-    assert row.fingerprint.exclude is False
+    assert row.routable is True
+    assert BookFilter.base_filters["loans__note__icontains"].exclude is False
 
 
 @pytest.mark.django_db
@@ -8548,9 +7739,10 @@ def test_blocker2_replacement_preserves_restricted_queryset_and_wire_shape():
     consumer instead REPLACES the entry with a restricted-queryset, ``required``
     ``ModelMultipleChoiceFilter``; ownership resolves ``override_generated``, the leaf is
     the consumer's class (NOT a GlobalID), and the restricted queryset survives on the
-    built form field. This is the observable green side of the Blocker-2 fix -- the
-    pre-fix nested-mutation spelling of the same customization is now impossible (see the
-    frozen-ness regressions above).
+    built form field. This is the observable green side of the Blocker-2 fix. (The public
+    ``FILTER_DEFAULTS`` table is intentionally a normal mutable, copyable ``dict`` again;
+    what makes a nested-mutation spelling of this customization non-routable is the
+    ownership comparison against the PRIVATE normalized baseline, not immutability.)
     """
     import django_filters
     from django.db import models as dj_models
@@ -8808,8 +8000,8 @@ def test_r6_benign_base_override_does_not_block_to_many_routing():
 # docs/feedback.md High 4: the supported generated django-filter families are an
 # EXECUTABLE fail-closed boundary (``_FILTER_FAMILY_REGISTRY`` +
 # ``_family_profile_for``), not prose. A framework-origin many-side leaf whose
-# filter class resolves to no registered family is ineligible (never routed) and,
-# as defence in depth, diverges the ``_CandidateFingerprint.family`` field.
+# filter class resolves to no registered family is ineligible, and therefore never
+# routable -- it runs django-filter's original outer invocation instead.
 # ======================================================================
 
 
@@ -8845,73 +8037,6 @@ def _genuine_dynamic_csv_class(lookup: str) -> type:
     field = dj_models.CharField() if lookup == "in" else dj_models.FloatField()
     dynamic_class, _params = FilterSet.filter_for_lookup(field, lookup)
     return dynamic_class
-
-
-# Representative member class per profile for the completeness test. Each class's
-# ``type()`` resolves to the named profile (exact key, or -- for sequence_lookup -- a
-# genuine dynamic CSV class recognized structurally).
-_PROFILE_REPRESENTATIVES: dict[str, type] = {
-    "scalar_lookup": CharFilter,
-    "sequence_lookup": _genuine_dynamic_csv_class("in"),
-    "choice": ChoiceFilter,
-    "model_choice": ModelChoiceFilter,
-    "multiple_choice": MultipleChoiceFilter,
-    "model_multiple_choice": ModelMultipleChoiceFilter,
-    "globalid": GlobalIDFilter,
-    "globalid_multiple": GlobalIDMultipleChoiceFilter,
-}
-
-
-def test_canonical_extractor_schema_matches_fingerprint_fields():
-    """The single canonical extractor tuple IS the fingerprint schema (hybrid simplification).
-
-    Round 8's per-family extractor tuples / ``relevant_reads`` are gone; ``_fingerprint_of``
-    signs ONE canonical ``_ALL_SEMANTIC_EXTRACTORS`` tuple for every family
-    (``docs/feedback.md`` Sixth-review hybrid simplification). This pins the schema integrity
-    that used to be spread across profiles, and does so more strictly:
-
-    * every entry is a ``_SemanticExtractor``;
-    * extractor names are UNIQUE -- a duplicate would let one extractor silently overwrite
-      another in the ``{name: extract(...)}`` build in ``_fingerprint_of`` (a latent
-      fail-open), so this is a real guard, not a tautology;
-    * the extractor names EQUAL every ``_CandidateFingerprint`` field except ``family``
-      (which ``_fingerprint_of`` sets directly). A new signed field with no extractor -- or
-      an extractor with no field -- fails here.
-
-    This is the STRUCTURAL half; that each signed field actually gates routing is proved
-    behaviorally by ``test_signature_matrix_*``.
-    """
-    import dataclasses
-
-    names = [extractor.name for extractor in _ALL_SEMANTIC_EXTRACTORS]
-    assert all(isinstance(extractor, _SemanticExtractor) for extractor in _ALL_SEMANTIC_EXTRACTORS)
-    assert len(names) == len(set(names)), "extractor names must be unique"
-    semantic_fields = {f.name for f in dataclasses.fields(_CandidateFingerprint)} - {"family"}
-    assert set(names) == semantic_fields
-
-
-def test_fingerprint_of_runs_whole_canonical_schema_on_every_family():
-    """``_fingerprint_of`` signs the FULL canonical union for every family (no narrowing).
-
-    The conservative global-union property the user preserved in the hybrid simplification:
-    every recognized family is fingerprinted with the SAME canonical schema, so a family is
-    never signed with a narrowed per-family subset that could go fail-open. For a
-    representative of each family identity, ``_fingerprint_of`` runs on a bare
-    ``object.__new__`` instance WITHOUT raising (every extractor reads via a safe default),
-    resolves the expected ``family`` profile, and populates every semantic field.
-    """
-    import dataclasses
-
-    semantic_fields = {f.name for f in dataclasses.fields(_CandidateFingerprint)} - {"family"}
-    profiles = {profile.name: profile for profile in _ALL_FAMILY_PROFILES}
-    assert set(_PROFILE_REPRESENTATIVES) == set(profiles), "one representative per family"
-    for name, representative in _PROFILE_REPRESENTATIVES.items():
-        # ``object.__new__`` skips ``__init__``; extraction must still never raise.
-        instance = object.__new__(representative)
-        fingerprint = _fingerprint_of(instance)
-        assert fingerprint.family is profiles[name], name
-        signed = {f.name for f in dataclasses.fields(fingerprint)} - {"family"}
-        assert signed == semantic_fields, name
 
 
 @pytest.mark.parametrize(
@@ -9092,9 +8217,9 @@ def test_registry_is_a_closed_exact_allowlist():
     Every EXACT class in ``_FILTER_FAMILY_REGISTRY`` maps to a KNOWN family identity (one of
     the closed ``_ALL_FAMILY_PROFILES``) and resolves to exactly that profile; and NO
     arbitrary subclass of a registered base is accepted merely by ancestry (a generated
-    single-base subclass resolves to ``None``). The profile is now a bare identity (the
-    hybrid simplification removed its extractor inventory), so the read audit is pinned by
-    ``test_canonical_extractor_schema_matches_fingerprint_fields`` instead.
+    single-base subclass resolves to ``None``). The profile is a bare family identity: it
+    answers only "is this one of the audited generated families?", which is the
+    eligibility half of the build-time routable verdict.
     """
     for cls, profile in _FILTER_FAMILY_REGISTRY.items():
         assert profile in _ALL_FAMILY_PROFILES, cls.__name__
@@ -9142,34 +8267,128 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
     assert row.eligible is False  # ...ineligible SOLELY because the family is unknown
 
 
-@pytest.mark.django_db
-def test_unknown_family_live_swap_not_routed_by_applicator():
-    """Defence in depth: an eligible candidate whose LIVE leaf is swapped to an unknown
-    family is NOT routed -- the applicator falls back to the outer invocation.
+# ======================================================================
+# docs/feedback.md (Seventh review) High 2: the AUDITED django-filter range gates
+# the OPTIMIZATION, not the dependency.
+# ----------------------------------------------------------------------
+# ``pyproject.toml`` keeps ``django-filter>=25.2`` UNBOUNDED so a consumer
+# application never hits a dependency-resolution conflict. What is bounded is the
+# release range whose generated families, helper call graphs and relation reads this
+# package has actually reviewed: outside it, EVERY leaf becomes non-routable and
+# filtering falls back wholesale to django-filter's original outer-query path with
+# IDENTICAL results. The verdict is computed once at import and read per FilterSet
+# build, never per query.
+# ======================================================================
 
-    The genres leaf is eligible + token-bearing at build. At request time the live
-    per-request instance is replaced with an unknown-family filter carrying the SAME
-    token, so the token check passes and ONLY the fingerprint gate can refuse routing:
-    the swapped class resolves to no profile, so ``_fingerprint_of`` diverges (via both
-    ``filter_class`` and the new ``family`` field). The applicator therefore runs the
-    ORIGINAL outer ``.filter`` -- no correlated ``EXISTS`` alias is attached.
+
+@pytest.mark.parametrize(
+    ("raw_version", "audited"),
+    [
+        ("25.2", True),  # the exact audited lower edge
+        ("25.2.1", True),  # a patch release inside the floor family
+        ("26.1", True),  # the compatibility-floor cell's version
+        ("26.9.9", True),  # anything below the exclusive upper bound
+        ("25.1", False),  # BELOW the audited floor
+        ("25", False),  # a bare major below the floor (25 < 25.2)
+        ("27.0", False),  # AT the exclusive upper bound
+        ("27", False),  # a bare major at the upper bound
+        ("28.4", False),  # a future unreviewed family
+        ("26.1.dev0", True),  # dev suffix -> compares as its numeric prefix (26, 1)
+        ("junk", False),  # unparseable -> FAIL CLOSED
+        ("", False),  # empty -> FAIL CLOSED
+    ],
+)
+def test_release_is_audited_range_edges(raw_version, audited):
+    """``_release_is_audited`` is an inclusive-lower / exclusive-upper numeric compare.
+
+    Pure-string parsing, so the edges are testable without touching global state.
+    Unparseable input must FAIL CLOSED (not audited): an optimizer that cannot prove
+    the installed release was reviewed must decline the rewrite, never assume it.
     """
-    candidate, _book, genre, fs = _r5_prefan_setup()
-    assert candidate.eligible is True
-    assert candidate.token is not None
-    # Build the form with the genuine ModelMultipleChoiceFilter, THEN swap the live
-    # leaf -- so validation/cleaned_data is unaffected and only the applicator sees
-    # the unknown family.
-    assert fs.form.is_valid()
-    unknown = _UnknownFamilyFilter(field_name="genres", lookup_expr="exact")
-    _stamp_generation_token(unknown, candidate.token)
-    fs.filters["genres"] = unknown
-    # Token equal, but no profile -> fingerprint diverges -> routing refused.
-    assert getattr(unknown, _GENERATION_TOKEN_ATTR, None) == candidate.token
-    assert _family_profile_for(unknown) is None
-    assert _fingerprint_of(unknown) != candidate.fingerprint
-    qs = fs.qs
-    assert getattr(unknown, "_outer_called", False) is True  # outer invocation ran
-    assert _reserved_aliases(qs) == []
-    assert "EXISTS" not in str(qs.query).upper()
-    assert genre is not None  # (fixture kept alive for the M2M row it seeded)
+    lower, upper = _AUDITED_DJANGO_FILTER_RANGE
+    assert lower == (25, 2) and upper == (27,), "update this test with the audited range"
+    assert _release_is_audited(raw_version) is audited
+
+
+def test_installed_django_filter_is_inside_the_audited_range():
+    """CI tripwire: the INSTALLED django-filter must be inside the audited range.
+
+    Deliberately couples the lock to the audit. When the dependency moves to a family
+    outside ``_AUDITED_DJANGO_FILTER_RANGE`` this fails, forcing the maintainer to run
+    the SQL-shape and semantic-parity suite against the new release and widen the range
+    on purpose -- rather than silently optimizing on unreviewed upstream behavior. (The
+    package still INSTALLS and filters correctly on such a release; only the
+    optimization is declined, so this failure is an audit prompt, not a breakage.)
+    """
+    import django_filters
+
+    assert _release_is_audited(django_filters.__version__) is True, (
+        f"django-filter {django_filters.__version__} is outside the audited optimizer "
+        f"range {_AUDITED_DJANGO_FILTER_RANGE}; re-audit, then widen the range."
+    )
+
+
+@pytest.mark.django_db
+def test_unaudited_release_disables_routing_without_changing_results():
+    """On an UNAUDITED release every leaf runs outer -- same rows, different SQL shape.
+
+    The fail-closed degrade. With the audited verdict forced ``False``, an otherwise
+    routable to-many leaf stays ``eligible`` (its own shape is fine) but is NOT
+    ``routable``, so ``_apply_flat_leaves`` runs django-filter's ORIGINAL outer
+    invocation: JOIN + framework ``distinct`` instead of a correlated ``EXISTS``. The
+    ROWS are identical to the audited run -- that is the whole promise, and it is
+    asserted by comparing both runs against each other rather than a hardcoded list.
+
+    Patching this package's OWN module constant is legitimate test tooling for
+    simulating a different installed release; it is NOT the process-wide mutation of
+    django-filter's classes that the narrowed contract declares unsupported.
+    """
+    from django_strawberry_framework.filters import sets as sets_module
+
+    shelf = _library_shelf()
+    matched = library_models.Book.objects.create(shelf=shelf, title="Matched")
+    matched.genres.add(library_models.Genre.objects.create(name="cardiology"))
+    other = library_models.Book.objects.create(shelf=shelf, title="Other")
+    other.genres.add(library_models.Genre.objects.create(name="neurology"))
+
+    def _run(audited):
+        # The verdict is frozen during ``get_filters()``, so the class must be BUILT
+        # inside the patch context for the patched value to take effect.
+        with mock.patch.object(sets_module, "_DJANGO_FILTER_OPTIMIZER_AUDITED", audited):
+
+            class GateBookFilter(FilterSet):
+                class Meta:
+                    model = library_models.Book
+                    fields = {"genres__name": ["icontains"]}
+
+            GateBookFilter.get_filters()
+            row = GateBookFilter._expansion_snapshot().candidates["genres__name__icontains"]
+            queryset = GateBookFilter(
+                data={"genres__name__icontains": "cardio"},
+                queryset=library_models.Book.objects.order_by("id"),
+                request=HttpRequest(),
+            ).qs
+            return row, queryset
+
+    audited_row, audited_qs = _run(True)
+    unaudited_row, unaudited_qs = _run(False)
+
+    # Eligibility is leaf-intrinsic and unchanged; only routability differs.
+    assert audited_row.eligible is True
+    assert unaudited_row.eligible is True
+    assert audited_row.routable is True
+    assert unaudited_row.routable is False
+
+    # SQL SHAPE differs: correlated EXISTS + no outer distinct vs JOIN + distinct.
+    assert "EXISTS" in str(audited_qs.query).upper()
+    assert len(_reserved_aliases(audited_qs)) == 1
+    assert audited_qs.query.distinct is False
+    assert "EXISTS" not in str(unaudited_qs.query).upper()
+    assert _reserved_aliases(unaudited_qs) == []
+    assert unaudited_qs.query.distinct is True
+
+    # RESULTS are identical -- the degrade declines an optimization, never changes rows.
+    assert list(audited_qs.values_list("pk", flat=True)) == [matched.pk]
+    assert list(unaudited_qs.values_list("pk", flat=True)) == list(
+        audited_qs.values_list("pk", flat=True),
+    )

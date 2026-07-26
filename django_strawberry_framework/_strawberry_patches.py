@@ -16,10 +16,16 @@ handling; like every patch the package ships it is gated by the
 ``APPLY_UPSTREAM_PATCHES`` setting (default on), so a consumer can opt
 out globally with ``DJANGO_STRAWBERRY_FRAMEWORK =
 {"APPLY_UPSTREAM_PATCHES": False}`` or for this dependency alone with
-``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}`` (note the
+``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}``. That opt-out is
+wider than a bug fix, because this module carries two things. The
 companion ``cross_web`` patch routes the sync transport's bytes into
 ``parse_json``, so disabling only one of the pair leaves the sync
-transport's malformed-body hardening incomplete). See
+transport's malformed-body hardening incomplete - **and** disabling this
+half also opts out of the strict UTF-8 wire contract below, after which
+``json.loads``'s RFC 8259 encoding auto-detection runs again and a
+UTF-16 / UTF-32 request body silently succeeds on both transports. The
+gate is deliberately shared rather than split per concern (spec-065
+Decision 9): one switch, one stated consequence. See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -34,11 +40,13 @@ only ``json.JSONDecodeError``. ``UnicodeDecodeError`` is a ``ValueError``
 and is **not** a ``JSONDecodeError``, so it escapes the ``except`` and
 surfaces as an unhandled ``500``:
 
-- On the **sync** view the decode happens in ``cross_web``'s request
-  adapter, before ``parse_json`` is even entered (handled by the
-  companion :mod:`django_strawberry_framework._cross_web_patches`,
-  which makes the adapter hand the raw bytes to ``parse_json`` instead
-  of decoding eagerly).
+- On the **sync** view *upstream* decodes in ``cross_web``'s request
+  adapter, before ``parse_json`` is even entered - a raise inside a
+  property, where no ``except`` can translate it. The companion
+  :mod:`django_strawberry_framework._cross_web_patches` therefore makes
+  that adapter hand the raw bytes to ``parse_json`` instead of decoding
+  eagerly. Moving the raise, not decoding defensively, is that patch's
+  entire job.
 - On the **async** view the raw bytes reach ``json.loads`` directly,
   which raises ``UnicodeDecodeError`` from *inside* ``parse_json``.
 
@@ -47,7 +55,49 @@ views inherit, so widening its ``except`` to also catch
 ``UnicodeDecodeError`` fixes both transports from one site. Combined
 with the ``cross_web`` patch (which routes the sync path's bytes through
 ``parse_json`` rather than decoding them eagerly), every malformed-body
-request becomes a clean ``400``.
+request becomes a clean ``400``. The package's own decode consequently
+happens in exactly one place - :func:`_patched_parse_json`, for **both**
+transports - one frame inside the ``except`` that translates it.
+
+The strict UTF-8 wire contract
+------------------------------
+
+On top of the two upstream bugs, :func:`_patched_parse_json` enforces a
+package **policy**: a GraphQL-over-HTTP request body is UTF-8 or it is a
+``400`` (spec-065 Decision 9). ``bytes`` are decoded once with strict
+UTF-8 before the delegation, so ``json.loads`` never sees ``bytes`` again
+and its RFC 8259 encoding auto-detection can no longer run. Measured
+across the shapes that matter, with **no new rejection branch** written
+or covered anywhere:
+
+- plain UTF-8 - decodes, parses, succeeds (unchanged);
+- UTF-16-with-BOM and UTF-32-with-BOM - the BOM's leading byte is not
+  valid UTF-8, so the strict decode raises and this module translates it
+  into the ``400``;
+- BOM-less UTF-16-LE/BE and UTF-32-LE/BE - NUL-padded ASCII, so they
+  *decode* cleanly and upstream's own ``json.loads`` rejects the
+  NUL-studded ``str``;
+- a UTF-8 BOM (``EF BB BF``) - decodes cleanly and upstream's
+  ``json.loads`` rejects the leading U+FEFF. The package neither strips
+  it nor decodes with ``utf-8-sig`` (spec-065 Decision 10);
+- undecodable bodies (an invalid UTF-8 byte, raw binary) - the strict
+  decode raises, exactly as gap 1 above.
+
+So every non-UTF-8 form reaches the same controlled ``400`` through a
+path that already existed, and the reason a bespoke BOM / NUL sniffer is
+absent is that adding a second parser to close a parser differential
+would be self-defeating. When reading a traceback, ``__cause__`` is the
+discriminator: a ``UnicodeDecodeError`` means our decode refused the
+bytes, a ``json.JSONDecodeError`` means the bytes decoded and upstream
+refused the text. Status and message are identical either way (upstream
+raises the same ``"Unable to parse request body as JSON"`` literal), so
+no caller can attribute the rejection by message.
+
+The contract is single-sited here rather than in
+``django_strawberry_framework.views`` because both views inherit the one
+``BaseView.parse_json``: a view-level check would miss consumers who
+mount upstream's view, would miss the async parse path unless
+duplicated, and would split one contract across two modules.
 
 The patch wraps the original ``parse_json`` rather than reimplementing
 it: the original is called unchanged and only the previously-uncaught
@@ -156,11 +206,36 @@ cause. Retire the envelope guard once #3398 lands ``isinstance`` checks
 (or equivalent) ahead of both ``data.get("query")`` and each batch
 ``item.get(...)``.
 
+Three lifecycles, not one
+-------------------------
+
+Read the retirement question per concern, because this module carries two
+upstream *bugs* and one package *policy* and they do not retire together:
+
+1. **The ``UnicodeDecodeError`` translation** - retirable once upstream
+   broadens its ``except`` to cover ``UnicodeDecodeError`` (or
+   ``ValueError``).
+2. **The body-envelope guard and its ``parse_query_params`` shield** -
+   retirable together once upstream #3398 lands the ``isinstance``
+   checks; the shield exists only to keep the guard off the GET path, so
+   it has no independent lifecycle.
+3. **The strict UTF-8 wire contract** - **not** retirable with either.
+   Upstream will never "fix" it, because upstream's behavior (RFC 8259
+   auto-detection over raw ``bytes``) is not a bug; the package
+   deliberately narrows it. Deleting this module once 1 and 2 land would
+   silently restore multi-encoding request bodies and re-open the parser
+   differential spec-065 Decision 9 exists to close. If 1 and 2 both
+   retire, what stays behind is the decode in
+   :func:`_patched_parse_json` - keep it, drop the rest, and rewrite this
+   docstring around the policy.
+
 Re-checking whether upstream fixed this
 ---------------------------------------
 
 You do not need to redo the research from scratch. Two ways to tell
-whether this patch is still required:
+whether the two *upstream-bug* halves are still required (the wire
+contract is not an upstream question at all - see "Three lifecycles"
+above):
 
 1. End-to-end (definitive). Disable the patches and run the live
    regression: set ``DJANGO_STRAWBERRY_FRAMEWORK =
@@ -172,14 +247,22 @@ whether this patch is still required:
    (non-object batch elements)::
 
        uv run pytest examples/fakeshop/test_query/test_products_api.py \
-           -k "utf8 or binary or non_object or non_object_elements"
+           -k "invalid_utf8 or raw_binary or non_object"
 
    If they still return 400 with the patch off, upstream has fixed that
-   gap; if they 500, the patch is still needed. Both gaps must be fixed
-   upstream before this module can be deleted. For the batch-element
-   half of gap 2, a 400 of "Batching is not enabled" with the patch off
-   (fakeshop's default) is *not* proof of an upstream fix - enable
+   gap; if they do not (Django surfaces the raw ``UnicodeDecodeError`` /
+   ``AttributeError`` as a 500 and ``django.test.Client`` re-raises it),
+   the patch is still needed. Both gaps must be fixed upstream before
+   the corresponding halves can go. For the batch-element half of gap 2,
+   a 400 of "Batching is not enabled" with the patch off (fakeshop's
+   default) is *not* proof of an upstream fix - enable
    ``batching_config`` and re-check that ``[1,2,3]`` still 500s.
+
+   The file's UTF-16 / UTF-32 / UTF-8-BOM rows are deliberately **not**
+   in that selector: they diagnose the package's own wire contract, not
+   upstream. With the patch off a BOM-less UTF-16 body *succeeds* - that
+   is upstream's RFC 8259 behavior, not an upstream fix - so reading
+   those rows as upstream probes inverts the verdict.
 
 2. Quick probe of the *installed* version. This module captures the
    unwrapped upstream callable, so you can exercise each gap directly::
@@ -340,12 +423,21 @@ def _validate_upstream_shape() -> None:
 
 
 def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
-    """Wrapper around ``BaseView.parse_json`` hardening two upstream gaps.
+    """Wrapper around ``BaseView.parse_json`` owning the wire contract and two gaps.
 
-    1. A ``UnicodeDecodeError`` (a ``ValueError`` that upstream's
-       ``except json.JSONDecodeError`` does not catch) is translated to
-       the same ``HTTPException(400, ...)`` Strawberry already raises for
-       unparseable JSON.
+    1. **The strict UTF-8 wire contract** (spec-065 Decision 9). A
+       ``bytes`` body is decoded here, once, with strict UTF-8 (the
+       default error handler) before the delegation, so the delegate
+       only ever sees ``str``. A ``UnicodeDecodeError`` from that decode
+       - the ``ValueError`` upstream's ``except json.JSONDecodeError``
+       does not catch - is translated to the same
+       ``HTTPException(400, ...)`` Strawberry already raises for
+       unparseable JSON, which is why the contract needs no new
+       ``except`` clause, status code, or message. A ``str`` input is
+       passed through **untouched**: upstream's GET ``variables`` /
+       ``extensions`` parses (Django has already decoded the query
+       string) and the multipart ``operations`` / ``map`` form fields
+       arrive as ``str`` and are never re-encoded.
     2. A successfully-parsed body that is not a GraphQL-over-HTTP envelope
        is rejected with ``HTTPException(400, ...)``. ``parse_http_body``
        handles a JSON object (a single operation) and a JSON array of
@@ -358,6 +450,27 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
        for that validator to own enablement / size limits; scalars and
        lists with any non-``dict`` element are rejected here.
 
+    Because the delegate never sees ``bytes`` again, ``json.loads``'s
+    RFC 8259 encoding auto-detection can no longer run, so UTF-16 and
+    UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM are no longer
+    accepted request bodies. **No dedicated branch rejects them**: the
+    BOM'd multi-byte forms carry a leading byte that is not valid UTF-8
+    and fail at the strict decode, while the BOM-less multi-byte forms
+    and the UTF-8 BOM decode cleanly and are then refused by upstream's
+    own ``json.loads`` (a UTF-8 BOM is deliberately not stripped and not
+    decoded with ``utf-8-sig`` - spec-065 Decision 10). Both routes end
+    in the identical ``400``; only ``__cause__`` differs
+    (``UnicodeDecodeError`` vs ``json.JSONDecodeError``).
+
+    The decode lives here rather than in the ``cross_web`` request
+    adapter because a ``UnicodeDecodeError`` raised inside that
+    adapter's ``body`` *property* escapes this ``except`` and surfaces as
+    an unhandled ``500`` - the original upstream bug (see
+    :mod:`django_strawberry_framework._cross_web_patches`). Keeping it
+    here puts the raise in the one scope that can translate it, and
+    because both the sync and async views inherit the single
+    ``BaseView.parse_json``, one install covers both transports.
+
     The body-envelope guard is a request-*body* contract enforced from a
     generic JSON helper, so it fires at every upstream ``parse_json`` call
     site (nine, one of them dead code at 0.316.0; see the module
@@ -369,11 +482,13 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     routes through the captured original so upstream's own per-param
     handling keeps ownership there. Both views inherit the single
     ``BaseView`` method, so one install covers sync and async - the same
-    one-site rationale as the ``UnicodeDecodeError`` widening. Every
+    one-site rationale as the decode above. Every
     other outcome - a successful object / well-typed-array parse, or any
     other exception - is passed through untouched.
     """
     try:
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
         parsed = _original_parse_json(self, data)
     except UnicodeDecodeError as exc:
         raise HTTPException(400, "Unable to parse request body as JSON") from exc

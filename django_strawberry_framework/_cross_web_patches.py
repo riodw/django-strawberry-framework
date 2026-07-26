@@ -12,10 +12,16 @@ so consumers get it automatically by having
 **production** request handling, so it is gated by the
 ``APPLY_UPSTREAM_PATCHES`` setting (default on): opt out globally with
 ``False`` or for this dependency alone with the mapping shape
-``{"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}`` (note this patch
-and the companion Strawberry patch jointly own the sync transport's
-malformed-body hardening, so disabling only one of the pair leaves it
-incomplete). See
+``{"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}``. This patch and the
+companion Strawberry patch jointly own the sync transport's
+malformed-body hardening **and** the strict UTF-8 wire contract
+(spec-065 Decision 9, enforced in
+:func:`django_strawberry_framework._strawberry_patches._patched_parse_json`),
+so disabling only one of the pair leaves both incomplete: without this
+half the sync adapter decodes inside a property again and an undecodable
+body is an unhandled ``500``; without the Strawberry half the wire
+contract is gone and UTF-16 / UTF-32 bodies silently succeed. The gate
+is deliberately shared rather than split per concern. See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -33,23 +39,32 @@ error handling. That has two production consequences before Strawberry's
    BOM-less UTF-16-LE/BE and UTF-32-LE/BE (ASCII code units padded with
    NUL bytes, which are valid UTF-8) and a UTF-8 BOM payload - returns a
    ``str`` that ``json.loads`` rejects, while the **async** adapter
-   (``AsyncDjangoHTTPRequestAdapter.get_body``) already hands Strawberry
-   the raw ``bytes`` that ``json.loads`` accepts per RFC 8259.
+   (``AsyncDjangoHTTPRequestAdapter.get_body``) hands Strawberry the raw
+   ``bytes`` untouched. Upstream's two transports therefore disagree
+   about which bodies are even parseable - the asymmetry, not either
+   answer, is the defect.
 
-The decode is therefore both unsafe and gratuitous: ``json.loads``
-accepts ``bytes`` directly. This patch replaces the sync ``body``
-property with the async contract - always return
-``self.request.body`` unchanged. JSON-decodable UTF-16/UTF-32 (with or
-without BOM) and UTF-8-with-BOM then parse and the request *succeeds*
-on sync exactly as on async; anything undecodable makes ``parse_json``
-raise ``UnicodeDecodeError`` from ``json.loads``, which the companion
-:mod:`django_strawberry_framework._strawberry_patches` patch turns into
-a clean ``HTTPException(400, ...)``.
+The decode is therefore both unsafe and misplaced. This patch replaces
+the sync ``body`` property with the async contract - always return
+``self.request.body`` unchanged - so both transports hand the same bytes
+to the same ``parse_json``, which is where
+:mod:`django_strawberry_framework._strawberry_patches` decodes them
+once with strict UTF-8 and translates any failure into a clean
+``HTTPException(400, ...)``.
+
+Under that wire contract (spec-065 Decision 9) only gap (1) still
+changes the *response*: an eagerly-decoding adapter and a strict decode
+in ``parse_json`` agree on every decodable-but-not-JSON shape - BOM-less
+UTF-16/32 and a UTF-8 BOM are a ``400`` either way. Gap (2) survives as
+the reason the correct fix is "hand over the raw bytes" rather than
+"decode defensively inside the property": a property cannot own an error
+contract. Sync/async parity is still the property this patch buys, but
+it is now parity of *rejection* rather than of success.
 
 Upstream's getter is still captured at import time so retirement probes
 and shape validation can see the bare ``.decode()``, but the installed
-property does not call it - calling it would re-introduce the
-UTF-8-decodable-but-wrong-encoding gap (2) on the success path.
+property does not call it - calling it would put the decode back inside
+the property and re-introduce gap (1)'s unhandled ``500``.
 
 Upstream status
 ---------------
@@ -73,16 +88,27 @@ The same two checks as
 :mod:`django_strawberry_framework._strawberry_patches`:
 
 1. End-to-end (definitive). Set ``DJANGO_STRAWBERRY_FRAMEWORK =
-   {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop tests
-   covering both gaps - undecodable bodies (``utf8`` / ``binary``) and
-   UTF-8-decodable non-UTF-8 JSON (``utf16_le`` / ``bom``)::
+   {"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}`` - this module off,
+   the Strawberry patch left **on** - and run the *undecodable*-body
+   rows, which are the only ones that discriminate::
 
        uv run pytest examples/fakeshop/test_query/test_products_api.py \
-           -k "utf8 or binary or utf16_le or bom"
+           -k "invalid_utf8 or raw_binary or utf16_json"
 
-   Passing with the patch off means upstream returns raw bytes (or
-   otherwise matches async) and this module can be deleted; a 500 on
-   binary or a 400 on ``utf16_le`` / BOM means the patch is still needed.
+   Those three bodies cannot be UTF-8-decoded at all, so with this module
+   off upstream's property decode raises before ``parse_json`` is
+   entered: the rows fail (an unhandled ``500`` that
+   ``django.test.Client`` re-raises) and the patch is still needed. If
+   they answer their ``400``, upstream stopped decoding eagerly and this
+   module can be deleted.
+
+   The ``utf16_le`` and ``bom`` rows deliberately do **not** appear in
+   that selector any more. Under the wire contract they answer ``400``
+   whether or not this patch is installed - upstream's decode succeeds
+   into a ``str`` that ``json.loads`` refuses, our decode succeeds into
+   the same ``str`` that ``json.loads`` refuses - so they diagnose
+   nothing about upstream. Selecting them and reading a ``400`` as
+   "still needed" inverts the verdict.
 
 2. Quick probe of the *installed* version, via the captured upstream
    getter::
@@ -180,13 +206,36 @@ def _validate_upstream_shape() -> None:
 def _patched_body(self: Any) -> bytes:
     """Return raw ``self.request.body`` bytes - the async adapter's contract.
 
-    Upstream's sync getter UTF-8-decodes first. That both ``500``s on
-    undecodable bodies and mis-handles UTF-8-decodable non-UTF-8 JSON
-    (BOM-less UTF-16/32, UTF-8 BOM) by feeding ``json.loads`` a ``str``.
-    Always returning the raw bytes matches
-    ``AsyncDjangoHTTPRequestAdapter.get_body`` so RFC 8259 encoding
-    detection runs inside ``json.loads``; undecodable bodies become a
-    controlled ``400`` via the Strawberry ``parse_json`` patch.
+    The return contract is unchanged by spec-065: raw bytes, never a
+    decoded ``str``. What changed is what happens to them next, so the
+    reason for the raw bytes is worth stating exactly.
+
+    **Why raw bytes.** Upstream's sync getter UTF-8-decodes inside a
+    *property*. A ``UnicodeDecodeError`` raised there escapes
+    ``BaseView.parse_json``'s ``except`` entirely and surfaces as an
+    unhandled ``500`` - the original upstream bug. Handing the bytes over
+    untouched moves that raise into the one scope that can translate it
+    into a controlled ``400``, and matches
+    ``AsyncDjangoHTTPRequestAdapter.get_body`` so both transports feed
+    ``parse_json`` the same thing. This getter therefore deliberately
+    performs no decode and no validation of its own; adding either here
+    would re-create the property-scope raise.
+
+    **What raw bytes no longer mean.** They no longer mean "let
+    ``json.loads`` auto-detect the encoding per RFC 8259".
+    :func:`django_strawberry_framework._strawberry_patches._patched_parse_json`
+    now strict-UTF-8-decodes them before delegating (spec-065 Decision
+    9), so UTF-16 / UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM are
+    ``400``s on both transports rather than successes. Sync/async parity
+    is preserved and is still this patch's point - it is now parity of
+    *rejection* rather than of success.
+
+    **Why the patch survives the S1 protocol split, and matters more.**
+    It patches ``cross_web.DjangoHTTPRequestAdapter``, the **Django
+    view's** sync request adapter - precisely the path S1 made
+    authoritative - not anything Channels-owned. Before S1 a
+    Channels-routed deployment never reached that adapter at all, so if
+    anything the split raises this patch's importance.
     """
     return self.request.body
 

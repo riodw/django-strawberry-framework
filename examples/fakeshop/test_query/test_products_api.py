@@ -2325,18 +2325,25 @@ def test_cascade_composes_with_filter_and_order_live():
 
 
 # ---------------------------------------------------------------------------
-# Malformed and non-UTF-8 request bodies. Fixed by the framework's upstream
-# patches for Strawberry (`BaseView.parse_json`) and cross_web
-# (`DjangoHTTPRequestAdapter.body`), applied at app load. Without them the
-# sync `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the
-# body, before GraphQL parsing runs -> an unhandled 500. Patched, the sync
-# adapter returns raw bytes (async `get_body` parity): a JSON-decodable
-# encoding (UTF-16/32, with or without BOM, and UTF-8-with-BOM) succeeds
-# exactly as on the async transport, everything else surfaces as a controlled
-# 400. The GET tests pin the patch's `parse_query_params` shield: the
-# scalar-body guard must never fire on upstream's GET `variables` /
-# `extensions` parses, which have their own precise upstream handling
-# downstream in `parse_http_body`.
+# Malformed request bodies and the strict UTF-8 wire contract. The framework's
+# upstream patches for Strawberry (`BaseView.parse_json`) and cross_web
+# (`DjangoHTTPRequestAdapter.body`) are applied at app load. Without them the
+# sync `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the body,
+# before GraphQL parsing runs -> an unhandled 500. Patched, the sync adapter
+# hands the raw bytes to `parse_json`, which decodes them once with strict
+# UTF-8 (spec-065 Decision 9): the success set is UTF-8, and UTF-8 only. UTF-16
+# and UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM are all a controlled
+# 400 - the BOM'd multi-byte forms fail at that decode, while the BOM-less ones
+# and the UTF-8 BOM decode cleanly and are then refused by upstream's own
+# `json.loads` (spec-065 Decision 10 chose rejection over stripping). No
+# dedicated rejection branch exists for any of them. Both transports answer
+# identically because both views inherit the one patched `parse_json`; the
+# async colour of these rows lives in `test_transport_api.py`, and the
+# which-mechanism-fired matrix lives in `tests/test_strawberry_patches.py`.
+# The GET tests pin the patch's `parse_query_params` shield: the scalar-body
+# guard must never fire on upstream's GET `variables` / `extensions` parses,
+# which have their own precise upstream handling downstream in
+# `parse_http_body`.
 # ---------------------------------------------------------------------------
 
 
@@ -2359,54 +2366,140 @@ def test_post_raw_binary_body_returns_400_not_500():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf16_json_body_succeeds_like_async_transport():
-    """A UTF-16-encoded JSON body (with BOM) -> 200 with data, not the upstream 500.
+def test_post_utf16_json_body_is_rejected_as_400():
+    """A UTF-16-encoded JSON body (with BOM) -> controlled 400.
 
-    The cross_web patch hands the raw bytes to `parse_json`, and `json.loads`
-    detects UTF-16/UTF-32 per RFC 8259, so this previously-500-ing request now
-    *succeeds* on the sync view. The async adapter (which always passed raw
-    bytes through) already accepted this body; the test pins that sync/async
-    parity - the bytes path is wider than "400 instead of 500".
+    The history is the point of keeping this row. Before spec-065 this request
+    *succeeded*: the cross_web patch handed the raw bytes to ``parse_json`` and
+    ``json.loads`` auto-detected UTF-16 per RFC 8259, so a body that used to
+    500 on the sync view started answering 200 - wider than "400 instead of
+    500", and identical to the async transport.
+
+    The wire contract (spec-065 Decision 9) narrows the success set to UTF-8,
+    so the same bytes are now a 400. Mechanism: ``encode("utf-16")`` prefixes
+    the BOM ``FF FE`` and ``0xFF`` is not a valid UTF-8 start byte, so the
+    strict decode inside ``_patched_parse_json`` raises and is translated
+    before upstream's ``json.loads`` is ever reached.
     """
     body = '{"query": "{ __typename }"}'.encode("utf-16")
 
     response = _post_graphql_raw(body)
 
-    assert response.status_code == 200
-    assert response.json()["data"] == {"__typename": "Query"}
+    assert response.status_code == 400
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf16_le_json_body_succeeds_like_async_transport():
-    """BOM-less UTF-16-LE JSON -> 200; must not take upstream's UTF-8 ``str`` path.
+def test_post_utf16_le_json_body_is_rejected_as_400():
+    """BOM-less UTF-16-LE JSON -> controlled 400, by a different mechanism than its sibling.
 
-    ``encode("utf-16-le")`` has no BOM, so the interleaved NULs are valid UTF-8.
-    Upstream's ``.decode()`` therefore *succeeds* and returns a NUL-studded
-    ``str`` that ``json.loads`` rejects (400), while raw bytes parse. The
-    ``encode("utf-16")`` sibling includes a BOM that forces ``UnicodeDecodeError``
-    and does not cover this gap.
+    History: ``encode("utf-16-le")`` carries no BOM, so the interleaved NULs
+    are valid UTF-8. Upstream's eager ``.decode()`` therefore *succeeded* into
+    a NUL-studded ``str`` that ``json.loads`` rejected (400) while the raw
+    bytes parsed - which is why this row existed as a 200 alongside the BOM'd
+    sibling, whose ``UnicodeDecodeError`` never covered this gap.
+
+    Under the wire contract the body still decodes cleanly, and upstream's own
+    ``json.loads`` then refuses the NUL-studded ``str``. So this 400 comes from
+    a ``json.JSONDecodeError``, not from the strict decode - no dedicated
+    rejection branch exists or is needed. Which mechanism fired is pinned per
+    encoding in ``tests/test_strawberry_patches.py``; over the wire the two are
+    indistinguishable, and deliberately so.
     """
     body = '{"query": "{ __typename }"}'.encode("utf-16-le")
 
     response = _post_graphql_raw(body)
 
-    assert response.status_code == 200
-    assert response.json()["data"] == {"__typename": "Query"}
+    assert response.status_code == 400
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_utf8_bom_json_body_succeeds_like_async_transport():
-    """UTF-8 JSON with a leading BOM -> 200; decoded ``str`` would 400.
+def test_post_utf8_bom_json_body_is_rejected_as_400():
+    """UTF-8 JSON with a leading BOM -> controlled 400; the BOM is deliberately not stripped.
 
-    ``json.loads`` accepts BOM'd *bytes* but rejects a ``str`` that still
-    starts with U+FEFF. Returning raw bytes keeps sync on the async contract.
+    History: ``json.loads`` accepts BOM'd *bytes* but rejects a ``str`` that
+    still starts with U+FEFF, so returning raw bytes made this body succeed on
+    the sync transport exactly as on async.
+
+    spec-065 Decision 10 chose rejection: the package neither strips the BOM
+    nor decodes with ``utf-8-sig``, because accept-and-strip re-creates the
+    parser differential the wire contract exists to close (a proxy, WAF, or
+    body scanner that does not strip sees a different document than the
+    application does). Rejection also costs zero code - the bytes decode
+    cleanly and upstream's ``json.loads`` refuses the leading U+FEFF.
     """
     body = b"\xef\xbb\xbf" + b'{"query": "{ __typename }"}'
 
     response = _post_graphql_raw(body)
 
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        pytest.param("utf-16-be", id="utf-16-be-no-bom"),
+        pytest.param("utf-32", id="utf-32-with-bom"),
+        pytest.param("utf-32-le", id="utf-32-le-no-bom"),
+        pytest.param("utf-32-be", id="utf-32-be-no-bom"),
+    ],
+)
+def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding):
+    """The remaining UTF-16 / UTF-32 shapes -> controlled 400, completing the encoding set.
+
+    The three rows above carry the history for the encodings that used to
+    succeed; these four complete the "UTF-16 / UTF-32 (BOM and BOM-less)" set
+    the wire contract claims (spec-065 test-plan row 19), which had no UTF-32
+    coverage at any tier before this slice. ``encode("utf-32")`` emits a BOM and
+    fails at the strict decode; the three BOM-less forms decode into
+    NUL-studded text and fail at upstream's ``json.loads``. Both routes are the
+    same status and the same message, which is the contract - one byte sequence,
+    one interpretation, no encoding negotiation on the wire.
+    """
+    body = '{"query": "{ __typename }"}'.encode(encoding)
+
+    response = _post_graphql_raw(body)
+
+    assert response.status_code == 400
+
+
+#: A category name whose UTF-8 encoding genuinely needs bytes above 0x7F, so the
+#: positive control below cannot pass under an ASCII-only decode. Spelled with
+#: escapes because source files here are ASCII-only; the runtime value is
+#: "zzz_live_cafe_uber" with an e-acute and a u-umlaut.
+_MULTIBYTE_CATEGORY_NAME = "zzz_live_caf\u00e9_\u00fcber"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value():
+    """Ordinary UTF-8 is unchanged, multi-byte characters included (test-plan row 20).
+
+    The contract narrowed to UTF-8, **not** to ASCII, so a positive control
+    built the usual way would be vacuous: ``json.dumps``'s default
+    ``ensure_ascii=True`` emits ``\\u00e9`` escapes, i.e. pure ASCII, and would
+    pass even if the wrapper decoded with the ``"ascii"`` codec. This row builds
+    the body with ``ensure_ascii=False``, asserts a byte above ``0x7F`` really
+    is on the wire before posting, and then round-trips the value back out
+    through the mutation's ``node { name }`` echo and the stored row - a
+    mis-decode could match neither.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_category_1", "add_category")
+    body = json.dumps(
+        {"query": _CREATE_CATEGORY, "variables": {"d": {"name": _MULTIBYTE_CATEGORY_NAME}}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    assert max(body) > 0x7F, "the control is vacuous unless the request carries non-ASCII bytes"
+
+    response = _post_graphql_raw(body, client=client)
+
     assert response.status_code == 200
-    assert response.json()["data"] == {"__typename": "Query"}
+    assert response.json()["data"]["createCategory"] == {
+        "node": {"name": _MULTIBYTE_CATEGORY_NAME},
+        "errors": [],
+    }
+    assert models.Category.objects.filter(name=_MULTIBYTE_CATEGORY_NAME).exists()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -62,10 +62,12 @@ APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
 # Canonical ``APPLY_UPSTREAM_PATCHES`` mapping keys - one name per patch
 # module, matching the package's one-module-per-dependency organizing rule.
 # ``strawberry`` and ``cross_web`` jointly own one fix (the malformed-body
-# ``400`` hardening: the Strawberry patch hardens both transports' body
-# parse, the cross_web patch routes the sync transport's bytes into it), so
-# disabling one of the pair alone is safe but leaves the sync transport
-# unfixed.
+# ``400`` hardening a consumer gets on STRAWBERRY'S OWN view: the Strawberry
+# patch hardens both transports' body parse, the cross_web patch routes that
+# view's sync bytes into it), so disabling one of the pair alone is safe but
+# leaves upstream's sync view unfixed. A package view is unaffected by every
+# state of this setting - it owns both its strict decode and its own body
+# source (``views.py::_RawBodyRequestAdapter``).
 UPSTREAM_PATCH_DEPENDENCIES = frozenset({"django", "strawberry", "cross_web"})
 
 # Default nested-connection fetch strategy for ``DjangoOptimizerExtension``

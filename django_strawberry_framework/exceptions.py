@@ -33,6 +33,47 @@ def _safe_arg_repr(value: object) -> str:
         return f"<unprintable {_safe_type_name(value)}>"
 
 
+def describe_value(value: object) -> str:
+    """Render ``value`` as an error message's ``got <this>`` tail, without ever raising.
+
+    The shared renderer for the ``got {type} {value!r}`` tail a typed rejection
+    appends to its prose, so a rejection message cannot itself fail on the value
+    it is rejecting. That is a real failure mode rather than a defensive
+    flourish, because the tail is built by an f-string at the RAISE SITE - before
+    any exception object exists, so the ``__str__`` / ``__repr__`` guards on
+    ``DjangoStrawberryFrameworkError`` cannot help:
+
+    - a consumer-supplied object with a hostile or stateful ``__repr__`` raises
+      while the message is being formatted; and
+    - CPython 3.11+ refuses to convert an integer with more than
+      ``sys.get_int_max_str_digits()`` digits to a string, so
+      ``f"{10**10000!r}"`` raises ``ValueError`` - which would replace the
+      package's promised ``ConfigurationError`` with an unrelated exception
+      precisely on the hostile-configuration path where the typed error matters
+      (spec-065 review, the enormous-window finding).
+
+    Both collapse to a placeholder that still names the type, because the type
+    is what makes the message actionable.
+
+    Scope, stated exactly rather than aspirationally: every typed rejection on
+    the package's **transport boundary** renders its tail through here - the
+    ``max_request_body_bytes`` cap (``views.py``), the WebSocket revalidation
+    window (``consumers.py``), and the router's three factory / consumer
+    rejections (``routers.py``). Those are the rejections whose argument is a
+    value a hostile or fat-fingered deployment hands the package directly, which
+    is where a message that raises while being formatted destroys the typed
+    contract. Dozens of other ``got {...}`` tails elsewhere in the package still
+    interpolate their own values; routing them is a separate DRY pass with its
+    own review surface and is deliberately not claimed here (spec-065 review
+    W3-3). A new rejection whose value came from outside the package belongs on
+    this helper.
+    """
+    try:
+        return f"{_safe_type_name(value)} {value!r}"
+    except BaseException:
+        return f"an unprintable {_safe_type_name(value)}"
+
+
 class DjangoStrawberryFrameworkError(Exception):
     """Base exception for the package.
 

@@ -35,6 +35,7 @@ WSGI-only project adopts the GraphQL view without the soft dependency.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from .consumers import (
@@ -42,7 +43,7 @@ from .consumers import (
     build_revalidating_consumer_class,
     resolved_revalidation_window,
 )
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, describe_value
 from .utils.imports import require_optional_module
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -111,6 +112,27 @@ _UNUSABLE_WEBSOCKET_CONSUMER_HINT = (
     "injected consumer opts out of revalidation, never out of the wrappers."
 )
 
+# The factory half of that seam, spelled once and shared by BOTH of its
+# construction-time rejections (the calling convention and the returned object) -
+# a consumer who got one of them wrong needs the same whole contract restated
+# either way (spec-065 Decision 11; review High 3).
+_FACTORY_CONTRACT_HINT = (
+    "A websocket_consumer_class factory is invoked ONCE, at router construction, as "
+    "`factory(schema=schema)`, and must return the ASGI application the WebSocket route "
+    "mounts - typically `YourConsumer.as_asgi(schema=schema)`, or an `async def "
+    "app(scope, receive, send)` function itself (never the coroutine that CALLING one "
+    "returns). The router wraps whatever it returns in AllowedHostsOriginValidator and "
+    "AuthMiddlewareStack."
+)
+# Appended only for the coroutine shape, which is the one mistake whose repair is
+# not obvious from the contract alone: the factory is one `async` keyword away
+# from correct, and the router cannot await anything at construction time.
+_ASYNC_FACTORY_HINT = (
+    " A coroutine object is what an `async def` factory returns, so this factory is one "
+    "keyword away from correct: make it a plain `def` that RETURNS the ASGI application. "
+    "Router construction is synchronous and cannot await anything."
+)
+
 # Rejecting the combination rather than ignoring the window: a knob that does
 # nothing is worse than an error (spec-065 Edge cases
 # #"``websocket_revalidation_window`` is meaningless when a custom class is
@@ -142,6 +164,87 @@ def require_channels() -> Any:
     return require_optional_module("channels", install_hint=_CHANNELS_INSTALL_HINT)
 
 
+def _require_factory_calling_convention(factory: Any, *, schema: BaseSchema) -> None:
+    """Raise ``ConfigurationError`` unless ``factory(schema=schema)`` can bind.
+
+    See ``_factory_application`` rejection 1 for why the binding is pre-checked
+    rather than caught. An un-introspectable callable is deliberately allowed
+    through: ``inspect.signature`` raises ``TypeError`` for a lying
+    ``__signature__`` and ``ValueError`` for a callable it cannot describe, and
+    neither is evidence that the CALL would fail.
+    """
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return
+    try:
+        signature.bind(schema=schema)
+    except TypeError as exc:
+        raise ConfigurationError(
+            f"{_FACTORY_CONTRACT_HINT} The factory {describe_value(factory)} cannot accept "
+            f"that call: {exc}.",
+        ) from exc
+
+
+def _factory_application(factory: Any, *, schema: BaseSchema) -> Any:
+    """Invoke the injection seam's factory and validate what it handed back.
+
+    The factory shape's whole contract is enforced here, at CONSTRUCTION, because
+    the alternative is a value that is not an ASGI application being installed as
+    a URL route callback and failing on the first matching handshake, deep inside
+    Channels' routing, with no mention of the seam that produced it (review High
+    3). Two rejections, both ``ConfigurationError``:
+
+    1. **The calling convention.** Bound with ``inspect.signature(...).bind``
+       BEFORE the call rather than by catching ``TypeError`` around it: a
+       ``TypeError`` raised by the call cannot be told apart from one raised
+       INSIDE a correct factory's body, and converting the latter into a
+       configuration error would mask a consumer bug behind the wrong diagnosis.
+       Pre-binding uses the same algorithm the call itself would, so it accepts
+       exactly what the call accepts; a callable whose signature cannot be read
+       (a C callable, a ``__signature__`` liar) skips the pre-check and is judged
+       by the call, which is why this is not a new source of false rejections.
+       The originating ``TypeError`` is preserved as ``__cause__``.
+    2. **The returned object.** What "a valid ASGI application" means at
+       construction time is deliberately narrow, and stated rather than implied:
+       the only honest, false-positive-free check is that the object is
+       CALLABLE. ASGI conformance - accepting ``(scope, receive, send)``,
+       awaiting, emitting the right event dicts - is observable only by running a
+       real connection through it, which construction must not do. So this is a
+       floor, not a conformance proof: it converts every shape that CANNOT be an
+       ASGI application (``None``, a scalar, a mapping, a coroutine object) into
+       an actionable construction error, and leaves a callable that merely
+       misbehaves to fail at the handshake, where its own traceback is the useful
+       signal. Rejected alternative: arity-checking the RESULT with
+       ``bind(scope, receive, send)``, which would falsely reject legitimate
+       ``*args`` middleware, ``functools.partial`` mounts and callable instances
+       whose ``__call__`` is a C slot - a real cost for no security gain.
+
+    The factory's OWN exceptions are never normalized. A factory that raises from
+    its body is a consumer bug whose traceback is the most useful thing the
+    package can hand back, and wrapping it would only bury it.
+    """
+    _require_factory_calling_convention(factory, schema=schema)
+    application = factory(schema=schema)
+    if callable(application):
+        return application
+
+    received = describe_value(application)
+    addendum = ""
+    if inspect.iscoroutine(application):
+        # Close the coroutine this rejection refuses. Dropping it un-awaited makes
+        # CPython emit an unraisable "coroutine ... was never awaited"
+        # RuntimeWarning from the garbage collector at an unrelated moment - noise
+        # that points at the package instead of at the factory, and a hard error
+        # in any consumer running under ``-W error``.
+        application.close()
+        addendum = _ASYNC_FACTORY_HINT
+    raise ConfigurationError(
+        f"{_FACTORY_CONTRACT_HINT}{addendum} The factory {describe_value(factory)} returned "
+        f"{received}.",
+    )
+
+
 def _websocket_application(
     candidate: Any,
     *,
@@ -156,8 +259,9 @@ def _websocket_application(
     package's own revalidating consumer and hands it the validated window; a
     ``GraphQLWSConsumer`` subclass is mounted through its own
     ``as_asgi(schema=schema)``; any other callable is a factory, invoked as
-    ``factory(schema=schema)``, whose return value is mounted as-is. Everything
-    else raises ``ConfigurationError``.
+    ``factory(schema=schema)`` by ``_factory_application``, which validates both
+    the calling convention and the returned application before it is mounted.
+    Everything else raises ``ConfigurationError``.
 
     The class test comes first on purpose: a class IS callable, so testing
     ``callable`` first would route a non-consumer class into the factory branch
@@ -175,9 +279,9 @@ def _websocket_application(
         if issubclass(candidate, base_consumer_class):
             return candidate.as_asgi(schema=schema)
     elif callable(candidate):
-        return candidate(schema=schema)
+        return _factory_application(candidate, schema=schema)
     raise ConfigurationError(
-        f"{_UNUSABLE_WEBSOCKET_CONSUMER_HINT} Got {type(candidate).__name__} {candidate!r}.",
+        f"{_UNUSABLE_WEBSOCKET_CONSUMER_HINT} Got {describe_value(candidate)}.",
     )
 
 
@@ -276,7 +380,10 @@ def _build_router_class() -> type[Any]:
         ``strawberry.channels.GraphQLWSConsumer`` subclass - mounted through its
         own ``as_asgi(schema=schema)`` - or a factory callable invoked as
         ``factory(schema=schema)`` that returns the ASGI application to mount.
-        Anything else raises ``ConfigurationError``. Whatever is injected, the
+        Anything else raises ``ConfigurationError``, and so does a factory that
+        cannot accept that call or does not return a mountable (callable)
+        application: the seam fails at construction rather than on the first
+        matching handshake. Whatever is injected, the
         two wrappers above are applied by the ROUTER around it, so an injected
         consumer opts out of the package's revalidation but never out of
         Host/Origin validation or authentication.

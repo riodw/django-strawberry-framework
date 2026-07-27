@@ -5,22 +5,14 @@ applied at app-load time by
 :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`.
 
 The patch wraps :meth:`strawberry.http.base.BaseView.parse_json` to
-enforce the package's UTF-8 wire contract and to close two upstream gaps
-that otherwise surface as unhandled ``500``s:
+close two upstream gaps that otherwise surface as unhandled ``500``s:
 
-1. The wrapper **owns** the request body's decode. A ``bytes`` body is
-   decoded once with strict UTF-8 before the delegation (spec-065
-   Decision 9), and a ``UnicodeDecodeError`` from that decode is
-   translated into the same ``HTTPException(400, ...)`` Strawberry
-   already raises for malformed JSON - it would otherwise escape
-   upstream's ``except json.JSONDecodeError``, since
-   ``UnicodeDecodeError`` is a ``ValueError`` and not a
-   ``JSONDecodeError``. A ``str`` input (a GET query param, a multipart
-   ``operations`` / ``map`` form field) is passed through untouched, so
-   the delegate only ever sees ``str`` and ``json.loads``'s RFC 8259
-   encoding auto-detection can no longer run: UTF-16 / UTF-32 (BOM or
-   BOM-less) and a UTF-8 BOM are all rejected, with no branch written
-   for any of them.
+1. ``json.loads`` on ``bytes`` raises ``UnicodeDecodeError`` when the
+   bytes are not decodable under the encoding it detects, and that is a
+   ``ValueError`` rather than a ``JSONDecodeError``, so it escapes
+   upstream's ``except`` and becomes a ``500``. The wrapper translates it
+   into the same ``HTTPException(400, ...)`` Strawberry already raises for
+   malformed JSON.
 2. A body that is not a GraphQL-over-HTTP envelope is rejected with
    ``HTTPException(400, ...)``: a top-level JSON *scalar*, or a JSON
    *array* containing any non-object element. Upstream's
@@ -43,11 +35,17 @@ executes; a scalar -> a per-param 400). The live GET regressions live in
 the shield's parse semantics, the pair install lifecycle, and the
 reimplementer's body pin.
 
-One attribution constraint shapes the wire-contract rows below: upstream
-raises the byte-identical ``HTTPException(400, "Unable to parse request
-body as JSON")`` for its own ``json.JSONDecodeError``, so **no test can
-attribute a rejection by status or message**. Attribution is therefore
-structural (which callable received what) or via ``__cause__``.
+**What is deliberately absent here.** The strict UTF-8 wire contract
+(spec-065 Decision 9) used to live in this module and no longer does: it
+is package *policy* with no upstream lifecycle, so gating it on
+``APPLY_UPSTREAM_PATCHES`` meant a consumer disabling temporary
+bug workarounds silently lost a security contract. It now belongs to
+``views.py::_RequestBodyBoundaryMixin.parse_json``, and its rows - the
+nine-shape encoding matrix, the ``__cause__`` attribution, the
+patch-opted-out proof - live in ``tests/test_views.py``. This module's
+rows therefore assert the *opposite* property on purpose: that upstream's
+own ``bytes`` semantics survive here untouched, because that is what a
+consumer mounting Strawberry's own view is entitled to.
 """
 
 import json
@@ -58,7 +56,6 @@ from cross_web import HTTPException
 from strawberry.http.base import BaseView
 
 from django_strawberry_framework import _strawberry_patches as patches
-from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 
 def test_apply_is_idempotent():
@@ -113,25 +110,31 @@ def test_apply_reinstalls_pair_when_parse_query_params_reverted():
 
 
 def test_patched_parse_json_translates_unicode_decode_error():
-    """A non-UTF-8 body -> controlled ``HTTPException(400)``, not ``UnicodeDecodeError``.
+    """An undecodable ``bytes`` body -> controlled ``400``, not a raw ``UnicodeDecodeError``.
 
-    The raise now originates in the wrapper's own strict decode rather than
-    inside the delegated ``json.loads`` (spec-065 Decision 9); the translation
-    it lands in is the same one, which is why the contract added no ``except``
-    clause, status code, or message.
+    This is gap 1 in isolation, i.e. the state a consumer who mounts
+    Strawberry's own view is in. The raise originates inside the delegated
+    ``json.loads``: it detects UTF-8 for these bytes (they start with ``{``) and
+    then fails to decode ``FF FE``, which upstream's ``except
+    json.JSONDecodeError`` does not catch because ``UnicodeDecodeError`` is a
+    ``ValueError`` instead. The reason is upstream's own, so the widened catch is
+    indistinguishable from the catch it widens.
     """
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_parse_json(BaseView(), b'{"a":"\xff\xfe"}')
+
     assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
+    assert type(excinfo.value.__cause__) is UnicodeDecodeError
 
 
 def test_patched_parse_json_passes_through_valid_json():
-    """The success path is untouched: valid UTF-8 JSON parses exactly as upstream.
+    """The success path is untouched: valid JSON parses exactly as upstream.
 
-    Both an ASCII body and a genuinely multi-byte one, because the wire
-    contract narrowed the accepted set to UTF-8 and **not** to ASCII. The
-    second body carries an e-acute (``C3 A9`` on the wire), so an ASCII-only
-    decode would fail it.
+    Both an ASCII body and a genuinely multi-byte one (the second carries an
+    e-acute, ``C3 A9`` on the wire). ``bytes`` are handed to the delegate
+    unchanged - this wrapper does not decode - so what is asserted here is
+    upstream's parse, not a package narrowing.
     """
     assert patches._patched_parse_json(BaseView(), b'{"a": 1}') == {"a": 1}
     multibyte = json.dumps({"a": "caf\u00e9"}, ensure_ascii=False).encode("utf-8")
@@ -139,27 +142,32 @@ def test_patched_parse_json_passes_through_valid_json():
     assert patches._patched_parse_json(BaseView(), multibyte) == {"a": "caf\u00e9"}
 
 
-def test_patched_parse_json_hands_the_delegate_a_str_for_a_bytes_body():
-    """Attribution (test-plan row 24): the decode happens here, not in ``json.loads``.
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        pytest.param("utf-16", id="utf-16-with-bom"),
+        pytest.param("utf-16-le", id="utf-16-le-no-bom"),
+        pytest.param("utf-32", id="utf-32-with-bom"),
+        pytest.param("utf-8-sig", id="utf-8-bom"),
+    ],
+)
+def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding):
+    """This wrapper does **not** narrow the accepted encodings, and must not start.
 
-    Recording what the captured original actually receives is the crispest
-    available proof, because a status-code or message assertion cannot
-    distinguish the two mechanisms (see the module docstring). After the
-    wrapper's decode the delegate sees a ``str`` equal to the body's UTF-8
-    text, so upstream's ``json.loads`` never sees ``bytes`` again and its
-    RFC 8259 encoding auto-detection is unreachable by construction.
+    The inverse of the view boundary's contract, asserted here so the ownership
+    split cannot silently collapse back into one site. ``json.loads`` on ``bytes``
+    performs RFC 8259 encoding auto-detection, which is documented upstream
+    behavior rather than a defect, so a body that reaches *this* wrapper as bytes
+    still parses. That is what a consumer who deliberately mounts
+    ``strawberry.django.views.GraphQLView`` is entitled to.
+
+    The rejection of these same four shapes is the package view's job
+    (``tests/test_views.py``), and this row is what would fail if a future change
+    put the strict decode back on the ``APPLY_UPSTREAM_PATCHES`` switch.
     """
-    seen = []
+    body = '{"a": 1}'.encode(encoding)
 
-    def _recorder(view, data):
-        seen.append(data)
-        return {"recorded": True}
-
-    with mock.patch.object(patches, "_original_parse_json", _recorder):
-        assert patches._patched_parse_json(BaseView(), b'{"a": 1}') == {"recorded": True}
-
-    assert seen == ['{"a": 1}']
-    assert isinstance(seen[0], str)
+    assert patches._patched_parse_json(BaseView(), body) == {"a": 1}
 
 
 def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
@@ -181,64 +189,6 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
         patches._patched_parse_json(BaseView(), body)
 
     assert seen[0] is body
-
-
-@pytest.mark.parametrize(
-    ("body", "cause"),
-    [
-        pytest.param('{"a": 1}'.encode("utf-16"), UnicodeDecodeError, id="utf-16-with-bom"),
-        pytest.param('{"a": 1}'.encode("utf-32"), UnicodeDecodeError, id="utf-32-with-bom"),
-        pytest.param(b'{"a": "\x80"}', UnicodeDecodeError, id="invalid-utf8-byte"),
-        pytest.param(bytes(range(256)) * 4, UnicodeDecodeError, id="raw-binary"),
-        pytest.param('{"a": 1}'.encode("utf-16-le"), json.JSONDecodeError, id="utf-16-le-no-bom"),
-        pytest.param('{"a": 1}'.encode("utf-16-be"), json.JSONDecodeError, id="utf-16-be-no-bom"),
-        pytest.param('{"a": 1}'.encode("utf-32-le"), json.JSONDecodeError, id="utf-32-le-no-bom"),
-        pytest.param('{"a": 1}'.encode("utf-32-be"), json.JSONDecodeError, id="utf-32-be-no-bom"),
-        pytest.param(b"\xef\xbb\xbf" + b'{"a": 1}', json.JSONDecodeError, id="utf-8-bom"),
-    ],
-)
-def test_patched_parse_json_rejects_every_non_utf8_wire_shape(body, cause):
-    """The wire matrix: every non-UTF-8 shape -> 400, and *which* mechanism refused it.
-
-    The executable form of spec-065 Decision 9's measured-behavior table and of
-    Decision 10 reason (a). The status and the message are identical across all
-    nine rows - deliberately, so one byte sequence has one interpretation at
-    every hop - so ``__cause__`` is the only thing that records the split:
-
-    * ``UnicodeDecodeError`` - the wrapper's own strict decode refused the
-      bytes (a BOM'd multi-byte form, an invalid byte, raw binary);
-    * ``json.JSONDecodeError`` - the bytes decoded cleanly and upstream's own
-      ``json.loads`` refused the resulting text (BOM-less multi-byte forms,
-      and the UTF-8 BOM that Decision 10 declines to strip).
-
-    Pinning the second group matters because that rejection is *inherited*: a
-    future stdlib that tolerated a leading U+FEFF, or NUL-studded text, would
-    silently turn these 400s into 200s with no package change to review.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), body)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.reason == "Unable to parse request body as JSON"
-    assert type(excinfo.value.__cause__) is cause
-
-
-def test_both_package_views_resolve_parse_json_to_the_one_patched_wrapper():
-    """Sync/async parity is structural: one install site, no shadowing class.
-
-    The behavioral colours live over real requests (sync in
-    ``examples/fakeshop/test_query/test_products_api.py``, async in
-    ``test_transport_api.py``). This row closes the regression channel those
-    cannot see: an intermediate class - a future upstream ``GraphQLView``
-    method, or a package override in ``views.py`` - defining ``parse_json`` on
-    one transport only would silently un-patch that transport while every live
-    row on the other stayed green. Asserting that ``BaseView`` is the sole MRO
-    owner fails the moment such a class appears.
-    """
-    for view_class in (DjangoGraphQLView, AsyncDjangoGraphQLView):
-        assert view_class.parse_json is patches._patched_parse_json
-        owners = [klass for klass in view_class.__mro__ if "parse_json" in vars(klass)]
-        assert owners == [BaseView]
 
 
 def test_patched_parse_json_passes_through_malformed_json_as_400():
@@ -499,6 +449,41 @@ def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
         patches.apply()
         assert patches._patch_is_installed() is True
+    finally:
+        BaseView.parse_json = saved_parse_json
+        BaseView.parse_query_params = saved_parse_query_params
+
+
+def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
+    """The opt-out is behavioral, not just an install flag - and stays that way.
+
+    The companion to ``tests/test_views.py``'s patch-opted-out rows, and the
+    reason both are needed: the wire contract must survive the switch, and the
+    upstream-bug workarounds must not. If a future change moved the envelope
+    guard or the ``UnicodeDecodeError`` translation somewhere ungated to make an
+    opt-out row easier, this row fails - which is the point, because those two are
+    workarounds for defects in a specific upstream version and a consumer pinning
+    a fixed or reshaped Strawberry has to be able to turn them off.
+
+    With the pair un-installed, upstream's own ``parse_json`` is what runs: a
+    JSON scalar body parses straight through (it is the caller downstream, not
+    this method, that then raises ``AttributeError``), and an undecodable body
+    raises the raw ``UnicodeDecodeError`` upstream never catches.
+    """
+    saved_parse_json = BaseView.__dict__["parse_json"]
+    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
+    try:
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+        BaseView.parse_json = patches._original_parse_json
+        BaseView.parse_query_params = patches._original_parse_query_params
+        patches.apply()
+        assert patches._patch_is_installed() is False
+
+        view = BaseView()
+        assert view.parse_json("42") == 42
+        assert view.parse_json("[1, 2, 3]") == [1, 2, 3]
+        with pytest.raises(UnicodeDecodeError):
+            view.parse_json(b'{"a":"\xff\xfe"}')
     finally:
         BaseView.parse_json = saved_parse_json
         BaseView.parse_query_params = saved_parse_query_params

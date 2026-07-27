@@ -42,6 +42,13 @@ one-shot subscription, the only operation type the legacy ``graphql-ws``
 protocol can execute) are sufficient (spec-041 Test plan). Every out-of-band
 session / user mutation the revalidation rows need therefore rides
 ``database_sync_to_async``, as Test 18's session mint already did.
+
+One row (Test 34) additionally needs a *real second HTTP request* against the
+socket's own session, so this module doubles as a probe URLConf: a single
+logout view plus ``urlpatterns``, reached through
+``override_settings(ROOT_URLCONF=__name__)`` and ``django.test.AsyncClient``.
+The socket stays package-tier on the router either way - the probe serves no
+GraphQL and exists only to run Django's session lifecycle.
 """
 
 import contextlib
@@ -62,12 +69,17 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import OriginValidator
 from channels.sessions import CookieMiddleware, SessionMiddleware
 from channels.testing import HttpCommunicator, WebsocketCommunicator
+from django.conf import settings
+from django.contrib.auth import logout
+from django.http import JsonResponse
+from django.test import AsyncClient, override_settings
+from django.urls import path
 
 import django_strawberry_framework
 import django_strawberry_framework.consumers as consumers_module
 import django_strawberry_framework.routers as routers_module
-from django_strawberry_framework.auth import sessions as auth_sessions
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import request_from_info
 from tests._soft_dependency import evicted_modules, simulated_absence
 
@@ -84,6 +96,18 @@ _STRAWBERRY_FLOOR_SUBSTRING = "strawberry-graphql>=0.262.0"
 _REVOKED_SUBSTRING = "no longer valid"
 _UNUSABLE_CONSUMER_SUBSTRING = "GraphQLWSConsumer"
 _WINDOW_WITH_CLASS_SUBSTRING = "injected consumer class owns its own revalidation policy"
+_FACTORY_CONTRACT_SUBSTRING = "factory(schema=schema)"
+_FACTORY_CONVENTION_SUBSTRING = "cannot accept that call"
+_ASYNC_FACTORY_SUBSTRING = "make it a plain `def`"
+
+# The two opt-in auth submodules ``auth/__init__`` imports eagerly (spec-040
+# Decision 3). The WebSocket revalidation must resolve its session store without
+# either of them entering ``sys.modules`` - review Medium 4, Test 33.
+_AUTH_SUBSYSTEM_PREFIX = "django_strawberry_framework.auth"
+_AUTH_SUBSYSTEM_MODULES = (
+    f"{_AUTH_SUBSYSTEM_PREFIX}.mutations",
+    f"{_AUTH_SUBSYSTEM_PREFIX}.queries",
+)
 
 # The two subprotocols the package's mount negotiates, and the per-protocol
 # frame names one operation round trip uses: (client operation frame, server
@@ -149,6 +173,48 @@ class Subscription:
 
 SCHEMA = strawberry.Schema(query=Query, subscription=Subscription)
 _TICK_SUBSCRIPTION = "subscription { tick }"
+
+
+# ---------------------------------------------------------------------------
+# Probe URLConf for the real secondary-request revocation row (Test 34).
+#
+# The holder-free variant of the ``override_settings(ROOT_URLCONF=__name__)``
+# pattern ``examples/fakeshop/test_query/test_multi_db.py`` established: this
+# module IS the URLConf, so a second REAL HTTP request can run Django's own
+# session lifecycle - ``SessionMiddleware`` load, ``django.contrib.auth.logout``,
+# the flush, and the ``Set-Cookie`` expiry - against the same session the open
+# socket is holding. Nothing GraphQL is served here; the socket stays
+# package-tier on the router (spec-065 Decision 13 #"Placement").
+# ---------------------------------------------------------------------------
+
+_LOGOUT_PROBE_PATH = "probe/logout/"
+
+
+def _logout_probe(request):
+    """Log the request's session out, reporting what it saw before and after.
+
+    Django's own ``logout`` - not an ORM stand-in: it flushes the session record
+    through the configured engine, rotates ``request.session`` to a fresh empty
+    store, and lets ``SessionMiddleware`` expire the cookie on the response. The
+    before-values are returned so the caller can prove this request really
+    resolved the SAME session key and the SAME actor as the open socket, which is
+    what makes it a *separate request* rather than a second fixture.
+    """
+    session_key_before = request.session.session_key
+    username_before = request.user.get_username()
+    authenticated_before = request.user.is_authenticated
+    logout(request)
+    return JsonResponse(
+        {
+            "session_key_before": session_key_before,
+            "username_before": username_before,
+            "authenticated_before": authenticated_before,
+            "session_key_after": request.session.session_key,
+        },
+    )
+
+
+urlpatterns = [path(_LOGOUT_PROBE_PATH, _logout_probe)]
 
 
 def _router_class():
@@ -450,12 +516,17 @@ def _poison_the_session_store(monkeypatch):
     returns skipped the session read entirely when they do NOT - a swallowed
     exception would surface as a denied operation, so "the operation succeeded"
     is only possible if the read never happened.
+
+    The target is ``utils/sessions.py``, the resolver's home since review Medium
+    4 moved it out of the eagerly-importing ``auth`` package;
+    ``consumers.py::_refreshed_actor`` imports the name from there per call, so
+    patching the module attribute is what the coroutine reads.
     """
 
     def _raise():
         raise RuntimeError("poisoned session store")
 
-    monkeypatch.setattr(auth_sessions, "session_store_class", _raise)
+    monkeypatch.setattr(session_store_module, "session_store_class", _raise)
 
 
 def _package_logger_records(caplog):
@@ -671,27 +742,174 @@ def test_an_injected_consumer_class_still_sits_inside_both_wrappers():
     assert router.application_mapping["http"] is django_application
 
 
+async def _valid_asgi_application(scope, receive, send):
+    """The ASGI application a CORRECT factory returns: an async callable.
+
+    Module-level so the four factory rows below mount the same object and assert
+    identity against it. Never driven - every row that mounts it asserts identity
+    or the wrapper nesting - so reaching the body would itself be the bug.
+    """
+    raise AssertionError("no row drives the injected ASGI application")
+
+
 def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
     """Test 21 (spec-065 Decision 11): the factory shape's calling convention.
 
     A non-class callable is a factory, invoked as ``factory(schema=schema)``, and
     whatever it returns is what gets mounted - by identity, so the router adds no
     ``as_asgi`` hop of its own.
+
+    Also the ACCEPTED half of review High 3's validation matrix: a synchronous
+    factory returning an async ASGI callable still passes, and it passes
+    *unwrapped* - ``_mounted_ws_callback`` asserts ``AllowedHostsOriginValidator``
+    and ``AuthMiddlewareStack`` are still the two layers above the route, so the
+    new validation neither moves nor unwraps them.
     """
     received = {}
 
-    async def injected_application(scope, receive, send):
-        raise AssertionError("this row never drives the injected application")
-
     def factory(**kwargs):
         received.update(kwargs)
-        return injected_application
+        return _valid_asgi_application
 
     callback = _mounted_ws_callback(_router(websocket_consumer_class=factory))
 
-    assert callback is injected_application
+    assert callback is _valid_asgi_application
+    assert inspect.iscoroutinefunction(callback)
     assert list(received) == ["schema"]
     assert received["schema"] is SCHEMA
+
+
+@pytest.mark.parametrize(
+    ("returned", "expected_tail"),
+    [
+        pytest.param(None, "NoneType None", id="none"),
+        pytest.param(7, "int 7", id="non-callable-scalar"),
+        pytest.param({"asgi": True}, "dict {'asgi': True}", id="mapping"),
+        pytest.param(10**10000, "an unprintable int", id="int-too-large-to-render"),
+    ],
+)
+def test_a_factory_returning_a_non_application_fails_at_construction(returned, expected_tail):
+    """Test 21b (review High 3): the factory's RESULT is validated before mounting.
+
+    Before this row the router mounted whatever the factory handed back, so a
+    ``None`` or a scalar became a URL route callback and the first matching
+    handshake failed deep inside Channels' routing with no mention of the seam.
+    The rejection now happens at construction and names both the factory and the
+    received value, which are the two things a migrant needs.
+
+    The last row is a value whose ``repr`` cannot be rendered at all: CPython
+    refuses to convert an integer of more than 4300 digits to a string, so an
+    f-string tail would have raised ``ValueError`` from inside the rejection and
+    replaced the promised ``ConfigurationError``. The message degrades to the
+    type instead (``exceptions.py::describe_value``).
+    """
+
+    def factory(*, schema):
+        return returned
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_consumer_class=factory)
+
+    message = str(exc_info.value)
+    assert _FACTORY_CONTRACT_SUBSTRING in message
+    assert "AllowedHostsOriginValidator" in message
+    assert f"returned {expected_tail}" in message
+
+
+def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
+    """Test 21c (review High 3): a coroutine is not an ASGI application.
+
+    An ``async def`` factory returns a coroutine object, which is not callable and
+    can never serve a handshake. Two shapes are covered: the literal one the
+    review names (an ``async def`` passed straight in), and a synchronous wrapper
+    that hands the SAME coroutine object to the router while keeping a reference
+    to it - the only way a test can inspect what the router did with it.
+
+    ``cr_frame is None`` is the proof that the router CLOSED the coroutine it
+    refused. That is not a nicety: an un-awaited coroutine makes CPython emit an
+    unraisable ``RuntimeWarning`` from the garbage collector at an unrelated
+    moment, which is noise pointing at the package in a normal consumer process
+    and a hard error under this suite's own ``-W error`` policy.
+    """
+
+    async def async_factory(*, schema):
+        return _valid_asgi_application
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_consumer_class=async_factory)
+    message = str(exc_info.value)
+    assert _ASYNC_FACTORY_SUBSTRING in message
+    assert "returned coroutine" in message
+
+    coroutines = []
+
+    def wrapping_factory(*, schema):
+        coroutine = async_factory(schema=schema)
+        coroutines.append(coroutine)
+        return coroutine
+
+    with pytest.raises(ConfigurationError):
+        _router(websocket_consumer_class=wrapping_factory)
+
+    [refused] = coroutines
+    assert refused.cr_frame is None, "the router must close the coroutine it refuses"
+
+
+def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction():
+    """Test 21d (review High 3): the calling convention is a construction error too.
+
+    ``factory(schema=schema)`` is the seam's one calling convention, so a factory
+    that cannot bind it is a configuration error naming the convention, with the
+    binding ``TypeError`` preserved as ``__cause__`` rather than surfacing bare.
+    """
+
+    def factory():
+        return _valid_asgi_application
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_consumer_class=factory)
+
+    message = str(exc_info.value)
+    assert _FACTORY_CONTRACT_SUBSTRING in message
+    assert _FACTORY_CONVENTION_SUBSTRING in message
+    assert isinstance(exc_info.value.__cause__, TypeError)
+
+
+def test_a_factory_that_raises_from_its_body_is_not_normalized():
+    """Test 21e (review High 3): only the CONVENTION is normalized, never the body.
+
+    The convention check binds the call with ``inspect.signature`` *before*
+    invoking the factory, precisely so that a ``TypeError`` raised inside a
+    correct factory's body stays a ``TypeError`` with its own traceback. Catching
+    ``TypeError`` around the call instead would have collapsed a consumer bug into
+    "your factory has the wrong signature", which is the wrong diagnosis.
+    """
+
+    def factory(*, schema):
+        raise TypeError("the factory's own bug")
+
+    with pytest.raises(TypeError, match="the factory's own bug"):
+        _router(websocket_consumer_class=factory)
+
+
+def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
+    """Test 21f (review High 3): an un-introspectable callable is not pre-rejected.
+
+    ``inspect.signature`` raises for a callable it cannot describe (a C callable,
+    or - as here - an object carrying a lying ``__signature__``). That is not
+    evidence the call would fail, so the pre-check skips and the factory is
+    judged by its result, which mounts normally.
+    """
+
+    class _Unintrospectable:
+        __signature__ = "not a signature"
+
+        def __call__(self, **kwargs):
+            return _valid_asgi_application
+
+    callback = _mounted_ws_callback(_router(websocket_consumer_class=_Unintrospectable()))
+
+    assert callback is _valid_asgi_application
 
 
 @pytest.mark.parametrize(
@@ -728,19 +946,48 @@ def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable):
         pytest.param("1.0", id="string"),
         pytest.param(float("nan"), id="nan"),
         pytest.param(float("inf"), id="inf"),
+        pytest.param(10**10000, id="int-with-no-float-image"),
+        pytest.param(-(10**10000), id="negative-int-with-no-float-image"),
     ],
 )
 def test_the_revalidation_window_rejects_unusable_values(unusable):
     """Test 23 (spec-065 Decision 11): the window's construction-time domain.
 
     ``bool`` is rejected explicitly (``isinstance(True, int)`` is ``True``), and
-    both non-finite values are rejected rather than silently meaning "never
-    revalidate" (``inf``) or "no window at all" (``nan``, which loses every
-    comparison). The failure is ``ConfigurationError`` at construction, never a
-    per-operation surprise.
+    both non-finite values are rejected because neither is a usable number of
+    seconds: ``nan`` loses every comparison, so it would silently never expire
+    and never say why, and ``inf`` is a saturation sentinel rather than a value a
+    deployment chose. Note what that reasoning does NOT claim - a ceiling; the
+    sibling row below accepts a finite but astronomical window on purpose. The
+    failure is ``ConfigurationError`` at construction, never a per-operation
+    surprise.
+
+    The two huge-integer rows are review's enormous-window finding. An ``int``
+    with no ``float`` image passes every ``isinstance`` check, so the validator
+    used to hand it to ``math.isfinite`` and escape the typed boundary with a raw
+    ``OverflowError``; rendering it into the rejection then raised ``ValueError``
+    from CPython's 4300-digit integer-to-string guard. Both arms are now inside
+    the boundary, and the negative twin is here because its ``value < 0`` check
+    could never run either.
     """
     with pytest.raises(ConfigurationError, match="websocket_revalidation_window"):
         _router(websocket_revalidation_window=unusable)
+
+
+def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
+    """Test 23c (review): the enormous-window rejection is complete, not just typed.
+
+    Two properties one row cannot infer from Test 23's ``pytest.raises``: the
+    ``OverflowError`` that detected the value survives as ``__cause__`` (so the
+    traceback still says *why* the number is unusable), and the message renders at
+    all - the value degrades to its type instead of raising ``ValueError`` while
+    the rejection is being formatted.
+    """
+    with pytest.raises(ConfigurationError) as exc_info:
+        _router(websocket_revalidation_window=10**10000)
+
+    assert isinstance(exc_info.value.__cause__, OverflowError)
+    assert "an unprintable int" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -750,6 +997,8 @@ def test_the_revalidation_window_rejects_unusable_values(unusable):
         pytest.param(0.0, 0.0, id="explicit-default"),
         pytest.param(30, 30.0, id="int-seconds-are-coerced"),
         pytest.param(2.5, 2.5, id="fractional-seconds"),
+        pytest.param(10**300, 1e300, id="astronomical-int-with-a-float-image"),
+        pytest.param(1e308, 1e308, id="largest-order-of-magnitude-float"),
     ],
 )
 def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected):
@@ -757,6 +1006,16 @@ def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected)
 
     The consumer receives a ``float`` whatever the caller passed, so the window
     comparison never mixes numeric types.
+
+    The last two rows are the honest boundary of the rejection above (spec-065
+    review W3-4). A ``1e300``-second window is operationally "never revalidate
+    again", and it is **accepted**: the package rejects values it cannot *use*, not
+    values it disapproves of, and it imposes no ceiling for the same reason it
+    imposes no maximum connection lifetime (Decision 12) - there is no correct
+    default and any constant would be invented rather than derived. They also mark
+    where ``int`` stops having a ``float`` image: these convert, and the
+    ``10**10000`` row above does not, which is the whole distinction the guarded
+    ``float()`` step exists to draw.
     """
     callback = _mounted_ws_callback(_router(websocket_revalidation_window=accepted))
 
@@ -1175,12 +1434,17 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: per-operation actor revalidation (Tests 26-32; spec-065
+# Channels-present: per-operation actor revalidation (Tests 26-34; spec-065
 # Decision 11, Test plan rows 25-27 and 30). Every row drives a REAL socket
-# through the package's own mount, and every out-of-band mutation stands in for
-# the spec's "separate request": the property under test is "denied without
-# reconnecting", not "an HTTP round trip happened", and this module's execution
-# schema is ORM-free on purpose (see the module docstring).
+# through the package's own mount.
+#
+# The spec's "separate request" is covered from both directions. The
+# out-of-band mutators (Test 26) are precise unit controls - one revocation
+# shape each, no HTTP lifecycle in the way - and Test 34 is the real thing: a
+# second HTTP request, made while the socket stays open, that runs Django's own
+# logout against the same session. Neither subsumes the other: the mutators
+# would stay green if the logout path broke, and the logout row alone could not
+# isolate the disabled-user or password-rotation shapes.
 # ---------------------------------------------------------------------------
 
 
@@ -1420,3 +1684,103 @@ async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_
 
     assert closed == {"type": "websocket.close", "code": 4401, "reason": "Unauthorized"}
     assert _package_logger_records(caplog) == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_package():
+    """Test 33 (review Medium 4): the revalidation does not import the auth subsystem.
+
+    ``auth/__init__.py`` eagerly imports ``.mutations`` and ``.queries``, so the
+    old ``from .auth.sessions import session_store_class`` made the FIRST
+    authenticated operation on ANY socket import and register the whole opt-in
+    GraphQL auth surface on the event loop - to read one settings string. The
+    resolver now lives in ``utils/sessions.py``.
+
+    Strict eviction is what makes the row provable rather than incidental: under
+    ``--dist loadscope`` a worker that already ran ``tests/auth/`` has those
+    modules cached, so a plain ``not in sys.modules`` assertion would pass no
+    matter what the production import does (the exact masking the review found in
+    this module, which imported ``auth.sessions`` at collection time). Evicting
+    the whole ``django_strawberry_framework.auth`` prefix - with the shared
+    two-sided restore - means a re-pointed import would have to re-import it,
+    which the assertion then sees.
+
+    The operation round trip is the other half of the proof. Window ``0.0`` and an
+    authenticated actor mean the revalidation MUST run, and a failed resolver
+    fails closed (Test 30), so ``next`` with the real username is only reachable
+    if the store resolved through the new module - which the positive assertion on
+    ``utils.sessions`` pins by name.
+    """
+    _user, cookie, _session_key = await _make_user_and_session("import_boundary_probe")
+    router = _router()
+
+    with evicted_modules(
+        _AUTH_SUBSYSTEM_PREFIX,
+        parent=django_strawberry_framework,
+        attr="auth",
+    ):
+        async with _open_ws(router, cookie=cookie) as communicator:
+            message = await _ws_operation(communicator, "{ username }", op_id="1")
+
+        assert message["type"] == "next", message
+        assert message["payload"]["data"] == {"username": "import_boundary_probe"}
+
+        assert session_store_module.__name__ in sys.modules
+        imported_auth = sorted(
+            name for name in sys.modules if name.startswith(_AUTH_SUBSYSTEM_PREFIX)
+        )
+        assert imported_auth == [], (
+            "the WebSocket revalidation imported the opt-in auth subsystem "
+            f"({_AUTH_SUBSYSTEM_MODULES} must stay absent): {imported_auth}"
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_real_second_request_logout_denies_the_next_operation_on_the_open_socket():
+    """Test 34 (spec-065 row 25, review Medium 5): the separate request is a REAL request.
+
+    Test 26's three revocations are direct ORM / session-store mutations - precise
+    unit controls that stay - but none of them exercises a second HTTP request's
+    own session lifecycle. This row does: while the socket stays open, an
+    ``AsyncClient`` posts to a probe URLConf view that calls Django's own
+    ``django.contrib.auth.logout``, so ``SessionMiddleware`` loads the session
+    from the cookie, the engine flushes the record, and the response expires the
+    cookie - the real revocation path a logout view, a cookie change, or a session
+    backend swap would break while every direct-mutation row stayed green.
+
+    The middle block is what makes it a proof rather than a coincidence: the
+    second request reports the session key and actor it resolved, so the row
+    asserts it targeted the SAME session as the socket before asserting the
+    denial. Only then is operation 2 on the ORIGINAL communicator - no reconnect,
+    same handshake - denied.
+    """
+    _user, cookie, session_key = await _make_user_and_session("logout_probe")
+    router = _router()
+
+    async with _open_ws(router, cookie=cookie) as communicator:
+        first = await _ws_operation(communicator, "{ username }", op_id="1")
+        assert first["type"] == "next", first
+        assert first["payload"]["data"] == {"username": "logout_probe"}
+
+        cookie_name = settings.SESSION_COOKIE_NAME
+        with override_settings(ROOT_URLCONF=__name__):
+            client = AsyncClient()
+            client.cookies[cookie_name] = session_key
+            response = await client.post(f"/{_LOGOUT_PROBE_PATH}")
+
+        assert response.status_code == 200, response.content
+        body = response.json()
+        # The second request really did resolve the socket's own session + actor.
+        assert body["session_key_before"] == session_key
+        assert body["username_before"] == "logout_probe"
+        assert body["authenticated_before"] is True
+        # Django's logout flushed the record and expired the browser cookie, so
+        # the credential the socket is still holding no longer resolves.
+        assert body["session_key_after"] is None
+        assert response.cookies[cookie_name].value == ""
+
+        _assert_rejected(
+            await _ws_operation(communicator, "{ username }", op_id="2"),
+            "2",
+            errors_as_list=True,
+        )

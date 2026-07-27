@@ -28,11 +28,11 @@ Joint version cut,joint-version-cut,card 045 shares 0.0.15 so the quintet defers
 Developer-only debug posture,developer-only-debug-posture,named in the transport guidance; the S8 change itself is card 067
 Debug-toolbar middleware,debug-toolbar-middleware,production-exposure guidance + the MIDDLEWARE-edit precedent rejected in Decision 6
 `DjangoDebugExtension`,djangodebugextension,the S8/S10 disclosure symbol pointed out of scope to card 067
-Multi-database cooperation,multi-database-cooperation,why the S11 revalidation read is alias-explicit
-Cookbook parity,cookbook-parity,project-level engine configuration migrates by recipe, not by the import-only promise
+Multi-database cooperation,multi-database-cooperation,"the rule the S11 revalidation satisfies by letting the session and user reads follow Django's own database routers"
+Cookbook parity,cookbook-parity,"project-level engine configuration migrates by recipe, not by the import-only promise"
 `DjangoType`,djangotype,no new `Meta` key; transport config is not type config (Non-goals)
 `DjangoFileType`,djangofiletype,audit S5 pointed out of scope; output shape untouched here
 `DjangoImageType`,djangoimagetype,same
 `FilterSet`,filterset,its `check_<field>_permission` input gate reads the refreshed actor for free
 `OrderSet`,orderset,same
-Django `AppConfig`,django-appconfig,where both upstream patches install; the S9 decode inherits that gate (Decision 9)
+Django `AppConfig`,django-appconfig,"where both upstream patches install; that gate covers upstream defects only, never the S9 wire contract (Decision 9)"

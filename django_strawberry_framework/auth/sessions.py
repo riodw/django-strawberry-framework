@@ -28,13 +28,17 @@ The module also owns:
   ``None.cycle_key()`` ``AttributeError``);
 * the per-scope ``asyncio.Lock`` primitive and its single acquisition helper that
   the login / logout state machines serialize their same-scope mutations under;
-* the configured session store's resolution (``session_store_class``) and the
-  session-engine capability answers built on it (login is unsupported on any
-  WebSocket; logout is unsupported on a signed-cookie-engine WebSocket) the
-  later stages gate on. ``session_store_class`` has one caller outside this
-  module - ``consumers.py::_refreshed_actor``, which reloads a WebSocket
-  connection's session during the per-operation actor revalidation (spec-065
-  Decision 11) - so the engine expression stays single-sited.
+* the session-engine capability answers (login is unsupported on any WebSocket;
+  logout is unsupported on a signed-cookie-engine WebSocket) the later stages
+  gate on. They are built on ``utils/sessions.py::session_store_class``, imported
+  below: the engine expression stays single-sited, but it is single-sited
+  OUTSIDE this package, because its other caller
+  (``consumers.py::_refreshed_actor``, which reloads a WebSocket connection's
+  session during the per-operation actor revalidation - spec-065 Decision 11)
+  must not import ``auth`` at all. ``auth/__init__.py`` eagerly imports
+  ``.mutations`` / ``.queries``, so an ``auth``-hosted resolver would have made
+  the first authenticated WebSocket operation register the whole opt-in auth
+  subsystem (spec-040 Decision 3) just to read ``SESSION_ENGINE``.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from django.http import HttpRequest
 from ..exceptions import ConfigurationError
 from ..utils.imports import require_optional_module
 from ..utils.permissions import ChannelsRequestAdapter
+from ..utils.sessions import session_store_class
 
 # The single channels-ABSENT install hint for the auth transport (mirrors
 # ``routers.py::_CHANNELS_INSTALL_HINT`` but keyed to this feature so hint strings
@@ -204,33 +209,16 @@ async def scope_session_lock(adapter: ChannelsRequestAdapter) -> AsyncIterator[a
         yield lock
 
 
-def session_store_class() -> type:
-    """Resolve the configured ``SESSION_ENGINE``'s ``SessionStore`` class.
-
-    The ONE expression that reads the deployment's session engine
-    (``import_string(f"{settings.SESSION_ENGINE}.SessionStore")``). Two callers
-    share it: ``uses_signed_cookie_sessions`` below, which answers a capability
-    question about the class, and
-    ``consumers.py::_refreshed_actor``, which instantiates it to reload a
-    connection's session during the per-operation WebSocket revalidation
-    (spec-065 Decision 11). Both go through Django's own ``import_string`` so a
-    consumer-authored engine subclass resolves identically.
-    """
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
-    return import_string(f"{settings.SESSION_ENGINE}.SessionStore")
-
-
 def uses_signed_cookie_sessions() -> bool:
     """True when the configured session engine is Django's signed-cookie engine.
 
     A settings / session-store read (``settings.SESSION_ENGINE``), NOT adapter
     metadata: the transport module answers the capability question itself rather
     than bolting a session-engine flag onto ``ChannelsRequestAdapter``. Resolves
-    the engine's ``SessionStore`` and tests it against the signed-cookie store so a
-    deployment subclassing that engine (which shares its no-server-side-record
-    limitation) is recognized too.
+    the engine's ``SessionStore`` through the shared
+    ``utils/sessions.py::session_store_class`` and tests it against the
+    signed-cookie store so a deployment subclassing that engine (which shares its
+    no-server-side-record limitation) is recognized too.
     """
     from django.contrib.sessions.backends.signed_cookies import (
         SessionStore as SignedCookieSessionStore,

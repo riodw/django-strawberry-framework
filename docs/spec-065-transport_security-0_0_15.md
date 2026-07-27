@@ -34,8 +34,8 @@ package's documented API freeze begins at `1.0.0`; correcting a newly confirmed
 security-boundary error during alpha is strictly preferable to preserving an unsafe
 migration convenience.
 
-Status: **IN BUILD — Slices 1-3 (S1, S2, S9) are built and accepted; Slices 4-5 remain.** Five
-slices: Slice 1 (**S1** — the protocol
+Status: **IN BUILD — Slices 1-4 (S1, S2, S9, S11) are built, and the round-1 review's
+remediation has landed; Slice 5 remains.** Five slices: Slice 1 (**S1** — the protocol
 split: HTTP to a required Django ASGI application, the package's Django GraphQL view,
 WebSocket-only exact routing), Slice 2 (**S2** — the cumulative body cap plus the
 documented proxy/server cap), Slice 3 (**S9** — the strict UTF-8 wire contract and the
@@ -100,8 +100,9 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 - [Developer-only debug posture][glossary-developer-only-debug-posture],
   [Debug-toolbar middleware][glossary-debug-toolbar-middleware] — the development-only
   surfaces whose production exposure the transport guidance must address.
-- [Multi-database cooperation][glossary-multi-database-cooperation] — the reason the
-  revalidation read is alias-explicit rather than router-guessed.
+- [Multi-database cooperation][glossary-multi-database-cooperation] — the rule the
+  revalidation's session and user reads satisfy by delegating to Django's own database
+  routers rather than pinning an alias of their own.
 - [Cookbook parity][glossary-cookbook-parity] — the rule that project-level engine
   configuration (here: the ASGI entrypoint and the URLconf) migrates by documented
   recipe rather than by import-only promise.
@@ -142,7 +143,12 @@ Each top-level item maps to one commit / PR.
         exact routing execute on the GraphQL HTTP route.
 - [ ] **Slice 2 — S2: the cumulative request-body cap**
   - [ ] `DjangoGraphQLView` / `AsyncDjangoGraphQLView` enforce a cumulative byte cap
-        **before** JSON parsing or schema execution, returning `413`
+        **before** JSON parsing or schema execution, returning `413`, and they *measure*
+        the body rather than materializing it — never `len(request.body)`
+        ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
+  - [ ] New `django_strawberry_framework/_request_body.py`: the single compatibility helper
+        that names `HttpRequest._stream` / `_body` / `_read_started`, handing the view one
+        boolean and pinning the Django 5.2.0-vs-6.0 contract that measurement depends on
         ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
   - [ ] One new settings key, `MAX_REQUEST_BODY_BYTES`, in
         `django_strawberry_framework/conf.py`, with a per-mount view-kwarg override
@@ -157,26 +163,51 @@ Each top-level item maps to one commit / PR.
         own surface split.
   - [ ] The full S2 regression matrix earned live over fakeshop's real `/graphql/`.
 - [ ] **Slice 3 — S9: one UTF-8 wire contract**
-  - [ ] `django_strawberry_framework/_strawberry_patches.py::_patched_parse_json` decodes
-        `bytes` with **strict UTF-8** before delegating
-        ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-once-in-_patched_parse_json)).
+  - [ ] `django_strawberry_framework/views.py::_RequestBodyBoundaryMixin.parse_json` decodes
+        `bytes` with **strict UTF-8** before delegating to upstream with `super()` — one
+        method inherited by both package views, and independent of
+        `APPLY_UPSTREAM_PATCHES`
+        ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
+  - [ ] `django_strawberry_framework/views.py::_RawBodyRequestAdapter` — a one-property
+        subclass of `cross_web.DjangoHTTPRequestAdapter` returning raw bytes, installed as
+        `DjangoGraphQLView.request_adapter_class` through upstream's own per-view seam — so
+        the sync transport's bytes reach that decode undecoded in **every** patch state.
+        Without it the decode is never entered on sync and a BOM'd body is an unhandled
+        `500`; the async view needs no counterpart and a row pins that asymmetry
+        ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
+  - [ ] `_strawberry_patches.py::_patched_parse_json` decodes nothing and keeps its
+        `UnicodeDecodeError` translation, which is a genuine upstream bug fix; both patch
+        modules' `APPLY_UPSTREAM_PATCHES` docstring paragraphs state that the gate covers
+        upstream *defects* only, scope the per-half consequence of disabling it to
+        Strawberry's own view, and name the two view-owned halves that carry the wire
+        contract whatever the setting says.
   - [ ] `_cross_web_patches.py::_patched_body` keeps returning raw bytes; its docstring
-        is rewritten to state the new contract and why the patch survives S1.
+        is rewritten to state the new contract, the mount it now serves (a package view
+        never reaches that getter), and why the patch survives S1.
   - [ ] A UTF-8 BOM is **rejected** with the same controlled `400`
         ([Decision 10](#decision-10--a-utf-8-bom-is-rejected)).
   - [ ] The three UTF-16/32/BOM **success** tests in
         `examples/fakeshop/test_query/test_products_api.py` are inverted to `400`, and the
-        raw-bytes contract tests in `tests/test_cross_web_patches.py` are re-aimed at the
-        new contract.
+        raw-bytes contract tests in `tests/test_cross_web_patches.py` are re-aimed: the
+        adapter still returns raw bytes, and those bytes are followed into the package view
+        that refuses them.
 - [ ] **Slice 4 — S11: WebSocket actor revalidation through an injection seam**
-  - [ ] `websocket_consumer_class=` injection on the router; the injected class still sits
-        inside `AllowedHostsOriginValidator` + `AuthMiddlewareStack` by construction
+  - [ ] `websocket_consumer_class=` injection on the router; an injected factory's calling
+        convention **and** its returned application are validated before anything is
+        mounted, and whatever is injected still sits inside `AllowedHostsOriginValidator` +
+        `AuthMiddlewareStack` by construction
         ([Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default)).
   - [ ] The package's default WebSocket consumer revalidates the session actor per
         operation and writes the refreshed actor back onto `scope["user"]`; an invalid
-        session rejects the operation.
+        session rejects the operation. The session store is resolved through
+        `django_strawberry_framework/utils/sessions.py::session_store_class`, outside the
+        structurally opt-in `auth` package ([`spec-040`][spec-040] Decision 3).
   - [ ] `websocket_revalidation_window=` — an explicit, bounded, opt-in revocation delay
-        (default `0.0` = revalidate every operation).
+        (default `0.0` = revalidate every operation), with a typed construction-time
+        domain: a finite number `>= 0.0` that converts to a `float`, or
+        [`ConfigurationError`][glossary-configurationerror] — whose `got ...` tail renders
+        through `exceptions.py::describe_value`, this slice's one shared value-describer,
+        also used by both router injection seams and by the view's cap resolution.
   - [ ] Maximum connection lifetime documented, with the enforcement seam named
         ([Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced)).
 - [ ] **Slice 5 — S12 transport slice: migration note, deployment guidance, doc fold-in**
@@ -194,8 +225,12 @@ Each top-level item maps to one commit / PR.
         superseded decisions
         ([Decision 14](#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions)).
   - [ ] [`docs/GLOSSARY.md`][glossary] via the glossary DB + re-render (never
-        hand-edited); [`docs/TREE.md`][tree] regenerated for `views.py` and the new tests;
-        [`README.md`][readme] / [`TODAY.md`][today] transport wording.
+        hand-edited); [`docs/TREE.md`][tree] regenerated for **all four** modules the
+        earlier slices added — `views.py`, `_request_body.py`, `consumers.py`, and
+        `utils/sessions.py` — in both the current and target package layouts, plus the new
+        tests; [`README.md`][readme] / [`TODAY.md`][today] transport wording. The render
+        reads each module docstring's first line, so a module whose docstring is missing
+        fails the regenerate rather than silently omitting the row.
   - [ ] The three now-wrong transport strings in `django_strawberry_framework/auth/`,
         corrected in the same pass as the prose above: `sessions.py::classify_transport`'s
         unrecognized-scope-type `ConfigurationError` (it tells the reader to "route GraphQL
@@ -229,21 +264,16 @@ Each top-level item maps to one commit / PR.
         clause, which Slice 2's own final verification made obsolete by correcting the spec —
         the `400` explanation itself stays, since it is the reason the row asserts what it
         asserts.
-  - [ ] The Slice-3 prose corrections, in
+  - [ ] The Slice-3 prose correction, in
         `examples/fakeshop/test_query/test_transport_api.py` and carried here for the same
-        reason as the Slice-1 and Slice-2 prose above: (a) the module docstring's **first
-        line** still scopes the file to `(spec-065 Slices 1-2)` although it now carries an
-        S9 async row — correct it to the file's actual slice scope, and do it **before**
-        the [`docs/TREE.md`][tree] regenerate in this same slice, because that first line
-        is the text `scripts/build_tree_md.py` renders (pinning a number at Slice 3 would
-        have been a guess about a file Slice 4 could still add rows to; pinning it here
-        pins the truth); and (b)
-        `::test_the_async_package_view_enforces_the_same_utf8_wire_contract`'s attribution
-        sentence claims a `400` there "can only come from the strict decode", which holds
-        for its UTF-16 request but not for the UTF-8-BOM request in the same test, whose
-        `__cause__` is upstream's `json.JSONDecodeError` — re-word to "the wrapper's strict
-        decode having replaced the raw-bytes path", which is the but-for cause of both. No
-        assertion changes in either; the rows stay exactly as accepted.
+        reason as the Slice-1 and Slice-2 prose above: the module docstring's **first line**
+        still scopes the file to `(spec-065 Slices 1-2)` although it now also carries the
+        S9 async rows and the wire contract's kill-switch rows — correct it to the file's
+        actual slice scope, and do it **before** the [`docs/TREE.md`][tree] regenerate in
+        this same slice, because that first line is the text `scripts/build_tree_md.py`
+        renders (pinning a number at Slice 3 would have been a guess about a file Slice 4
+        could still add rows to; pinning it here pins the truth). No assertion changes; the
+        rows stay exactly as accepted.
   - [ ] Card flip to Done + `KANBAN.md` / `KANBAN.html` regeneration from the DB.
   - [ ] **No version quintet movement, and no `CHANGELOG.md` edit**
         ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
@@ -374,7 +404,7 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   [Decision 10](#decision-10--a-utf-8-bom-is-rejected) nearly free. The complete
   ten-shape table, and which of the two mechanisms refuses each shape, is enumerated once
   in
-  [Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-once-in-_patched_parse_json)
+  [Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)
   rather than restated here.
 - **Three live tests assert the encodings this card rejects.**
   `test_products_api.py::test_post_utf16_json_body_succeeds_like_async_transport`,
@@ -432,10 +462,13 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
    construction with an actionable message.
 3. **A bounded request body as a package contract.** An explicit cumulative-byte cap,
    enforced pre-parse and pre-execution on the GraphQL HTTP path, counted rather than
-   declared, with a `413` proving neither JSON parsing nor schema execution ran — plus a
-   documented deployment-layer cap the package states it depends on.
+   declared, with a `413` proving neither JSON parsing nor schema execution ran — and a
+   refusal that is itself bounded, since a limit enforced after an unbounded allocation is a
+   detector rather than a bound — plus a documented deployment-layer cap the package states
+   it depends on.
 4. **One wire encoding.** Request JSON is UTF-8, strictly, with one documented BOM
-   policy and byte-identical sync / async behavior.
+   policy, byte-identical sync / async behavior, and a lifecycle of its own: permanent
+   package policy, not a workaround riding a patch's kill switch.
 5. **A WebSocket actor that cannot go stale silently.** Per-operation session
    revalidation on by default for the package's own consumer, with any accepted
    revocation delay expressed as an explicit, bounded, opt-in number.
@@ -618,7 +651,7 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 - **A body over the cap gets `413`** with a `text/plain` reason, before `parse_json` and
   before schema execution.
 - **Non-UTF-8 request JSON gets `400`** — the same controlled response malformed JSON
-  already gets.
+  already gets, on both package views, whatever `APPLY_UPSTREAM_PATCHES` says.
 - **A revoked session cannot keep executing over an open socket**: the next operation is
   rejected without a reconnect.
 - **Migration is no longer one line.** Both the `asgi.py` call site and the URLconf
@@ -657,8 +690,10 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
   `ASGIHandler.create_request` is unreachable here) — both are correct, and the tests
   assert which one fired. The `413` is therefore the package's own signature.
 - **Non-UTF-8 body** — `HTTPException(400, "Unable to parse request body as JSON")` for a
-  strict-decode failure (the existing message, unchanged), or upstream's own
-  `400` for a decodable-but-not-JSON payload such as BOM-less UTF-16 or a UTF-8 BOM.
+  strict-decode failure, or upstream's own `400` for a decodable-but-not-JSON payload such
+  as BOM-less UTF-16 or a UTF-8 BOM. The reason string is upstream's own `parse_json`
+  literal, reproduced verbatim rather than invented, so the two mechanisms are
+  indistinguishable on the wire and no caller can attribute a rejection by message.
 - **Revoked session, next operation** — a GraphQL error on that operation; the socket is
   closed when the protocol offers no per-operation error channel. The rejection is a
   transport-capability error in the same family as the shipped WebSocket
@@ -885,8 +920,13 @@ every integration surface (`routers.py`, `middleware/debug_toolbar.py`,
 `extensions/`). It resolves both of the card's open API questions at once: the package
 does ship a view, and the exact `urlpatterns` entry is the one above.
 
-The subclass adds **one** behavior — the cumulative body cap — and inherits everything
-else. Every upstream kwarg (`graphql_ide`, `allow_queries_via_get`,
+The subclass adds exactly **one subject** — the raw request body — and inherits everything
+else. That subject is two questions and two overridden hooks, both on one shared private
+mixin: how many of the body's bytes will be processed (the cumulative cap,
+[Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared))
+and how those exact bytes become text (the strict UTF-8 wire contract,
+[Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
+Every upstream kwarg (`graphql_ide`, `allow_queries_via_get`,
 `multipart_uploads_enabled`, `subscriptions_enabled`) keeps working, unchanged, so the
 S1 regression proving `graphql_ide=None` and `allow_queries_via_get=False` are supported
 is a proof about the shipped surface rather than about a package reimplementation.
@@ -900,7 +940,9 @@ every S2 regression row is then earnable over fakeshop's real `/graphql/` with
 `django.test.Client`, rather than mocked at the package tier — decisive, because a body
 limit asserted against a fake request proves nothing about the transport. (d) It is where
 the later cards' transport-shaped bounds (S3's budget, S4's upload limits, S10's error
-policy) will need to live, so the seam is created once rather than three times.
+policy) will need to live, so the seam is created once rather than three times — and it is
+where S9's wire contract lands for the same reason, since a package-owned policy needs a
+package-owned boundary to live on.
 
 **Why a subclass rather than a wrapper decorator.** A decorator around
 `GraphQLView.as_view()` cannot reach the request before Django's view dispatch in a way
@@ -933,12 +975,13 @@ request-body ceiling before `parse_json` and before schema execution:
 
 1. **Declared over-limit rejects immediately.** If `CONTENT_LENGTH` is present and
    exceeds the limit, return `413` without reading the body.
-2. **Actual bytes decide otherwise.** For a non-multipart request, measure the real body
-   length and reject at `413` if it exceeds the limit — a `Content-Length` that is absent
-   or lying cannot buy a larger body. On ASGI this composes with Django's own
-   seekable-stream check on the spooled size; on WSGI Django's `LimitedStream` truncates
-   reads at the declared length, so the declared value cannot understate what the
-   application receives.
+2. **Actual bytes decide otherwise.** For a non-multipart request, measure the received
+   body and reject at `413` if it exceeds the limit — a `Content-Length` that is absent or
+   lying cannot buy a larger body. The measurement never materializes the body it may be
+   about to refuse (see below). On WSGI Django's `LimitedStream` truncates reads at the
+   declared length, so the declared value cannot understate what the application receives;
+   on ASGI the spooled body file is measurable outright, so the refusal costs no allocation
+   at all.
 3. **Multipart is bounded by declaration plus Django's parser, not by materializing the
    body.** For a multipart request the view applies step 1 and then hands off to Django's
    `MultiPartParser` rather than reading `request.body` — reading it would force the whole
@@ -958,6 +1001,44 @@ request-body ceiling before `parse_json` and before schema execution:
    disables the package cap explicitly; a `None` *kwarg*, by contrast, means "this mount did
    not override anything" and defers to the setting, so a single mount cannot disable a cap
    the project has set.
+
+**How the body is measured, and why not `len(request.body)`.** `HttpRequest.body` performs
+an unbounded `self.read()` into one `bytes` value, so counting it would detect an
+over-limit body only *after* the attacker-sized allocation the cap exists to prevent — and
+on ASGI that read also copies back a `SpooledTemporaryFile` that
+`ASGIHandler.read_body` may already have rolled to disk, synchronously, on the event loop
+for `AsyncDjangoGraphQLView`. Django 6.0's own `body` narrows that window by size-checking
+a seekable stream first; the **Django 5.2.0 floor carries no such check**, which is
+precisely where the package's counted bound has to stand alone. So the cap asks a question
+instead of reading a body, in descending order of cheapness. A body an earlier middleware
+already cached is measured from that cache and still refused — the allocation cannot be
+undone, but processing it can be. A measurable stream (the ASGI spool) is size-probed with
+`seek` / `tell`, its original position restored, with **nothing read** — and it is the
+probe's *answer* that is judged, not merely its arithmetic: a count of zero or less is a
+measurement failure, never an empty body, so the request falls through to the bounded read
+below. Zero is the one answer a size probe must not be believed on, because the cap reads
+it as "within the limit" while nothing has been read, which hands the request straight to
+`HttpRequest.body` with no package bound at all — and at the 5.2.0 floor that property's
+only ceiling is the `CONTENT_LENGTH` this cap exists precisely not to trust. Verifying a
+zero costs exactly one `read`, so the fail-safe direction is affordable, and a genuinely
+empty body is still allowed — by measurement rather than by assumption. A stream the probe
+cannot answer for (genuinely non-seekable, or refused as above) is read through
+`request.read` — so Django keeps its own bookkeeping — in bounded chunks to at most
+`limit + 1` bytes, one byte more than the largest legal body
+and the least information that distinguishes "exactly at the limit" from "over it". Over
+the limit the collected chunks are never joined and the remainder is left unread, so no
+over-limit `bytes` value is allocated even transiently. Under it, the bytes are handed back
+as a *stream* — the consumed stream closed, a rewound `BytesIO` over the same bytes
+installed, `_read_started` reset to the `False` the request was constructed with — never by
+pre-filling `request._body`, so `HttpRequest.body` still runs in full and Django's own
+ceiling still fires exactly where it always did. Two states are unmeasurable, and the cap
+defers rather than guessing: a synthetic `HttpRequest` that carries no `_stream` at all,
+and a stream some other component already read from without caching `_body` — where
+`HttpRequest.body` itself raises `RawPostDataException`, so nothing downstream can process
+that request either and there is no bypass left to close. All three private attributes live
+in **one** module, `_request_body.py`, which hands the view a single boolean: the
+version-divergent knowledge is the risk, so it is single-sited beside the documented Django
+contract it depends on rather than spread across the two view classes.
 
 **Why its own key rather than `DATA_UPLOAD_MAX_MEMORY_SIZE`.** Django's knob is
 project-wide and shared with file uploads: a project that raises it to accommodate an
@@ -988,9 +1069,33 @@ with a controlled `413`. The un-fixable half is [Decision 8](#decision-8--the-de
 - **An ASGI/middleware guard as the primary seam.** Rejected in
   [Decision 6](#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf);
   its mid-stream advantage is reassigned to the deployment layer.
-- **Pre-reading the stream in chunks and stashing `request._body`.** Rejected: it
-  duplicates what Django's `body` property already does, mutates a private attribute, and
-  would make `request.body` raise `RawPostDataException` if the ordering ever drifted.
+- **Counting `len(request.body)`.** Its appeal is real — the property is the only *public*
+  way to obtain a body, so counting it touches no private attribute. Rejected anyway,
+  because it obtains the correct length only after Django has materialized the whole
+  request, which makes it a detector rather than a bound; and at the 5.2.0 floor, against an
+  absent or understated `Content-Length`, there is no earlier Django check to have shrunk
+  that allocation. Measuring the stream Django keeps private, from one module pinned to both
+  supported versions, is the smaller compatibility surface of the two — the alternative
+  buys its purity with an unbounded allocation on the one path this card exists to bound.
+- **Stashing the bounded read's bytes in `request._body`.** Rejected even though it mirrors
+  what `HttpRequest.body` itself leaves behind: pre-filling Django's cache makes the
+  property short-circuit, which silently disables **Django's own**
+  `DATA_UPLOAD_MAX_MEMORY_SIZE` for every request that took the bounded branch, so a project
+  whose Django knob sits below the package cap would lose it. A package cap adds a ceiling;
+  it must not remove one. Handing the bytes back as a rewound stream leaves the property
+  fully in charge and needs no ordering discipline to stay correct.
+- **Copying Django 6.0's `body` implementation into the package.** Rejected: it
+  reimplements a property whose behavior already differs across the supported range, and it
+  would still have to make the same `_body`-vs-`_stream` decision. Probing the size and
+  leaving the reading to Django's own property is less code and survives the next change to
+  it.
+- **Spreading `_stream` / `_body` / `_read_started` across the two view classes.** Rejected:
+  the version-divergent knowledge *is* the risk, so it belongs in one module beside the
+  contract it pins, with the views reading one boolean and owning policy only.
+- **Rewriting `META["CONTENT_LENGTH"]` so an unparseable declaration parses.** Rejected: it
+  edits the request to make Django's own later read succeed, concealing a malformed header
+  the deployment should see, and bounds nothing that the counted check does not already
+  bound.
 - **Rejecting inside `_patched_parse_json`.** Rejected: the patch modules exist to fix
   *upstream defects*; a package size policy is not a defect fix, it would fire on GET
   query-param parses, and it would be unreachable for a multipart request.
@@ -1036,60 +1141,103 @@ what keeps the two layers from collapsing into one in the reader's head.
 proxy in passing. Rejected: it would restate the exact conflation the audit called out,
 and would make the package's own documentation the source of a false guarantee.
 
-### Decision 9 — The strict UTF-8 wire contract is enforced once, in `_patched_parse_json`
+### Decision 9 — The strict UTF-8 wire contract is enforced by the package view: its own body source, one strict decode
 
-**Decision.** `_strawberry_patches.py::_patched_parse_json` decodes `bytes` input with
-**strict UTF-8** before delegating to the captured upstream `parse_json`. A
-`UnicodeDecodeError` from that decode reaches the existing translation and becomes the
-same `HTTPException(400, "Unable to parse request body as JSON")` the patch already
-raises. A `str` input (the GET query-param path, which Django has already decoded) is
-passed through untouched, and the existing `_patched_parse_query_params` shield keeps the
-body-envelope guard off those two sites regardless.
+**Decision.** `views.py::_RequestBodyBoundaryMixin.parse_json` decodes `bytes` input with
+**strict UTF-8** and then delegates with `super()` to upstream's `parse_json`, which stays
+the only JSON parser in the path. A `UnicodeDecodeError` from that decode becomes
+`HTTPException(400, "Unable to parse request body as JSON")` — upstream's own literal,
+reproduced verbatim. A `str` input (the GET query-param path and the multipart
+`operations` / `map` form fields, all of which Django has already decoded) passes through
+**untouched, by identity**, and the existing `_patched_parse_query_params` shield keeps the
+body-envelope guard off the two query-param sites regardless. The mixin sits first in both
+views' bases, so it is the MRO owner of `parse_json` for the sync and async view alike:
+one method, both transports, no duplication and no possible drift.
 
-`_cross_web_patches.py::_patched_body` **keeps returning raw
-`self.request.body` bytes**, and its docstring is rewritten. This is the load-bearing
-half of the decision and needs stating precisely: the patch's job is to stop the sync
-adapter from UTF-8-decoding *inside a property*, because a `UnicodeDecodeError` raised
-there escapes `parse_json`'s `except` and surfaces as an unhandled `500` — the original
-upstream bug. Moving the strict decode into `_patched_parse_json` keeps the raise inside
-the one scope that can translate it, and — because both the sync and async views inherit
-the single `BaseView.parse_json` — fixes both transports from one site. The patch pair's
-existing joint ownership of the malformed-body contract is unchanged; only the *success*
-set narrows.
+**The bytes have to arrive undecoded, and that half is the view's too.** A decode the
+bytes never reach is not an enforcement, and on the sync transport they do not reach it by
+default: upstream's `cross_web.DjangoHTTPRequestAdapter` UTF-8-decodes inside a
+*property*, so `parse_json` is never entered with `bytes` at all and the
+`UnicodeDecodeError` raised there escapes `dispatch`'s `except HTTPException` as an
+unhandled `500` — the original upstream bug. The package view therefore supplies its own
+body source: `views.py::_RawBodyRequestAdapter`, a one-property subclass of that same
+adapter returning raw `self.request.body`, installed through `request_adapter_class` —
+upstream's own per-view seam, the class attribute every integration sets, and the single
+place `strawberry.http.sync_base_view` decides who answers `request_adapter.body`.
+Subclassing keeps every other adapter member upstream's, and the property shadows the
+(patched or unpatched) class attribute by identity, so neither the patch state nor the
+install order can reach a package mount. The async view needs no counterpart —
+`AsyncDjangoHTTPRequestAdapter.get_body` already hands over the raw bytes, which is exactly
+the contract the sync subclass reproduces — and a test pins that asymmetry so it cannot
+silently become a gap.
 
-Both patches keep installing where they install today — from
-`apps.py::DjangoStrawberryFrameworkConfig.ready` at Django app load, the
-[Django `AppConfig`][glossary-django-appconfig] seam — and keep their shared
-`APPLY_UPSTREAM_PATCHES` gate. A consumer who disables the Strawberry patch therefore
-opts out of the strict wire contract along with the malformed-body hardening the pair
-already jointly owns; the docs state that consequence rather than splitting the gate.
+`_cross_web_patches.py::_patched_body` **keeps returning raw `self.request.body` bytes**,
+and its docstring is rewritten — but the mount it serves is the *other* one. It replaces
+the property on upstream's class process-wide, so a consumer who mounts **Strawberry's
+own** view also gets the raise moved out of a property and into a scope that can answer it
+with a controlled `400`; a package view never reaches that getter at all.
+`_strawberry_patches.py::_patched_parse_json` decodes nothing and keeps its own
+`UnicodeDecodeError` translation, which remains reachable on that same upstream-mounted
+path (`json.loads(bytes)` raises it whenever the bytes are undecodable under the encoding
+`detect_encoding` picks) and is a genuine upstream bug fix. The patch pair's joint
+ownership of the malformed-body contract is unchanged, and so is its subject — Strawberry's
+own view; what narrows is the *success* set, and it narrows on the package view.
+
+**Ownership follows lifecycle, so the gate does not carry the policy.** Both patches keep
+installing where they install today — from `apps.py::DjangoStrawberryFrameworkConfig.ready`
+at Django app load, the [Django `AppConfig`][glossary-django-appconfig] seam — and keep
+their shared `APPLY_UPSTREAM_PATCHES` gate, which governs **upstream bug workarounds and
+nothing else**. The wire contract is permanent package policy, so it does not ride a
+temporary workaround's kill switch: a consumer who disables the patches (or a future
+maintainer who deletes them once upstream fixes the bugs) keeps the strict wire contract on
+every package view. That is a claim about **both** halves, which is why both are
+view-owned: a policy is only as ungated as the least-owned step on the path to it, and the
+path to the decode runs through the body source. Deletability is the other half of the same
+property: because the patch module no longer holds a permanent policy, it can be removed
+outright when both upstream bugs retire. A consumer who deliberately mounts
+`strawberry.django.views.GraphQLView` instead keeps upstream's own RFC 8259 `bytes`
+semantics — their choice to make, and no longer made for them by an unrelated setting; a
+test pins that upstream behavior as a *requirement*, so the ownership split cannot silently
+collapse back into one site.
 
 **Which docs, by surface.** The same split
 [Decision 8](#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative)
 states for the body cap: the **code-documentation** surface belongs to the slice that
-authors the code, so Slice 3 discharges it on the `APPLY_UPSTREAM_PATCHES` paragraph of
-**both** patch module docstrings — `_strawberry_patches.py` and `_cross_web_patches.py` —
-each of which already documents the pair's joint ownership of the malformed-body contract
-and must now name the wire contract travelling with the same gate. Naming both is the
-point: the consequence differs per half (without the `cross_web` half an undecodable body
-is an unhandled `500`; without the Strawberry half the wire contract is absent and a
-UTF-16 / UTF-32 body silently succeeds), so a consumer who reads only the module they
-disabled still learns what they gave up. Any consumer-facing restatement is Slice 5's
-transport deployment guidance, not a third code surface.
+authors the code, so Slice 3 discharges it in four places, one per owner. `views.py`'s
+`parse_json` docstring carries the decode itself, including why it lives there;
+`_RawBodyRequestAdapter`'s docstring carries the other half — what upstream's
+property-scoped decode costs, why `request_adapter_class` is the seam, and why this class
+is not the `cross_web` patch under another name. The
+`APPLY_UPSTREAM_PATCHES` paragraph of **both** patch module docstrings —
+`_strawberry_patches.py` and `_cross_web_patches.py` — states that the gate covers upstream
+*defects* only, names the per-half consequence of disabling it **on Strawberry's own view**,
+the only mount the gate can still reach (without the `cross_web` half an undecodable body is
+an unhandled `500` there; without the Strawberry half a scalar or non-object-batch body is),
+and names the two view-owned halves that carry the wire contract on a package mount whatever
+the setting says. Naming both is the point: a consumer who reads only the module they
+disabled still learns exactly what they gave up, and what they did not. Any consumer-facing
+restatement is Slice 5's transport deployment guidance, not a fifth code surface.
 
 **What this means for `_patched_body` after S1.** The patch is unaffected by the protocol
-split and remains necessary. It patches `cross_web.DjangoHTTPRequestAdapter`, the **Django
-view's** sync request adapter — the very path S1 makes authoritative — not anything
-Channels-owned. If anything, S1 raises the patch's importance: previously a
-Channels-routed deployment never reached that adapter at all.
+split and remains necessary for the mount it serves. It patches
+`cross_web.DjangoHTTPRequestAdapter`, the **Django view's** sync request adapter — the very
+path S1 makes authoritative — not anything Channels-owned, and a consumer who mounts
+Strawberry's own Django view is served by it. If anything, S1 raises the patch's importance
+for that consumer: previously a Channels-routed deployment never reached that adapter at
+all.
 
-**Why the decode belongs in the patch module rather than in the new view.** The UTF-8
-wire contract is a property of GraphQL-over-HTTP request parsing, which the patch module
-already owns end-to-end for both transports and both encodings-of-failure. Enforcing it
-in `views.py` would cover only consumers who adopt the package view, would miss the async
-view's own parse path unless duplicated, and would split one contract across two modules
-— the single-siting rule [`request_from_info`][glossary-request_from_info] already
-establishes for request decoding.
+**Why the decode belongs on the view rather than in the patch module.** Three reasons, and
+the first is decisive. (a) A permanent security policy must not share a temporary patch's
+lifecycle: an upstream shape change that forces a consumer to disable the patch would
+otherwise reopen the parser differential S9 exists to close, silently. That argument
+governs the body source identically, which is why the view owns that too — a switchable
+body source is a switchable decode. (b) The mixin is one
+seam covering both transports — `super()` delegates to upstream's `parse_json`, patched or
+not, so nothing is reimplemented and the two views cannot diverge, which is the same
+single-siting rule [`request_from_info`][glossary-request_from_info] establishes for
+request decoding. (c) It is the same boundary as the body cap: the cap decides which bytes
+reach the parse, and the parse decides how those exact bytes become text — one mixin, one
+subject, the raw request body.
 
 **Measured behavior** (verified, not assumed — the full shape set, so no reader has to
 infer a sibling's behavior from a named one):
@@ -1107,9 +1255,11 @@ infer a sibling's behavior from a named one):
 | UTF-32-BE without BOM | ok | `JSONDecodeError` | `400` at `json.loads` |
 | UTF-8 with BOM | ok | `JSONDecodeError` | `400` at `json.loads` |
 
-Every non-UTF-8 form therefore reaches a `400` through an existing path, with **no new
-rejection branch** to write or cover. The authoritative split across the nine rejected
-shapes is **4 `UnicodeDecodeError` / 5 `json.JSONDecodeError`**: the BOM'd multi-byte
+Every non-UTF-8 form therefore reaches a `400` through **one** rejection branch, not nine:
+the four undecodable shapes ride the single `except UnicodeDecodeError` the boundary owns,
+and the other five are refused by upstream's own parser with no package branch at all. The
+authoritative split across the nine rejected shapes is
+**4 `UnicodeDecodeError` / 5 `json.JSONDecodeError`**: the BOM'd multi-byte
 forms carry a leading byte that is not valid UTF-8, while the BOM-less multi-byte forms
 decode into NUL-studded text that only the parser refuses. Status and message are
 identical across all nine — deliberately, so one byte sequence has one interpretation at
@@ -1119,14 +1269,48 @@ that tolerated them.
 
 **Alternatives rejected.**
 
+- **Decode inside `_patched_parse_json`.** The wire contract *is* a property of
+  GraphQL-over-HTTP request parsing, and the patch module already owned that parse for both
+  transports and both encodings-of-failure, so putting the decode there costs the fewest
+  lines and covers upstream-mounted consumers too. Rejected on ownership: it makes a
+  permanent package security policy share the lifecycle — and the `APPLY_UPSTREAM_PATCHES`
+  kill switch — of temporary workarounds for upstream bugs. A consumer disabling those
+  workarounds, or a maintainer deleting them once upstream fixes them, then silently
+  restores multi-encoding request bodies. A security policy a consumer can switch off by
+  accident is not a policy, and the extra reach over upstream-mounted views is not the
+  package's to claim.
 - **Decode inside `_patched_body`.** Rejected: it re-creates the unhandled-`500`
   path the patch module exists to close, and it would only fix the sync transport.
+- **Let `_patched_body` be the package view's sync body source.** One patched property
+  already hands raw bytes to both mounts, so the package view would need no adapter of its
+  own and the decode would be reached for free. Rejected for the *same* reason the decode
+  is not in the patch module, not a second one: the patch is gated, so the sync half of the
+  wire contract would ride `APPLY_UPSTREAM_PATCHES` while the other half did not, and a
+  policy that is half-switchable is worse than one that is honestly switchable, because the
+  reader of either half is told something untrue. Measured rather than argued: with the
+  gate off, a BOM'd UTF-16 or UTF-32 body on a mounted sync package view answers `500`
+  instead of the contracted `400`, because upstream's property decodes first and
+  `parse_json` is never entered with bytes. A decode the bytes never reach is not an
+  enforcement.
+- **Override `decode_json` instead of `parse_json`.** Rejected: a `UnicodeDecodeError`
+  raised there lands in upstream's `except json.JSONDecodeError`, which does not catch it,
+  so the `400` translation would depend on the Strawberry patch being installed — exactly
+  the coupling this decision removes.
 - **Reject non-UTF-8 by sniffing leading bytes** (a BOM / NUL-pattern check). Rejected: a
   bespoke encoding sniffer is a parser, and adding a second parser to close a parser
   differential is self-defeating. `bytes.decode("utf-8")` is the contract.
 - **Set a strict codec on the adapter and let `json.loads` see a `str` everywhere.**
-  Rejected: it changes the async adapter's contract too and re-introduces the property-
-  scope raise; the sync/async symmetry the current patch pair achieves would be lost.
+  Rejected — and worth distinguishing from the adapter subclass the view does install,
+  which *removes* a decode rather than adding one. Putting the strict codec on the adapter
+  instead re-introduces the property-scope raise, on the very transport the subclass exists
+  to rescue: a `UnicodeDecodeError` with no `except` above it is a `500`, wherever the
+  codec is strict. It also needs a matching change to the async adapter's contract to keep
+  the two transports agreeing, losing the sync/async symmetry one inherited `parse_json`
+  gives for free.
+- **A `STRICT_UTF8_BODY` setting so a consumer can opt out of the policy too.** Rejected:
+  a security policy a consumer can switch off is the finding this decision answers, not the
+  fix — and [`AGENTS.md`][agents] forbids adding a settings key speculatively. The opt-out
+  that does exist is deliberate and explicit: mount upstream's own view.
 
 ### Decision 10 — A UTF-8 BOM is rejected
 
@@ -1160,8 +1344,31 @@ a future reader knows the choice was deliberate rather than incidental.
 `GraphQLWSConsumer` and is mounted through its own `as_asgi(schema=schema)`; a factory is
 called as `factory(schema=schema)` and must return the ASGI application to mount. Anything
 else — a class that is not a `GraphQLWSConsumer` subclass, or a non-callable — is a
-[`ConfigurationError`][glossary-configurationerror] at construction. `None` selects the
-package's own `GraphQLWebSocketConsumer`, a thin `GraphQLWSConsumer` subclass that revalidates the
+[`ConfigurationError`][glossary-configurationerror] at construction.
+
+**A factory is validated on both halves of its contract, before anything is mounted.** The
+*calling convention* is pre-bound with `inspect.signature(factory).bind(schema=schema)`
+before the factory is invoked at all, with the binding `TypeError` preserved as
+`__cause__`; a factory whose signature cannot be read is judged by the call instead. The
+*returned object* must then be callable, and a coroutine object — what an `async def`
+factory returns — is `close()`d on the way out, because dropping it makes CPython emit an
+unraisable "never awaited" `RuntimeWarning` from the collector at an unrelated moment, in
+the consumer's process. What "a valid ASGI application" means at this seam is stated rather
+than implied: **callability is the floor, and the only false-positive-free check available
+at construction**. ASGI conformance — accepting `(scope, receive, send)`, awaiting, emitting
+the right events — is observable only by running a real connection through the object, which
+router construction must not do, and an arity check on the result would falsely reject
+legitimate `*args` middleware, `functools.partial` mounts, and callable instances whose
+`__call__` is a C slot. So the validation converts every shape that *cannot* be an ASGI
+application (`None`, a scalar, a mapping, a coroutine) into an actionable
+`ConfigurationError` naming the contract, the factory, and the received value, and
+deliberately leaves a callable that merely misbehaves to fail at the handshake, where its
+own traceback is the useful signal. A `TypeError` raised from inside a correct factory's
+body is never normalized — that is why the convention is pre-bound rather than caught
+around the call.
+
+`None` selects the package's own `GraphQLWebSocketConsumer`, a thin `GraphQLWSConsumer`
+subclass that revalidates the
 session actor per operation. Whatever is injected, the router applies
 `AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([...])))` around it — the
 wrappers are the router's, not the consumer's, so an injected class **cannot** escape
@@ -1181,7 +1388,16 @@ the per-protocol subclasses carry no logic of their own.
 
 **What the revalidation does.** It reloads the session and resolves the actor for the
 scope, writes the refreshed actor back onto `scope["user"]`, and rejects the operation
-when the session is no longer valid (revoked, flushed, or the user disabled). Writing
+when the session is no longer valid (revoked, flushed, or the user disabled). The reload
+goes through `channels.auth.get_user`, reused verbatim rather than reimplemented, over a
+store the deployment's `SESSION_ENGINE` resolves — and that resolution is read from
+`utils/sessions.py::session_store_class`, **outside** the `auth` package. `auth` is
+structurally opt-in ([`spec-040`][spec-040] Decision 3) and its `__init__` eagerly imports
+`.mutations` / `.queries`, so reaching the resolver through `auth.sessions` would make the
+first authenticated operation on a socket import and register the whole GraphQL auth
+subsystem, on the event loop, to read one settings string. Hosting the expression in
+`utils/` — which the transport layer and the auth layer both already depend on — keeps one
+expression for the engine and leaves `auth` opt-in. Writing
 back is what makes the rest of the package compose for free: the
 [Channels request adapter][glossary-channels-request-adapter] reads
 `scope["user"]`, so every surface reached through
@@ -1207,6 +1423,41 @@ rather than an emergent cache behavior. The docs state the trade in one sentence
 session read per operation, or a named number of seconds during which a revoked session
 still executes.
 
+The window's domain is typed and checked at construction: a **finite number `>= 0.0` that
+converts to a `float`**. `bool` is refused explicitly (`isinstance(True, int)` is `True`), a
+non-numeric value is refused, and the conversion runs in its own guarded step so an integer
+with no `float` image raises the promised
+[`ConfigurationError`][glossary-configurationerror] with the `OverflowError` chained as
+`__cause__` rather than escaping as a raw arithmetic error; the sign and finiteness tests
+then run on the converted `float`. `nan` and `inf` are refused as well, and the reason is
+unusability rather than size: `nan` loses every comparison, so a window spelled that way
+would silently never expire and never say why, and `inf` is the saturation sentinel a
+failed computation produces rather than a number of seconds any deployment chose. A
+negative value, `nan`, and `inf` all raise **one** message, because they differ in how they
+detect an unusable value, not in what the deployment must change.
+What is deliberately **not** refused, so the rationale is not read as more than it is, is a
+finite but astronomical window: `10**300` and `1e308` are accepted, and a window that large
+*is* "never revalidate again". The package sets no upper bound, for the same reason
+[Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced)
+sets no maximum connection lifetime — there is no correct default, any ceiling would be a
+constant invented here rather than derived from anything, and the window is a deliberate
+consumer trade-off (one session read per authenticated operation against a named revocation
+delay) that the deployment can price and the package has no standing to second-guess. The
+guard is about values the package cannot *use*, not about values it disapproves of.
+The message renders through the package's one safe value-describer, since the `got ...` tail
+is built by an f-string at the *raise site* — before any exception object exists, so a value
+whose `repr` cannot be produced would otherwise replace the typed error with an unrelated
+one on exactly the hostile-configuration path where the typed error is the contract.
+
+A **positive** window cannot be combined with `websocket_consumer_class`: the window
+configures the package's own consumer, so pairing it with an injected class that owns its
+own revalidation policy is a construction error rather than a silently ignored knob. An
+explicit `0.0` alongside an injected class is accepted, because it configures nothing either
+way and is already the public default — the rule is about the window's *effect*, not about
+its presence in the call. Distinguishing "omitted" from "explicitly zero" would need a
+private sentinel in a public signature, which is a worse API than a rule that keys on the
+value that matters.
+
 **Why this and not the alternatives.**
 
 - **Revalidate lazily in `ChannelsRequestAdapter.user`.** Rejected: it only fires when
@@ -1226,12 +1477,37 @@ still executes.
 - **Make revalidation opt-in.** Rejected: the audit's finding is that the default is
   stale; an opt-in fix leaves the default stale. Injecting a custom consumer class is the
   opt-out, and it is an opt-out that requires the consumer to own the concern explicitly.
+- **Mount whatever the factory returns and let a bad value fail at the first handshake.**
+  Rejected: an injection seam that accepts an object it can already prove is not an
+  application converts a configuration mistake into a runtime routing failure, far from the
+  line that caused it. Construction is where the seam's contract is knowable, so it is where
+  the contract is enforced.
+- **Catch `TypeError` around `factory(schema=schema)` instead of pre-binding.** Rejected: a
+  `TypeError` raised by the call cannot be told apart from one raised *inside* a correct
+  factory's body, so a consumer's own bug would be reported as "your factory has the wrong
+  signature" — the wrong diagnosis, with the real traceback buried under `__cause__`.
+- **Validate the class branch's `as_asgi(schema=schema)` result too.** Rejected: that return
+  value is upstream's contract, not the consumer's, so checking it would assert against
+  Strawberry rather than against the injection seam.
+- **Resolve the session store from `auth/sessions.py`.** It is where the capability question
+  about signed-cookie sessions already lives, so the expression looks at home there.
+  Rejected: importing a submodule executes its package's `__init__`, and `auth` is
+  structurally opt-in with an eager `__init__`, so a transport-layer read would drag the
+  whole GraphQL auth subsystem into every process that never asked for it. Making
+  `auth/__init__` lazy instead was also rejected — it changes the public opt-in surface
+  [`spec-040`][spec-040] Decision 3 pins, to solve a transport problem — and duplicating the
+  two-line `SESSION_ENGINE` expression was rejected outright: two sites would have to agree
+  about how a consumer-authored engine subclass resolves.
 
 **One deliberate constraint, stated as a constraint.** The revalidation performs a
 session read per authenticated operation (or per window), which is database work on the socket's
-critical path. It is pinned to the operation's own resolved alias rather than guessed, per
-[Multi-database cooperation][glossary-multi-database-cooperation], and the window exists
-precisely so a deployment can price it. This is a cost the audit's finding makes
+critical path. The session and user reads honor their models' **normal Django
+database-router decisions** — the store the deployment's `SESSION_ENGINE` resolves and
+`channels.auth.get_user` both perform ordinary router selection, and the package captures no
+alias of its own — which is what [Multi-database cooperation][glossary-multi-database-cooperation]
+asks of a library: cooperate with the consumer's routing rather than pin around it.
+Reimplementing `get_user` to force an alias would be strictly worse, and the window exists
+precisely so a deployment can price the read. This is a cost the audit's finding makes
 worth paying, not a cost the spec hides.
 
 ### Decision 12 — Maximum connection lifetime is documented and seamed, not silently enforced
@@ -1345,8 +1621,11 @@ lands rather than assumed.
 `test_products_api.py` UTF-16/32/BOM success tests become `400` assertions, keeping their
 docstrings' explanation of *why* each byte sequence used to succeed — the history is the
 point. `tests/test_cross_web_patches.py`'s raw-bytes contract tests are re-aimed: the
-adapter still returns raw bytes (that contract is unchanged), and the new assertion is
-that the strict decode in `_patched_parse_json` is what rejects them.
+adapter still returns raw bytes (that contract is unchanged), and the new assertion follows
+those bytes into the package view, which is what refuses them. For the BOM row that
+distinction is load-bearing rather than cosmetic — `json.loads` on `bytes` detects
+`utf-8-sig` and strips the BOM itself, so a patch-module-only assertion would have recorded
+that body as *accepted*.
 
 **Placement.** The S1 middleware / Host / CSRF / header / cache / routing regressions and
 the entire S2 body-cap matrix live in `examples/fakeshop/test_query/` over the real
@@ -1357,8 +1636,15 @@ in `tests/test_routers.py` (communicator-driven), the documented
 genuinely-unreachable-live case. `tests/test_views.py` is new and holds only what a live
 request cannot reach — in Slice 1 the import-boundary and public-surface contracts (the
 `channels`-free import proof, the `as_view()` kwarg-binding matrix, the async-twin
-coroutine marking, and the exact `__all__` / stays-off-the-package-root assertion), and in
-Slice 2 the cap's argument validation and the settings-precedence matrix.
+coroutine marking, and the exact `__all__` / stays-off-the-package-root assertion), in
+Slice 2 the cap's argument validation, the settings-precedence matrix, and the stream-shape
+rows whose whole point is a negative witness a real server cannot provide (a body file whose
+`read` raises if the cap ever calls it, a stream that records every requested size, the
+Python 3.10 spool shape reproduced from any interpreter), and in Slice 3 the nine-shape wire
+matrix, because status and message are identical across all nine by design and `__cause__` —
+the only discriminator — is exposed by no HTTP response, plus the two adapter-installation
+rows, whose subject is a class attribute (`request_adapter_class` on each view) rather than
+a response.
 
 ### Decision 14 — This card amends `spec-041` and supersedes three of its decisions
 
@@ -1430,9 +1716,9 @@ hard `strawberry-graphql` requirement.
 | Slice | Finding | Where | Work | Risk profile |
 |---|---|---|---|---|
 | 1 | S1 | `routers.py`, new `views.py`, `tests/test_routers.py`, new `tests/test_views.py`, live tier | protocol split; required `django_application`; `websocket_url_pattern`; the package view; rewrite 5 router tests; live middleware / Host / CSRF / header / cache / routing proofs | **HIGH** — the breaking change; every downstream slice builds on the new shape |
-| 2 | S2 | `views.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse; `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED — multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
-| 3 | S9 | `_strawberry_patches.py`, `_cross_web_patches.py` docstring, `test_products_api.py`, `tests/test_cross_web_patches.py` | strict UTF-8 decode in the wrapper; invert 3 live tests; re-aim 2 package tests | LOW — measured behavior, no new branch |
-| 4 | S11 | `routers.py`, new package WS consumer + 2 handler pre-hooks, `tests/test_routers.py` | injection seam; revalidation function; window kwarg; revoke-then-operate matrix | MED-HIGH — async, per-operation, communicator-driven |
+| 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper; `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
+| 3 | S9 | `views.py` (the mixin's `parse_json` **and** `_RawBodyRequestAdapter`), both patch modules' docstrings, `_strawberry_patches.py`, `test_products_api.py`, `test_transport_api.py`, `tests/test_cross_web_patches.py`, `tests/test_views.py` | strict UTF-8 decode on the view's `parse_json`, fed by the view's own `request_adapter_class`; the patch gate narrowed to upstream defects; invert 3 live tests; re-aim 2 package tests; the kill-switch matrix in both opt-out spellings | LOW — measured behavior, one rejection branch |
+| 4 | S11 | `routers.py`, new `consumers.py` (WS consumer + 2 handler pre-hooks), new `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; revalidation function; window kwarg and its typed domain; the shared safe value-describer; revoke-then-operate matrix | MED-HIGH — async, per-operation, communicator-driven |
 | 5 | S12 | `docs/`, `spec-041`, glossary DB, kanban DB | migration note; transport guidance; `spec-041` amendment; GLOSSARY + TREE regen; card wrap | mechanical breadth; **no version quintet, no `CHANGELOG.md`** |
 
 Sequencing inside the card is strict: **Slice 1 first and alone.** Slices 2 and 4 both
@@ -1469,12 +1755,35 @@ removed in the change that ships the slice — the repo's standing staging disci
   existing [Channels request adapter][glossary-channels-request-adapter] and
   [`request_from_info`][glossary-request_from_info] single-siting is preserved; this card
   adds **no** new request-context decoder, per that helper's hard single-siting rule.
-- **The view subclasses upstream rather than reimplementing it.** One overridden hook for
-  the cap; every other behavior inherited from
-  `strawberry.django.views.GraphQLView` / `AsyncGraphQLView`.
-- **The UTF-8 decode is added to the existing `_patched_parse_json` wrapper**, reusing its
-  existing `UnicodeDecodeError` → `HTTPException(400, ...)` translation and its existing
-  `_validate_upstream_shape` gate. No new patch module, no second patched method.
+- **The view subclasses upstream rather than reimplementing it.** Two overridden hooks —
+  `run` for the cap and `parse_json` for the wire contract — both on the one private
+  `_RequestBodyBoundaryMixin` the two views share, so the sync and async colours cannot
+  diverge; every other behavior is inherited from `strawberry.django.views.GraphQLView` /
+  `AsyncGraphQLView`.
+- **The UTF-8 decode is one `parse_json` override that delegates with `super()`**, so
+  upstream stays the only JSON parser in the path. `_patched_parse_json` keeps its own
+  `UnicodeDecodeError` → `HTTPException(400, ...)` translation and its
+  `_validate_upstream_shape` gate for the upstream-mounted path; no new patch module, no
+  second patched method, and no reimplemented parser anywhere. The `400` reason string is
+  deliberately named in **both** places rather than imported: an import would make
+  `apps.py::ready` load `views.py` (and `strawberry.django.views`) at every consumer's
+  startup, channels-only ones included, and would cost the patch module the import-time
+  independence that lets it survive a missing dependency long enough to report the
+  unsupported shape — and the property that actually matters is that both are byte-identical
+  to *upstream's own* literal, which a test asserts against what upstream really raises.
+- **The private-Django request-body interaction is single-sited in `_request_body.py`.** It
+  is the only file in the package that names `HttpRequest._stream`, `_body`, or
+  `_read_started`, it never raises `HTTPException` and never reads settings, and it hands the
+  view one boolean; policy — which limit, what the `413` says — stays in `views.py`.
+- **The `got {type} {value!r}` tail is rendered by `exceptions.py::describe_value`**, the one
+  owner of that fragment, degrading to `an unprintable {type}` for a value that cannot be
+  rendered. Every typed configuration rejection this card adds uses it — the revalidation
+  window, both router injection seams, and the view's cap resolution — because the tail is
+  built at the raise site, where the exception class's own rendering guards cannot help.
+- **The session-store resolution is single-sited in `utils/sessions.py::session_store_class`**,
+  imported by both `auth/sessions.py::uses_signed_cookie_sessions` and
+  `consumers.py::_refreshed_actor`. One `SESSION_ENGINE` expression, hosted outside the
+  opt-in `auth` package so neither caller drags the other in.
 - **Live tests start with [`seed_data`][glossary-seed_data]** and route the schema through
   [`Schema reload discipline`][glossary-schema-reload-discipline]'s
   `reload_all_project_schemas()`; the body-cap and header tests use
@@ -1506,24 +1815,58 @@ removed in the change that ships the slice — the repo's standing staging disci
   the declared-`CONTENT_LENGTH` path, which is identical on both releases, and every
   ASGI-driven row leaves Django's knob at its default — which is what makes the floor-parity
   row (Test plan row 18) bit-identical rather than merely green.
-- **A garbage `Content-Length` is Django's rejection, not the package's.**
-  `HttpRequest.body` evaluates `int(self.META.get("CONTENT_LENGTH") or 0)` unguarded, so a
-  non-numeric declaration raises `ValueError` from Django before the package's counted check
-  can complete. The package never *trusts* such a declaration — its declared-length reader
-  returns `None` for both the absent and the unparseable shape, the fail-safe direction — and
-  the failure still precedes any JSON parse or schema execution, so the security property
-  holds. It is not a regression the cap introduces: a mount with the cap disabled raises
-  identically, because the raise happens later, where the request adapter reads the body.
+- **A garbage `Content-Length` is Django's rejection, not the package's.** The package never
+  *trusts* such a declaration — its declared-length reader returns `None` for both the absent
+  and the unparseable shape, the fail-safe direction — so the counted check runs and can
+  refuse an over-limit body with the package's own `413` on its own evidence. A body within
+  the cap then reaches `HttpRequest.body`, which evaluates
+  `int(self.META.get("CONTENT_LENGTH") or 0)` unguarded and raises `ValueError` from Django
+  where the request adapter reads it — still before any JSON parse or schema execution, so
+  the security property holds either way, and identically to a mount with the cap disabled.
   No test asserts a status code for this shape, deliberately: doing so would pin Django's
-  exception as a package contract, and the alternatives — pre-reading the stream or
-  rewriting `META` — are both rejected by name in
+  exception as a package contract, and the two ways to avoid it — counting `request.body` or
+  rewriting `META` so the declaration parses — are both rejected by name in
   [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared).
   A conforming server rejects such a header before Django sees it.
-- **`request.body` is single-shot.** Reading it caches `_body` and rebinds `_stream`;
-  reading the *stream* first sets `_read_started` and makes a later `request.body` raise
-  `RawPostDataException`. The view must not pre-read the stream, which is why
-  [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
-  measures `request.body` rather than chunk-counting.
+- **`request.body` is single-shot, and the cap must leave it usable.** Reading it caches
+  `_body` and rebinds `_stream`; reading the *stream* first sets `_read_started` and makes a
+  later `request.body` raise `RawPostDataException`. The cap therefore never reads through
+  `request.body` and never writes `_body`: it size-probes where the stream allows it, and
+  where it must read it reads through `request.read` in bounded chunks and then restores the
+  request to an unread shape — old stream closed, a rewound `BytesIO` over the same bytes
+  installed, `_read_started` back to `False` — which is a shape Django itself both produces
+  and accepts, so Strawberry's later `request.body` returns the original bytes byte-for-byte
+  with Django's own ceiling still applied. A request whose stream another component already
+  consumed without caching `_body` cannot be measured at all; the cap defers there rather
+  than translating that component's `RawPostDataException` into a misleading `413`
+  ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
+- **`SpooledTemporaryFile` does not declare `seekable()` at the Python 3.10 floor.** It
+  became an `io.IOBase` subclass only in 3.11, so ASGI's body file is seekable *in fact* on
+  every supported Python but advertises nothing at the floor this card protects; WSGI's
+  `LimitedStream`, by contrast, does declare `seekable()` and returns `False`, with `tell()`
+  raising `io.UnsupportedOperation`. The measurement therefore believes `seekable()` when the
+  method exists — poking a stream that says no is undefined, and a misbehaving one would
+  corrupt the read position — and lets `tell()` decide when it does not. Anything narrower
+  drops the ASGI spool onto the read branch at exactly the interpreter the floor gate exists
+  for: green on the dev stack, guarantee lost where it matters.
+- **An incoherent size probe is a measurement failure, and the direction it fails in is
+  stated.** Neither shape is hypothetical: a wrapper that answers `tell()` in the
+  coordinates of the whole message over-reports the position, and a queue- or
+  iterator-backed stream that can report a position but not take one returns the offset it
+  was handed, under-reporting the end. Both once produced a probed count of `0` — read as
+  "within the limit", with no byte read anywhere. A probe answering zero or less therefore
+  yields no measurement at all and the bounded read supplies the bound. The cost in the
+  over-reporting direction is disclosed rather than papered over: the restored position
+  lands past the end, so the request reaches Strawberry with an **empty** body and is a
+  `400` at the parse — never a bypass. Recovering the true bytes is impossible, and
+  rewinding to zero instead would corrupt a stream that was legitimately mid-position.
+  Neither production stream lies (`ASGIRequest`'s spool and `WSGIRequest`'s `LimitedStream`
+  both measure honestly on both supported interpreters); these shapes are consumer
+  middleware and custom ASGI servers, which is exactly where a silent fail-open would be
+  least visible. What no probe can catch is stated rather than implied away: a *plausible*
+  lie — an end that is wrong but still ahead of the position — is indistinguishable from a
+  measurement without reading the bytes it describes, which is the work the probe exists to
+  avoid.
 - **Multipart must not be materialized.** Reading `request.body` on a multipart request
   forces the whole payload into memory and defeats Django's streaming upload handlers,
   breaking the [`Upload` scalar][glossary-upload-scalar] /
@@ -1542,28 +1885,42 @@ removed in the change that ships the slice — the repo's standing staging disci
 - **`lifespan` scope is unchanged.** Channels' `ProtocolTypeRouter` still raises
   `ValueError` for unmapped scope types; uvicorn's startup probe still logs its benign
   "ASGI 'lifespan' protocol appears unsupported".
-- **A revalidation database error must fail closed.** A session-store or auth-alias
-  failure during revalidation rejects the operation; it never falls back to the stale
+- **A revalidation database error must fail closed.** A session-store or user-load failure
+  during revalidation rejects the operation and is logged; it never falls back to the stale
   cached actor. This mirrors the fail-closed posture the shipped
-  [auth mutations][glossary-auth-mutations] already take after authentication.
-- **The revalidation read is alias-explicit.** Per
+  [auth mutations][glossary-auth-mutations] already take after authentication. The guard
+  catches `Exception`, not `BaseException`, so a cancellation raised while a task is being
+  torn down propagates instead of being reported to the client as a denied operation.
+- **The revalidation read is router-decided, not alias-pinned.** Per
   [Multi-database cooperation][glossary-multi-database-cooperation] the session and user
-  reads use the router's resolved alias rather than an implicit default, so a
-  divergent-router deployment does not silently read auth off the wrong connection.
+  reads honor their models' normal **Django database-router** decisions — the session engine
+  and `channels.auth.get_user` each select their connection the way any Django read does, and
+  the package captures no alias to force on them. (The word *router* is overloaded in this
+  card: here it means Django's `DATABASE_ROUTERS`, never the ASGI
+  [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter].) A divergent-router
+  deployment therefore gets exactly the routing it configured for those models, which is the
+  cooperation the rule asks for; a stronger same-operation-alias guarantee is deliberately
+  **not** claimed, because reaching it would mean reimplementing `get_user`.
 - **An injected consumer class opts out of revalidation, not out of the wrappers.** The
   Host/Origin and authentication wrappers are applied by the router around whatever is
   injected; a test asserts the wrapper nesting for an injected class as well as for the
   default.
-- **`websocket_revalidation_window` is meaningless when a custom class is injected.** The
-  constructor rejects the combination rather than silently ignoring the window — a knob
-  that does nothing is worse than an error.
+- **A positive `websocket_revalidation_window` is meaningless when a custom class is
+  injected.** The constructor rejects that combination rather than silently ignoring the
+  window — a knob that does nothing is worse than an error. An explicit `0.0` is accepted
+  alongside an injected class, because it configures nothing either way and is already the
+  public default: the rule keys on the window's effect, not on its presence in the call, and
+  the alternative would be a private omitted-value sentinel in a public signature.
 - **ASCII-only in `.py`**; trailing-comma layout via `scripts/check_trailing_commas.py`
   with explicit paths (never the repo-wide auto-fix, which would touch untracked
   concurrent work); `ruff format` + `ruff check --fix` after every edit;
   `::QualifiedName` doc references swept when `routers.py`'s symbols change.
-- **Coverage.** `fail_under = 100` must hold with `views.py` added. The cap's
-  settings-precedence and validation branches are package-tier; every request-shaped row
-  is live-tier.
+- **Coverage.** `fail_under = 100` must hold with all four new modules added — `views.py`,
+  `_request_body.py`, `consumers.py`, `utils/sessions.py`. The cap's settings-precedence and
+  validation branches, the measurement's per-stream-shape branches, and the window's domain
+  arms are package-tier; every request-shaped row is live-tier. No branch of the measurement
+  needs a `pragma: no cover`: each stream shape it distinguishes is reachable from a real
+  request or from a stand-in that subclasses the production stream class.
 
 ## Test plan
 
@@ -1604,7 +1961,18 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     crosses the boundary.
 14. JSON, malformed JSON, and multipart bodies each hit the documented outcome.
 15. An early `413` with **proof that neither JSON parsing nor schema execution ran** — a
-    resolver / parse sentinel that must not fire.
+    resolver / parse sentinel that must not fire — **and proof that the refusal itself is
+    bounded**: a seekable ASGI body file far larger than the cap whose `read` raises if the
+    cap ever calls it is still refused (in-memory and rolled-to-disk, absent and understated
+    `Content-Length`); a non-seekable over-limit stream delivers at most `limit + 1` bytes
+    and no single requested size exceeds it; a body an earlier middleware already cached is
+    refused from that cache with the stream unreadable; and an under-limit control reaches
+    Strawberry byte-for-byte, `_body` absent and `_read_started` `False`, through the
+    rewound stream the cap installed. A stream whose `tell()` / `seek` pair is incoherent
+    in either direction — an over-reported position, an under-reported end — is refused a
+    measurement and bounded by the read instead, in both the over-limit direction (`413`,
+    one bounded read) and the genuinely-empty one (allowed, one bounded read), so the
+    probe's zero is never taken on trust.
 16. Which ceiling fired: package cap vs. Django's `DATA_UPLOAD_MAX_MEMORY_SIZE`, both
     directions.
 17. `max_request_body_bytes=` view kwarg beats `MAX_REQUEST_BODY_BYTES`; the setting beats
@@ -1619,13 +1987,37 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
 21. Malformed UTF-8 → `400` (the existing assertion, still green).
 22. UTF-8 BOM → `400` (the chosen direction).
 23. Sync and async transports behave identically.
-24. `_patched_body` still returns raw bytes; the rejection is attributable to the strict
-    decode in `_patched_parse_json`.
+24. `_patched_body` still returns raw bytes, and the rejection is attributable to the strict
+    decode on the package view's `parse_json` — reached through the view's own body source,
+    which is pinned structurally as well as behaviorally:
+    `DjangoGraphQLView.request_adapter_class` **is** `_RawBodyRequestAdapter`, that adapter
+    hands over the identical bytes upstream's own adapter raises on, and
+    `AsyncDjangoGraphQLView` stays on upstream's async adapter so a later "symmetrization"
+    cannot take those bytes away again. `_patched_parse_json` is proven to leave
+    upstream's own `bytes` semantics alone, so the ownership split cannot collapse back into
+    one site. **And the contract survives the kill switch, in both of its spellings**: the
+    same matrix on both package views with
+    `APPLY_UPSTREAM_PATCHES = {"strawberry": False}` **and** with the broad `False` that
+    opts the `cross_web` half out too, live as well as package-tier. In that same opted-out
+    state the upstream bug workarounds the gate *does* own are proven to stop hardening (a
+    JSON-scalar body reaches the unhandled `500` it would reach without the patch) — so the
+    requirement cannot be satisfied by quietly moving everything somewhere ungated — while
+    with the patches **on**, a mount of Strawberry's own view is proven to keep upstream's
+    RFC 8259 auto-detection, answering `200` to the BOM'd UTF-16 body the package mount
+    refuses. Four answers across two mounts and two patch states; only the package mount is
+    constant.
 
 **S11 — actor revalidation** (package, communicator-driven):
 
 25. Establish a socket, then revoke / flush / disable the session through a **separate**
-    request; the next operation is denied **without reconnecting**.
+    request; the next operation is denied **without reconnecting**. Both tiers of "separate"
+    are owed and neither subsumes the other: a **real second HTTP request** — an
+    `AsyncClient` carrying the socket's own session cookie to a logout view on a
+    [Probe URLconf][glossary-probe-urlconf], while the communicator stays open, asserting it
+    resolved the same session key and actor *before* asserting the denial, so the real
+    cookie / middleware / session-backend lifecycle is what invalidates the socket — plus the
+    three direct mutators (session flush, user disabled, password rotated) as precise unit
+    controls, one revocation shape each.
 26. A valid session keeps executing, and the refreshed actor — not the connect-time one —
     is what the next operation observes at
     [`request_from_info`][glossary-request_from_info], the single read the
@@ -1639,9 +2031,31 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     window and is denied after it.
 28. An injected `websocket_consumer_class` is still wrapped by
     `AllowedHostsOriginValidator` and `AuthMiddlewareStack`.
-29. Injecting a class **and** passing a window is a construction error.
+29. Injecting a class **and** passing a **positive** window is a construction error; an
+    explicit `0.0` alongside an injected class is accepted, since it configures nothing
+    either way.
 30. A revalidation store failure denies the operation (fail-closed), never falls back to
     the cached actor.
+31. The window's construction-time domain: `bool`, a non-numeric value, a negative number,
+    `nan` / `inf`, and an integer with no `float` image are each a
+    [`ConfigurationError`][glossary-configurationerror] — with the conversion's
+    `OverflowError` chained as `__cause__` and the message rendering rather than raising on
+    the value it is rejecting; accepted numbers arrive at the consumer coerced to `float`.
+32. The injected-factory contract, at construction: a factory that cannot accept `schema=`
+    (with the binding `TypeError` as `__cause__`), one returning a non-callable (`None`, a
+    scalar, a mapping, a value whose `repr` cannot be rendered), and an `async def` factory
+    (whose refused coroutine is closed, so no "never awaited" warning escapes into the
+    consumer's process) are each a [`ConfigurationError`][glossary-configurationerror]; a
+    sync factory returning an async ASGI callable is mounted **by identity** inside both
+    wrappers; a `TypeError` raised from a correct factory's own body is not normalized; and a
+    factory whose signature cannot be introspected is judged by the call.
+33. The revalidation resolves its session store **without** the opt-in `auth` package: under
+    strict eviction of the whole `django_strawberry_framework.auth` prefix, a real
+    authenticated operation over the package's own mount still returns the actor, with
+    `utils.sessions` in `sys.modules` and nothing under the `auth` prefix in it. Strict
+    eviction is what makes the row a proof rather than a coincidence — a worker that already
+    ran the auth suite has those modules cached, so a bare absence assertion would pass
+    whatever production imports.
 
 **Gates.** Full suite green under `fail_under = 100`; `ruff format` / `ruff check` clean;
 `scripts/check_trailing_commas.py --check` clean on the touched paths; `manage.py check`
@@ -1668,8 +2082,11 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   the UTF-8 wire contract, the consumer-injection seam, the revalidation window). New
   glossary entries require the maintainer-authorized DB update; they are **not**
   hand-written into the rendered file.
-- **[`docs/TREE.md`][tree]** via `scripts/build_tree_md.py` — `views.py` in both the
-  current and target package layouts, `tests/test_views.py` in the test trees.
+- **[`docs/TREE.md`][tree]** via `scripts/build_tree_md.py` — all four modules the earlier
+  slices add, in both the current and target package layouts: `views.py`, `_request_body.py`,
+  `consumers.py`, and `utils/sessions.py`; plus `tests/test_views.py` in the test trees. The
+  render reads each module docstring's first line, so a missing docstring fails the
+  regenerate rather than silently dropping a row.
 - **[`README.md`][readme]** and **[`TODAY.md`][today]** — the `0.0.14`
   [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] paragraphs, which
   currently advertise "serving GraphQL on both HTTP and WebSocket in one import" and
@@ -1789,18 +2206,31 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
       GraphQL HTTP path, counting received bytes rather than trusting `Content-Length`,
       with an early `413` proving neither JSON parsing nor schema execution ran; the
       reverse-proxy / ASGI-server cap is documented as a co-requirement.
+- [ ] The cap **measures** the body instead of materializing it: never `len(request.body)`,
+      never more than `limit + 1` bytes allocated or read for an over-limit request, an
+      allowed body handed back as a rewound stream so Django's own
+      `DATA_UPLOAD_MAX_MEMORY_SIZE` still applies, and every `_stream` / `_body` /
+      `_read_started` reference confined to `_request_body.py` and pinned on both the
+      py3.10 / Django 5.2.0 floor and the current stack.
 - [ ] `MAX_REQUEST_BODY_BYTES` exists in `conf.py` with a per-mount view-kwarg override
       and the documented precedence; it is the only settings key this card adds.
 - [ ] Request JSON is UTF-8-only: UTF-16 / UTF-32 (BOM and BOM-less) and a UTF-8 BOM all
       return `400`; ordinary UTF-8 is unchanged; sync and async behave identically; the
       three live UTF-16/32/BOM success tests are inverted.
+- [ ] The wire contract is enforced by the package view itself — its own body source
+      (`_RawBodyRequestAdapter`, installed as `request_adapter_class`) feeding one strict
+      decode — and holds with `APPLY_UPSTREAM_PATCHES` disabled in either spelling, while
+      the upstream bug workarounds that gate does own still respect their opt-out.
 - [ ] `_cross_web_patches.py::_patched_body`'s contract and docstring are reconciled
-      against the new HTTP path and the new wire contract.
-- [ ] A WebSocket consumer-class/factory injection seam exists; the injected class still
-      sits inside `AllowedHostsOriginValidator` + `AuthMiddlewareStack`; the package
-      default revalidates the session actor per operation and denies an operation on a
-      revoked session without a reconnect; `websocket_revalidation_window` makes any
-      accepted delay explicit.
+      against the new HTTP path, the new wire contract, and the mount it now serves.
+- [ ] A WebSocket consumer-class/factory injection seam exists; an injected factory's calling
+      convention and returned application are validated at construction; the injected class
+      still sits inside `AllowedHostsOriginValidator` + `AuthMiddlewareStack`; the package
+      default revalidates the session actor per operation — resolving its session store
+      outside the opt-in `auth` package — and denies an operation on a revoked session
+      without a reconnect; `websocket_revalidation_window` makes any accepted delay explicit
+      and rejects every unusable value as a
+      [`ConfigurationError`][glossary-configurationerror].
 - [ ] Every preserved WebSocket Origin / auth test still passes unmodified; every rewritten
       HTTP-branch test asserts the new contract.
 - [ ] Migration note (old vs new `asgi.py` **plus** the `urlpatterns` entry) and transport
@@ -1870,6 +2300,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 <!-- docs/SPECS/ -->
 [next]: SPECS/NEXT.md
+[spec-040]: SPECS/spec-040-auth_mutations-0_0_13.md
 [spec-041]: SPECS/spec-041-channels_router-0_0_14.md
 
 <!-- docs/builder/ -->

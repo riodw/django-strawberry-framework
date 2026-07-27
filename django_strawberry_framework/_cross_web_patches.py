@@ -13,15 +13,24 @@ so consumers get it automatically by having
 ``APPLY_UPSTREAM_PATCHES`` setting (default on): opt out globally with
 ``False`` or for this dependency alone with the mapping shape
 ``{"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}``. This patch and the
-companion Strawberry patch jointly own the sync transport's
-malformed-body hardening **and** the strict UTF-8 wire contract
-(spec-065 Decision 9, enforced in
-:func:`django_strawberry_framework._strawberry_patches._patched_parse_json`),
-so disabling only one of the pair leaves both incomplete: without this
-half the sync adapter decodes inside a property again and an undecodable
-body is an unhandled ``500``; without the Strawberry half the wire
-contract is gone and UTF-16 / UTF-32 bodies silently succeed. The gate
-is deliberately shared rather than split per concern. See
+companion Strawberry patch jointly own the malformed-body hardening a
+consumer gets on **Strawberry's own** sync view, so disabling either
+leaves that incomplete: without this half the sync adapter decodes inside
+a property again and an undecodable body is an unhandled ``500``; without
+the Strawberry half a scalar or non-object-batch body is an unhandled
+``500``.
+
+The gate covers upstream *defects* only, and a **package** view does not
+consult it. The strict UTF-8 wire contract (spec-065 Decision 9) is
+package policy, and the package view owns both halves of it: the decode,
+in ``views.py::_RequestBodyBoundaryMixin.parse_json``, and its own sync
+body source, in ``views.py::_RawBodyRequestAdapter`` - a one-property
+subclass of the adapter this module patches, so a package mount reaches
+that decode with undecoded bytes whatever this setting says. That second
+half is not redundant with this patch; it is what made the claim true. With
+this half opted out and only the decode view-owned, upstream's property
+decoded first and the mounted sync view answered ``500`` instead of the
+contract's ``400`` (spec-065 review W3-2). See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -46,20 +55,37 @@ error handling. That has two production consequences before Strawberry's
 
 The decode is therefore both unsafe and misplaced. This patch replaces
 the sync ``body`` property with the async contract - always return
-``self.request.body`` unchanged - so both transports hand the same bytes
-to the same ``parse_json``, which is where
-:mod:`django_strawberry_framework._strawberry_patches` decodes them
-once with strict UTF-8 and translates any failure into a clean
-``HTTPException(400, ...)``.
+``self.request.body`` unchanged - so upstream's two transports hand the
+same bytes to the same ``parse_json``, where
+:mod:`django_strawberry_framework._strawberry_patches` translates the
+``UnicodeDecodeError`` that ``json.loads`` raises for the undecodable
+ones. The raise then lands in a scope that can answer with a response,
+which a property is not.
 
-Under that wire contract (spec-065 Decision 9) only gap (1) still
-changes the *response*: an eagerly-decoding adapter and a strict decode
-in ``parse_json`` agree on every decodable-but-not-JSON shape - BOM-less
-UTF-16/32 and a UTF-8 BOM are a ``400`` either way. Gap (2) survives as
-the reason the correct fix is "hand over the raw bytes" rather than
-"decode defensively inside the property": a property cannot own an error
-contract. Sync/async parity is still the property this patch buys, but
-it is now parity of *rejection* rather than of success.
+Who this patch is for
+---------------------
+
+Consumers who mount **Strawberry's own** view. It is no longer on the
+package's own request path at all: a package view installs its own
+raw-body adapter (``views.py::_RawBodyRequestAdapter``, a one-property
+subclass of the class patched here) and decodes strictly in its own
+``parse_json``, so it behaves identically with this patch installed or
+not. What the patch decides is what the *other* mount gets:
+
+- installed - the raw bytes reach ``json.loads``, so gap (1)'s
+  undecodable bodies become the controlled ``400`` the Strawberry patch
+  translates, and every other shape keeps upstream's own RFC 8259
+  auto-detection (its documented behavior, which the package deliberately
+  does not narrow on someone else's view);
+- not installed - an undecodable body raises inside the property and is
+  the unhandled ``500`` that is the upstream defect.
+
+Gap (2) survives as the reason the correct fix is "hand over the raw
+bytes" rather than "decode defensively inside the property": a property
+cannot own an error contract. Sync/async parity is still the property
+this patch buys for that mount - without it upstream's two transports
+disagree about which bodies are even parseable, and the asymmetry, not
+either answer, is the defect.
 
 Upstream's getter is still captured at import time so retirement probes
 and shape validation can see the bare ``.decode()``, but the installed
@@ -104,11 +130,12 @@ The same two checks as
 
    The ``utf16_le`` and ``bom`` rows deliberately do **not** appear in
    that selector any more. Under the wire contract they answer ``400``
-   whether or not this patch is installed - upstream's decode succeeds
-   into a ``str`` that ``json.loads`` refuses, our decode succeeds into
-   the same ``str`` that ``json.loads`` refuses - so they diagnose
-   nothing about upstream. Selecting them and reading a ``400`` as
-   "still needed" inverts the verdict.
+   whether or not this patch is installed - upstream's property decode
+   succeeds into a ``str`` that ``json.loads`` refuses, and the view
+   boundary's strict decode succeeds into the same ``str`` that
+   ``json.loads`` refuses - so they diagnose nothing about upstream.
+   Selecting them and reading a ``400`` as "still needed" inverts the
+   verdict.
 
 2. Quick probe of the *installed* version, via the captured upstream
    getter::
@@ -221,14 +248,18 @@ def _patched_body(self: Any) -> bytes:
     performs no decode and no validation of its own; adding either here
     would re-create the property-scope raise.
 
-    **What raw bytes no longer mean.** They no longer mean "let
-    ``json.loads`` auto-detect the encoding per RFC 8259".
-    :func:`django_strawberry_framework._strawberry_patches._patched_parse_json`
-    now strict-UTF-8-decodes them before delegating (spec-065 Decision
-    9), so UTF-16 / UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM are
-    ``400``s on both transports rather than successes. Sync/async parity
-    is preserved and is still this patch's point - it is now parity of
-    *rejection* rather than of success.
+    **What raw bytes mean, and on whose view.** They mean "let
+    ``json.loads`` auto-detect the encoding per RFC 8259" - upstream's
+    documented behavior, which this patch preserves rather than narrows.
+    That is deliberate: the mount this getter serves is Strawberry's own
+    view, and a consumer who chose it is entitled to its semantics. A
+    **package** view never reaches this getter, because it installs
+    ``views.py::_RawBodyRequestAdapter`` instead, and strict-UTF-8-decodes
+    in its own ``parse_json`` (spec-065 Decision 9) - so UTF-16 / UTF-32
+    (BOM or BOM-less) and a leading UTF-8 BOM are ``400``s there on both
+    transports, in every state of this patch's own setting. Keeping the
+    wire contract out of this getter is what makes those two answers
+    independent, which is exactly the point of the split.
 
     **Why the patch survives the S1 protocol split, and matters more.**
     It patches ``cross_web.DjangoHTTPRequestAdapter``, the **Django

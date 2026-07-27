@@ -19,7 +19,7 @@ Importing this module is ``channels``-free, which is what lets ``routers.py``
 import it above its own guard: the module level reaches only for the standard
 library, ``graphql`` (the hard dependency Strawberry already carries, for the
 rejection's wire shape), this package's logger, and
-``exceptions.ConfigurationError``.
+``exceptions.ConfigurationError`` / ``exceptions.describe_value``.
 ``channels.auth.get_user`` and the package's session-store resolver are imported
 **inside** the revalidation coroutine (the
 ``auth/mutations.py::_channels_http_login_establish`` precedent), and the two
@@ -27,6 +27,16 @@ protocol handler base classes are never imported at all - they are read off the
 base consumer class the factory is handed, so an upstream re-point is tracked
 for free. ``views.py`` does not import this module, so the package's Django
 GraphQL view stays adoptable without the soft dependency.
+
+The session-store resolver the revalidation reaches is
+``utils/sessions.py::session_store_class`` and deliberately NOT
+``auth/sessions.py``'s re-export of it: ``auth`` is structurally opt-in
+(spec-040 Decision 3) and its ``__init__`` eagerly imports ``.mutations`` /
+``.queries``, so importing that submodule would register the whole GraphQL auth
+subsystem on the event loop the first time an authenticated socket ran an
+operation - for a resolver that only reads ``SESSION_ENGINE`` (spec-065 review,
+the import-boundary finding). Nothing on this module's revalidation path imports
+``django_strawberry_framework.auth``, and a test asserts exactly that.
 """
 
 from __future__ import annotations
@@ -38,7 +48,7 @@ from typing import Any
 from graphql import GraphQLError
 
 from . import logger
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, describe_value
 
 #: The default revalidation window, in seconds: ``0.0`` revalidates every
 #: operation. Spelled ONCE here and imported by ``routers.py`` for its
@@ -78,31 +88,71 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
+def _unusable_window_error(value: object) -> ConfigurationError:
+    """Build the ONE rejection every unusable-window arm raises.
+
+    A single message for a single domain: the arms below differ in *how* they
+    detect an unusable value, not in what the deployment has to change. The
+    value's tail goes through ``exceptions.py::describe_value`` because this
+    message is formatted while rejecting a value the package does not trust -
+    including an integer too large for CPython to render (see
+    ``resolved_revalidation_window``).
+    """
+    return ConfigurationError(
+        "websocket_revalidation_window must be a finite number of seconds >= 0.0 that "
+        "converts to a float (0.0 revalidates the session actor on every operation); got "
+        f"{describe_value(value)}.",
+    )
+
+
 def resolved_revalidation_window(value: object) -> float:
     """Validate ``websocket_revalidation_window`` and return it as a ``float``.
 
     Shaped after ``views.py::_resolved_max_request_body_bytes``: the same typed
     ``ConfigurationError``, the same explicit ``bool`` rejection (because
-    ``isinstance(True, int)`` is ``True``), and the same
-    ``got {type} {value!r}`` tail. A non-finite value (``nan`` / ``inf``) is
-    rejected too: ``nan`` would silently disable the window (every comparison
-    against it is ``False``) and ``inf`` would mean "never revalidate again",
-    which is the one thing this card exists to prevent - both are far better as
-    a loud construction-time failure. The router calls this, so an unusable
-    window is a construction error and never a per-operation one.
+    ``isinstance(True, int)`` is ``True``), and the same ``got {type} {value!r}``
+    tail. A non-finite value (``nan`` / ``inf``) is rejected too, and the reason
+    is unusability rather than a ceiling: ``nan`` loses every comparison, so a
+    window spelled that way would silently never expire and never say why, and
+    ``inf`` is the saturation sentinel a failed computation produces rather than
+    a number of seconds any deployment chose. Both are far better as a loud
+    construction-time failure. The router calls this, so an unusable window is a
+    construction error and never a per-operation one.
+
+    What is deliberately NOT rejected, so that rationale is not read as more than
+    it is: a finite but astronomical window. ``10**300`` and ``1e308`` are
+    accepted, and a window that large is operationally "never revalidate again"
+    (spec-065 review W3-4). The package imposes no upper bound, for the same
+    reason ``GraphQLWebSocketConsumer`` imposes no maximum connection lifetime
+    (Decision 12): there is no correct default, any constant would be invented
+    here rather than derived from anything, and a positive window is a deliberate
+    consumer trade-off - one session read per authenticated operation against a
+    named revocation delay - that the deployment can compute and this function
+    has no standing to second-guess. The guard is about values the package cannot
+    *use*, not about values it disapproves of.
+
+    The ``float`` conversion is a GUARDED step of its own, and it happens BEFORE
+    any numeric predicate runs. A sufficiently large ``int`` (``10**10000``) is a
+    perfectly ordinary Python object that no ``isinstance`` check rejects, yet it
+    has no ``float`` image: ``math.isfinite`` and ``float()`` both raise
+    ``OverflowError`` on it. Reading the domain first would therefore have let a
+    hostile or fat-fingered configuration escape the typed boundary with a raw
+    ``OverflowError`` instead of the promised ``ConfigurationError`` (spec-065
+    review, the enormous-window finding). Converting first also means the sign and
+    finiteness checks below run on a real ``float``, which is the value the
+    consumer will actually compare against.
     """
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or value < 0
-        or not math.isfinite(value)
-    ):
-        raise ConfigurationError(
-            "websocket_revalidation_window must be a number of seconds >= 0.0 (0.0 "
-            "revalidates the session actor on every operation); got "
-            f"{type(value).__name__} {value!r}.",
-        )
-    return float(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _unusable_window_error(value)
+    try:
+        window = float(value)
+    except OverflowError as exc:
+        # Chained, not swallowed: the cause names WHY the number is unusable
+        # ("int too large to convert to float") under the package's own error.
+        raise _unusable_window_error(value) from exc
+    if window < 0 or not math.isfinite(window):
+        raise _unusable_window_error(value)
+    return window
 
 
 async def revalidate_operation_actor(
@@ -244,7 +294,7 @@ async def _refreshed_actor(scope: Any) -> Any:
     """
     from channels.auth import get_user
 
-    from .auth.sessions import session_store_class
+    from .utils.sessions import session_store_class
 
     store = session_store_class()(scope["session"].session_key)
     return await get_user({"session": store})

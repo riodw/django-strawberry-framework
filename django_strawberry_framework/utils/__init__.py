@@ -11,6 +11,12 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
   (``unwrap_graphql_type``, ``unwrap_return_type``), ``is_async_callable``,
   and the ``_strawberry_schema`` / config digs (``schema_config_from_info``).
 - ``connections`` - the connection window-bounds / sidecar-kwarg contracts.
+- ``sessions`` - the configured ``SESSION_ENGINE``'s ``SessionStore``
+  resolution (``session_store_class``), shared by the ``auth`` session
+  boundary and by the WebSocket consumer's per-operation actor revalidation.
+  It lives out here precisely so the transport layer can reach the resolver
+  without importing the structurally opt-in ``auth`` package (spec-065
+  review, the import-boundary finding).
 - ``inputs`` / ``permissions`` - the generated-input and active-input
   permission substrates shared by the filter / order families.
 - ``input_values`` - the neutral set-input traversal substrate

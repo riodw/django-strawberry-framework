@@ -2325,25 +2325,28 @@ def test_cascade_composes_with_filter_and_order_live():
 
 
 # ---------------------------------------------------------------------------
-# Malformed request bodies and the strict UTF-8 wire contract. The framework's
-# upstream patches for Strawberry (`BaseView.parse_json`) and cross_web
-# (`DjangoHTTPRequestAdapter.body`) are applied at app load. Without them the
-# sync `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the body,
-# before GraphQL parsing runs -> an unhandled 500. Patched, the sync adapter
-# hands the raw bytes to `parse_json`, which decodes them once with strict
-# UTF-8 (spec-065 Decision 9): the success set is UTF-8, and UTF-8 only. UTF-16
-# and UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM are all a controlled
-# 400 - the BOM'd multi-byte forms fail at that decode, while the BOM-less ones
-# and the UTF-8 BOM decode cleanly and are then refused by upstream's own
-# `json.loads` (spec-065 Decision 10 chose rejection over stripping). No
-# dedicated rejection branch exists for any of them. Both transports answer
-# identically because both views inherit the one patched `parse_json`; the
-# async colour of these rows lives in `test_transport_api.py`, and the
-# which-mechanism-fired matrix lives in `tests/test_strawberry_patches.py`.
-# The GET tests pin the patch's `parse_query_params` shield: the scalar-body
-# guard must never fire on upstream's GET `variables` / `extensions` parses,
-# which have their own precise upstream handling downstream in
-# `parse_http_body`.
+# Malformed request bodies and the strict UTF-8 wire contract. Two owners, both
+# on this route. The framework's upstream patches for Strawberry
+# (`BaseView.parse_json`) and cross_web (`DjangoHTTPRequestAdapter.body`) are
+# applied at app load and fix upstream *defects*: without them the sync
+# `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the body, before
+# GraphQL parsing runs -> an unhandled 500. The package's own strict UTF-8 wire
+# contract (spec-065 Decision 9) is *not* one of those patches - it lives on the
+# mounted view, in `views.py::_RequestBodyBoundaryMixin.parse_json`, so it holds
+# whatever `APPLY_UPSTREAM_PATCHES` says. The sync adapter hands the raw bytes to
+# that view method, which decodes them once with strict UTF-8: the success set is
+# UTF-8, and UTF-8 only. UTF-16 and UTF-32 (BOM or BOM-less) and a leading UTF-8
+# BOM are all a controlled 400 - the BOM'd multi-byte forms fail at that decode,
+# while the BOM-less ones and the UTF-8 BOM decode cleanly and are then refused
+# by upstream's own `json.loads` (spec-065 Decision 10 chose rejection over
+# stripping). No dedicated rejection branch exists for any of them. Both
+# transports answer identically because both views inherit the one mixin method;
+# the async colour of these rows and the patch-opted-out rows live in
+# `test_transport_api.py`, and the which-mechanism-fired matrix lives in
+# `tests/test_views.py`. The GET tests pin the Strawberry patch's
+# `parse_query_params` shield: the scalar-body guard must never fire on
+# upstream's GET `variables` / `extensions` parses, which have their own precise
+# upstream handling downstream in `parse_http_body`.
 # ---------------------------------------------------------------------------
 
 
@@ -2378,8 +2381,8 @@ def test_post_utf16_json_body_is_rejected_as_400():
     The wire contract (spec-065 Decision 9) narrows the success set to UTF-8,
     so the same bytes are now a 400. Mechanism: ``encode("utf-16")`` prefixes
     the BOM ``FF FE`` and ``0xFF`` is not a valid UTF-8 start byte, so the
-    strict decode inside ``_patched_parse_json`` raises and is translated
-    before upstream's ``json.loads`` is ever reached.
+    strict decode inside ``views.py::_RequestBodyBoundaryMixin.parse_json``
+    raises and is translated before upstream's ``json.loads`` is ever reached.
     """
     body = '{"query": "{ __typename }"}'.encode("utf-16")
 
@@ -2402,7 +2405,7 @@ def test_post_utf16_le_json_body_is_rejected_as_400():
     ``json.loads`` then refuses the NUL-studded ``str``. So this 400 comes from
     a ``json.JSONDecodeError``, not from the strict decode - no dedicated
     rejection branch exists or is needed. Which mechanism fired is pinned per
-    encoding in ``tests/test_strawberry_patches.py``; over the wire the two are
+    encoding in ``tests/test_views.py``; over the wire the two are
     indistinguishable, and deliberately so.
     """
     body = '{"query": "{ __typename }"}'.encode("utf-16-le")

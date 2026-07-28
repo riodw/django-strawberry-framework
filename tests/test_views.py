@@ -39,6 +39,7 @@ import contextlib
 import importlib
 import io
 import json
+import logging
 import sys
 import tempfile
 from io import BytesIO
@@ -60,6 +61,7 @@ from strawberry.http.base import BaseView
 import django_strawberry_framework
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as patches
+from django_strawberry_framework._request_body import _CORRUPTED_PROBE_LOG_MESSAGE
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
@@ -546,6 +548,13 @@ def test_a_misconfigured_mount_fails_loud_on_every_request_including_get(view_cl
 def test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists():
     """The mixin is private, unexported, and ahead of upstream in the MRO.
 
+    Privacy is proven once, by the exact-``__all__`` assertion in
+    ``test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_root``;
+    a second
+    "the private name is absent from a two-element tuple that names neither"
+    assertion here would be trivially true and would not fail for a real
+    regression.
+
     Ordering is load-bearing rather than stylistic: the mixin's ``run`` overrides
     live on the view classes themselves, but the class attribute, the shared
     enforcement method, and ``parse_json`` must resolve to the package's
@@ -557,7 +566,6 @@ def test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists
 
     mixin = views_module._RequestBodyBoundaryMixin
 
-    assert mixin.__name__ not in views_module.__all__
     assert DjangoGraphQLView.__bases__ == (mixin, GraphQLView)
     assert AsyncDjangoGraphQLView.__bases__ == (mixin, AsyncGraphQLView)
     assert DjangoGraphQLView.__mro__.index(mixin) < DjangoGraphQLView.__mro__.index(GraphQLView)
@@ -704,6 +712,67 @@ class _OverReportingPositionStream(_UndeclaredSeekableStream):
 
     def tell(self):
         return super().tell() + _PROBE_CAP * 64
+
+
+class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
+    """``seekable()`` itself raises - review Low 6's first stand-in.
+
+    A wrapper that answers the capability question with an error rather than a
+    boolean, which is a shape a consumer middleware or a custom ASGI server can
+    present and which the previous implementation called unguarded, turning the
+    request into an unrelated ``500``. Nothing has been moved when this raises, so
+    the safe classification is "unmeasurable, position intact" and the bounded
+    read is both available and correct.
+    """
+
+    def seekable(self):
+        raise OSError("this stream refuses to answer capability queries")
+
+
+class _UnseekableToEndStream(_UndeclaredSeekableStream):
+    """Reports its position, then refuses the seek to the end.
+
+    Review Low 6's second stand-in. The end seek is the first call that can move
+    the stream, so its failure leaves the position UNKNOWN rather than known - the
+    restore has to run anyway, and only a restore that verifies may license the
+    bounded read.
+    """
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_END:
+            raise OSError("this stream cannot seek to its end")
+        return self._buffer.seek(offset, whence)
+
+
+class _UnnumberedSeekStream(_UndeclaredSeekableStream):
+    """A ``seek`` that returns ``None`` instead of a position, and never moves.
+
+    Review Low 6's third stand-in: the subtraction ``end - position`` is what
+    fails here, with a ``TypeError`` rather than an ``OSError``, which is exactly
+    the class of failure an enumerated ``except`` tuple misses. ``seek`` returning
+    ``None`` is legal for a file-like object that simply does not report positions,
+    and because it also does not move, the position is provably intact and the
+    bounded read is the answer.
+    """
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        return None
+
+
+class _UnrestorableStream(_UndeclaredSeekableStream):
+    """Seeks to the end and then cannot get back - review Low 6's fourth stand-in.
+
+    The one shape that must NOT reach the bounded read: the probe has moved the
+    stream to its end and the restore failed, so a read would return the tail of
+    the body (here, nothing at all) rather than the request. Falling through would
+    hand Strawberry a body the client never sent; the package refuses the request
+    instead.
+    """
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_END:
+            return self._buffer.seek(offset, whence)
+        raise OSError("this stream cannot seek back")
 
 
 @contextlib.contextmanager
@@ -983,38 +1052,148 @@ def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
     assert hasattr(request, "_body") is False
 
 
+def _assert_the_corrupted_probe_was_recorded(caplog, stream):
+    """Exactly one ``WARNING`` naming the probe outcome and the stream that caused it.
+
+    Review round 2 L2: this refusal is by design indistinguishable from an ordinary
+    over-limit one on the wire (Decision 9's non-attributability), so an operator
+    debugging a ``413`` for a request that is not oversized has nothing to go on
+    unless the server records the distinction. The message object is asserted by
+    IDENTITY rather than by a re-typed string, so a reworded record still pins the
+    contract, and the ``args`` assertion is what keeps the stream's own class name -
+    the only actionable detail, since the culprit is whatever the ASGI server or a
+    middleware installed - from being dropped in a later edit.
+    """
+    records = [record for record in caplog.records if record.name == "django_strawberry_framework"]
+
+    assert len(records) == 1, caplog.records
+    assert records[0].levelno == logging.WARNING
+    assert records[0].msg is _CORRUPTED_PROBE_LOG_MESSAGE
+    assert records[0].args == (type(stream).__name__,)
+    assert records[0].exc_info is None
+
+
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_stream_reporting_a_position_past_its_end_is_not_waved_through(view_class):
-    """The other incoherent direction: a negative remaining count is not "empty".
+def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
+    view_class,
+    caplog,
+):
+    """The other incoherent direction: an unverifiable restore fails CLOSED.
 
     ``max(end - position, 0)`` clamped a negative measurement - a ``tell()`` that
     over-reports - to "no bytes remaining, allowed", so a full body reached
-    ``HttpRequest.body`` unbounded. The pair is now judged instead of clamped, and
-    the request falls through to the bounded read like any other stream the
-    package cannot measure.
+    ``HttpRequest.body`` unbounded. The pair is judged rather than clamped now, and
+    the verdict is the third probe outcome rather than the second (review Low 6):
+    the position this stream reports is a lie, so the restore lands somewhere the
+    stream did not start, the verifying ``tell()`` says so, and the request is
+    refused with the package's own ``413``.
 
-    What the fall-through can and cannot recover is worth stating, because this
-    row pins it: the position the probe reported is a lie, so the restored
-    position lands past the end and the request ends up with an **empty** body -
-    a ``400`` at the parse, never a bypass. Recovering the true bytes is
-    impossible once a stream misreports where it is, and rewinding to zero
-    instead would corrupt a stream that was legitimately mid-position. The
-    security property is what holds: the application never receives bytes the cap
-    did not count. The two witnesses are that the probe's answer was NOT acted on
-    (reads were attempted, the consumed stream was closed and replaced) - both
-    absent in the clamping version, which returned before touching the stream.
+    Falling through to a bounded read instead - which is what the two-state version
+    did - meant reading from an offset past the body's end and handing Strawberry
+    an **empty** body the client never sent, then answering ``400`` at the parse.
+    Both outcomes are safe, but only one of them is honest about what happened, and
+    "the package could not measure this body" is a body-limit rejection rather than
+    a malformed-document one. The witnesses are that NOTHING was read and nothing
+    was materialized: a stream whose coordinates are incoherent is not a stream the
+    package will read bytes out of.
+
+    The server-side record is asserted too (review round 2 L2): the wire cannot
+    carry the distinction, so the log is the only place it exists.
     """
     view = _capped_view(_PROBE_CAP, view_class=view_class)
     stream = _OverReportingPositionStream(b"x" * (_PROBE_CAP * 16))
     request = _asgi_request(stream, None)
 
-    view._enforce_request_body_limit(request)
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException) as excinfo:
+            view._enforce_request_body_limit(request)
 
-    assert stream.requested != []
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.requested == []
     assert stream.delivered == 0
-    assert stream.closed is True
     assert hasattr(request, "_body") is False
-    assert request.body == b""
+    _assert_the_corrupted_probe_was_recorded(caplog, stream)
+
+
+@pytest.mark.parametrize(
+    "stream_class",
+    [
+        pytest.param(_CapabilityQueryRaisingStream, id="seekable-raises"),
+        pytest.param(_UnseekableToEndStream, id="seek-to-end-raises"),
+        pytest.param(_UnnumberedSeekStream, id="subtraction-fails"),
+    ],
+)
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_read(
+    view_class,
+    stream_class,
+):
+    """Review Low 6: a failed probe is a ``413`` from a bounded read, never a ``500``.
+
+    Three failure sites, one classification. ``seekable()`` raising and the
+    subtraction failing both leave the stream untouched; the seek to the end
+    raising leaves it unknown until the restore proves otherwise - and here the
+    restore does. In all three the position is provably where the request started,
+    so the bounded read is licensed and supplies the bound.
+
+    The old implementation called ``seekable()``, both ``seek``s and the
+    subtraction unguarded, so each of these streams turned a request into an
+    unhandled ``500`` (a ``TypeError`` for the third, which no ``OSError`` tuple
+    would have caught). The bound is asserted rather than just the status: exactly
+    ``limit + 1`` bytes are read, bytes are demonstrably left unread, and nothing
+    is materialized.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = stream_class(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.delivered == _PROBE_CAP + 1
+    assert max(stream.requested) <= _PROBE_CAP + 1
+    assert stream.unread > 0
+    assert hasattr(request, "_body") is False
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(view_class, caplog):
+    """Review Low 6's fail-closed state: a failed restore ends the request.
+
+    The one outcome that must never become a bounded read. The probe has already
+    moved this stream to its end and the restore raises, so every byte a read
+    could still return is the wrong byte - reading anyway would have handed
+    Strawberry an empty body in place of the client's, which is a silent
+    substitution rather than a rejection.
+
+    "Not measurable" and "not readable" therefore have to be different answers,
+    which is why the probe reports three outcomes and not two. The witness is that
+    no read was even attempted: the refusal comes from the probe's verdict, not
+    from a read that happened to come back empty.
+
+    The second stand-in for the same server-side record (review round 2 L2), so the
+    log is pinned by both ``CORRUPTED`` shapes rather than by whichever one a later
+    refactor happens to keep - and the stream class in ``args`` differs between
+    them, which is the detail an operator needs.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _UnrestorableStream(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException) as excinfo:
+            view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.requested == []
+    assert stream.delivered == 0
+    assert hasattr(request, "_body") is False
+    assert request._stream is stream
+    _assert_the_corrupted_probe_was_recorded(caplog, stream)
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
@@ -1048,10 +1227,13 @@ def test_a_genuinely_empty_body_is_allowed_by_one_bounded_read(view_class):
 def test_a_body_already_cached_by_middleware_is_measured_from_the_cache_and_refused(view_class):
     """The one shape the cap cannot bound, and the only thing left to do about it.
 
-    ``CsrfViewMiddleware`` reads ``request.POST`` before the view runs, and for a
-    ``application/x-www-form-urlencoded`` body that materializes ``_body`` through
-    ``HttpRequest.body`` - an allocation that has already happened by the time
-    ``run`` is entered and cannot be undone. The package must still refuse to
+    A consumer middleware that reads ``request.POST`` (or ``request.body``) on the
+    way in materializes ``_body`` through ``HttpRequest.body`` - an allocation that
+    has already happened by the time ``run`` is entered and cannot be undone. It
+    used to be Django's own ``CsrfViewMiddleware`` that did this, for every
+    cookie-bearing ``application/x-www-form-urlencoded`` POST; the ``csrf_exempt``
+    / ``csrf_protect`` re-entry moved that read behind the boundary, so what is
+    left on this rung is a read no application-level ordering can precede. The package must still refuse to
     *process* it, measured off the cache rather than by re-reading, which the
     unreadable stream proves: the cache is consulted and the stream is not
     touched. The under-limit direction in the same row is what shows the cached
@@ -1390,3 +1572,367 @@ def test_both_package_views_resolve_parse_json_to_the_one_shared_mixin_method():
         assert view_class.parse_json is mixin.parse_json
         owners = [klass for klass in view_class.__mro__ if "parse_json" in vars(klass)]
         assert owners == [mixin, BaseView]
+
+
+# ---------------------------------------------------------------------------
+# Review High 2 (multipart): the effective form encoding is a codec question,
+# not a string-matching one, so the alias matrix is a pure-function contract
+# that belongs here. The wire outcomes - real multipart requests carrying a
+# malformed byte, an explicit Latin-1 declaration, genuine multibyte UTF-8, and
+# an escaped replacement character - are live in
+# ``examples/fakeshop/test_query/test_transport_api.py``.
+#
+# Review round 2 M1 / M4: the gate is TWO independent conditions, so each one and
+# each sub-rung of the effective encoding gets its own row that fails on its own.
+# One row used to pin two rungs at once, which means removing either of them cost
+# the suite the same single failure and neither was really pinned:
+#
+#   * the declared charset            -> ``..._is_refused_even_when_django_would_decode_utf8``
+#     (plus the alias matrix below, and the M1 row for the masking direction)
+#   * ``request.encoding``            -> ``..._non_utf8_request_encoding_is_refused_on_its_own``
+#     and ``..._does_not_mask_a_middleware_set_request_encoding``
+#   * ``settings.DEFAULT_CHARSET``    -> ``..._reconfigured_default_charset_is_refused_...``
+# ---------------------------------------------------------------------------
+
+_DECLARED_CHARSETS = (
+    pytest.param("utf-8", True, id="utf-8"),
+    pytest.param("UTF-8", True, id="uppercase"),
+    pytest.param("utf8", True, id="unhyphenated"),
+    pytest.param("u8", True, id="obscure-alias"),
+    pytest.param("iso-8859-1", False, id="latin-1"),
+    pytest.param("utf-16", False, id="utf-16"),
+    pytest.param("utf-8-sig", False, id="utf-8-sig"),
+    pytest.param("no-such-codec", False, id="unknown-name"),
+)
+
+
+_MULTIPART_BOUNDARY = "BoUnDaRy"
+
+
+def _multipart_body(raw):
+    """A real single-field multipart body carrying ``raw`` as ``operations``.
+
+    Hand-built rather than produced by ``RequestFactory.post`` because the whole
+    subject of the rows that use it is a byte sequence a client sent and a codec
+    name the client declared, and ``post`` re-encodes the payload with that
+    declared charset instead of putting it on the wire. Only the rows that need
+    Django to *actually decode* the form use this; the header-only rows stop at
+    the gate and use a one-byte payload.
+    """
+    disposition = 'Content-Disposition: form-data; name="operations"'
+    return (
+        f"--{_MULTIPART_BOUNDARY}\r\n{disposition}\r\n\r\n".encode()
+        + raw
+        + f"\r\n--{_MULTIPART_BOUNDARY}--\r\n".encode()
+    )
+
+
+def _multipart_request(
+    charset=None,
+    *,
+    encoding=None,
+    method="POST",
+    data=b"x",
+):
+    """A multipart request whose declared ``Content-Type`` carries ``charset``.
+
+    Built through ``generic`` rather than ``post`` for one reason that is itself
+    part of the contract: ``RequestFactory.post`` encodes the payload *with* the
+    declared charset, so it cannot express an unusable codec name - the very
+    declaration a real client is free to send and that Django itself silently
+    drops. ``generic`` puts the header on the request untouched, which is what
+    the endpoint has to cope with.
+
+    The payload defaults to a single byte rather than empty because ``generic``
+    only populates ``CONTENT_TYPE`` ``if data`` - and the content type is the
+    entire subject of most rows below, which stop at the header check.
+
+    ``encoding=`` stands in for a consumer middleware assigning
+    ``request.encoding``, Django's documented per-request override. It is applied
+    AFTER construction on purpose: that is the only order a middleware can act
+    in, and it is what overwrites the promotion
+    ``HttpRequest._set_content_type_params`` performed from the declaration.
+    ``method=`` exists for the GET carve-out row.
+    """
+    content_type = f"multipart/form-data; boundary={_MULTIPART_BOUNDARY}"
+    if charset is not None:
+        content_type = f"{content_type}; charset={charset}"
+    request = RequestFactory().generic(method, "/graphql/", data=data, content_type=content_type)
+    if encoding is not None:
+        request.encoding = encoding
+    return request
+
+
+@pytest.mark.parametrize(("charset", "accepted"), _DECLARED_CHARSETS)
+def test_only_codecs_that_canonicalize_to_utf8_are_accepted_as_a_form_encoding(charset, accepted):
+    """The declared charset is resolved through ``codecs``, not compared as a string.
+
+    Every alias Python calls UTF-8 is accepted, including ones the package has
+    never heard of, and everything else is refused - ``utf-8-sig`` included,
+    because it is a *different* codec that would silently eat the BOM Decision 10
+    deliberately refuses. An unknown codec name is refused rather than ignored:
+    Django's own ``_set_content_type_params`` drops an unusable charset and decodes
+    with ``DEFAULT_CHARSET`` instead, so accepting the request would mean honouring
+    a declaration nobody honoured.
+
+    The reason is the shared one on purpose (Decision 9): a caller must not be able
+    to tell which of the endpoint's refusals it hit by reading the message.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+    request = _multipart_request(charset)
+
+    if accepted:
+        view._enforce_multipart_form_encoding(request)
+        return
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_multipart_form_encoding(request)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == _JSON_PARSE_REASON
+
+
+def test_a_declared_utf8_charset_does_not_mask_a_middleware_set_request_encoding():
+    """Review round 2 M1: the two conditions are ``and``, not a fallback chain.
+
+    The bypass this closes, proved end to end here rather than asserted: a client
+    declares ``charset=utf-8``, one line of consumer middleware assigns
+    ``request.encoding = "iso-8859-1"`` (Django's documented per-request
+    override), and Django decodes every non-file field with the middleware's
+    value - ``HttpRequest.parse_file_upload`` hands ``MultiPartParser`` only
+    ``self.encoding`` and never re-reads ``content_params``. Resolving the gate as
+    ``declared or request.encoding or DEFAULT_CHARSET`` therefore validated the
+    value Django was NOT going to use, and let the *client* choose which rung was
+    consulted.
+
+    The second half is why the loss detector cannot be the backstop, and it is the
+    reason this is a wire-contract defect rather than a cosmetic one: the same
+    request, allowed to parse, decodes the raw Latin-1 byte cleanly into a
+    different character with **no** replacement marker anywhere, so
+    ``_reject_lossy_multipart_control_fields`` is structurally blind to it and a
+    non-UTF-8-decoded control document would reach ``json.loads``. Asserting that
+    here keeps the premise on disk: if a future Django started replacing instead,
+    this row says so rather than silently becoming a tautology.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+    latin1 = _multipart_body(b'{"query": "{ __typename }", "note": "\xe9"}')
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_multipart_form_encoding(
+            _multipart_request("utf-8", encoding="iso-8859-1", data=latin1),
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == _JSON_PARSE_REASON
+
+    unguarded = _multipart_request("utf-8", encoding="iso-8859-1", data=latin1)
+    decoded = unguarded.POST["operations"]
+    assert "\ufffd" not in decoded
+    assert decoded == '{"query": "{ __typename }", "note": "\u00e9"}'
+    assert json.loads(decoded)["note"] == "\u00e9"
+
+
+_UNHONOURED_DECLARATIONS = (
+    pytest.param("iso-8859-1", id="usable-name-django-promoted"),
+    pytest.param("no-such-codec", id="unusable-name-django-dropped"),
+)
+
+
+@pytest.mark.parametrize("charset", _UNHONOURED_DECLARATIONS)
+def test_a_declared_non_utf8_charset_is_refused_even_when_django_would_decode_utf8(charset):
+    """The declared condition is independent, and this is the row that says so.
+
+    Both requests here would be decoded as UTF-8 by Django - ``request.encoding``
+    is UTF-8, which is the only value ``MultiPartParser`` receives - so the
+    effective-encoding condition is satisfied and something else has to refuse
+    them. That something is the declaration: a client asked for an encoding this
+    endpoint will not honour, and accepting would mean honouring a declaration
+    nobody honoured.
+
+    Two shapes, because Django treats them differently and the package must not:
+    a *usable* non-UTF-8 name is promoted onto ``request.encoding`` (so a
+    middleware assignment is what puts UTF-8 back), while an *unusable* one is
+    silently dropped and ``DEFAULT_CHARSET`` decides. The second is the shape that
+    makes this condition strictly necessary rather than merely defensive - with it
+    gone, ``charset=no-such-codec`` is accepted on any ordinary project.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_multipart_form_encoding(_multipart_request(charset, encoding="utf-8"))
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == _JSON_PARSE_REASON
+
+
+def test_a_middleware_set_non_utf8_request_encoding_is_refused_on_its_own():
+    """The effective-encoding condition's first sub-rung, with nothing declared.
+
+    ``request.encoding`` is what ``parse_file_upload`` hands over, so a consumer
+    middleware that sets it decides how ``operations`` is decoded without the
+    request line changing at all. The control in the same row is what keeps this
+    from passing for the wrong reason: the identical request with no declaration
+    and no override is accepted, because ``DEFAULT_CHARSET`` is UTF-8.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    view._enforce_multipart_form_encoding(_multipart_request())
+
+    with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
+        view._enforce_multipart_form_encoding(_multipart_request(encoding="iso-8859-1"))
+
+
+def test_a_reconfigured_default_charset_is_refused_but_a_declared_utf8_still_wins():
+    """The effective-encoding condition's second sub-rung, and its exact boundary.
+
+    ``MultiPartParser.__init__`` resolves ``encoding or
+    settings.DEFAULT_CHARSET``, so a project that reconfigures ``DEFAULT_CHARSET``
+    away from UTF-8 changes how every undeclared multipart form is decoded, and the
+    endpoint's promise would quietly stop being true. It is refused instead.
+
+    The second half is the part a "every rung must be UTF-8" reading gets wrong,
+    and it is measured Django behavior rather than a preference: with
+    ``DEFAULT_CHARSET`` set to Latin-1 and the client declaring ``charset=utf-8``,
+    ``_set_content_type_params`` promotes ``utf-8`` onto ``request.encoding``,
+    ``MultiPartParser`` receives ``utf-8``, and the form genuinely IS decoded as
+    UTF-8 - so refusing it would be the package refusing a request Django handles
+    exactly as the contract promises. The gate tracks what Django does, not a rung
+    order of its own.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    with override_settings(DEFAULT_CHARSET="iso-8859-1"):
+        with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
+            view._enforce_multipart_form_encoding(_multipart_request())
+
+        view._enforce_multipart_form_encoding(_multipart_request("utf-8"))
+
+
+def test_a_get_carrying_a_stray_multipart_content_type_is_not_a_multipart_form():
+    """Review round 2 L1: the guard is scoped to the requests Django decodes.
+
+    ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
+    parsing anything unless the method is ``POST``, so a stale
+    ``multipart/form-data`` ``Content-Type`` on a GET describes a form that will
+    never be decoded - and this endpoint reads no body on GET either. Refusing it
+    was the package inventing a rejection for bytes nobody parses, and it made the
+    mixin's own "**GET.** A no-op" sentence false.
+
+    Asserted through ``_enforce_request_boundary`` rather than the encoding guard
+    alone, because the claim is about the composed boundary: both halves have to
+    be no-ops on this request, and the second half is what regressed.
+    """
+    view = _capped_view(_PROBE_CAP)
+
+    view._enforce_request_boundary(_multipart_request("iso-8859-1", method="GET"))
+
+    post = _multipart_request("iso-8859-1")
+    with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
+        view._enforce_request_boundary(post)
+
+
+def test_a_non_multipart_request_is_not_subject_to_the_form_encoding_check():
+    """The check is scoped to the one content type Django replacement-decodes.
+
+    A JSON body's encoding is enforced by ``parse_json`` over the raw bytes, which
+    is strictly stronger - it sees the bytes - so a ``charset`` on an
+    ``application/json`` request must not be turned into a second, weaker gate that
+    could refuse a body the strict decode would have accepted.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+    request = RequestFactory().post(
+        "/graphql/",
+        data=b"{}",
+        content_type="application/json; charset=iso-8859-1",
+    )
+
+    view._enforce_multipart_form_encoding(request)
+
+
+def test_a_bytes_control_field_is_left_to_the_strict_decode_rather_than_the_marker_check():
+    """A ``bytes`` value still carries its own encoding, so ``parse_json`` owns it.
+
+    Unreachable from a live request - Django's multipart parser always hands over
+    ``str`` - but the adapter protocol upstream's ``parse_multipart`` reads permits
+    ``bytes``, and the two guards must not overlap: a marker check on undecoded
+    bytes would be meaningless (no replacement has happened yet), while the strict
+    decode is exactly the right owner. The lone ``0x80`` here is what that decode
+    refuses, and this row pins that the marker check does not intercept it first.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    view._reject_lossy_multipart_control_fields({"operations": b'{"query": "\x80"}'})
+
+    with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
+        view.parse_json(b'{"query": "\x80"}')
+
+
+# ---------------------------------------------------------------------------
+# Review High 3 (ordering): the outer dispatch callback is ``csrf_exempt`` so
+# Django's global ``CsrfViewMiddleware.process_view`` cannot read
+# ``request.POST`` before the body boundary, and the view re-enters the same
+# middleware from inside ``run``. The behavioral proof - a ``413`` with the
+# upload-handler sentinel untouched, plus the full CSRF matrix on the requests
+# that pass - is live in ``test_transport_api.py``; these two rows pin the
+# mechanism that makes it possible.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class):
+    """The mark has to be on the callback, and it has to come from ONE owner.
+
+    ``CsrfViewMiddleware.process_view`` reads ``getattr(callback, "csrf_exempt")``,
+    and the callback is the function ``as_view`` returns. A refactor that moved the
+    mark somewhere ``process_view`` does not look would silently restore the
+    ordering defect while every CSRF row stayed green, because the protection
+    itself would still be enforced - twice - so the ordering has no other witness
+    than this attribute and the live parser sentinel.
+
+    The single owner is asserted too: both transports resolve ``as_view`` to the
+    shared mixin, which is what makes it impossible for one of them to be exempt
+    and the other not. And the marking must not cost the async transport its
+    coroutine dispatch, so the async row re-asserts what
+    ``test_async_view_as_view_is_marked_as_a_coroutine_function`` states - here in
+    the presence of the wrapper that could have dropped it - along with the
+    ``as_view`` bookkeeping ``functools.wraps`` carries through.
+    """
+    from django_strawberry_framework import views as views_module
+
+    view = view_class.as_view(schema=SCHEMA)
+
+    assert view.csrf_exempt is True
+    assert view_class.as_view.__func__ is views_module._RequestBodyBoundaryMixin.as_view.__func__
+    assert view.view_class is view_class
+    assert view.view_initkwargs == {"schema": SCHEMA}
+    assert iscoroutinefunction(view) is (view_class is AsyncDjangoGraphQLView)
+
+
+def test_each_csrf_continuation_matches_the_transport_it_protects():
+    """``csrf_protect`` branches on the callable it wraps, so the pair is not cosmetic.
+
+    ``csrf_protect`` is ``decorator_from_middleware(CsrfViewMiddleware)``, and
+    ``make_middleware_decorator`` chooses between an awaiting and a non-awaiting
+    wrapper by asking ``iscoroutinefunction(view_func)``. If the async view's
+    continuation were the sync function, the wrapper would hand a coroutine to
+    ``process_response`` as if it were a response - so the async wrapper being a
+    coroutine function IS the load-bearing fact, on the supported Django 5.2.0 floor
+    as well as on current.
+
+    Neither continuation may be ``csrf_exempt``: the exemption belongs to the outer
+    callback alone, and one on the inner function would turn the re-entry into the
+    bypass it must never be.
+    """
+    from django_strawberry_framework import views as views_module
+
+    assert iscoroutinefunction(views_module._async_run_after_csrf_check)
+    assert iscoroutinefunction(views_module._csrf_protected_async_run)
+    assert iscoroutinefunction(views_module._csrf_protected_run) is False
+    assert views_module._csrf_protected_run is not views_module._run_after_csrf_check
+    for function in (
+        views_module._run_after_csrf_check,
+        views_module._async_run_after_csrf_check,
+        views_module._csrf_protected_run,
+        views_module._csrf_protected_async_run,
+    ):
+        assert getattr(function, "csrf_exempt", False) is False

@@ -99,6 +99,10 @@ between modules, and repeated string/key/tuple literals are build-time defects.
 - `docs/builder/bld-review-1-http_boundary.md`
 - `docs/builder/bld-review-1-ws_boundary.md`
 - `docs/builder/bld-review-1-w3_review.md`
+- `docs/builder/bld-review-2-ws_revocation.md`
+- `docs/builder/bld-review-2-http_boundary.md`
+- `docs/builder/bld-review-2-ws_host_boundary.md`
+- `docs/builder/bld-review-2-w3_review.md`
 - `docs/builder/bld-slice-5-docs_foldin.md`
 - `docs/builder/bld-integration.md`
 - `docs/builder/bld-final.md`
@@ -110,6 +114,7 @@ between modules, and repeated string/key/tuple literals are build-time defects.
 - [x] Slice 3: S9 — one UTF-8 wire contract -> `docs/builder/bld-slice-3-utf8_wire.md`
 - [x] Slice 4: S11 — WebSocket actor revalidation through an injection seam -> `docs/builder/bld-slice-4-ws_revalidation.md`
 - [x] **Review round 1** (maintainer review of slices 1-4) -> see below
+- [ ] **Review round 2** (maintainer review of the round-1 tree) -> see below
 - [ ] Slice 5: S12 transport slice — migration note, deployment guidance, doc fold-in -> `docs/builder/bld-slice-5-docs_foldin.md`
 - [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
 - [ ] Final test-run gate -> `docs/builder/bld-final.md`
@@ -186,3 +191,101 @@ and two Definition-of-done items follow. `scripts/check_spec_glossary.py` stays 
 `OK: 37 terms`, exit 0. `docs/TREE.md` needs no new row for `_RawBodyRequestAdapter` — the
 render is per-module and `views.py` is already on Slice 5's list — but still needs
 `_request_body.py` at Slice 5's doc-wrap regenerate.
+
+## Review round 2 — maintainer adversarial review of the round-1 tree
+
+Round 1 was **committed by the maintainer at `511aec8a`**, who then replaced `docs/feedback.md`
+again with a second adversarial review of this card. It confirms round 1's findings as
+materially fixed and lists seven properties as satisfactorily closed, but does not close the
+card: the strongest S11 claim is false for an *already-running* subscription, and the multipart
+path sits outside both the strict UTF-8 boundary and the claimed pre-parse declared-size
+boundary. Both are architectural gaps rather than test wording.
+
+Slice 5 was mid-flight when this review landed and is explicitly deferred by its own
+recommended correction order (step 6: finish Slice 5's prose/integration sweep only after the
+behavior is stable). The partial `README.md` / `docs/README.md` edits already on disk are
+therefore **unfinished Slice 5 work**, not round-2 work.
+
+All six findings were independently confirmed against source by Worker 0 before dispatch.
+
+| # | Severity | Finding | Cohort |
+|---|---|---|---|
+| 1 | **Blocker** | `build_revalidating_consumer_class` overrides only `handle_subscribe` / `handle_start`, i.e. operation *admission*. An admitted subscription keeps iterating upstream's `run_operation` / `handle_async_results` loop and keeps emitting results after its session is revoked, so "a revoked session stops executing" is false. `Subscription.tick` yields exactly once, so no existing row can detect it. | WS revocation |
+| 2 | High | Multipart `operations` / `map` reach the package as `str` from `request.POST`, after Django's `MultiPartParser` has already `force_str(..., errors="replace")`-decoded them (`multipartparser.py:254`; per-part `charset` is honored only in the FILE branch). Live probes: explicit Latin-1 -> 200, malformed UTF-8 (`0x80`) -> 200. "Request JSON is UTF-8-only" held only for the ordinary JSON body. | HTTP |
+| 3 | High | `CsrfViewMiddleware._check_token` reads `request.POST` (`csrf.py:368`) from `process_view` (:414) for every cookie-bearing POST, before the view's `run` reaches `_enforce_request_body_limit` (`views.py:407` / :433). On multipart the declared gate runs *after* Django's parser and upload handlers. The live test uses plain `Client()`, whose CSRF checks are disabled, so it never exposed the ordering. | HTTP |
+| 4 | Medium | `AllowedHostsOriginValidator` is a factory for `OriginValidator(settings.ALLOWED_HOSTS)`, and `OriginValidator.__call__` reads only `Origin` — never `Host`. A probe with allowed `Origin` and `Host: evil.example` connected. The router and spec both promise "Host/Origin validation". | WS host |
+| 5 | Medium | `routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT` still advertises `strawberry-graphql>=0.262.0` while the dependency and minimum CI node pin `>=0.316.0`; `tests/test_routers.py:91` pins the stale text. Following the error's own advice installs a version the metadata rejects. | WS host |
+| 6 | Low | `_measured_remaining` guards `tell()` but calls `seekable()`, both `seek()`s and `end - position` unguarded, so an odd middleware/server stream escapes as an unrelated 500 and a failed restore can leave the position corrupted. | HTTP |
+
+### The four contract decisions
+
+Findings 1-4 each turned on a contract choice, and each was decided by the maintainer rather
+than by a worker. Recorded here because the *rejected* options are load-bearing:
+
+- **Finding 1 — connection-scoped revocation through the derived WebSocket adapter.** The seam
+  is `GraphQLWSConsumer.websocket_adapter_class`, which upstream instantiates *by name* at
+  `strawberry/http/async_base_view.py:310`, and through whose `send_json` both protocols funnel
+  every frame. The factory derives one private adapter and installs it on the generated consumer
+  exactly as it already installs the two handler classes — a class-level extension seam, not
+  per-instance patching. Two checkpoints: the existing admission hooks, plus an adapter gate on
+  the information-bearing frames (`next`, `data`, and operation-scoped `error`). On failure:
+  mark revoked, suppress the frame, close the socket, cancel, and let upstream's own teardown
+  finish. One connection-local lock spans validation, the revoked transition, *and* the send —
+  held through the send deliberately, at the cost of per-connection head-of-line blocking on the
+  outbound hot path, because that is what makes "no sibling payload escapes after revocation is
+  observed" true. `websocket_revalidation_window` keeps its meaning, now spanning both
+  checkpoints: the maximum age of a successful validation that may authorize a new operation or
+  an information-bearing frame. **Rejected:** a polling monitor at any cadence (not immediate,
+  merely a detection interval, and multiplies reads by idle connection count); a send-time guard
+  on `handler.send_message` (that funnel also carries connection-control frames, and no
+  symmetric payload-only gate exists because transport-ws's payload send lives on `Operation`,
+  constructed by name inside `handle_subscribe`); per-operation cancellation without closing;
+  and a package maximum-connection-lifetime timer, which would disconnect valid and revoked
+  clients indiscriminately and reintroduce the timer machinery the polling design was rejected
+  for.
+- **Finding 2 — Django-owned parsing with a strict loss-detection guard.** Django keeps sole
+  ownership of multipart framing, limits and file streaming. The package adds two conditions
+  before `operations` / `map` are parsed as JSON: the effective form encoding must canonicalize
+  to UTF-8, and the serialized control values must contain no literal U+FFFD. Since Django
+  replacement-decodes every malformed sequence to U+FFFD, that detects exactly the information
+  loss that made malformed UTF-8 look valid, while preserving genuine multibyte UTF-8 including
+  normal browser `JSON.stringify` output. **Rejected:** ASCII-only control fields (breaks
+  `JSON.stringify` for any non-ASCII variable); a raw-preserving pre-decode seam (no narrow
+  strict-field hook exists, so it means copying the parser); `receive_data_chunk` (files only);
+  and `handle_raw_input` (takes over the whole parse).
+- **Finding 3 — view-local CSRF re-entry after the body gate.** Outer `csrf_exempt` on the
+  dispatch callback so the global middleware's `process_view` skips it before touching
+  `request.POST`; inside the view, the body gate runs first and an over-cap multipart returns
+  413 before `request.POST` / `request.FILES` / any upload handler; a passing request then
+  enters a package-owned continuation wrapped in Django's public `csrf_protect`. The exemption
+  is an *ordering mechanism, not a bypass* — full CSRF still runs, and the endpoint stays
+  protected even if a consumer omits the global middleware. **Rejected:** a pre-CSRF package
+  middleware plus ordering system check, which adds a required deployment entry and cuts against
+  this card's thesis that Django owns the HTTP stack.
+- **Finding 4 — a Django-backed WebSocket Host boundary.** One private ASGI middleware projects
+  the handshake's host metadata into a minimal `HttpRequest` and calls public
+  `request.get_host()`, so Django exclusively owns syntax, ports, IPv6, trailing dots,
+  `ALLOWED_HOSTS`, wildcards and DEBUG defaults; only `DisallowedHost` is caught, and the denial
+  precedes authentication and consumer construction. Composed outermost:
+  `DjangoWebSocketHostValidator(AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter(...))))`.
+  Host and Origin stay separate checks and neither substitutes for the other. **Rejected:**
+  narrowing every claim to Origin-only, which leaves the handshake accepting a hostile Host with
+  nothing else owning it, since Django never sees the WS handshake.
+
+### Cohorts
+
+Grouped by **file ownership** again, so workers cannot collide:
+
+- `docs/builder/bld-review-2-ws_revocation.md` — finding 1 (`consumers.py`, `tests/test_routers.py`)
+- `docs/builder/bld-review-2-http_boundary.md` — findings 2 + 3 + 6 (`views.py`,
+  `_request_body.py`, `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py`)
+- `docs/builder/bld-review-2-ws_host_boundary.md` — findings 4 + 5 (`routers.py`, the new private
+  host validator, `tests/test_routers.py`). **Serialized after the revocation cohort**, because
+  both own `tests/test_routers.py`.
+- Spec work is custodian-only on `docs/spec-065-transport_security-0_0_15.md`, and this round it
+  also reconciles the historical `0.262.0` language in the shipped
+  `docs/SPECS/spec-041-channels_router-0_0_14.md`.
+
+Process correction carried into every round-2 prompt: builders must write their
+`## Required spec amendments` list **into their artifact on disk**, not only into their report to
+Worker 0. Round 1's custodian had to re-derive that list because the detail never reached disk.

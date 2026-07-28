@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-2).
+"""Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-3).
 
 The S1 HTTP-boundary tier: every proof that Django's real request lifecycle
 executes on the package's GraphQL HTTP route now that ``routers.py`` no longer
@@ -70,7 +70,9 @@ from apps.products.services import create_users, seed_data
 from cross_web import DjangoHTTPRequestAdapter
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.files.uploadhandler import MemoryFileUploadHandler
 from django.core.handlers.asgi import ASGIHandler
+from django.http import HttpResponseForbidden
 from django.middleware.csrf import get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
 from django.urls import include, path
@@ -124,6 +126,48 @@ class _SentinelMiddleware:
         response = self.get_response(request)
         response[_SENTINEL_HEADER] = "1"
         return response
+
+
+class _LatinOneEncodingMiddleware:
+    """Assign ``request.encoding``, which is Django's documented per-request override.
+
+    Review round 2 M1's deployment, as one line of consumer middleware - the exact
+    shape the encoding gate's docstring cites as the reason it consults
+    ``request.encoding`` at all. ``HttpRequest.encoding``'s setter is public API and
+    ``HttpRequest.parse_file_upload`` hands ``MultiPartParser`` nothing but this
+    value, so a project can legitimately install this and every multipart form on
+    every route is then decoded as Latin-1 - **including** one whose
+    ``Content-Type`` declared ``charset=utf-8``, because Django never re-reads
+    ``content_params`` at parse time.
+
+    Mounted last (innermost) by :func:`_with_a_middleware_that_sets_the_encoding`,
+    so it runs immediately before the view, which is the hostile ordering: the
+    assignment lands after the declaration was promoted and cannot be seen from the
+    request line.
+    """
+
+    encoding = "iso-8859-1"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        request.encoding = self.encoding
+        return self.get_response(request)
+
+
+def _with_a_middleware_that_sets_the_encoding():
+    """``override_settings`` adding :class:`_LatinOneEncodingMiddleware` innermost.
+
+    Derived from the project's real ``MIDDLEWARE`` rather than a hand-written list,
+    the same way ``_without_the_global_csrf_middleware`` is, so the row adds exactly
+    one entry and keeps fakeshop's session, auth, CSRF and security middleware in
+    place - the deployment is "a project that also does this", not "a project with
+    nothing else".
+    """
+    entry = f"{__name__}._LatinOneEncodingMiddleware"
+    assert entry not in settings.MIDDLEWARE, settings.MIDDLEWARE
+    return override_settings(MIDDLEWARE=[*settings.MIDDLEWARE, entry])
 
 
 # ---------------------------------------------------------------------------
@@ -191,21 +235,80 @@ class _ParseSpyView(DjangoGraphQLView):
         return super().parse_json(data)
 
 
-def _capped_view(view_class, limit):
+def _carrying_the_packages_csrf_mark(view_class):
+    """Copy the package view's own ``csrf_exempt`` mark onto a probe mount wrapper.
+
+    Every probe mount in this file resolves its view per request, so the callback
+    the URL resolver hands ``CsrfViewMiddleware.process_view`` is the wrapper
+    function here rather than the one ``as_view`` returned - and ``process_view``
+    reads ``csrf_exempt`` off *that* callback. A real mount needs nothing: the mark
+    is on the ``as_view`` callback itself, and every Django view decorator carries
+    it onward through ``functools.wraps`` (which is how fakeshop's own
+    ``ensure_csrf_cookie`` mount at ``/graphql/`` keeps it). A bare wrapper defined
+    here is neither, so it copies the mark for the same reason - otherwise the probe
+    mount, not the package, is what loses the ordering, and a row would be measuring
+    its own scaffolding.
+
+    The value is READ FROM the package rather than hardcoded, so this raises at
+    import the day the package stops setting it. The load-bearing ordering evidence
+    is still the row that runs against fakeshop's real ``/graphql/`` mount, where no
+    scaffolding is involved at all.
+    """
+    mark = view_class.as_view().csrf_exempt
+
+    def decorate(view):
+        view.csrf_exempt = mark
+        return view
+
+    return decorate
+
+
+def _capped_view(view_class, limit, *, uploads=False):
     """A request-time-resolving mount of ``view_class`` with the cap pinned.
 
     Resolving the schema per request mirrors ``_ide_off_view`` above: it keeps
     every probe mount pointed at the schema the per-test reload fixture just
     rebuilt instead of one captured at import.
+
+    ``uploads=True`` turns on upstream's ``multipart_uploads_enabled``, which the
+    multipart wire-contract rows need: with it off, upstream refuses every
+    ``multipart/form-data`` request as an unsupported content type before
+    ``operations`` is ever read, so a mount without it cannot show what the
+    package does to a control document it DOES parse.
     """
 
+    @_carrying_the_packages_csrf_mark(view_class)
     def view(request, *args, **kwargs):
         from config.schema import schema
 
-        built = view_class.as_view(schema=schema, max_request_body_bytes=limit)
+        built = view_class.as_view(
+            schema=schema,
+            max_request_body_bytes=limit,
+            multipart_uploads_enabled=uploads,
+        )
         return built(request, *args, **kwargs)
 
     return view
+
+
+@_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
+async def _async_capped_multipart_view(request, *args, **kwargs):
+    """The async view with uploads on and a roomy cap, for the async wire rows.
+
+    Spelled out rather than produced by ``_capped_view`` for the same reason
+    ``_async_graphql_view`` is: the ``await`` is the difference. Fakeshop's own
+    ``/graphql/`` is the sync half of every multipart row below (it already mounts
+    the package view with ``multipart_uploads_enabled=True``), so this is the one
+    mount the async half needs.
+    """
+    from config.schema import schema
+
+    view = AsyncDjangoGraphQLView.as_view(
+        schema=schema,
+        max_request_body_bytes=_ROOMY_CAP,
+        multipart_uploads_enabled=True,
+    )
+    return await view(request, *args, **kwargs)
 
 
 async def _async_cap_tiny_view(request, *args, **kwargs):
@@ -218,6 +321,24 @@ async def _async_cap_tiny_view(request, *args, **kwargs):
     from config.schema import schema
 
     view = AsyncDjangoGraphQLView.as_view(schema=schema, max_request_body_bytes=_TINY_CAP)
+    return await view(request, *args, **kwargs)
+
+
+@_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
+async def _async_cap_tiny_multipart_view(request, *args, **kwargs):
+    """The async twin under the tiny cap with uploads on, for the ordering rows.
+
+    The async colour of ``multipart-tiny/``: an over-cap multipart request has to
+    be refused before Django's parser on the event loop too, and the under-cap
+    control has to reach the schema, which needs uploads enabled.
+    """
+    from config.schema import schema
+
+    view = AsyncDjangoGraphQLView.as_view(
+        schema=schema,
+        max_request_body_bytes=_TINY_CAP,
+        multipart_uploads_enabled=True,
+    )
     return await view(request, *args, **kwargs)
 
 
@@ -245,6 +366,9 @@ urlpatterns = [
     path("cap-tiny/", _capped_view(DjangoGraphQLView, _TINY_CAP)),
     path("cap-spy/", _capped_view(_ParseSpyView, _TINY_CAP)),
     path("cap-off/", _capped_view(DjangoGraphQLView, _ROOMY_CAP)),
+    path("multipart-tiny/", _capped_view(DjangoGraphQLView, _TINY_CAP, uploads=True)),
+    path("async-multipart-tiny/", _async_cap_tiny_multipart_view),
+    path("async-multipart/", _async_capped_multipart_view),
     path("async-cap-tiny/", _async_cap_tiny_view),
     path("upstream-graphql/", _upstream_graphql_view),
 ]
@@ -367,6 +491,198 @@ def _asgi_post(path_, fragments, extra_headers=()):
     )
     headers = {name.decode(): value.decode() for name, value in start.get("headers", [])}
     return start["status"], headers, body
+
+
+# ---------------------------------------------------------------------------
+# Review High 2 / High 3 scaffolding: hand-built multipart requests, a CSRF
+# token round trip, and an upload-handler sentinel.
+#
+# Neither ``Client.post`` nor ``AsyncClient.post`` can present these bodies:
+# both run the payload through ``_encode_data``, which re-encodes it with the
+# charset parsed off the declared content type - so a malformed UTF-8 byte or an
+# explicit ``charset=iso-8859-1`` raises inside the test client instead of
+# reaching the endpoint. ``generic`` puts the bytes and the header on the wire
+# untouched, which is the whole point of a wire-contract row.
+# ---------------------------------------------------------------------------
+
+_MULTIPART_BOUNDARY = "BoUnDaRyFoRtHeWiReRoWs"
+
+#: Every upload-handler and parser call the sentinel handler saw, newest last.
+#: The High-3 ordering witness: a ``413`` that leaves this EMPTY is a ``413``
+#: raised before Django's multipart parser ran at all. A status alone cannot say
+#: that, which is exactly the review's point.
+_UPLOAD_EVENTS: list[str] = []
+
+
+class _RecordingUploadHandler(MemoryFileUploadHandler):
+    """Django's own in-memory upload handler, with a call recorder in front of it.
+
+    Installed through ``FILE_UPLOAD_HANDLERS``, so it is reached the way a
+    project's handlers are reached - lazily, from
+    ``HttpRequest.parse_file_upload`` - and it records the two events that prove
+    Django's multipart machinery ran: ``handle_raw_input``, which
+    ``MultiPartParser.parse`` calls on every handler for **any** multipart body
+    (fields included, files or not), and ``new_file`` /
+    ``receive_data_chunk``, which are called only for a file payload.
+
+    Subclassing Django's handler rather than faking one keeps the accepted
+    direction honest: files really are streamed through the normal handler chain,
+    and the row that proves it is asserting about the shipped path.
+
+    Every override takes ``*args, **kwargs`` deliberately - the hook signatures
+    carry Django's own ``META`` spelling, which is not a name this repo's lint
+    allows a parameter to have, and forwarding blind also keeps the recorder
+    correct if a supported Django adds a hook argument.
+    """
+
+    def handle_raw_input(self, *args, **kwargs):
+        _UPLOAD_EVENTS.append("handle_raw_input")
+        return super().handle_raw_input(*args, **kwargs)
+
+    def new_file(self, *args, **kwargs):
+        _UPLOAD_EVENTS.append("new_file")
+        return super().new_file(*args, **kwargs)
+
+    def receive_data_chunk(self, *args, **kwargs):
+        _UPLOAD_EVENTS.append("receive_data_chunk")
+        return super().receive_data_chunk(*args, **kwargs)
+
+
+def _recording_upload_handlers():
+    """``override_settings`` for the sentinel handler, by dotted path.
+
+    The path resolves because pytest has already put this module in
+    ``sys.modules`` under ``__name__`` - the same mechanism the probe URLconf
+    relies on.
+    """
+    return override_settings(FILE_UPLOAD_HANDLERS=[f"{__name__}._RecordingUploadHandler"])
+
+
+def _csrf_failure_probe(request, reason=""):
+    """A custom ``CSRF_FAILURE_VIEW``, so one row can prove the setting still fires."""
+    return HttpResponseForbidden(b"probe-csrf-failure")
+
+
+def _csrf_token(path="/graphql/"):
+    """A usable CSRF token, minted the way Django mints one for a real client.
+
+    The same round trip ``_asgi_post`` performs: the value goes into the
+    ``csrftoken`` cookie AND the ``X-CSRFToken`` header, which is what a browser
+    (and Strawberry's own GraphiQL) sends.
+    """
+    return get_token(RequestFactory().get(path))
+
+
+def _multipart_content_type(charset=None):
+    """The declared ``Content-Type`` for a hand-built multipart body."""
+    content_type = f"multipart/form-data; boundary={_MULTIPART_BOUNDARY}"
+    if charset is not None:
+        content_type = f"{content_type}; charset={charset}"
+    return content_type
+
+
+def _multipart_bytes(fields, files=()):
+    """A multipart body over exactly the given raw bytes.
+
+    ``fields`` and ``files`` are ``(name, raw)`` / ``(name, filename, raw)``
+    pairs whose payloads are **bytes**, never text: a row's whole subject can be
+    one undecodable byte, so nothing here may encode on the caller's behalf. No
+    per-part ``charset`` is ever declared, because Django honours one only in its
+    FILE branch - a per-part charset on ``operations`` is ignored, which is
+    precisely why the top-level declaration is the one the package checks.
+    """
+    parts = []
+    for name, raw in fields:
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        parts.append(
+            f"--{_MULTIPART_BOUNDARY}\r\n{disposition}\r\n\r\n".encode() + raw + b"\r\n",
+        )
+    for name, filename, raw in files:
+        disposition = f'Content-Disposition: form-data; name="{name}"; filename="{filename}"'
+        parts.append(
+            f"--{_MULTIPART_BOUNDARY}\r\n{disposition}\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n".encode()
+            + raw
+            + b"\r\n",
+        )
+    parts.append(f"--{_MULTIPART_BOUNDARY}--\r\n".encode())
+    return b"".join(parts)
+
+
+def _post_multipart(
+    client,
+    path,
+    fields,
+    *,
+    files=(),
+    charset=None,
+    token=None,
+    send_header=True,
+    **extra,
+):
+    """POST a hand-built multipart body; return whatever the client returns.
+
+    Sync callers get a response, async callers get an awaitable - both clients
+    inherit ``generic`` from their request factory, so one helper serves both
+    transports and the rows stay symmetric.
+
+    ``token`` installs the CSRF cookie and, unless ``send_header=False``, the
+    ``X-CSRFToken`` header - the shape ``Client(enforce_csrf_checks=True)``
+    accepts. Omitting the token is how the missing-token direction is expressed,
+    and dropping only the header is how the form-token direction is: the cookie
+    still has to be there, because a token in the form is checked against it.
+
+    Extra request headers ride the ``headers=`` mapping rather than WSGI-style
+    ``HTTP_*`` keyword arguments, because that is the only spelling both clients
+    accept: ``AsyncRequestFactory`` treats ``**extra`` as ASGI *scope* entries and
+    would put ``HTTP_X_CSRFTOKEN`` on the wire as a header literally named
+    ``http-x-csrftoken``.
+    """
+    headers = dict(extra.pop("headers", {}))
+    if token is not None:
+        client.cookies["csrftoken"] = token
+        if send_header:
+            headers["x-csrftoken"] = token
+    return client.generic(
+        "POST",
+        path,
+        data=_multipart_bytes(fields, files),
+        content_type=_multipart_content_type(charset),
+        headers=headers,
+        **extra,
+    )
+
+
+def _operations_bytes(*, note=b"plain", operation_name=None):
+    """A serialized ``operations`` control document with two byte-exact slots.
+
+    ``note`` is an inert top-level member - Strawberry ignores unknown members,
+    exactly as ``_sized_body``'s ``pad`` relies on - so a row can carry arbitrary
+    bytes through the control document while the operation still executes
+    normally. ``operation_name`` becomes ``operationName``, which upstream echoes
+    back verbatim when it does not match (``Unknown operation named "..."``), and
+    that echo is how a row proves the bytes arrived byte-for-byte rather than
+    merely arrived.
+    """
+    document = b'{"query": "{ __typename }", "note": "' + note + b'"'
+    if operation_name is not None:
+        document += b', "operationName": "' + operation_name + b'"'
+    return document + b"}"
+
+
+def _assert_multipart_control_document_refused(response):
+    """The package's refusal for a control document it will not read as JSON.
+
+    Pinning the reason is what makes the row a statement about the wire contract:
+    the same bytes without the contract reach the schema and answer ``200``, and a
+    lossily-decoded ``map`` that got past this check would answer ``400`` with
+    upstream's "File(s) missing in form data" instead. Only the exact reason tells
+    those apart.
+    """
+    assert response.status_code == 400
+    assert response.headers["Content-Type"].startswith("text/plain")
+    assert response.content == b"Unable to parse request body as JSON"
+    _assert_no_graphql_envelope(response)
 
 
 def _assert_no_graphql_envelope(response):
@@ -1010,9 +1326,7 @@ def test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce(
     413`` wraps only ``ASGIRequest`` construction, which never touches the body;
     ``RequestDataTooBig`` is raised lazily from ``HttpRequest.body`` inside the
     view, where ``response_for_exception`` maps ``SuspiciousOperation`` to
-    ``400``. The spec's Edge-case sentence predicting a ``413`` on the ASGI
-    direction is inaccurate against both supported releases; this row pins the
-    measured behavior. Deliberately WSGI-only: lowering Django's knob under the
+    ``400``. Deliberately WSGI-only: lowering Django's knob under the
     ASGI harness is the single cell where the two Django versions diverge.
     """
     seed_data(1)
@@ -1418,3 +1732,760 @@ def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
 
     assert guarded.status_code == 400
     assert b"request body" in guarded.content
+
+
+# ===========================================================================
+# Review High 2: the multipart control documents. ``parse_json``'s strict decode
+# only ever sees the ``application/json`` body; ``operations`` and ``map`` reach
+# the package as ``str``, already decoded by Django's own multipart parser with
+# ``errors="replace"``. These rows are the wire proof of the two checks that
+# close that gap - an effective UTF-8 form encoding, and no replacement marker
+# in either control document - on both transports, because a direct
+# ``parse_json(str)`` call cannot express a wire boundary at all.
+# ===========================================================================
+
+#: The four control documents the review names, as raw bytes, each paired with
+#: the field it rides in. ``0x80`` is a lone continuation byte - never valid
+#: UTF-8 - and ``0xEF 0xBF 0xBD`` is a genuine, well-formed encoding of U+FFFD,
+#: which is the harder case: it decodes cleanly, so only the marker check
+#: refuses it, and refusing it is what makes the malformed-byte check
+#: unforgeable.
+_LOSSY_CONTROL_DOCUMENTS = (
+    pytest.param("operations", _operations_bytes(note=b"\x80"), id="operations-malformed"),
+    pytest.param(
+        "operations",
+        _operations_bytes(note=b"\xef\xbf\xbd"),
+        id="operations-literal-fffd",
+    ),
+    pytest.param("map", b'{"\x80": []}', id="map-malformed"),
+    pytest.param("map", b'{"\xef\xbf\xbd": []}', id="map-literal-fffd"),
+)
+
+
+def _multipart_fields(field, raw):
+    """The two control fields, with ``field`` replaced by ``raw`` bytes."""
+    documents = {"operations": _operations_bytes(), "map": b"{}"}
+    documents[field] = raw
+    return list(documents.items())
+
+
+@pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
+@pytest.mark.django_db
+def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(field, raw):
+    """Review High 2: the probes that used to answer ``200`` now answer ``400``.
+
+    The review posted an ``operations`` field carrying a malformed UTF-8 byte and
+    watched Django replacement-decode it into something that parsed and executed -
+    a byte sequence the package calls invalid UTF-8, accepted on one GraphQL body
+    shape. Both control documents are covered, and both directions of the same
+    detector: the malformed byte Django *converts* into U+FFFD, and a literal
+    U+FFFD the client sent as valid UTF-8. They are indistinguishable after
+    Django's decode, which is the honest limit of this contract and the reason it
+    is documented as "must survive Django's decode without a replacement marker"
+    rather than "must be valid UTF-8".
+
+    The exact reason is asserted, not just the status: a lossy ``map`` that slipped
+    past the check would still answer ``400``, from upstream's own "File(s) missing
+    in form data" once the replaced key failed to match a variable path. Only the
+    reason distinguishes the contract from that accident.
+    """
+    seed_data(1)
+
+    response = _post_multipart(Client(), "/graphql/", _multipart_fields(field, raw))
+
+    _assert_multipart_control_document_refused(response)
+
+
+@pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
+async def test_the_async_view_refuses_the_same_lossy_control_documents(field, raw):
+    """The async colour: one shared mixin method, two ``parse_multipart`` overrides.
+
+    Upstream's ``parse_multipart`` is a coroutine on the async base view and a plain
+    method on the sync one, so the package needs one override per transport - which
+    is exactly the seam where a policy silently applies to one transport only. DB
+    free for the same reason as the other async rows: an ORM read from the event
+    loop would raise ``SynchronousOnlyOperation``.
+    """
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_multipart(
+            AsyncClient(),
+            "/async-multipart/",
+            _multipart_fields(field, raw),
+        )
+
+    _assert_multipart_control_document_refused(response)
+
+
+_NON_UTF8_FORM_CHARSETS = (
+    pytest.param("iso-8859-1", id="explicit-latin-1"),
+    pytest.param("utf-16", id="explicit-utf-16"),
+    pytest.param("utf-8-sig", id="bom-eating-codec"),
+    pytest.param("no-such-codec", id="unusable-codec-name"),
+)
+
+
+@pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
+@pytest.mark.django_db
+def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset):
+    """Review High 2's other probe: an explicit ``charset`` the package will not honour.
+
+    The review's Latin-1 probe executed with ``200``, and Django's behaviour is why:
+    ``_set_content_type_params`` copies a usable declared charset onto
+    ``request.encoding``, which is the encoding ``MultiPartParser`` then decodes
+    every field with. So the declaration is honoured - just not with the UTF-8 the
+    endpoint promises - and a Latin-1 byte becomes a different character than the
+    same byte would in a JSON body. The endpoint refuses instead, before the form
+    is parsed at all.
+
+    ``utf-8-sig`` is in the matrix because it is the near-miss: a codec whose name
+    contains "utf-8" and which would silently swallow the BOM that Decision 10
+    deliberately refuses. ``no-such-codec`` is the other end - Django drops an
+    unusable charset and decodes with ``DEFAULT_CHARSET``, so accepting it would
+    mean honouring a declaration nobody honoured.
+
+    The control in the same row is what keeps this from passing for the wrong
+    reason: the identical body with no charset at all executes normally.
+    """
+    seed_data(1)
+    fields = _multipart_fields("operations", _operations_bytes())
+
+    declared = _post_multipart(Client(), "/graphql/", fields, charset=charset)
+    control = _post_multipart(Client(), "/graphql/", fields)
+
+    _assert_multipart_control_document_refused(declared)
+
+    assert control.status_code == 200
+    assert control.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
+async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset):
+    """The async colour of the declared-charset refusal, from the shared boundary."""
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_multipart(
+            AsyncClient(),
+            "/async-multipart/",
+            _multipart_fields("operations", _operations_bytes()),
+            charset=charset,
+        )
+
+    _assert_multipart_control_document_refused(response)
+
+
+@pytest.mark.django_db
+def test_genuine_utf8_and_escaped_unicode_survive_the_multipart_boundary_intact():
+    """The contract is UTF-8, not ASCII - and the accepted bytes arrive unchanged.
+
+    Four directions, because "rejects the bad shapes" is only half a contract:
+
+    1. genuine multibyte UTF-8 in the control document executes normally. This is
+       also a losslessness proof by construction, not merely an acceptance: had
+       Django replacement-decoded any of those bytes, the marker check would have
+       refused the request, so a ``200`` here means the document survived the
+       decode byte-for-byte. It is what ``JSON.stringify`` emits by default for
+       non-ASCII text, so the endpoint has not become ASCII-only.
+    2. the same text as a JSON escape executes normally too - the ASCII
+       serialization is unaffected.
+    3. an ESCAPED U+FFFD is accepted, and reaches the schema as the real
+       character: upstream echoes ``operationName`` back verbatim, so the response
+       body carries the exact bytes. That is the documented escape hatch for a
+       client that genuinely needs U+FFFD as data, and it is the pair to the
+       literal-U+FFFD refusal above - identical status, different reason,
+       different cause.
+    4. genuine multibyte UTF-8 in ``operationName`` comes back byte-for-byte in
+       upstream's error text, which is the strongest available statement that the
+       transport did not touch the bytes.
+    """
+    seed_data(1)
+    cafe = "caf\u00e9"
+
+    raw_utf8 = _post_multipart(
+        Client(),
+        "/graphql/",
+        _multipart_fields("operations", _operations_bytes(note=cafe.encode())),
+    )
+    escaped = _post_multipart(
+        Client(),
+        "/graphql/",
+        _multipart_fields("operations", _operations_bytes(note=b"caf\\u00e9")),
+    )
+    escaped_marker = _post_multipart(
+        Client(),
+        "/graphql/",
+        _multipart_fields("operations", _operations_bytes(operation_name=b"\\ufffd")),
+    )
+    echoed = _post_multipart(
+        Client(),
+        "/graphql/",
+        _multipart_fields("operations", _operations_bytes(operation_name=cafe.encode())),
+    )
+
+    for accepted in (raw_utf8, escaped):
+        assert accepted.status_code == 200
+        assert accepted.json()["data"] == {"__typename": "Query"}
+
+    assert escaped_marker.status_code == 400
+    assert escaped_marker.content.decode() == 'Unknown operation named "\ufffd".'
+
+    assert echoed.status_code == 400
+    assert echoed.content.decode() == f'Unknown operation named "{cafe}".'
+
+
+@pytest.mark.django_db
+def test_the_marker_check_is_scoped_to_the_two_control_documents():
+    """A replacement marker outside ``operations`` / ``map`` is none of the package's business.
+
+    The check exists because those two fields are JSON documents the package
+    parses. Any other form field is application data Django decoded under its own
+    rules, and refusing a request over one would be the package inventing a
+    contract about somebody else's field - so the same undecodable byte that gets
+    a request refused in ``operations`` passes through untouched in a neighbouring
+    field, and the operation still executes.
+    """
+    seed_data(1)
+    fields = [*_multipart_fields("operations", _operations_bytes()), ("junk", b"\x80\x80")]
+
+    response = _post_multipart(Client(), "/graphql/", fields)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+
+
+#: The exploit body of review round 2 M1: a raw Latin-1 ``0xe9``, which is not
+#: valid UTF-8 on its own. Under the Latin-1 decode the middleware forces it
+#: becomes an ordinary character with **no** replacement marker, so the loss
+#: detector is structurally blind to it and the control document reaches
+#: ``json.loads`` non-UTF-8-decoded. Under UTF-8 it would have become ``U+FFFD``
+#: and the marker check would have caught it - which is exactly why the encoding
+#: gate has to read the value Django will really use.
+_LATIN1_CONTROL_DOCUMENT = _operations_bytes(note=b"\xe9")
+
+
+@pytest.mark.django_db
+def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_charset():
+    """Review round 2 M1: the deployment the gate exists for, on the shipped mount.
+
+    The round's own High 2 was re-achievable behind one line of consumer
+    middleware. ``HttpRequest.parse_file_upload`` hands ``MultiPartParser`` nothing
+    but ``request.encoding``, and ``content_params`` is never re-read at parse
+    time - so a client declaring ``charset=utf-8`` while a middleware has assigned
+    ``request.encoding = "iso-8859-1"`` got the declaration validated and the
+    override applied. The client picked which value the gate consulted.
+
+    Three answers make this a statement about the encoding rung rather than about
+    the body:
+
+    * an ordinary ASCII control document, refused under the middleware. Nothing is
+      wrong with these bytes - the same request without the middleware is the
+      control below - so only the effective-encoding condition can be refusing it;
+    * the same request with the middleware removed, ``200``. That is what stops the
+      first answer from passing for the wrong reason;
+    * the review's actual probe: a raw Latin-1 byte in ``operations``, refused. It
+      is the shape the marker check cannot see, because a Latin-1 decode never
+      fails (proved at the package tier in
+      ``tests/test_views.py::test_a_declared_utf8_charset_does_not_mask_a_middleware_set_request_encoding``).
+
+    Run against fakeshop's real ``/graphql/`` - the shipped mount - because the
+    whole subject is a deployment shape.
+    """
+    seed_data(1)
+    ascii_fields = _multipart_fields("operations", _operations_bytes())
+    latin1_fields = _multipart_fields("operations", _LATIN1_CONTROL_DOCUMENT)
+
+    with _with_a_middleware_that_sets_the_encoding():
+        refused_ascii = _post_multipart(Client(), "/graphql/", ascii_fields, charset="utf-8")
+        refused_latin1 = _post_multipart(Client(), "/graphql/", latin1_fields, charset="utf-8")
+
+    control = _post_multipart(Client(), "/graphql/", ascii_fields, charset="utf-8")
+
+    _assert_multipart_control_document_refused(refused_ascii)
+    _assert_multipart_control_document_refused(refused_latin1)
+
+    assert control.status_code == 200
+    assert control.json()["data"] == {"__typename": "Query"}
+
+
+async def test_the_async_view_is_not_masked_by_a_declared_utf8_charset_either():
+    """The async colour of review round 2 M1, from the one shared mixin method.
+
+    The gate lives on ``_RequestBodyBoundaryMixin`` and is called from each
+    transport's own ``run``, so it is a seam where a fix can silently apply to one
+    transport only - the same reason every other multipart row in this file has an
+    async twin. The control in the same row is the identical request with the
+    middleware removed.
+    """
+    fields = _multipart_fields("operations", _LATIN1_CONTROL_DOCUMENT)
+
+    with override_settings(ROOT_URLCONF=__name__):
+        with _with_a_middleware_that_sets_the_encoding():
+            refused = await _post_multipart(
+                AsyncClient(),
+                "/async-multipart/",
+                fields,
+                charset="utf-8",
+            )
+        control = await _post_multipart(
+            AsyncClient(),
+            "/async-multipart/",
+            _multipart_fields("operations", _operations_bytes()),
+            charset="utf-8",
+        )
+
+    _assert_multipart_control_document_refused(refused)
+
+    assert control.status_code == 200
+    assert control.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db
+def test_a_project_that_reconfigured_default_charset_is_refused_unless_the_client_declares_utf8():
+    """The third rung of the effective encoding, live, and its exact boundary.
+
+    ``MultiPartParser.__init__`` resolves ``encoding or
+    settings.DEFAULT_CHARSET``, so a project that reconfigures ``DEFAULT_CHARSET``
+    away from UTF-8 changes how every undeclared multipart form is decoded and the
+    endpoint's promise quietly stops being true. It is refused instead.
+
+    The second answer is the part a "every value in sight must be UTF-8" reading
+    gets wrong, and it is measured Django behaviour rather than a preference: with
+    ``DEFAULT_CHARSET`` at Latin-1 and the client declaring ``charset=utf-8``,
+    ``_set_content_type_params`` promotes ``utf-8`` onto ``request.encoding``,
+    ``MultiPartParser`` receives ``utf-8``, and the form genuinely IS decoded as
+    UTF-8 - so refusing it would refuse a request Django handles exactly as the
+    contract promises.
+
+    The control document is deliberately ASCII: ``RequestFactory.generic``
+    transcodes its payload through ``force_bytes(data, settings.DEFAULT_CHARSET)``,
+    so a non-ASCII byte in the body would be rewritten by the test client under
+    this override and the row would be measuring its own harness.
+    """
+    seed_data(1)
+    fields = _multipart_fields("operations", _operations_bytes())
+
+    with override_settings(DEFAULT_CHARSET="iso-8859-1"):
+        refused = _post_multipart(Client(), "/graphql/", fields)
+        accepted = _post_multipart(Client(), "/graphql/", fields, charset="utf-8")
+
+    _assert_multipart_control_document_refused(refused)
+
+    assert accepted.status_code == 200
+    assert accepted.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db
+def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
+    """Review round 2 L1: the encoding gate is scoped to the forms Django decodes.
+
+    ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
+    parsing anything unless the method is ``POST``, so a stale
+    ``multipart/form-data`` ``Content-Type`` on a GET - a client reusing a previous
+    request's headers - describes a form nothing will decode, and this endpoint
+    reads no body on GET at all. It used to be answered ``400``, which made the
+    mixin's own "**GET.** A no-op" sentence false and refused a query Django would
+    have served from the query string.
+
+    The header is passed as a raw WSGI ``CONTENT_TYPE`` rather than through a body,
+    because that is the only way to put a content type on a bodyless GET:
+    ``RequestFactory.generic`` populates ``CONTENT_TYPE`` only ``if data``.
+    """
+    seed_data(1)
+    query = {"query": _TYPENAME}
+    stray = _multipart_content_type("iso-8859-1")
+
+    response = Client().get("/graphql/", query, CONTENT_TYPE=stray)
+    control = Client().get("/graphql/", query)
+
+    for answer in (response, control):
+        assert answer.status_code == 200, answer.content
+        assert answer.json()["data"] == {"__typename": "Query"}
+
+
+# ===========================================================================
+# Review High 3: the declared multipart cap now runs BEFORE Django's CSRF
+# middleware reads ``request.POST``. Every row here uses
+# ``Client(enforce_csrf_checks=True)`` - the review's own requirement - so
+# ``CsrfViewMiddleware`` is live rather than short-circuited, and the ordering
+# witness is the upload-handler sentinel rather than the status code.
+# ===========================================================================
+
+
+@pytest.mark.django_db
+def test_an_over_cap_multipart_request_is_refused_before_djangos_parser_runs():
+    """Review High 3: the ``413`` precedes ``MultiPartParser`` and every upload handler.
+
+    The defect this closes is an ordering one, not a status one.
+    ``CsrfViewMiddleware.process_view`` reads
+    ``request.POST.get("csrfmiddlewaretoken", "")`` for **every** cookie-bearing
+    POST - even one that will authenticate with the ``X-CSRFToken`` header - and it
+    runs before the view, so on a multipart request Django had already parsed the
+    form and invoked the project's upload handlers by the time the package's
+    declared-size gate could refuse it. The old row could not see that: it used a
+    plain ``Client``, whose CSRF checks are disabled, so the middleware exited
+    before touching ``request.POST``.
+
+    Here CSRF is enforced for real, with a valid cookie/header token, so
+    ``process_view`` genuinely wants the form - and the upload sentinel stays
+    EMPTY. The under-cap control in the same row is what makes that emptiness
+    evidence rather than an absent instrument: the identical request under the cap
+    fires the sentinel and executes.
+
+    Deliberately run against fakeshop's OWN ``/graphql/`` - the shipped mount,
+    wrapped in ``ensure_csrf_cookie`` - with the cap turned down through the
+    project-wide setting rung. A probe mount would prove the ordering for a
+    wrapper written in this file; the shipped mount proves it for the deployment
+    shape the README documents, including that ``functools.wraps`` carries the
+    ``csrf_exempt`` mark through a consumer's own view decorator.
+    """
+    seed_data(1)
+    token = _csrf_token()
+    over = _multipart_fields("operations", _operations_bytes(note=b"y" * (_TINY_CAP * 4)))
+    under = _multipart_fields("operations", _operations_bytes())
+
+    _UPLOAD_EVENTS.clear()
+    with (
+        override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"MAX_REQUEST_BODY_BYTES": _TINY_CAP}),
+        _recording_upload_handlers(),
+    ):
+        refused = _post_multipart(
+            Client(enforce_csrf_checks=True),
+            "/graphql/",
+            over,
+            token=token,
+        )
+        refused_events = list(_UPLOAD_EVENTS)
+
+        accepted = _post_multipart(
+            Client(enforce_csrf_checks=True),
+            "/graphql/",
+            under,
+            token=token,
+        )
+
+    _assert_body_limit_response(refused)
+    assert refused_events == []
+
+    assert accepted.status_code == 200
+    assert accepted.json()["data"] == {"__typename": "Query"}
+    assert "handle_raw_input" in _UPLOAD_EVENTS
+    _UPLOAD_EVENTS.clear()
+
+
+async def test_the_async_view_also_refuses_before_djangos_parser_runs():
+    """The async colour of the ordering guarantee, including the ``csrf_protect`` await.
+
+    ``csrf_protect`` is ``decorator_from_middleware(CsrfViewMiddleware)``, and it
+    only awaits the view it wraps when the wrapped callable is itself a coroutine
+    function - so this row is the live proof that the async continuation was wired
+    to the async branch. If it had not been, the CSRF decorator would have handed a
+    coroutine to ``process_response`` in place of a response and the request would
+    have failed rather than answered ``200``.
+
+    **A known asymmetry with its sync twin, recorded rather than left to be
+    discovered** (review round 2 L7). The sync row drives fakeshop's real
+    ``/graphql/`` mount; this one drives ``_async_cap_tiny_multipart_view``, a probe
+    mount decorated with ``_carrying_the_packages_csrf_mark`` - i.e. exactly the
+    hand-written, non-``functools.wraps`` wrapper shape that DROPS the mark and
+    therefore loses the ordering, repaired by copying the mark off the package.
+    There is no shipped async fakeshop mount to use instead, so this is the
+    strongest available async evidence, but it is evidence about the *mechanism*
+    and not about a deployment shape: only the sync row is deployment-shape
+    evidence. Do not read a green run here as proof that an arbitrary async mount
+    keeps the ordering.
+    """
+    token = _csrf_token("/async-multipart-tiny/")
+    over = _multipart_fields("operations", _operations_bytes(note=b"y" * (_TINY_CAP * 4)))
+    under = _multipart_fields("operations", _operations_bytes())
+
+    _UPLOAD_EVENTS.clear()
+    with override_settings(ROOT_URLCONF=__name__), _recording_upload_handlers():
+        refused = await _post_multipart(
+            AsyncClient(enforce_csrf_checks=True),
+            "/async-multipart-tiny/",
+            over,
+            token=token,
+        )
+        refused_events = list(_UPLOAD_EVENTS)
+
+        accepted = await _post_multipart(
+            AsyncClient(enforce_csrf_checks=True),
+            "/async-multipart-tiny/",
+            under,
+            token=token,
+        )
+
+    _assert_body_limit_response(refused)
+    assert refused_events == []
+
+    assert accepted.status_code == 200
+    assert accepted.json()["data"] == {"__typename": "Query"}
+    assert "handle_raw_input" in _UPLOAD_EVENTS
+    _UPLOAD_EVENTS.clear()
+
+
+def _csrf_matrix_paths(token):
+    """The six CSRF directions of the row below, as keyword sets for ``_post_multipart``.
+
+    Named once so the sync and async rows run the *same* matrix rather than two
+    hand-copied ones that could drift apart - which is the failure mode the two
+    ``run`` overrides make possible in the first place.
+    """
+    fields = _multipart_fields("operations", _operations_bytes())
+    return (
+        ("untokened", {"fields": fields}),
+        ("headered", {"fields": fields, "token": token}),
+        (
+            "wrong_token",
+            {
+                "fields": fields,
+                "token": token,
+                "send_header": False,
+                "headers": {"x-csrftoken": "n0tth3r1ghtt0k3n" * 4},
+            },
+        ),
+        (
+            "formed",
+            {
+                "fields": [*fields, ("csrfmiddlewaretoken", token.encode())],
+                "token": token,
+                "send_header": False,
+            },
+        ),
+        (
+            "hostile_origin",
+            {"fields": fields, "token": token, "headers": {"origin": "https://evil.example"}},
+        ),
+        ("insecure_referer", {"fields": fields, "token": token, "secure": True}),
+    )
+
+
+def _assert_csrf_matrix(answers, custom_failure):
+    """The one set of assertions both transports' rows make."""
+    for name in (
+        "untokened",
+        "wrong_token",
+        "hostile_origin",
+        "insecure_referer",
+    ):
+        assert answers[name].status_code == 403, name
+        _assert_no_graphql_envelope(answers[name])
+
+    for name in ("headered", "formed"):
+        assert answers[name].status_code == 200, name
+        assert answers[name].json()["data"] == {"__typename": "Query"}, name
+
+    assert custom_failure.status_code == 403
+    assert custom_failure.content == b"probe-csrf-failure"
+
+
+@pytest.mark.django_db
+def test_a_within_cap_request_still_faces_djangos_complete_csrf_check():
+    """The exemption is an ordering mechanism: everything past the gate still gets CSRF.
+
+    Six directions plus the failure-view override, all of them Django's own
+    implementation running from inside the view instead of ahead of it:
+
+    * no token at all -> ``403``, and no GraphQL envelope;
+    * a wrong header token -> ``403``;
+    * the header token -> ``200``;
+    * the ``csrfmiddlewaretoken`` FORM field, with no header -> ``200``. This is the
+      path ``_check_token`` reads ``request.POST`` for in the first place, so it
+      would be the first casualty of an ordering fix that skipped the form;
+    * a hostile ``Origin`` with a valid token -> ``403``;
+    * HTTPS with a valid token and no ``Referer`` -> ``403``, the strict-Referer
+      branch that only runs on a secure request;
+    * a custom ``CSRF_FAILURE_VIEW`` -> that view's own response body, which proves
+      the setting is still consulted from the re-entry point.
+
+    Together these are what makes "``csrf_exempt`` on the outer callback" a claim
+    about ORDER rather than about protection: nothing in the CSRF implementation
+    stopped running, it just stopped running before the body boundary.
+    """
+    seed_data(1)
+    token = _csrf_token()
+
+    answers = {
+        name: _post_multipart(
+            Client(enforce_csrf_checks=True),
+            "/graphql/",
+            keywords.pop("fields"),
+            **keywords,
+        )
+        for name, keywords in _csrf_matrix_paths(token)
+    }
+    with override_settings(CSRF_FAILURE_VIEW=f"{__name__}._csrf_failure_probe"):
+        custom_failure = _post_multipart(
+            Client(enforce_csrf_checks=True),
+            "/graphql/",
+            _multipart_fields("operations", _operations_bytes()),
+        )
+
+    _assert_csrf_matrix(answers, custom_failure)
+
+
+async def test_the_async_view_faces_the_same_complete_csrf_check():
+    """The async colour of the whole CSRF matrix, through the awaited continuation.
+
+    The two ``run`` overrides differ only in ``async`` / ``await``, and the CSRF
+    re-entry is the part of them that is NOT shared code: ``csrf_protect`` picks an
+    awaiting or a non-awaiting wrapper by inspecting the callable it was handed, so
+    the async view rides a second continuation function. A wrong pairing there
+    would hand a coroutine to ``process_response`` in place of a response, so every
+    ``200`` below is also a statement about that wiring.
+    """
+    token = _csrf_token("/async-multipart/")
+
+    with override_settings(ROOT_URLCONF=__name__):
+        answers = {}
+        for name, keywords in _csrf_matrix_paths(token):
+            answers[name] = await _post_multipart(
+                AsyncClient(enforce_csrf_checks=True),
+                "/async-multipart/",
+                keywords.pop("fields"),
+                **keywords,
+            )
+        with override_settings(CSRF_FAILURE_VIEW=f"{__name__}._csrf_failure_probe"):
+            custom_failure = await _post_multipart(
+                AsyncClient(enforce_csrf_checks=True),
+                "/async-multipart/",
+                _multipart_fields("operations", _operations_bytes()),
+            )
+
+    _assert_csrf_matrix(answers, custom_failure)
+
+
+def _without_the_global_csrf_middleware():
+    """``override_settings`` with ``CsrfViewMiddleware`` taken out of ``MIDDLEWARE``.
+
+    Derived from the project's real ``MIDDLEWARE`` rather than a hand-written list,
+    so the row removes exactly one entry and leaves fakeshop's session, auth and
+    security middleware in place.
+    """
+    remaining = [entry for entry in settings.MIDDLEWARE if "CsrfViewMiddleware" not in entry]
+    assert len(remaining) == len(settings.MIDDLEWARE) - 1, settings.MIDDLEWARE
+    return override_settings(MIDDLEWARE=remaining)
+
+
+@pytest.mark.django_db
+def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
+    """The invariant the re-entry buys: protection that does not depend on ``MIDDLEWARE``.
+
+    This is the row that distinguishes the fix from a bypass in the one direction
+    nothing else can. With ``CsrfViewMiddleware`` deleted from the project entirely,
+    a consumer who mounts the package view still cannot post to it without a valid
+    token, because the continuation inside ``run`` is package-owned, unconditional,
+    and carries Django's real implementation with it. A reordering that had merely
+    disabled the check would answer ``200`` to all three.
+
+    Both transports, because the sync and async ``csrf_protect`` wrappers are
+    different code paths in Django - and the async half is driven from the same
+    ``asyncio`` entry point the ``_asgi_post`` rows already use rather than an
+    ``async def`` test, so one row can state the invariant for both.
+    """
+    seed_data(1)
+    token = _csrf_token()
+    fields = _multipart_fields("operations", _operations_bytes())
+    wrong = "n0tth3r1ghtt0k3n" * 4
+
+    async def async_answers():
+        answers = {}
+        for name, keywords in (
+            ("untokened", {}),
+            (
+                "wrong_token",
+                {"token": token, "send_header": False, "headers": {"x-csrftoken": wrong}},
+            ),
+            ("headered", {"token": token}),
+        ):
+            answers[name] = await _post_multipart(
+                AsyncClient(enforce_csrf_checks=True),
+                "/async-multipart/",
+                fields,
+                **keywords,
+            )
+        return answers
+
+    with _without_the_global_csrf_middleware():
+        sync_answers = {
+            "untokened": _post_multipart(Client(enforce_csrf_checks=True), "/graphql/", fields),
+            "wrong_token": _post_multipart(
+                Client(enforce_csrf_checks=True),
+                "/graphql/",
+                fields,
+                token=token,
+                send_header=False,
+                headers={"x-csrftoken": wrong},
+            ),
+            "headered": _post_multipart(
+                Client(enforce_csrf_checks=True),
+                "/graphql/",
+                fields,
+                token=token,
+            ),
+        }
+        with override_settings(ROOT_URLCONF=__name__):
+            async_answers_ = asyncio.run(async_answers())
+
+    for answers in (sync_answers, async_answers_):
+        for name in ("untokened", "wrong_token"):
+            assert answers[name].status_code == 403, name
+            _assert_no_graphql_envelope(answers[name])
+        assert answers["headered"].status_code == 200
+        assert answers["headered"].json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db
+def test_the_csrf_cookie_and_vary_header_survive_the_outer_exemption():
+    """``csrf_exempt`` skips ``process_view`` only - the cookie machinery is untouched.
+
+    Worth its own row because the exemption sounds like it should break exactly
+    this: fakeshop's mount wraps the view in ``ensure_csrf_cookie`` so the IDE GET
+    hands a browser the ``csrftoken`` cookie Strawberry's GraphiQL then echoes back.
+    That cookie is set by ``CsrfViewMiddleware.process_request`` /
+    ``process_response``, neither of which the exemption touches - and
+    ``_set_csrf_cookie`` is what patches ``Vary: Cookie``, so both are asserted
+    together on the one request a browser actually makes first.
+    """
+    seed_data(1)
+
+    response = Client().get("/graphql/", HTTP_ACCEPT="text/html")
+
+    assert response.status_code == 200
+    assert "csrftoken" in response.cookies
+    assert "Cookie" in response.headers.get("Vary", "")
+
+
+@pytest.mark.django_db
+def test_an_accepted_file_upload_still_streams_through_djangos_upload_handlers():
+    """The un-broken direction: Django keeps owning multipart framing and files.
+
+    The whole design constraint on both fixes was that Django's parser, limits and
+    upload handlers stay in charge - no private multipart parser, no double read,
+    no ``handle_raw_input`` takeover - so the accepted path has to be asserted too,
+    not just the refused one. A real file part on a request that passes the
+    boundary reaches the project's handler chain through ``new_file`` and
+    ``receive_data_chunk``, and the file lands in ``request.FILES`` where
+    upstream's ``replace_placeholders_with_files`` looks for it.
+
+    The end-to-end ``Upload``-scalar mutations in ``test_uploads_api.py`` run
+    against this same package mount, so they are the second half of this proof.
+    """
+    seed_data(1)
+    token = _csrf_token()
+    fields = _multipart_fields("operations", _operations_bytes())
+
+    _UPLOAD_EVENTS.clear()
+    with _recording_upload_handlers():
+        response = _post_multipart(
+            Client(enforce_csrf_checks=True),
+            "/graphql/",
+            fields,
+            files=[("0", "note.txt", b"streamed through django")],
+            token=token,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+    assert "handle_raw_input" in _UPLOAD_EVENTS
+    assert "new_file" in _UPLOAD_EVENTS
+    assert "receive_data_chunk" in _UPLOAD_EVENTS
+    _UPLOAD_EVENTS.clear()

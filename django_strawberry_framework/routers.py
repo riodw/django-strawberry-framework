@@ -11,17 +11,23 @@ not serve GraphQL over HTTP at all: the GraphQL HTTP endpoint is
 (spec-065 Decisions 2, 3 and 6).
 
 The ``"websocket"`` value is the package's Channels composition:
-``AllowedHostsOriginValidator`` (the origin check) wrapping
+``consumers.py::DjangoWebSocketHostValidator`` (the Host check, which calls
+Django's own ``HttpRequest.get_host()``; spec-065 Decision 19) wrapping
+``AllowedHostsOriginValidator`` (the Origin check) wrapping
 ``AuthMiddlewareStack`` (sessions + ``scope["user"]``) wrapping a ``URLRouter``
 holding one ``re_path`` onto a GraphQL WebSocket consumer, matched by
 ``websocket_url_pattern`` - exact at both ends by default (spec-065 Decision 4;
-spec-041 Decisions 3 and 5).
+spec-041 Decisions 3 and 5). This module composes those wrappers and names them;
+it implements no transport policy of its own - the Host validator lives in
+``consumers.py`` beside the consumer factory, which is the package's WebSocket
+module.
 
 Which consumer sits at the end of that chain is the ``websocket_consumer_class``
 seam (spec-065 Decision 11): by default ``consumers.py``'s revalidating
 ``GraphQLWSConsumer`` subclass, otherwise a consumer class or factory the
-project injects. The two wrappers are the ROUTER's either way, so an injected
-consumer cannot escape Host/Origin validation or authentication.
+project injects. All three wrappers are the ROUTER's either way, so an injected
+consumer cannot escape the Host check, the Origin check, or authentication - and
+those are two separate checks, in that order, neither standing in for the other.
 
 ``channels`` is a SOFT dependency (spec-041 Decision 5): importing this module
 is channels-free, and the router class materializes lazily through the PEP 562
@@ -40,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from .consumers import (
     _DEFAULT_REVALIDATION_WINDOW,
+    DjangoWebSocketHostValidator,
     build_revalidating_consumer_class,
     resolved_revalidation_window,
 )
@@ -76,7 +83,7 @@ _CHANNELS_BROKEN_HINT = (
 )
 _STRAWBERRY_CHANNELS_BROKEN_HINT = (
     "DjangoGraphQLProtocolRouter could not import Strawberry's Channels consumers. It "
-    "requires both `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the "
+    "requires both `channels>=4.3.2` and `strawberry-graphql>=0.316.0` with the "
     "`strawberry.channels` consumer (GraphQLWSConsumer) importable."
 )
 
@@ -108,8 +115,9 @@ _UNUSABLE_WEBSOCKET_CONSUMER_HINT = (
     "subclass (mounted through its own `as_asgi(schema=schema)`) or a factory callable "
     "invoked as `factory(schema=schema)` that returns the ASGI application to mount; "
     "None selects the package's own revalidating consumer. Either way the router still "
-    "wraps the result in AllowedHostsOriginValidator and AuthMiddlewareStack, so an "
-    "injected consumer opts out of revalidation, never out of the wrappers."
+    "wraps the result in DjangoWebSocketHostValidator, AllowedHostsOriginValidator and "
+    "AuthMiddlewareStack, so an injected consumer opts out of revalidation, never out of "
+    "the wrappers."
 )
 
 # The factory half of that seam, spelled once and shared by BOTH of its
@@ -121,8 +129,8 @@ _FACTORY_CONTRACT_HINT = (
     "`factory(schema=schema)`, and must return the ASGI application the WebSocket route "
     "mounts - typically `YourConsumer.as_asgi(schema=schema)`, or an `async def "
     "app(scope, receive, send)` function itself (never the coroutine that CALLING one "
-    "returns). The router wraps whatever it returns in AllowedHostsOriginValidator and "
-    "AuthMiddlewareStack."
+    "returns). The router wraps whatever it returns in DjangoWebSocketHostValidator, "
+    "AllowedHostsOriginValidator and AuthMiddlewareStack."
 )
 # Appended only for the coroutine shape, which is the one mistake whose repair is
 # not obvious from the contract alone: the factory is one `async` keyword away
@@ -372,7 +380,12 @@ def _build_router_class() -> type[Any]:
         The WebSocket branch carries ``AuthMiddlewareStack`` (the session
         machinery and ``scope["user"]``) inside ``AllowedHostsOriginValidator``,
         which denies cross-origin - and missing-``Origin`` - handshakes against
-        ``ALLOWED_HOSTS``. ``schema`` passes through untouched, extensions
+        ``ALLOWED_HOSTS``, inside ``consumers.py::DjangoWebSocketHostValidator``,
+        which denies a handshake whose ``Host`` Django's own
+        ``HttpRequest.get_host()`` refuses (spec-065 Decision 19). Those are two
+        separate questions - which server authority the client addressed, and
+        which browser origin initiated the socket - so both run and neither
+        substitutes for the other. ``schema`` passes through untouched, extensions
         intact.
 
         ``websocket_consumer_class`` is the WebSocket consumer injection seam
@@ -384,9 +397,9 @@ def _build_router_class() -> type[Any]:
         cannot accept that call or does not return a mountable (callable)
         application: the seam fails at construction rather than on the first
         matching handshake. Whatever is injected, the
-        two wrappers above are applied by the ROUTER around it, so an injected
-        consumer opts out of the package's revalidation but never out of
-        Host/Origin validation or authentication.
+        three wrappers above are applied by the ROUTER around it, so an injected
+        consumer opts out of the package's revalidation but never out of the Host
+        check, the Origin check, or authentication.
 
         ``None`` (the default) selects the package's own
         ``consumers.py::GraphQLWebSocketConsumer``, which revalidates the session
@@ -436,15 +449,23 @@ def _build_router_class() -> type[Any]:
             super().__init__(
                 {
                     "http": django_application,
-                    "websocket": AllowedHostsOriginValidator(
-                        AuthMiddlewareStack(
-                            URLRouter(
-                                [
-                                    re_path(
-                                        websocket_url_pattern,
-                                        websocket_application,
-                                    ),
-                                ],
+                    # Host OUTSIDE Origin (spec-065 Decision 19): the Host check
+                    # answers which server authority was addressed, so it runs
+                    # before Channels' Origin check, before the session
+                    # middleware, and before any consumer is constructed. The
+                    # HTTP branch needs neither - Django's own ALLOWED_HOSTS
+                    # middleware already owns the question there.
+                    "websocket": DjangoWebSocketHostValidator(
+                        AllowedHostsOriginValidator(
+                            AuthMiddlewareStack(
+                                URLRouter(
+                                    [
+                                        re_path(
+                                            websocket_url_pattern,
+                                            websocket_application,
+                                        ),
+                                    ],
+                                ),
                             ),
                         ),
                     ),

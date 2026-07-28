@@ -34,14 +34,17 @@ package's documented API freeze begins at `1.0.0`; correcting a newly confirmed
 security-boundary error during alpha is strictly preferable to preserving an unsafe
 migration convenience.
 
-Status: **IN BUILD — Slices 1-4 (S1, S2, S9, S11) are built, and the round-1 review's
-remediation has landed; Slice 5 remains.** Five slices: Slice 1 (**S1** — the protocol
+Status: **IN BUILD — Slices 1-4 (S1, S2, S9, S11) are built, with
+[Decisions 16-19](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
+contracts landing inside them; Slice 5 remains.** Five slices: Slice 1 (**S1** — the
+protocol
 split: HTTP to a required Django ASGI application, the package's Django GraphQL view,
 WebSocket-only exact routing), Slice 2 (**S2** — the cumulative body cap plus the
 documented proxy/server cap), Slice 3 (**S9** — the strict UTF-8 wire contract and the
 inverted encoding tests), Slice 4 (**S11** — the WebSocket consumer-injection seam and
-per-operation actor revalidation), Slice 5 (**S12 transport slice** — the migration
-note, transport deployment guidance, the `spec-041` amendment, and the doc fold-in).
+actor revalidation at both the admission and the outbound-frame checkpoint), Slice 5
+(**S12 transport slice** — the migration note, transport deployment guidance, the
+`spec-041` amendment, and the doc fold-in).
 
 **Version boundary** (see
 [Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)): this
@@ -146,10 +149,23 @@ Each top-level item maps to one commit / PR.
         **before** JSON parsing or schema execution, returning `413`, and they *measure*
         the body rather than materializing it — never `len(request.body)`
         ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
+  - [ ] The view is `csrf_exempt` on the outside and re-enters Django's public
+        `csrf_protect` on the inside, **after** the body gate, so the declared multipart
+        ceiling runs before `CsrfViewMiddleware.process_view` can touch `request.POST` and
+        invoke `MultiPartParser`
+        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
   - [ ] New `django_strawberry_framework/_request_body.py`: the single compatibility helper
         that names `HttpRequest._stream` / `_body` / `_read_started`, handing the view one
         boolean and pinning the Django 5.2.0-vs-6.0 contract that measurement depends on
         ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
+  - [ ] `_request_body.py::_measured_remaining` models the capability probe as **three**
+        explicit outcomes — measurable; safely unmeasurable with the original position
+        intact so the bounded read may run; or position potentially corrupted, so fail
+        closed with the package's own controlled rejection — with every capability call
+        (`seekable()`, both `seek()`s, and the subtraction) guarded rather than allowed to
+        escape as an unrelated `500`
+        ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+        #"An unmeasurable stream has three outcomes, not two").
   - [ ] One new settings key, `MAX_REQUEST_BODY_BYTES`, in
         `django_strawberry_framework/conf.py`, with a per-mount view-kwarg override
         (constructor > setting > default) — the shipped
@@ -184,6 +200,12 @@ Each top-level item maps to one commit / PR.
   - [ ] `_cross_web_patches.py::_patched_body` keeps returning raw bytes; its docstring
         is rewritten to state the new contract, the mount it now serves (a package view
         never reaches that getter), and why the patch survives S1.
+  - [ ] The multipart control-document guard: each view overrides upstream's
+        `parse_multipart` with a two-line delegate over one shared mixin helper, which
+        accepts only an effective form encoding that canonicalizes to UTF-8 and refuses a
+        `operations` / `map` value carrying Django's replacement marker `U+FFFD`, both with
+        the same controlled `400`, **before** either value reaches `parse_json`
+        ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
   - [ ] A UTF-8 BOM is **rejected** with the same controlled `400`
         ([Decision 10](#decision-10--a-utf-8-bom-is-rejected)).
   - [ ] The three UTF-16/32/BOM **success** tests in
@@ -194,22 +216,43 @@ Each top-level item maps to one commit / PR.
 - [ ] **Slice 4 — S11: WebSocket actor revalidation through an injection seam**
   - [ ] `websocket_consumer_class=` injection on the router; an injected factory's calling
         convention **and** its returned application are validated before anything is
-        mounted, and whatever is injected still sits inside `AllowedHostsOriginValidator` +
-        `AuthMiddlewareStack` by construction
-        ([Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default)).
-  - [ ] The package's default WebSocket consumer revalidates the session actor per
-        operation and writes the refreshed actor back onto `scope["user"]`; an invalid
-        session rejects the operation. The session store is resolved through
+        mounted, and whatever is injected still sits inside all three router-applied
+        wrappers — `DjangoWebSocketHostValidator`, `AllowedHostsOriginValidator`, and
+        `AuthMiddlewareStack` — by construction
+        ([Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default),
+        [Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+  - [ ] The package's default WebSocket consumer revalidates the session actor at **two**
+        checkpoints — operation admission (`handle_subscribe` / `handle_start`) and every
+        information-bearing outbound operation frame (`next` / `data` / operation `error`,
+        through the derived `websocket_adapter_class`) — and writes the refreshed actor
+        back onto `scope["user"]`. A failed validation at either checkpoint revokes and
+        closes the whole connection
+        ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+        The session store is resolved through
         `django_strawberry_framework/utils/sessions.py::session_store_class`, outside the
         structurally opt-in `auth` package ([`spec-040`][spec-040] Decision 3).
   - [ ] `websocket_revalidation_window=` — an explicit, bounded, opt-in revocation delay
-        (default `0.0` = revalidate every operation), with a typed construction-time
+        (default `0.0` = revalidate at every admission **and** every information-bearing
+        outbound operation frame), with a typed construction-time
         domain: a finite number `>= 0.0` that converts to a `float`, or
         [`ConfigurationError`][glossary-configurationerror] — whose `got ...` tail renders
         through `exceptions.py::describe_value`, this slice's one shared value-describer,
         also used by both router injection seams and by the view's cap resolution.
-  - [ ] Maximum connection lifetime documented, with the enforcement seam named
+  - [ ] Maximum connection lifetime, idle-socket lifetime, and aggregate connection limits
+        documented as transport-resource policy the deployment owns, with the enforcement
+        seam named
         ([Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced)).
+  - [ ] `consumers.py::DjangoWebSocketHostValidator` — the private ASGI middleware that
+        projects the handshake's Host metadata into a minimal Django `HttpRequest` and calls
+        the public `request.get_host()`, composed **outside**
+        `AllowedHostsOriginValidator` so Host and Origin stay two separate checks, denying
+        through Channels' own `WebsocketDenier` so the two denials are indistinguishable on
+        the wire
+        ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+  - [ ] `routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT` and the `tests/test_routers.py`
+        assertion that pins it move from `strawberry-graphql>=0.262.0` to the `>=0.316.0`
+        the hard dependency and the minimum CI matrix node already agree on — a user-facing
+        recovery hint must not recommend a version the package metadata rejects.
 - [ ] **Slice 5 — S12 transport slice: migration note, deployment guidance, doc fold-in**
   - [ ] The migration note: old vs new `asgi.py` **plus** the required Django
         `urlpatterns` entry, in [`docs/README.md`][docs-readme].
@@ -223,7 +266,20 @@ Each top-level item maps to one commit / PR.
         ([Decision 8](#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative)).
   - [ ] [`spec-041`][spec-041] amended in place with an amendment banner naming the three
         superseded decisions
-        ([Decision 14](#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions)).
+        ([Decision 14](#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions)),
+        **and** its historical `strawberry-graphql>=0.262.0` floor prose reconciled to the
+        live `>=0.316.0` requirement in the same pass. That spec is **shipped**, so the
+        reconciliation corrects only factually-wrong prose — the sentences that describe the
+        package's *current* dependency floor and the CI node that pins it — while checkbox
+        state is left exactly as it is and the Status line remains the source of truth,
+        which is this repo's shipped-card closeout convention. Sentences that are explicitly
+        historical ("the export's presence at the 0.262.0 floor itself is upstream history,
+        spot-checked at …") stay: they record what was true when that card shipped and are
+        not claims about live code. There is no new Python 3.10 problem behind this: the
+        dependency floor and the minimum CI matrix node already agree on `0.316.0`. The
+        `routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT` string and the
+        `tests/test_routers.py` assertion that pins it are corrected by Slice 4's own
+        change, not here — this bullet owns the shipped spec's prose only.
   - [ ] [`docs/GLOSSARY.md`][glossary] via the glossary DB + re-render (never
         hand-edited); [`docs/TREE.md`][tree] regenerated for **all four** modules the
         earlier slices added — `views.py`, `_request_body.py`, `consumers.py`, and
@@ -246,7 +302,13 @@ Each top-level item maps to one commit / PR.
         bodies, content-type negotiation" from the shared harness, which does not cover the
         hostile-`Host` / `secure=` / `enforce_csrf_checks=` / `AsyncClient` rows S1 added or
         the in-process `ASGIHandler` driver S2 added for the unmeasured / understated /
-        fragmented-body rows.
+        fragmented-body rows. The exemption widens again for the
+        real-`multipart/form-data` control-field rows
+        ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard))
+        and the `Client(enforce_csrf_checks=True)` ordering row with its parser sentinel
+        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry))
+        are both outside the shared harness, and the file must say so rather than leaving a
+        reader to infer it from the absence of a row.
   - [ ] The Slice-2 prose corrections, carried here for the same reason as the `auth/`
         strings above (prose only, none load-bearing, none in a Slice-2 named file's
         contract): `views.py`'s cap-contract docstring re-words its mixin-first rationale
@@ -261,7 +323,7 @@ Each top-level item maps to one commit / PR.
         test is dropped, leaving the exact-`__all__` test as the single privacy proof; and
         `test_transport_api.py::test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce`'s
         docstring drops its "the spec's Edge-case sentence predicting a `413` is inaccurate"
-        clause, which Slice 2's own final verification made obsolete by correcting the spec —
+        clause, which the spec's corrected Edge-case sentence has made obsolete —
         the `400` explanation itself stays, since it is the reason the row asserts what it
         asserts.
   - [ ] The Slice-3 prose correction, in
@@ -345,10 +407,18 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   `graphql_ide="graphiql"` (the IDE is **on**), `allow_queries_via_get=True` (GET queries
   are **on**), and `multipart_uploads_enabled=False`. The router exposes no constructor
   control over any of them, nor over either consumer class.
-- **The WebSocket branch is already correct** and this card preserves it:
+- **The WebSocket branch's composition is sound as far as it goes, and this card preserves
+  it** while adding one wrapper outside it:
   `AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([...GraphQLWSConsumer...])))`,
   with the origin validator outside the auth stack so a cross-origin **or
-  missing-`Origin`** handshake is denied against `ALLOWED_HOSTS`.
+  missing-`Origin`** handshake is denied against `ALLOWED_HOSTS`. What that composition does
+  **not** do — measured, not assumed — is validate the handshake's `Host`.
+  `channels.security.websocket.OriginValidator.__call__` reads the `Origin` header and
+  nothing else, and `AllowedHostsOriginValidator` is only a factory for
+  `OriginValidator(settings.ALLOWED_HOSTS)`; a handshake carrying an allowed `Origin` and a
+  hostile `Host` connects successfully. The class name is not evidence of behavior, and this
+  card therefore adds the missing Host boundary rather than narrowing the claim
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
 - **The soft-dependency machinery is intact and stays.** `require_channels()` over
   [`require_optional_module`][glossary-require_optional_module], the split
   present-but-incompatible hints, the cached `_ROUTER_CLASS` module global that
@@ -466,15 +536,26 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
    refusal that is itself bounded, since a limit enforced after an unbounded allocation is a
    detector rather than a bound — plus a documented deployment-layer cap the package states
    it depends on.
-4. **One wire encoding.** Request JSON is UTF-8, strictly, with one documented BOM
-   policy, byte-identical sync / async behavior, and a lifecycle of its own: permanent
+4. **One wire encoding, on every JSON document the endpoint parses.** An
+   `application/json` request body is UTF-8, strictly, with one documented BOM policy and
+   byte-identical sync / async behavior. A multipart `operations` / `map` control document
+   — which Django, not the package, decodes — must declare an effective UTF-8 encoding and
+   must survive that decode without a replacement marker
+   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+   Both halves have a lifecycle of their own: permanent
    package policy, not a workaround riding a patch's kill switch.
-5. **A WebSocket actor that cannot go stale silently.** Per-operation session
-   revalidation on by default for the package's own consumer, with any accepted
-   revocation delay expressed as an explicit, bounded, opt-in number.
+5. **A WebSocket actor that cannot go stale silently.** Session revalidation on by default
+   for the package's own consumer at **both** transport checkpoints — operation admission
+   and every information-bearing outbound operation frame — so a revoked actor can neither
+   start another operation nor emit another result from one already running, with any
+   accepted revocation delay expressed as an explicit, bounded, opt-in number
+   ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
 6. **A transport that is configurable rather than frozen.** A consumer-class injection
-   seam that cannot escape the package's Host/Origin and authentication wrappers, so a
-   deployment needing stronger revocation extends the transport instead of forking it.
+   seam that cannot escape the package's Host, Origin, and authentication wrappers — three
+   separate checks, each named by the wrapper that delivers it
+   ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check))
+   — so a deployment needing stronger revocation extends the transport instead of forking
+   it.
 7. **A migration a reader can execute.** Old `asgi.py`, new `asgi.py`, the required
    `urlpatterns` entry, and the transport deployment expectations, in one place.
 
@@ -499,13 +580,31 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   HTTP half (fakeshop already serves a real Django GraphQL view over
   `django.test.Client`); the WebSocket half remains the documented
   genuinely-unreachable-live case that keeps `tests/test_routers.py` communicator-driven.
-- **A second GraphQL protocol engine.** The injection seam and the revalidation pre-hook
-  delegate to Strawberry's handlers with `super()`; the package implements no message
-  loop, no subprotocol negotiation, and no subscription machinery.
+- **A second GraphQL protocol engine.** All three revalidation seams delegate to
+  Strawberry's own classes with `super()` — the two admission pre-hooks on the protocol
+  handlers and the outbound-frame gate on the WebSocket adapter
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam));
+  the package implements no message loop, no subprotocol negotiation, no frame
+  serialization, and no subscription machinery.
+- **A second Host-validation implementation, or a second `ALLOWED_HOSTS` matcher.**
+  [Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)'s
+  WebSocket Host boundary adapts the ASGI handshake and then calls Django's public
+  `HttpRequest.get_host()`; the package parses no hostnames, matches no wildcards, and adds
+  no setting of its own.
+- **A package-enforced connection lifetime, idle timeout, or connection-count limit.**
+  Those are transport-resource policy owned by the ASGI server, the reverse proxy, or a
+  deliberately injected consumer
+  ([Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced),
+  [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+  #"The idle-socket consequence"). They are DoS-relevant and documented as such; they are
+  not required to make the package's authorization boundary true.
+- **A private copy, subclass, or monkeypatch of Django's `MultiPartParser`.** Django owns
+  multipart framing, limits, and file streaming outright
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
 - **Reintroducing a Channels HTTP mode as an "advanced transport".** The audit offers
   that as a conditional; this spec declines it
-  ([Decision 2](#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application),
-  alternatives rejected).
+  ([Decision 2](#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application);
+  the rejected alternatives live in [the rationale companion][rationale-d2]).
 - **A new [`DjangoType`][glossary-djangotype] `Meta` key.** Transport configuration is not
   type configuration; `DEFERRED_META_KEYS` is untouched.
 - **A `channels` extras group or a hard dependency.** `channels` stays soft, exactly as
@@ -526,8 +625,12 @@ borrowed HTTP branch is the defect. So this card **stops borrowing that half**:
 - **Still borrowed, verbatim:** the WebSocket composition
   (`AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([...])))`), the
   engine-owned consumers from `strawberry.channels`, and the `ProtocolTypeRouter`
-  subclass shape. Upstream got the WebSocket branch right, and the audit's own "security
-  strengths confirmed" list agrees.
+  subclass shape. Upstream got the WebSocket branch right as far as it goes, and the audit's
+  own "security strengths confirmed" list agrees. **Borrowed but not sufficient:** that
+  composition validates `Origin` only, so this card wraps one more layer *outside* it
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+  Channels' own validator is left untouched — the addition is a separate check for a
+  separate question, never a replacement for or a re-implementation of theirs.
 - **Deliberately not borrowed:** the HTTP branch, the optional `django_application`, the
   prefix `url_pattern` shared across both protocols, and the byte-compatible constructor
   signature. Keeping composition parity with an upstream whose HTTP branch bypasses
@@ -649,11 +752,34 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 - **WebSocket path matching is the router's, and is exact.** `r"^graphql/?$"` matches
   `/graphql` and `/graphql/` and rejects every prefix extension.
 - **A body over the cap gets `413`** with a `text/plain` reason, before `parse_json` and
-  before schema execution.
+  before schema execution — and, on a multipart request, before `request.POST`,
+  `request.FILES`, `MultiPartParser`, or any upload handler, because the view is
+  `csrf_exempt` on the outside and re-enters `csrf_protect` on the inside of the gate
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  That exemption is an **ordering mechanism, not a CSRF bypass**: every request past the
+  size boundary still undergoes Django's complete CSRF implementation.
 - **Non-UTF-8 request JSON gets `400`** — the same controlled response malformed JSON
   already gets, on both package views, whatever `APPLY_UPSTREAM_PATCHES` says.
-- **A revoked session cannot keep executing over an open socket**: the next operation is
-  rejected without a reconnect.
+- **A multipart `operations` / `map` control document must be effectively UTF-8 and must
+  survive Django's decode intact**, or it gets the same controlled `400`: an explicit
+  non-UTF-8 `charset` on the form is refused, and so is a value carrying Django's
+  replacement marker `U+FFFD`. Ordinary browser `JSON.stringify` output — including genuine
+  multibyte UTF-8 — is unaffected, and a client that genuinely needs a replacement character
+  in its document sends the ASCII escape `\ufffd`
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+- **A revoked actor cannot admit another operation or emit another information-bearing
+  operation frame over an open socket.** The connection is revoked and closed at whichever
+  checkpoint notices first — the next operation's admission, or the next `next` / `data` /
+  operation `error` frame an already-running subscription tries to send. Detection is
+  event-boundary-driven: a socket sitting idle is not interrupted at the instant an external
+  logout happens, and it has no authorization capability while idle
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+- **A WebSocket handshake is validated on `Host` *and* `Origin`, as two separate checks.**
+  A hostile `Host` is denied against Django's own `ALLOWED_HOSTS` boundary before
+  authentication or consumer construction; a cross-origin or missing `Origin` is denied by
+  Channels' validator. Passing one has never substituted for passing the other, and now
+  both actually run
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
 - **Migration is no longer one line.** Both the `asgi.py` call site and the URLconf
   change:
 
@@ -694,13 +820,31 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
   as BOM-less UTF-16 or a UTF-8 BOM. The reason string is upstream's own `parse_json`
   literal, reproduced verbatim rather than invented, so the two mechanisms are
   indistinguishable on the wire and no caller can attribute a rejection by message.
-- **Revoked session, next operation** — a GraphQL error on that operation; the socket is
-  closed when the protocol offers no per-operation error channel. The rejection is a
-  transport-capability error in the same family as the shipped WebSocket
-  [auth-mutation][glossary-auth-mutations] rejections, never the undifferentiated
-  failed-login envelope.
+- **Multipart control document the endpoint refuses to decode** — the same
+  `HTTPException(400, "Unable to parse request body as JSON")` as every other refused
+  request document, raised before `parse_json` sees either value. Identical status and
+  reason for the two refusal causes (a non-UTF-8 effective form encoding, and a `U+FFFD`
+  in a decoded control value) and identical to a plain malformed-JSON rejection, for the
+  same reason the nine encoding shapes share one response: a caller must not be able to
+  attribute a rejection by message
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+- **Revoked actor on an open socket** — a **connection close**, code `4403`, reason
+  `"Forbidden"`, on both protocols and at both checkpoints. No protocol-specific operation
+  `error` frame precedes it: the actor is connection-scoped, so the close *is* the
+  rejection, and the pending frame that triggered the gate is suppressed rather than sent.
+  `4403` / `"Forbidden"` is upstream's own authentication-failure close on
+  `graphql-transport-ws`, reproduced verbatim so a revoked-session close is
+  indistinguishable on the wire from any other refusal to authorize this connection
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
 - **Cross-origin or missing-`Origin` WebSocket handshake** — unchanged: denied by
   `AllowedHostsOriginValidator` before the GraphQL protocol starts.
+- **Hostile-`Host` WebSocket handshake** — denied by the package's
+  `DjangoWebSocketHostValidator` before `AllowedHostsOriginValidator`, before
+  authentication, and before the consumer is constructed. The denial carries no detail
+  about why; Django's `DisallowedHost` message is the *only* exception normalized into a
+  denial, and any other exception from the projection propagates so a genuine bug stays
+  visible instead of being reported as a rejected host
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
 - **`channels` absent** — unchanged: the install-hint `ImportError` at the consumer's
   `from django_strawberry_framework.routers import ...` line. Note the asymmetry this
   card introduces and must document: `django_strawberry_framework.views` needs **no**
@@ -714,13 +858,13 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 This spec lives at `docs/spec-065-transport_security-0_0_15.md`: card NNN `065`, topic
 slug `transport_security`, target version `0.0.15` with dots as underscores, per the
 [`docs/SPECS/NEXT.md`][next] Step 6 convention. The companion term ledger is
-`docs/spec-065-transport_security-0_0_15-terms.csv`.
+`docs/spec-065-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
+[`spec-065-transport_security-0_0_15-rationale.md`][rationale], carrying the rejected
+alternatives, the derivations, and the change record for every decision below, keyed to the
+decision it belongs to — is where this spec's deliberative layer lives. This document is the
+contract and states only what is currently true; it never narrates its own history.
 
-The topic slug is `transport_security` rather than `channels_router` (the `spec-041`
-slug) because the card's subject is the transport boundary as a whole — HTTP ownership,
-body bounds, wire encoding, and socket actor freshness — not the router module alone.
-Two of the four findings (S2's cap and S9's wire contract) land outside `routers.py`
-entirely.
+*Rejected alternative and naming derivation: [rationale companion, Decision 1][rationale-d1].*
 
 ### Decision 2 — HTTP dispatches directly to a required, consumer-supplied Django ASGI application
 
@@ -731,8 +875,10 @@ entirely.
 ```python
 {
     "http": django_application,
-    "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(URLRouter([re_path(websocket_url_pattern, consumer)])),
+    "websocket": DjangoWebSocketHostValidator(          # Decision 19
+        AllowedHostsOriginValidator(
+            AuthMiddlewareStack(URLRouter([re_path(websocket_url_pattern, consumer)])),
+        ),
     ),
 }
 ```
@@ -768,28 +914,7 @@ tells a `0.0.14` migrant so. That surviving support is why Slice 1 repairs
 its eight `HttpCommunicator` round trips
 ([Decision 13](#decision-13--test-strategy-which-existing-tests-change-and-why)).
 
-**Why.** It is the only correction that gives the credential-accepting route the same
-boundary as the rest of the application, and it deletes code rather than adding it.
-
-**Alternatives rejected.**
-
-- **Keep the Channels HTTP consumer and rebuild Django's boundary around it** (the
-  audit's own conditional). Rejected: it means package-owned exact routing, Host
-  validation, cookie-auth CSRF, cache variation, body limits, response security headers,
-  and IDE/GET controls — a partial re-implementation of `MIDDLEWARE` that must track
-  Django's security releases forever. [`AGENTS.md`][agents] #"always recommend the
-  root-cause fix over the surface patch" settles it.
-- **Keep the Channels HTTP route but wrap it in Django's middleware chain manually.**
-  Rejected: Django's middleware is written against `HttpRequest` / `HttpResponse`, not an
-  ASGI scope; the adapter layer needed to make that true *is* `ASGIHandler`, which is
-  what `get_asgi_application()` already returns.
-- **Reorder the existing branch so `django_application` comes first.** Rejected: it makes
-  the GraphQL consumer unreachable rather than safe, and leaves the whole apparatus in
-  place as a trap.
-- **Ship both modes with the safe one as the default.** Rejected explicitly by the
-  maintainer's pinned direction, and correctly: an unsafe mode that exists is an unsafe
-  mode that gets selected, and a security boundary with a documented opt-out is a
-  boundary the audit would have to re-find next release.
+*Rejected alternatives and change record: [rationale companion, Decision 2][rationale-d2].*
 
 ### Decision 3 — `django_application` is required; omission fails at construction with no compatibility fallback
 
@@ -820,20 +945,7 @@ parameter makes `DjangoGraphQLProtocolRouter(schema)` fail immediately, but Pyth
 `django_application=None` from `0.0.14` binds the signature successfully and needs the
 prose. Both paths therefore fail, with the second one explaining why.
 
-**Alternatives rejected.**
-
-- **Keep it optional and warn.** Rejected: [`AGENTS.md`][agents] #"never propose
-  ship-it-today-defer-the-real-fix sequencing" — and the audit's own closing line, "Do
-  not split these into 'ship the warning now, fix the architecture later' work."
-- **Derive it internally with a lazy `get_asgi_application()` call.** Rejected on the
-  initialization-order ambiguity above; a framework must not make Django's setup point
-  implicit.
-- **Accept a dotted path string and import it.** Rejected: it adds an import-time failure
-  mode and a second way to spell the same thing, for no security gain.
-- **Raise `ImproperlyConfigured` instead of `ConfigurationError`.** Rejected:
-  [`ConfigurationError`][glossary-configurationerror] is the package's single typed
-  configuration failure and is already the router module's available exception with no
-  new import.
+*Rejected alternatives and change record: [rationale companion, Decision 3][rationale-d3].*
 
 ### Decision 4 — `url_pattern` becomes `websocket_url_pattern`, with exact matching as the secure default
 
@@ -847,26 +959,7 @@ There is no aliased `url_pattern=` kwarg kept for compatibility.
 `/graphql/extra` do not. That is the explicit policy the card's test plan demands, and it
 preserves the URLs a `0.0.14` WebSocket client already uses while closing the overmatch.
 
-**Why rename rather than keep one shared parameter.** A single parameter that no longer
-affects HTTP would be a name that lies. The rename is the diff that tells a migrant the
-semantics changed; silently narrowing `url_pattern`'s meaning would let a consumer keep
-a custom HTTP-shaped regex that now does nothing to HTTP.
-
-**Why exact rather than prefix.** A prefix default is a default that over-claims paths,
-and the audit's probe demonstrates the consequence on the branch that mattered. On
-WebSocket the blast radius is smaller than on HTTP — an over-claimed WS path denies a
-handshake rather than exposing one — but the correct default is still the narrow one, and
-a consumer wanting a prefix can pass one deliberately.
-
-**Alternatives rejected.**
-
-- **Keep `url_pattern` and accept both spellings.** Rejected: two names for one knob,
-  and the compatibility alias would silently accept an HTTP-intended pattern.
-- **Default to `r"^ws/graphql/?$"`** (a conventional WS-only path). Rejected: it breaks
-  every `0.0.14` WebSocket client for a cosmetic gain, and the endpoint path is the
-  consumer's choice.
-- **Keep the prefix default and document the overmatch.** Rejected: documenting a
-  routing surprise is not fixing it.
+*Rejected alternatives and change record: [rationale companion, Decision 4][rationale-d4].*
 
 ### Decision 5 — Compatibility policy: an intentional alpha breaking change to a security boundary
 
@@ -877,18 +970,6 @@ are breaking: `django_application` becomes required, `url_pattern` is renamed to
 `0.0.14` deployments do not have. The break is announced, migrated, and tested — not
 mitigated by a flag.
 
-**Why this is the right trade.** The package is at `0.0.14` and its documented API
-freeze begins at `1.0.0`; strict SemVer applies from `1.0.0` forward, not before. The
-broken promise was itself a migration convenience — "a migrant changes exactly the import
-line" — purchased by inheriting an upstream HTTP branch now confirmed to bypass Django's
-security middleware on a route that accepts session credentials. Preserving byte
-compatibility with that contract means preserving the defect for every consumer who
-adopts the router. Correcting a newly confirmed security-boundary error during alpha
-costs a documented migration note; deferring it to `1.0.0` costs every deployment in
-between. The package's status line already says "alpha-quality, not production" — this is
-precisely the latitude that statement buys, and spending it here is what makes the
-statement retractable later.
-
 **What is explicitly *not* broken.** The
 [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] symbol name and
 import path, the [soft-`channels`][glossary-soft-dependency] guard and its install hints,
@@ -896,17 +977,17 @@ the [PEP 562 lazy export][glossary-pep-562-lazy-export] shape, the WebSocket com
 and its Origin semantics, the schema pass-through, and the package's
 [Channels request adapter][glossary-channels-request-adapter] read path on WebSocket.
 
-**Alternatives rejected.**
+**One behavior change that is deliberately not in that list.** The WebSocket composition
+carries an **outer** wrapper
+([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)),
+so a handshake whose `Host` is not in `ALLOWED_HOSTS` is denied where `0.0.14` accepted it.
+That is a behavior change, and it is not a breaking change: it changes no signature, no
+import, no setting and no documented promise — it makes an existing documented promise
+("an injected consumer cannot escape Host validation") true. A deployment whose
+`ALLOWED_HOSTS` is already correct for HTTP sees no difference; a deployment that sees a
+difference was accepting handshakes addressed to a host it never allowed.
 
-- **A `0.1.0`-gated break.** Rejected: it leaves the blocker live across the whole
-  remaining alpha line, and `0.1.0` is the beta cut-over — the worst moment to land a
-  transport rewrite.
-- **A compatibility shim accepting the old signature with a `DeprecationWarning`.**
-  Rejected: the shim's only behavior would be to construct the insecure router, which is
-  the thing being removed. A warning that precedes an exploitable default is decoration.
-- **A new symbol beside the old one** (`DjangoGraphQLProtocolRouter2`, or a
-  `SecureDjangoGraphQLProtocolRouter`). Rejected: it keeps the unsafe symbol importable
-  and installs a naming wart permanently, to spare a documented one-time migration.
+*Rejected alternatives and change record: [rationale companion, Decision 5][rationale-d5].*
 
 ### Decision 6 — The GraphQL HTTP endpoint is a package-owned Django view in the consumer's URLconf
 
@@ -931,42 +1012,7 @@ Every upstream kwarg (`graphql_ide`, `allow_queries_via_get`,
 S1 regression proving `graphql_ide=None` and `allow_queries_via_get=False` are supported
 is a proof about the shipped surface rather than about a package reimplementation.
 
-**Why a package view rather than pointing consumers at Strawberry's.** Four reasons, in
-order of weight. (a) It is the only home for the S2 cap that works identically on WSGI
-and ASGI, sync and async — Django's own view layer. (b) It gives the migration note one
-canonical line instead of a fork between "use upstream's view" and "except when you want
-the cap". (c) Under the [live-first coverage mandate][glossary-live-first-coverage-mandate]
-every S2 regression row is then earnable over fakeshop's real `/graphql/` with
-`django.test.Client`, rather than mocked at the package tier — decisive, because a body
-limit asserted against a fake request proves nothing about the transport. (d) It is where
-the later cards' transport-shaped bounds (S3's budget, S4's upload limits, S10's error
-policy) will need to live, so the seam is created once rather than three times — and it is
-where S9's wire contract lands for the same reason, since a package-owned policy needs a
-package-owned boundary to live on.
-
-**Why a subclass rather than a wrapper decorator.** A decorator around
-`GraphQLView.as_view()` cannot reach the request before Django's view dispatch in a way
-that composes with `as_view(...)` kwargs, and it would leave the cap invisible to anyone
-reading the URLconf. The subclass keeps one symbol in the URLconf and one place to look.
-
-**Alternatives rejected.**
-
-- **Point consumers directly at `strawberry.django.views.GraphQLView`.** Rejected: it
-  leaves S2 with no seam on the HTTP path at all, which is precisely the gap the
-  maintainer's direction forbids representing as closed.
-- **Put the cap in Django `MIDDLEWARE`** (a package-shipped `BodyLimitMiddleware`).
-  Rejected: it applies project-wide rather than to the GraphQL endpoint, needs a path
-  predicate to avoid capping unrelated upload views, and burdens every consumer with a
-  `MIDDLEWARE` edit the [Debug-toolbar middleware][glossary-debug-toolbar-middleware]
-  precedent shows is easy to get wrong.
-- **Put the cap in an ASGI wrapper inside the router.** Rejected as the *primary* seam:
-  it cannot serve a WSGI deployment, it cannot serve a consumer who adopts the view
-  without the router (which this card makes the common case, since the view needs no
-  `channels`), and it would place a GraphQL-specific limit on every path the Django app
-  serves. Its one genuine advantage — rejecting mid-stream before Django spools the body
-  — is real, and is exactly what
-  [Decision 8](#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative)
-  assigns to the deployment layer, where it belongs and already exists.
+*Rejected alternatives and change record: [rationale companion, Decision 6][rationale-d6].*
 
 ### Decision 7 — The app-level body cap lives in the package Django view, counted not declared
 
@@ -989,7 +1035,13 @@ request-body ceiling before `parse_json` and before schema execution:
    [`Upload` scalar][glossary-upload-scalar] path this package ships. Per-file count,
    per-file size, and aggregate size are [`TODO-ALPHA-066-0.0.16`][kanban] (audit S4);
    this card's contract for multipart is the declared-size gate plus an explicit
-   statement of what it does and does not bound.
+   statement of what it does and does not bound. **That gate really does run before
+   Django's parser**, which is a property of the view's ordering rather than of this step
+   alone: `CsrfViewMiddleware.process_view` reads `request.POST` for every cookie-bearing
+   POST, so without the `csrf_exempt` / `csrf_protect` re-entry of
+   [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)
+   the declared gate would fire only *after* `MultiPartParser` and the upload handlers had
+   already run.
 4. **The limit is configured once, overridable per mount.** `MAX_REQUEST_BODY_BYTES` in
    `DJANGO_STRAWBERRY_FRAMEWORK`, overridden by a `max_request_body_bytes=` view kwarg —
    the constructor > setting > default precedence the shipped
@@ -1040,6 +1092,39 @@ in **one** module, `_request_body.py`, which hands the view a single boolean: th
 version-divergent knowledge is the risk, so it is single-sited beside the documented Django
 contract it depends on rather than spread across the two view classes.
 
+**An unmeasurable stream has three outcomes, not two.** The size probe reaches for four
+capabilities of an object the package did not create — `seekable()`, a seek to the end, a
+seek back to the original position, and the subtraction of the two answers — and a stream
+supplied by consumer middleware or a custom ASGI server may raise from any of them.
+Letting such a failure fall through as an unrelated `500` is the wrong answer at the one
+seam this design deliberately centralizes, so the probe reports exactly three outcomes:
+
+1. **Measurable** — a coherent position/end pair, the original position restored, nothing
+   read. The count decides.
+2. **Safely unmeasurable, original position intact** — the stream declared itself
+   unseekable, or `tell()` refused, or the pair came out incoherent and the restore
+   succeeded. No measurement is produced and the bounded read supplies the bound. A probed
+   count of zero or less stays in this class, and that property is hard-won: zero taken at
+   face value reads as "within the limit" while nothing has been read, which hands the
+   request to `HttpRequest.body` with no package bound at all, and at the 5.2.0 floor that
+   property's only ceiling is the `CONTENT_LENGTH` this cap exists precisely not to trust.
+   Verifying a zero costs exactly one `read`, so the fail-safe direction is affordable, and
+   a genuinely empty body is still allowed — by measurement rather than by assumption.
+3. **Position potentially corrupted** — the seek to the end succeeded (or raised after
+   moving) and the restoring seek then failed, so the stream's read position is no longer
+   known to be where the request started. The package **fails closed** with its own
+   controlled rejection rather than reading from an unknown offset or guessing a rewind to
+   zero: the bytes cannot be recovered, and a bounded read from an unknown position would
+   measure a body nobody sent. This is the only new refusal, and it is a refusal rather
+   than a `500`.
+
+The split is deliberate about *which* failure fails closed. An outcome-2 failure has cost
+nothing and lost nothing, so deferring to the read is strictly better than refusing a
+possibly-legitimate request. An outcome-3 failure has already mutated state the request
+depends on, and a package that quietly continued would be processing a request it can no
+longer describe. Rewinding to zero instead was rejected explicitly: a stream legitimately
+mid-position would then be misread from its start.
+
 **Why its own key rather than `DATA_UPLOAD_MAX_MEMORY_SIZE`.** Django's knob is
 project-wide and shared with file uploads: a project that raises it to accommodate an
 upload endpoint silently raises the GraphQL body ceiling to match. A GraphQL request body
@@ -1058,47 +1143,7 @@ does, is that the application never parses, allocates a document from, or execut
 schema against an over-limit body, and that the rejection is a tested package contract
 with a controlled `413`. The un-fixable half is [Decision 8](#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative).
 
-**Alternatives rejected.**
-
-- **Trust `Content-Length` alone.** Rejected by the maintainer's direction and correct on
-  the merits: the header is client-supplied and, on ASGI with chunked transfer, may be
-  absent entirely.
-- **Documented `DATA_UPLOAD_MAX_MEMORY_SIZE` reliance plus a thin wrapper.** Rejected on
-  the shared-knob argument above, plus: it would make the package's most security-visible
-  bound something the package neither owns nor tests.
-- **An ASGI/middleware guard as the primary seam.** Rejected in
-  [Decision 6](#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf);
-  its mid-stream advantage is reassigned to the deployment layer.
-- **Counting `len(request.body)`.** Its appeal is real — the property is the only *public*
-  way to obtain a body, so counting it touches no private attribute. Rejected anyway,
-  because it obtains the correct length only after Django has materialized the whole
-  request, which makes it a detector rather than a bound; and at the 5.2.0 floor, against an
-  absent or understated `Content-Length`, there is no earlier Django check to have shrunk
-  that allocation. Measuring the stream Django keeps private, from one module pinned to both
-  supported versions, is the smaller compatibility surface of the two — the alternative
-  buys its purity with an unbounded allocation on the one path this card exists to bound.
-- **Stashing the bounded read's bytes in `request._body`.** Rejected even though it mirrors
-  what `HttpRequest.body` itself leaves behind: pre-filling Django's cache makes the
-  property short-circuit, which silently disables **Django's own**
-  `DATA_UPLOAD_MAX_MEMORY_SIZE` for every request that took the bounded branch, so a project
-  whose Django knob sits below the package cap would lose it. A package cap adds a ceiling;
-  it must not remove one. Handing the bytes back as a rewound stream leaves the property
-  fully in charge and needs no ordering discipline to stay correct.
-- **Copying Django 6.0's `body` implementation into the package.** Rejected: it
-  reimplements a property whose behavior already differs across the supported range, and it
-  would still have to make the same `_body`-vs-`_stream` decision. Probing the size and
-  leaving the reading to Django's own property is less code and survives the next change to
-  it.
-- **Spreading `_stream` / `_body` / `_read_started` across the two view classes.** Rejected:
-  the version-divergent knowledge *is* the risk, so it belongs in one module beside the
-  contract it pins, with the views reading one boolean and owning policy only.
-- **Rewriting `META["CONTENT_LENGTH"]` so an unparseable declaration parses.** Rejected: it
-  edits the request to make Django's own later read succeed, concealing a malformed header
-  the deployment should see, and bounds nothing that the counted check does not already
-  bound.
-- **Rejecting inside `_patched_parse_json`.** Rejected: the patch modules exist to fix
-  *upstream defects*; a package size policy is not a defect fix, it would fire on GET
-  query-param parses, and it would be unreachable for a multipart request.
+*Rejected alternatives and change record: [rationale companion, Decision 7][rationale-d7].*
 
 ### Decision 8 — The deployment-layer cap is a co-requirement, not an alternative
 
@@ -1127,7 +1172,11 @@ the other's obligation as its own:
 - **Slice 5 owns the consumer-facing prose surface**: the [`docs/README.md`][docs-readme]
   transport guidance, where the concrete directives above live, together with the multipart
   carve-out (for a multipart request the bound is the declaration plus Django's
-  `MultiPartParser`, not a byte count).
+  `MultiPartParser`, not a byte count) — and, alongside it, the statement that the
+  declaration *is* nonetheless enforced before that parser and its upload handlers run,
+  which is a property of the view's `csrf_exempt` / `csrf_protect` ordering rather than of
+  the cap
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
 
 **Why this is a decision and not a documentation footnote.** The most likely failure of
 this card is not a code bug — it is a reader concluding "S1 fixed the transport, so S2 is
@@ -1137,9 +1186,7 @@ evaluates any limit. So an unbounded request still consumes bandwidth and disk o
 Django-routed deployment. Naming that boundary explicitly, in a numbered decision, is
 what keeps the two layers from collapsing into one in the reader's head.
 
-**Alternative rejected.** Treating the application cap as sufficient and mentioning the
-proxy in passing. Rejected: it would restate the exact conflation the audit called out,
-and would make the package's own documentation the source of a false guarantee.
+*Rejected alternatives and change record: [rationale companion, Decision 8][rationale-d8].*
 
 ### Decision 9 — The strict UTF-8 wire contract is enforced by the package view: its own body source, one strict decode
 
@@ -1150,7 +1197,19 @@ the only JSON parser in the path. A `UnicodeDecodeError` from that decode become
 reproduced verbatim. A `str` input (the GET query-param path and the multipart
 `operations` / `map` form fields, all of which Django has already decoded) passes through
 **untouched, by identity**, and the existing `_patched_parse_query_params` shield keeps the
-body-envelope guard off the two query-param sites regardless. The mixin sits first in both
+body-envelope guard off the two query-param sites regardless.
+
+**Scope, stated so the decode is not read as more than it is.** This decision governs the
+one document the package receives as *bytes*: the `application/json` request body. It is
+**not** a wire-encoding contract for multipart, and cannot be, because Django decodes
+multipart field data — with `force_str(..., errors="replace")` — before the package is
+handed anything: `operations` and `map` arrive as `str` with every decode failure already
+collapsed to `U+FFFD`, so a `str` pass-through here is the only correct behavior and a
+strict decode here would have nothing left to be strict about. The multipart control
+documents get their own boundary, one step earlier, in
+[Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard).
+The two together are what makes Goal 4's "one wire encoding" true of *every* JSON document
+this endpoint parses; this decision alone governs the ordinary JSON body. The mixin sits first in both
 views' bases, so it is the MRO owner of `parse_json` for the sync and async view alike:
 one method, both transports, no duplication and no possible drift.
 
@@ -1226,21 +1285,10 @@ Strawberry's own Django view is served by it. If anything, S1 raises the patch's
 for that consumer: previously a Channels-routed deployment never reached that adapter at
 all.
 
-**Why the decode belongs on the view rather than in the patch module.** Three reasons, and
-the first is decisive. (a) A permanent security policy must not share a temporary patch's
-lifecycle: an upstream shape change that forces a consumer to disable the patch would
-otherwise reopen the parser differential S9 exists to close, silently. That argument
-governs the body source identically, which is why the view owns that too — a switchable
-body source is a switchable decode. (b) The mixin is one
-seam covering both transports — `super()` delegates to upstream's `parse_json`, patched or
-not, so nothing is reimplemented and the two views cannot diverge, which is the same
-single-siting rule [`request_from_info`][glossary-request_from_info] establishes for
-request decoding. (c) It is the same boundary as the body cap: the cap decides which bytes
-reach the parse, and the parse decides how those exact bytes become text — one mixin, one
-subject, the raw request body.
-
-**Measured behavior** (verified, not assumed — the full shape set, so no reader has to
-infer a sibling's behavior from a named one):
+**Measured behavior** (verified, not assumed — the full shape set for an
+`application/json` **request body**, so no reader has to infer a sibling's behavior from a
+named one; the multipart control-document shapes are tabulated separately in
+[Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)):
 
 | request body | strict `decode("utf-8")` | `json.loads(str)` | outcome |
 |---|---|---|---|
@@ -1267,50 +1315,7 @@ every hop — which makes `__cause__` the only thing that records which mechanis
 the only way a test can pin the five **inherited** rejections against a future `json`
 that tolerated them.
 
-**Alternatives rejected.**
-
-- **Decode inside `_patched_parse_json`.** The wire contract *is* a property of
-  GraphQL-over-HTTP request parsing, and the patch module already owned that parse for both
-  transports and both encodings-of-failure, so putting the decode there costs the fewest
-  lines and covers upstream-mounted consumers too. Rejected on ownership: it makes a
-  permanent package security policy share the lifecycle — and the `APPLY_UPSTREAM_PATCHES`
-  kill switch — of temporary workarounds for upstream bugs. A consumer disabling those
-  workarounds, or a maintainer deleting them once upstream fixes them, then silently
-  restores multi-encoding request bodies. A security policy a consumer can switch off by
-  accident is not a policy, and the extra reach over upstream-mounted views is not the
-  package's to claim.
-- **Decode inside `_patched_body`.** Rejected: it re-creates the unhandled-`500`
-  path the patch module exists to close, and it would only fix the sync transport.
-- **Let `_patched_body` be the package view's sync body source.** One patched property
-  already hands raw bytes to both mounts, so the package view would need no adapter of its
-  own and the decode would be reached for free. Rejected for the *same* reason the decode
-  is not in the patch module, not a second one: the patch is gated, so the sync half of the
-  wire contract would ride `APPLY_UPSTREAM_PATCHES` while the other half did not, and a
-  policy that is half-switchable is worse than one that is honestly switchable, because the
-  reader of either half is told something untrue. Measured rather than argued: with the
-  gate off, a BOM'd UTF-16 or UTF-32 body on a mounted sync package view answers `500`
-  instead of the contracted `400`, because upstream's property decodes first and
-  `parse_json` is never entered with bytes. A decode the bytes never reach is not an
-  enforcement.
-- **Override `decode_json` instead of `parse_json`.** Rejected: a `UnicodeDecodeError`
-  raised there lands in upstream's `except json.JSONDecodeError`, which does not catch it,
-  so the `400` translation would depend on the Strawberry patch being installed — exactly
-  the coupling this decision removes.
-- **Reject non-UTF-8 by sniffing leading bytes** (a BOM / NUL-pattern check). Rejected: a
-  bespoke encoding sniffer is a parser, and adding a second parser to close a parser
-  differential is self-defeating. `bytes.decode("utf-8")` is the contract.
-- **Set a strict codec on the adapter and let `json.loads` see a `str` everywhere.**
-  Rejected — and worth distinguishing from the adapter subclass the view does install,
-  which *removes* a decode rather than adding one. Putting the strict codec on the adapter
-  instead re-introduces the property-scope raise, on the very transport the subclass exists
-  to rescue: a `UnicodeDecodeError` with no `except` above it is a `500`, wherever the
-  codec is strict. It also needs a matching change to the async adapter's contract to keep
-  the two transports agreeing, losing the sync/async symmetry one inherited `parse_json`
-  gives for free.
-- **A `STRICT_UTF8_BODY` setting so a consumer can opt out of the policy too.** Rejected:
-  a security policy a consumer can switch off is the finding this decision answers, not the
-  fix — and [`AGENTS.md`][agents] forbids adding a settings key speculatively. The opt-out
-  that does exist is deliberate and explicit: mount upstream's own view.
+*Rejected alternatives and change record: [rationale companion, Decision 9][rationale-d9].*
 
 ### Decision 10 — A UTF-8 BOM is rejected
 
@@ -1330,12 +1335,7 @@ is machine-generated by a client library, not a hand-saved text file; a BOM sign
 misconfigured client, and a `400` is the fastest way for that client's author to find
 out.
 
-**Alternative rejected.** Accept-and-strip via `utf-8-sig` or an explicit
-`lstrip("﻿")`. It is friendlier to one misconfigured client and is what several JSON
-parsers do — but it reintroduces the differential above, adds a lenient pre-processing
-step the contract must then document and test, and buys tolerance for a payload no
-correct GraphQL client emits. Documented here as the considered-and-rejected direction so
-a future reader knows the choice was deliberate rather than incidental.
+*Rejected alternatives and change record: [rationale companion, Decision 10][rationale-d10].*
 
 ### Decision 11 — A WebSocket consumer-class/factory injection seam, with a revalidating package default
 
@@ -1368,17 +1368,26 @@ body is never normalized — that is why the convention is pre-bound rather than
 around the call.
 
 `None` selects the package's own `GraphQLWebSocketConsumer`, a thin `GraphQLWSConsumer`
-subclass that revalidates the
-session actor per operation. Whatever is injected, the router applies
-`AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([...])))` around it — the
+subclass that revalidates the session actor at both of
+[Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
+checkpoints. Whatever is injected, the router applies
+`DjangoWebSocketHostValidator(AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([...]))))`
+around it — the
 wrappers are the router's, not the consumer's, so an injected class **cannot** escape
-Host/Origin validation or authentication. That structural guarantee is the whole reason
-the seam is safe to offer.
+**Host** validation (the package's own validator, delegating to Django's
+`HttpRequest.get_host()`), **Origin** validation (Channels'
+`AllowedHostsOriginValidator`), or **authentication** (`AuthMiddlewareStack`). Three
+wrappers, three named checks — the Host half is
+[Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)'s
+own boundary rather than a property of Channels' Origin validator. That structural
+guarantee is the whole reason the seam is safe to offer — and it is a guarantee about the
+*wrappers* only: the outbound-frame gate rides on the package's own consumer, so an injected
+consumer opts out of it exactly as it opts out of the admission hooks.
 
 **Where the revalidation hooks in, and why not `get_context`.** Strawberry's
 `GraphQLWSConsumer.get_context` is called **once per connection**, inside
 `AsyncBaseHTTPView.run`, before either protocol handler's message loop starts — so it is
-not a per-operation seam. The per-operation entries are
+not a per-operation seam. The per-operation **admission** entries are
 `BaseGraphQLTransportWSHandler.handle_subscribe` and the `graphql_ws` sibling's
 `handle_start`, reachable through the `graphql_transport_ws_handler_class` /
 `graphql_ws_handler_class` class attributes on the view. The package's consumer points
@@ -1386,9 +1395,23 @@ those at two two-line subclasses, each of which awaits one shared package functi
 then delegates with `super()`. The revalidation logic is single-sited in that function;
 the per-protocol subclasses carry no logic of their own.
 
+Admission is only **half** the boundary. An admitted subscription iterates its result
+source inside one task and never
+returns through `handle_subscribe`, so an admission hook cannot stop an *already-running*
+operation from emitting results after its actor is revoked. The second checkpoint — a gate
+on the outbound frame, installed through the consumer's `websocket_adapter_class` — is
+[Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam),
+and it is what makes the S11 contract whole. Everything below in this
+decision describes the admission checkpoint; read it together with Decision 16, which owns
+the second checkpoint, the shared connection state, and the failure response both
+checkpoints produce.
+
 **What the revalidation does.** It reloads the session and resolves the actor for the
-scope, writes the refreshed actor back onto `scope["user"]`, and rejects the operation
-when the session is no longer valid (revoked, flushed, or the user disabled). The reload
+scope, writes the refreshed actor back onto `scope["user"]`, and — when the session is no
+longer valid (revoked, flushed, the user disabled, the password rotated) — revokes and
+closes the whole connection
+([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)),
+rather than failing one operation and leaving the socket authorized. The reload
 goes through `channels.auth.get_user`, reused verbatim rather than reimplemented, over a
 store the deployment's `SESSION_ENGINE` resolves — and that resolution is read from
 `utils/sessions.py::session_store_class`, **outside** the `auth` package. `auth` is
@@ -1411,17 +1434,27 @@ with **no change to `utils/permissions.py`**.
 
 Two boundary cases the contract states rather than leaves emergent. A connection whose
 scope actor is anonymous has no session actor to revalidate, so it passes through with no
-session read at all: only an authenticated socket pays the cost. And once an operation is
-denied, the scope keeps the stale actor instead of being downgraded to anonymous, so every
-later operation on that socket is denied identically — a revoked session must not quietly
-become an anonymous one that keeps executing.
+session read at all: only an authenticated socket pays the cost. And `scope["user"]` is
+**never** downgraded to anonymous on a failed validation — the stale actor stays exactly
+where it was. A revoked session must not quietly become an anonymous one that keeps
+executing, and the invariant still matters after
+[Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+closes the socket, because the close is not instantaneous: sibling operation tasks are still
+unwinding while the connection's revoked flag is set, and any of them that reaches a
+checkpoint in that window must take the same denial path rather than find an anonymous actor
+that looks permissible for an unauthenticated read.
 
-**The bounded window is explicit.** `websocket_revalidation_window=0.0` (the default)
-revalidates every operation. A positive value is an accepted revocation delay in seconds,
-expressed as a number in the constructor so the delay is a stated deployment decision
-rather than an emergent cache behavior. The docs state the trade in one sentence: one
-session read per operation, or a named number of seconds during which a revoked session
-still executes.
+**The bounded window is explicit, and it means the same thing at both checkpoints.**
+`websocket_revalidation_window` is **the maximum age of a successful actor validation that
+may authorize a new operation or an information-bearing outbound operation frame**. `0.0`
+(the default) revalidates at every admission and at every `next` / `data` / operation
+`error` frame. A positive value permits reuse of the last successful validation only while
+it is younger than that value. There is no artificial minimum interval, no second setting,
+and no background task, and an idle authenticated socket performs **zero** database reads —
+freshness is spent at event boundaries, not on a timer. The value is expressed as a number
+in the constructor so the delay is a stated deployment decision rather than an emergent
+cache behavior. The docs state the trade in one sentence: one session read per authorized
+event, or a named number of seconds during which a revoked session may still be served.
 
 The window's domain is typed and checked at construction: a **finite number `>= 0.0` that
 converts to a `float`**. `bool` is refused explicitly (`isinstance(True, int)` is `True`), a
@@ -1444,6 +1477,7 @@ constant invented here rather than derived from anything, and the window is a de
 consumer trade-off (one session read per authenticated operation against a named revocation
 delay) that the deployment can price and the package has no standing to second-guess. The
 guard is about values the package cannot *use*, not about values it disapproves of.
+
 The message renders through the package's one safe value-describer, since the `got ...` tail
 is built by an f-string at the *raise site* — before any exception object exists, so a value
 whose `repr` cannot be produced would otherwise replace the typed error with an unrelated
@@ -1458,50 +1492,14 @@ its presence in the call. Distinguishing "omitted" from "explicitly zero" would 
 private sentinel in a public signature, which is a worse API than a rule that keys on the
 value that matters.
 
-**Why this and not the alternatives.**
-
-- **Revalidate lazily in `ChannelsRequestAdapter.user`.** Rejected: it only fires when
-  the package happens to read the actor, so an operation touching no permission gate
-  would execute with no revalidation at all — failing the "reload the actor **before
-  execution**" requirement — and it can only affect a read, never reject an operation.
-- **Revalidate in the consumer's `receive()`.** Rejected: `receive` sees every frame,
-  including keep-alive pongs and `complete` messages, so it would fire a session read per
-  frame; and at that layer the only available rejection is closing the socket, not
-  failing one operation.
-- **Ship a periodic background refresh task.** Rejected: it makes freshness a function of
-  wall-clock luck rather than of the operation being authorized, and it adds a task
-  lifecycle to a transport helper.
-- **Implement the message loop ourselves to own the seam.** Rejected explicitly by the
-  maintainer's direction and on the merits: a second GraphQL protocol engine is a
-  permanent maintenance surface. Two `super()`-delegating pre-hooks are not an engine.
-- **Make revalidation opt-in.** Rejected: the audit's finding is that the default is
-  stale; an opt-in fix leaves the default stale. Injecting a custom consumer class is the
-  opt-out, and it is an opt-out that requires the consumer to own the concern explicitly.
-- **Mount whatever the factory returns and let a bad value fail at the first handshake.**
-  Rejected: an injection seam that accepts an object it can already prove is not an
-  application converts a configuration mistake into a runtime routing failure, far from the
-  line that caused it. Construction is where the seam's contract is knowable, so it is where
-  the contract is enforced.
-- **Catch `TypeError` around `factory(schema=schema)` instead of pre-binding.** Rejected: a
-  `TypeError` raised by the call cannot be told apart from one raised *inside* a correct
-  factory's body, so a consumer's own bug would be reported as "your factory has the wrong
-  signature" — the wrong diagnosis, with the real traceback buried under `__cause__`.
-- **Validate the class branch's `as_asgi(schema=schema)` result too.** Rejected: that return
-  value is upstream's contract, not the consumer's, so checking it would assert against
-  Strawberry rather than against the injection seam.
-- **Resolve the session store from `auth/sessions.py`.** It is where the capability question
-  about signed-cookie sessions already lives, so the expression looks at home there.
-  Rejected: importing a submodule executes its package's `__init__`, and `auth` is
-  structurally opt-in with an eager `__init__`, so a transport-layer read would drag the
-  whole GraphQL auth subsystem into every process that never asked for it. Making
-  `auth/__init__` lazy instead was also rejected — it changes the public opt-in surface
-  [`spec-040`][spec-040] Decision 3 pins, to solve a transport problem — and duplicating the
-  two-line `SESSION_ENGINE` expression was rejected outright: two sites would have to agree
-  about how a consumer-authored engine subclass resolves.
-
 **One deliberate constraint, stated as a constraint.** The revalidation performs a
-session read per authenticated operation (or per window), which is database work on the socket's
-critical path. The session and user reads honor their models' **normal Django
+session read per authorized event — an admission or an information-bearing outbound frame —
+or one per window, which is database work on the socket's
+critical path. Where an *authenticated subscription* is concerned that is per emitted result
+rather than per client message, which is the cost
+[Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+prices explicitly and the window exists to let a deployment reduce.
+The session and user reads honor their models' **normal Django
 database-router decisions** — the store the deployment's `SESSION_ENGINE` resolves and
 `channels.auth.get_user` both perform ordinary router selection, and the package captures no
 alias of its own — which is what [Multi-database cooperation][glossary-multi-database-cooperation]
@@ -1510,14 +1508,30 @@ Reimplementing `get_user` to force an alias would be strictly worse, and the win
 precisely so a deployment can price the read. This is a cost the audit's finding makes
 worth paying, not a cost the spec hides.
 
+*Rejected alternatives and change record: [rationale companion, Decision 11][rationale-d11].*
+
 ### Decision 12 — Maximum connection lifetime is documented and seamed, not silently enforced
 
-**Decision.** The package does **not** impose a maximum WebSocket connection lifetime.
-Slice 5 documents (a) that an established socket should have a deployment-enforced
+**Decision.** The package does **not** impose a maximum WebSocket connection lifetime, a
+socket idle timeout, or an aggregate connection limit. Slice 5 documents (a) that an
+established socket should have a deployment-enforced
 maximum lifetime, (b) the ASGI-server and proxy settings that provide it, (c) the
 upstream `connection_init_wait_timeout` and `keep_alive` knobs the injected consumer
-class can set, and (d) that with per-operation revalidation on, the freshness bound is
-the revalidation window rather than the connection lifetime.
+class can set, and (d) that with revalidation on, the **authorization** bound is the
+revalidation window and the checkpoints of
+[Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+rather than the connection lifetime — while the **resource** bound remains the deployment's,
+because a revoked socket producing no further events stays physically open until something
+that owns connections closes it.
+
+**Which bound lifetime is, and which it is not.** Lifetime is not the bound on *what a
+revoked actor can do* — a revoked connection cannot admit an operation or emit an
+information-bearing operation frame, and dies at the attempt — but it remains the bound on
+*how long the socket, its subscription task, its session object, and its stale actor
+reference occupy the server*. That residue is DoS-relevant and is named as such
+([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+#"The idle-socket consequence"); it is not an authorization hole, because the idle socket has
+no authorization capability while idle.
 
 **Why not enforce it.** A framework-imposed disconnect is a visible behavior change for
 every subscription consumer, with no correct default: the right lifetime for a dashboard
@@ -1525,11 +1539,10 @@ subscription and for a short-lived request-response socket differ by orders of m
 The audit asks for "at minimum, document a maximum connection lifetime and a
 consumer-class injection seam"; the seam ships in
 [Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default),
-and with revalidation on, lifetime stops being the security-relevant bound.
+and with revalidation on at both checkpoints, lifetime stops being the bound the
+*authorization* boundary depends on.
 
-**Alternative rejected.** A `max_connection_lifetime=` kwarg with a default. Rejected:
-either the default is long enough to be security-irrelevant, or it is short enough to
-break subscriptions. A consumer who wants it can enforce it in the injected class today.
+*Rejected alternatives and change record: [rationale companion, Decision 12][rationale-d12].*
 
 ### Decision 13 — Test strategy: which existing tests change, and why
 
@@ -1590,7 +1603,8 @@ reviewable change rather than a regression:
    `::test_websocket_branch_wraps_origin_validator_outside_the_auth_stack` is a genuine
    WebSocket Origin test, but its pattern assertion reads the default, so `["^graphql"]`
    becomes `[r"^graphql/?$"]`. The nesting assertion and the "the HTTP value is not an
-   `OriginValidator`" assertion are unchanged.
+   `OriginValidator`" assertion are preserved verbatim, beside the one assertion added for
+   the outermost wrapper (below).
 
 **Repaired harness, call sites and assertions untouched.**
 `tests/auth/test_mutations.py::_channels_router` borrowed the `0.0.14` router as this
@@ -1627,6 +1641,44 @@ distinction is load-bearing rather than cosmetic — `json.loads` on `bytes` det
 `utf-8-sig` and strips the BOM itself, so a patch-module-only assertion would have recorded
 that body as *accepted*.
 
+**Re-aimed to the connection-scoped revocation, ordering, Host and probe contracts.** Same
+discipline as above: named explicitly so a reviewer can tell a deliberate inversion from a
+regression.
+
+- `tests/test_routers.py`'s revocation rows assert a **connection close** (`4403` /
+  `"Forbidden"`) with no preceding operation error, at both checkpoints and on both
+  protocols
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+  The revocation subject is preserved; the wire shape of the denial is what changes, and an
+  operation-scoped `error` frame is unreachable through the outbound gate.
+- `tests/test_routers.py` carries a controlled **multi-yield** subscription beside the
+  single-yield `Subscription.tick`: a single-yield fixture cannot pin the active-operation
+  gate at all, because operation 1 finishes before the revocation lands. The single-yield
+  fixture serves the admission rows; the multi-yield one serves the outbound-frame rows.
+- `tests/test_routers.py`'s `_STRAWBERRY_FLOOR_SUBSTRING` pins
+  `routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT`, and both name
+  `strawberry-graphql>=0.316.0` — the value the hard dependency and the minimum CI matrix
+  node already agree on — because a user-facing recovery hint that recommends a version the
+  package metadata rejects is a defect in the hint, not in the test that pins it.
+- `examples/fakeshop/test_query/test_transport_api.py`'s declared-cap rows carry a
+  `Client(enforce_csrf_checks=True)` sibling with a parser / upload-handler sentinel
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)),
+  and the file carries the multipart control-field encoding matrix
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+  Status `413` alone is not evidence of ordering, and a plain `Client()` — whose CSRF
+  checks are off — cannot observe it; the rows say so.
+- `tests/test_routers.py::test_websocket_branch_wraps_origin_validator_outside_the_auth_stack`
+  asserts the wrapper nesting, and the nesting carries an outer layer
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)):
+  one assertion is **added** for the outermost wrapper, while the test's subject and its two
+  existing assertions (the origin validator sits outside the auth stack; the `"http"` value
+  is not an `OriginValidator`) are preserved verbatim. Nothing is weakened.
+- `tests/test_views.py`'s stream-shape rows carry the third probe outcome — a stand-in whose
+  restoring `seek` fails — which is the one shape that must produce the package's controlled
+  rejection rather than a `500`
+  ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+  #"An unmeasurable stream has three outcomes, not two").
+
 **Placement.** The S1 middleware / Host / CSRF / header / cache / routing regressions and
 the entire S2 body-cap matrix live in `examples/fakeshop/test_query/` over the real
 `/graphql/` — fakeshop already serves a Django GraphQL view, so the
@@ -1646,6 +1698,21 @@ the only discriminator — is exposed by no HTTP response, plus the two adapter-
 rows, whose subject is a class attribute (`request_adapter_class` on each view) rather than
 a response.
 
+The same rule places the remaining rows, and it places them where the rule sends them, not
+where they are convenient. The multipart control-field matrix and the CSRF-ordering row are
+**live** — they are request-shaped, and a direct `parse_json(str)` call or a mocked request
+proves nothing about either boundary
+([Decisions 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)
+and [18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+The active-operation revocation matrix and the WebSocket Host rows stay in
+`tests/test_routers.py`, communicator-driven, under the same documented
+genuinely-unreachable-live exemption the rest of the WebSocket surface already carries —
+fakeshop still has no `asgi.py`. The third probe outcome stays in `tests/test_views.py`,
+because a stream whose restoring `seek` raises is exactly the negative witness a real server
+cannot supply.
+
+*Prior test contracts and the changes that replaced them: [rationale companion, Decision 13][rationale-d13].*
+
 ### Decision 14 — This card amends `spec-041` and supersedes three of its decisions
 
 **Decision.** Slice 5 edits [`spec-041`][spec-041] in place, adding an amendment banner
@@ -1663,6 +1730,25 @@ dependency), Decision 7 (engine-owned consumers — now with the injection seam 
 over it), Decision 8 (the test strategy), Decision 10 (joint-cut version ownership), and
 Decision 11 (the Channels request contract).
 
+**One further reconciliation, deliberately *not* a
+supersession.** `spec-041` repeatedly describes the package's Strawberry floor as
+`strawberry-graphql>=0.262.0`. That floor has since moved to `>=0.316.0` in
+`pyproject.toml`, and the minimum CI matrix node pins the same value — so those sentences are
+now factually wrong *about live code*, which is the exact condition this decision's own
+"why amend" argument is built on. The same pass therefore corrects them, under the repo's
+shipped-card closeout convention: **factually-wrong prose only**, checkbox state left exactly
+as it is, and the Status line treated as the source of truth. Sentences that are explicitly
+historical — "the export's presence at the 0.262.0 floor itself is upstream history,
+spot-checked at …" — are **kept**, because they record what was true when that card shipped
+and make no claim about live code. This is a correction of the record, not a decision of
+`spec-041`'s being superseded, and the amendment banner says so rather than listing it beside
+the three superseded items. The corresponding live-code fix —
+`routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT` and the `tests/test_routers.py` assertion that
+pins it — is Slice 4's, because a user-facing recovery hint recommending a version the
+package metadata rejects is a defect in the hint rather than in the spec that described it.
+There is no Python 3.10 complication behind any of this: the dependency floor and the minimum
+CI node already agree on `0.316.0`.
+
 **Why amend rather than leave it as history.** `spec-041` is the standing design record
 for a module that still exists and is still imported; a reader who finds it and follows
 its constructor documentation would wire the insecure shape. This is the narrow case
@@ -1670,9 +1756,7 @@ where a shipped spec's prose becomes factually wrong about live code, and the re
 practice is to correct the record in the same change rather than let two documents
 disagree.
 
-**Alternative rejected.** Leaving `spec-041` untouched and relying on this spec to
-supersede it implicitly. Rejected: implicit supersession between two specs at different
-paths is exactly how a reader ends up following the wrong one.
+*Rejected alternatives and change record: [rationale companion, Decision 14][rationale-d14].*
 
 ### Decision 15 — The `0.0.15` version bump is deferred to the joint cut
 
@@ -1699,27 +1783,332 @@ advertise a released `0.0.15` transport contract while `__version__` still repor
 dependency: `channels` is already in the dev group, and the new view rides the existing
 hard `strawberry-graphql` requirement.
 
-**Alternatives rejected.**
+*Rejected alternatives and change record: [rationale companion, Decision 15][rationale-d15].*
 
-- **Bump to `0.0.15` in Slice 5.** Rejected: card `045` also ships into `0.0.15`; a
-  per-card bump races the joint cut and gets reconciled twice.
-- **Claim the cut for this card because it is the higher-numbered / more urgent one.**
-  Rejected: the rule keys on *last to land*, not on card number or priority, and the
-  landing order is the maintainer's to decide.
-- **Ship the `CHANGELOG.md` entry here and let the cut add the version.** Rejected: the
-  [joint version cut][glossary-joint-version-cut] contract puts the `CHANGELOG.md`
-  bullets in the cut, and [`AGENTS.md`][agents] requires an explicit grant this card does
-  not hold.
+### Decision 16 — Revocation is connection-scoped and gated at the WebSocket adapter's outbound frame seam
+
+**Decision.** Revocation is **connection-scoped** and terminates the whole socket. The
+package's consumer carries **two** security checkpoints, not one:
+
+1. **Admission** — the existing shallow `handle_subscribe` / `handle_start` pre-hooks
+   ([Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default)),
+   which decide whether a *new* operation may start.
+2. **Outbound frame** — a shared gate that validates the actor immediately before any
+   **information-bearing operation frame** is sent, which is what stops an *already-running*
+   subscription.
+
+The gated frame types are deliberately `next` (`graphql-transport-ws`), `data` (legacy
+`graphql-ws`), and operation-scoped `error` frames. Runtime resolver errors ride inside
+`next` / `data`, but pre-execution and other operation errors travel as `error` frames and
+may still expose schema names, validation detail, extension output, or
+consumer-authored messages; gating them avoids drawing a disclosure distinction the package
+would then have to defend. `complete`, `connection_ack`, `connection_error`, `ping` / `pong`,
+`ka` and every other connection-control frame delegate to upstream unchanged — they carry no
+operation payload, and gating them would price keep-alives as authorization events.
+
+**The seam is `GraphQLWSConsumer.websocket_adapter_class`, and it is a class attribute, not
+a patch.** Upstream instantiates it **by name**, once per connection, at
+`strawberry/http/async_base_view.py::AsyncBaseHTTPView.run`
+#"self.websocket_adapter_class(self, request, websocket_response)", and both protocols funnel
+every frame through that one object's `send_json`: `graphql-transport-ws` as
+`Operation.send_next` -> `handler.send_message` -> adapter, and legacy `graphql-ws` as
+`send_data_message` -> `handler.send_message` -> adapter. So
+`consumers.py::build_revalidating_consumer_class` derives one private adapter subclass from
+`base_consumer_cls.websocket_adapter_class` and installs it on the generated consumer —
+*exactly* as it already derives and installs the two protocol handler classes from
+`graphql_transport_ws_handler_class` / `graphql_ws_handler_class`. Same factory, same
+mechanism, same "read the base off the class the factory was handed so an upstream re-point
+is tracked for free" property. This is **not** per-instance patching of upstream internals,
+and no upstream module is imported to do it.
+
+**One failure response, at both checkpoints.** On failed validation the package atomically
+marks the connection revoked, suppresses the pending frame, closes the whole socket with one
+documented connection-level code and a non-disclosing reason (`4403` / `"Forbidden"`, the
+[Error shapes](#error-shapes) row), unwinds the current operation through cancellation, and
+lets upstream's existing disconnect / shutdown path cancel and await every remaining
+registered operation — `BaseGraphQLTransportWSHandler.shutdown` and, on the legacy protocol,
+`BaseGraphQLWSHandler.cleanup` / `::cleanup_operation` each already collect every registered
+operation task, cancel it, and await it from the `finally` of their own `handle` loop, so the
+package adds **no** teardown of its own.
+`scope["user"]` is **never** downgraded to anonymous.
+
+There is deliberately **no protocol-specific operation error before the close**. The actor is
+connection-scoped, so the close *is* the rejection; error-then-close only adds protocol
+asymmetry (two payload shapes for one event) and one more race between the error frame and
+the close frame. This is also **forced rather than merely chosen**, and the derivation is
+worth recording because it changes shipped behavior: an admission-checkpoint denial would
+have to be delivered as an operation-scoped `error` frame, which is a gated type, so
+checkpoint 2 would validate it against the same revoked actor, fail, suppress it, and close —
+the client would never see it. A single unified response is therefore the only coherent
+reading, and the consequence is explicit: the per-operation revoked-session `error` message
+and its one per-protocol payload difference (a list for `graphql-transport-ws`, a bare object
+for legacy `graphql-ws`) **leave the package** along with the `graphql.GraphQLError` import
+that formatted them. That deletion belongs to the change that implements this decision, not
+to Slice 5, because leaving an unreachable send path behind would be dead code under
+`fail_under = 100`.
+
+**One connection-local lock, held through the send.** A single `asyncio.Lock`, owned by the
+connection's adapter instance (upstream constructs exactly one per connection, which is what
+makes "connection-local" structural rather than conventional), spans the whole critical
+section: the window / cache decision, the session read, the revoked-state transition, **and
+the actual send**. Holding it through the send is intentional and is the reason the gate is
+sound. Releasing after validation would admit this interleaving: sibling task A passes
+validation; sibling task B then detects revocation and begins closing; task A, already
+authorized, emits its payload anyway. The accepted cost is stated rather than discovered: a
+per-connection serialization point on the outbound hot path, so concurrent operations on one
+socket wait behind a session-store read. It serializes **one connection's** protected frames
+only — never a `complete`, never a keep-alive, and never anything on an unrelated
+connection — and an idle or anonymous socket never takes it at all.
+
+**The window keeps its meaning, expanded consistently across both checkpoints.**
+`websocket_revalidation_window` is **the maximum age of a successful actor validation that
+may authorize a new operation or an information-bearing outbound operation frame**. `0.0`
+revalidates at every admission and at every `next` / `data` / operation `error` frame; a
+positive value permits reuse only while the last successful validation is younger than that
+value. No artificial minimum interval, no second setting, no background task, and an idle
+authenticated socket performs **zero** database reads. One knob, one meaning, two
+checkpoints.
+
+**The idle-socket consequence**, stated explicitly rather than left implicit: a revoked
+subscription that produces no further events may stay **physically open indefinitely**,
+retaining its socket, its subscription task, its session object, and its stale actor
+reference. That is accepted, because it has **no authorization capability while idle** — its
+next operation or information-bearing frame must pass the gate, fail, and close the
+connection. Idle timeout, maximum socket lifetime, and aggregate connection limits are
+transport-resource policy owned by the ASGI server, the reverse proxy, or a deliberately
+injected consumer
+([Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced)):
+DoS-relevant, documented as such, and **not** required to make the package's authorization
+boundary true. Conflating the two is exactly the error Decision 12 names.
+
+**The production claim, in the exact words the docs and docstrings must use.** *A revoked
+actor cannot admit another operation or emit another information-bearing operation frame.
+Detection is event-boundary-driven, not an asynchronous promise to interrupt an idle resolver
+at the instant an external logout occurs.* `consumers.py`'s module docstring and
+`GraphQLWebSocketConsumer`'s carry that claim in those words, in place of any "a revoked
+session stops executing" / "without the socket having to end" wording: on this contract the
+socket *does* end, and an already-running subscription is exactly the case such wording
+gets wrong. Correcting those two docstrings belongs to the change that implements this
+decision, not to Slice 5's prose sweep: they are load-bearing security claims in the file
+being rewritten.
+
+*Rejected alternatives and change record: [rationale companion, Decision 16][rationale-d16].*
+
+### Decision 17 — Multipart control fields stay Django-parsed, behind a strict loss-detection guard
+
+**Decision.** Django's `MultiPartParser`, `request.POST`, `request.FILES` and the upload
+handlers remain the **sole owners** of multipart framing, limits and file streaming. The
+package adds a guard at its own boundary, and nothing else: no copy or subclass of
+`MultiPartParser._parse`, no double-read-and-rewind of the body, no monkeypatching of
+`force_str`, and no second multipart parser anywhere in the package.
+
+Two conditions must hold before Strawberry parses `operations` / `map` as JSON:
+
+1. **The effective multipart form encoding must canonicalize to UTF-8.** The package resolves
+   it the way Django does — the declared top-level `charset` (which Django has already
+   promoted onto `request.encoding` from `content_params`), else `settings.DEFAULT_CHARSET` —
+   and accepts only codec aliases that canonicalize to UTF-8. An explicit `charset=iso-8859-1`,
+   or anything else, is refused with the normal controlled `400`.
+2. **A decoded control value must not carry Django's replacement marker.** After
+   `request.POST` is populated, the guard inspects **only** the serialized `operations` and
+   `map` values and refuses a literal `U+FFFD` before `json.loads` runs.
+
+The guard is one shared helper on `_RequestBodyBoundaryMixin`; each view overrides upstream's
+`parse_multipart` with a two-line delegate that runs the helper and then calls `super()` —
+the sync view synchronously, the async view as a coroutine, which is the same forced
+sync/async asymmetry the two `run` overrides already carry. No new module, and the mixin
+keeps being the single home of the request-body boundary
+([Decision 6](#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf)).
+
+**Why a loss *detector* rather than a strict decoder.** Django decodes multipart **field**
+data with `force_str(..., errors="replace")` and honours a per-part `charset` only in the
+**file** branch, so by the time the package sees `operations` and `map` they are `str` with
+every decode failure already collapsed to `U+FFFD`. The original bytes are gone. Two live
+probes confirmed the consequence: an `operations` field declared `charset=iso-8859-1` and
+carrying a raw Latin-1 byte executed with `200`, and an `operations` field with no charset
+and a malformed UTF-8 byte (`0x80`) was replacement-decoded and also executed with `200`. A
+strict decode is therefore *unavailable* at this seam, and the honest options are to detect
+the loss or to own the parser. This decision detects the loss.
+
+**The contract, stated precisely.** An accepted multipart control document must use an
+effective UTF-8 encoding **and** must survive Django's decoding without a replacement marker.
+That is deliberately **slightly narrower** than "every valid UTF-8 document": a document that
+legitimately contains a literal `U+FFFD` character is refused, because the package cannot
+distinguish it from a replacement Django generated. It is also deliberately **much wider**
+than ASCII-only: genuine multibyte UTF-8 passes untouched, so ordinary browser
+`JSON.stringify` output with non-ASCII variable values keeps working, and a client that
+genuinely needs a replacement character in its document sends the ASCII escape
+`\ufffd` — which is what a JSON serializer emitting `ensure_ascii` output produces anyway.
+The contract is deterministic, fail-closed, and free of a private-parser maintenance fork
+across Django 5.2 through current.
+
+| multipart `operations` on the wire | Django's decode | package guard | outcome |
+|---|---|---|---|
+| UTF-8, ASCII only | clean | passes | **success** |
+| UTF-8, genuine multibyte (`café`) | clean | passes | **success** |
+| ASCII with a JSON escape (`\u00e9`, or `\ufffd`) | clean | passes | **success** |
+| declared `charset=iso-8859-1` | clean, wrong codec | refused at condition 1 | `400` |
+| no charset, malformed UTF-8 byte | replaced with `U+FFFD` | refused at condition 2 | `400` |
+| UTF-8 containing a literal `U+FFFD` | clean | refused at condition 2 | `400` (the accepted narrowing) |
+
+*Rejected alternatives and change record: [rationale companion, Decision 17][rationale-d17].*
+
+### Decision 18 — The body gate runs before Django's multipart parser, via view-local CSRF re-entry
+
+**Decision.** The package view is `csrf_exempt` on the **outside** and re-enters Django's
+public `csrf_protect` on the **inside**, after the body gate. No package middleware, no
+reimplemented token validation, no ordering system check, and no required `MIDDLEWARE` entry.
+
+The fixed order inside the view is:
+
+1. the outer dispatch callback carries `csrf_exempt`, so the global
+   `CsrfViewMiddleware.process_view` returns before it touches `request.POST` (its earlier
+   `process_request` may still run and reads no body — it only reads the cookie secret);
+2. resolve and enforce the package body limit, returning the controlled `413` immediately if
+   a declared multipart size exceeds it — **before** `request.POST`, `request.FILES`,
+   `MultiPartParser`, or any upload handler;
+3. otherwise enter a private continuation wrapped with Django's public `csrf_protect`, which
+   delegates to Strawberry's inherited `run`.
+
+`csrf_exempt` is stamped by the package, once, on the callback `as_view()` returns — a single
+override on the shared mixin, so both views get it and a URLconf author cannot forget it.
+Django's `csrf_exempt` preserves the async view's coroutine marking by construction, so
+`AsyncDjangoGraphQLView` keeps being dispatched on the event loop.
+
+**The outer exemption is an ORDERING MECHANISM, NOT a CSRF bypass**, and this spec says so in
+those words because it is the single sentence most likely to be misread. Every request that
+gets past the size boundary still undergoes Django's **complete** CSRF implementation, from
+Django's own code: cookie and header tokens, form tokens, `Origin` / `Referer` checks,
+`CSRF_FAILURE_VIEW`, cookie rotation, and `Vary: Cookie`. The protected continuation is
+package-owned and non-optional; there is **no consumer bypass switch**, no setting, and no
+view kwarg that disables it.
+
+**The invariant it buys.** Because the inner `csrf_protect` is unconditional, the GraphQL POST
+endpoint stays CSRF-protected **even if a consumer omits `CsrfViewMiddleware` from
+`MIDDLEWARE` entirely**. The reordering therefore strengthens the boundary it reorders.
+Django's own `csrf_protect` docstring settles the double-processing question — "Using both, or
+using the decorator multiple times, is harmless and efficient" — so a project with the global
+middleware installed pays a second cookie-secret read and nothing else.
+
+**Why the declared gate needs this at all.** `CsrfViewMiddleware._check_token` reads
+`request.POST.get("csrfmiddlewaretoken", "")` for every cookie-bearing POST — even one that
+will ultimately authenticate through the `X-CSRFToken` header — and `_check_token` runs from
+`process_view`, before the view's `run` reaches
+`_enforce_request_body_limit`. On a multipart request that single access invokes Django's
+multipart parser and the upload handlers. Without the re-entry below, the declared gate
+would therefore run **after** the parser it claims to precede
+([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+step 3). A plain `Client()` disables CSRF, so the global middleware exits before
+`_check_token` and a row driven that way observes only the view-local branch: status `413`
+alone is not evidence of ordering
+([Decision 13](#decision-13--test-strategy-which-existing-tests-change-and-why)).
+
+**What this does not change.** ASGI has already received and spooled the raw body in either
+case; that half is unfixable in the application and is
+[Decision 8](#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative)'s
+deployment-layer co-requirement. What the reorder buys is that Django's **parser** and
+**upload handlers** no longer run on a payload the package has already decided to refuse.
+
+**Two consequences worth naming rather than discovering.** (a) On
+`AsyncDjangoGraphQLView`, `csrf_protect`'s pre-processing is synchronous inside its async
+wrapper, so the token check's `request.POST` read happens on the event loop — for a request
+that has already passed the size gate, which is precisely why the gate comes first. (b) An
+`HTTPException` raised inside the continuation (a `400` from the wire contract, say) unwinds
+past `csrf_protect` without reaching its `process_response`, so those error responses do not
+carry a rotated CSRF cookie; the `413` is raised outside the continuation entirely and never
+did.
+
+*Rejected alternatives and change record: [rationale companion, Decision 18][rationale-d18].*
+
+### Decision 19 — A Django-backed WebSocket Host boundary, beside Channels' Origin check
+
+**Decision.** The package adds a **WebSocket Host boundary**, and adds it by *calling Django*
+rather than by implementing one. One small **private** ASGI middleware,
+`DjangoWebSocketHostValidator`, projects the handshake's Host-related metadata into a minimal
+Django `HttpRequest` and calls the public `request.get_host()`. The package parses and matches
+no hostnames itself.
+
+The composition becomes:
+
+```python
+DjangoWebSocketHostValidator(
+    AllowedHostsOriginValidator(
+        AuthMiddlewareStack(URLRouter([re_path(websocket_url_pattern, consumer)])),
+    ),
+)
+```
+
+**Host and Origin stay two separate checks.** Host answers *which server authority the client
+addressed*; Origin answers *which browser origin initiated the socket*. Passing one must never
+substitute for passing the other, and the router's claim now names the specific check that
+delivers each. Channels' validator is left untouched.
+
+**Where it lives, and why not in `routers.py`.** In `consumers.py`, beside the consumer
+factory: that module is already the WebSocket-transport module, it is already `channels`-free
+at import time with its `channels` imports made inside coroutines, and the denial reuses
+`channels.security.websocket.WebsocketDenier` — imported the same way — so a denied `Host`
+handshake looks byte-identical on the wire to a denied `Origin` handshake. `routers.py` stays
+a composition module that *names* wrappers rather than defining them, which is the shape it
+already has for `AllowedHostsOriginValidator` and `AuthMiddlewareStack`. The module's docstring
+first line widens accordingly, and that matters mechanically: `scripts/build_tree_md.py`
+renders that exact line, so Slice 5's regenerate picks up the wider scope.
+
+**The projection preserves Django's semantics, deliberately and item by item.** Each of these
+is a property of Django's own ASGI request adapter, reproduced so that WebSocket and HTTP
+answer the same question the same way:
+
+- collect the ASGI host header **without trusting its casing** (ASGI header names are
+  lowercase bytes by spec, but the projection normalizes rather than assumes);
+- **preserve duplicate values in the same comma-joined form** Django's ASGI request adapter
+  uses (`django/core/handlers/asgi.py::ASGIRequest.__init__` #"join(value) for name"), so an
+  ambiguous duplicate `Host`
+  header fails validation exactly as it does on HTTP rather than being silently reduced to
+  one value;
+- include `X-Forwarded-Host`, so `USE_X_FORWARDED_HOST` behaves identically to HTTP;
+- include `scope["server"]` as `SERVER_NAME` / `SERVER_PORT`, Django's normal fallback when
+  no host header is present;
+- decode header bytes with the **Latin-1** Django/ASGI transport convention, the same codec
+  Django's adapter and Channels' `OriginValidator` both use.
+
+`HttpRequest.get_host()` then **exclusively owns** syntax checking, port removal, IPv4 and
+IPv6 handling, trailing-dot behavior, `ALLOWED_HOSTS` matching, wildcards, and the
+`DEBUG`-and-empty-`ALLOWED_HOSTS` localhost defaults. The package contributes the projection
+and nothing else.
+
+**Only `DisallowedHost` becomes a denial.** The validator catches `DisallowedHost` and denies
+the handshake **before authentication and before the consumer is constructed**. Any other
+exception propagates: a bug in the projection must stay visible rather than being normalized
+into "that host is not allowed", which would be indistinguishable from correct operation.
+
+**Why call Django rather than narrow the claim.**
+`channels.security.websocket.OriginValidator.__call__` reads the `Origin` header and nothing
+else, and `AllowedHostsOriginValidator` is only a factory for
+`OriginValidator(settings.ALLOWED_HOSTS)` — the name is not evidence of behavior. Narrowing
+the package's claim to Origin-only is the least surprising correction and is rejected,
+because it leaves the handshake **accepting a hostile `Host`** with nothing else in the
+stack to catch it: Django never sees the WebSocket handshake at all, so unlike HTTP there is
+no other owner for the question. A boundary the package documents as absent is still absent.
+
+**What this deliberately does not do.** It keeps Channels' validator untouched, invents no
+second allowed-host matching algorithm, adds **no new setting** (WebSocket now follows the
+same Django configuration as HTTP, `ALLOWED_HOSTS` included), and works across supported
+WebSocket protocol versions because the ASGI specification requires an HTTP/2 or HTTP/3
+`:authority` pseudo-header to be exposed as a `host` header in `scope["headers"]`. The
+validator stays **private** and package-owned; its contract is "adapt the ASGI handshake and
+invoke Django's Host boundary", never "reimplement Django Host validation". A consumer who
+wants a different Host policy configures `ALLOWED_HOSTS`, exactly as they would for HTTP.
+
+*Rejected alternatives and change record: [rationale companion, Decision 19][rationale-d19].*
 
 ## Implementation plan
 
 | Slice | Finding | Where | Work | Risk profile |
 |---|---|---|---|---|
 | 1 | S1 | `routers.py`, new `views.py`, `tests/test_routers.py`, new `tests/test_views.py`, live tier | protocol split; required `django_application`; `websocket_url_pattern`; the package view; rewrite 5 router tests; live middleware / Host / CSRF / header / cache / routing proofs | **HIGH** — the breaking change; every downstream slice builds on the new shape |
-| 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper; `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
-| 3 | S9 | `views.py` (the mixin's `parse_json` **and** `_RawBodyRequestAdapter`), both patch modules' docstrings, `_strawberry_patches.py`, `test_products_api.py`, `test_transport_api.py`, `tests/test_cross_web_patches.py`, `tests/test_views.py` | strict UTF-8 decode on the view's `parse_json`, fed by the view's own `request_adapter_class`; the patch gate narrowed to upstream defects; invert 3 live tests; re-aim 2 package tests; the kill-switch matrix in both opt-out spellings | LOW — measured behavior, one rejection branch |
-| 4 | S11 | `routers.py`, new `consumers.py` (WS consumer + 2 handler pre-hooks), new `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; revalidation function; window kwarg and its typed domain; the shared safe value-describer; revoke-then-operate matrix | MED-HIGH — async, per-operation, communicator-driven |
-| 5 | S12 | `docs/`, `spec-041`, glossary DB, kanban DB | migration note; transport guidance; `spec-041` amendment; GLOSSARY + TREE regen; card wrap | mechanical breadth; **no version quintet, no `CHANGELOG.md`** |
+| 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper and its **three** probe outcomes ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)); `csrf_exempt` / `csrf_protect` re-entry so the gate really precedes `MultiPartParser` ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)); `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, the CSRF re-entry reorders a security middleware, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
+| 3 | S9 | `views.py` (the mixin's `parse_json`, the multipart control-field guard, **and** `_RawBodyRequestAdapter`), both patch modules' docstrings, `_strawberry_patches.py`, `test_products_api.py`, `test_transport_api.py`, `tests/test_cross_web_patches.py`, `tests/test_views.py` | strict UTF-8 decode on the view's `parse_json`, fed by the view's own `request_adapter_class`; the multipart control-document encoding + loss guard behind two `parse_multipart` delegates ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)); the patch gate narrowed to upstream defects; invert 3 live tests; re-aim 2 package tests; the kill-switch matrix in both opt-out spellings | LOW-MED — the JSON-body half is measured behavior with one rejection branch; the multipart half adds a second boundary on a path Django decodes first |
+| 4 | S11 | `routers.py`, `consumers.py` (WS consumer + 2 handler pre-hooks + the derived outbound-frame adapter + the private Host validator), `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; the shared revalidation decision function; the adapter-level outbound-frame gate, its connection-local lock and its one close code ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)); `DjangoWebSocketHostValidator` ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)); window kwarg and its typed domain; the shared safe value-describer; the multi-yield revoke-mid-subscription matrix on both protocols; the `0.316.0` install-hint correction | **HIGH** — async, per-frame, communicator-driven, and the lock is held across a send |
+| 5 | S12 | `docs/`, `spec-041`, glossary DB, kanban DB | migration note; transport guidance; `spec-041` amendment **plus** its stale `0.262.0` floor prose; GLOSSARY + TREE regen; card wrap | mechanical breadth; **no version quintet, no `CHANGELOG.md`** |
 
 Sequencing inside the card is strict: **Slice 1 first and alone.** Slices 2 and 4 both
 need Slice 1's seams (the view and the consumer-injection point respectively); Slice 3 is
@@ -1747,10 +2136,32 @@ removed in the change that ships the slice — the repo's standing staging disci
   `_STRAWBERRY_CHANNELS_BROKEN_HINT` triple and the same `_ROUTER_CLASS` cache the
   [eviction-simulated absence][glossary-eviction-simulated-absence] tests depend on. No
   new guard, no new hint string, no second lazy-export mechanism.
-- **The WebSocket revalidation is one function, called from both protocol pre-hooks.**
-  The `graphql_transport_ws` and `graphql_ws` subclasses contain a single `await` and a
-  `super()` call each; every decision (window expiry, session reload, actor write-back,
-  reject-or-continue) lives in the shared function.
+- **The WebSocket revalidation is one function, called from all three seams.**
+  The `graphql_transport_ws` and `graphql_ws` handler subclasses contain a single `await` and a
+  `super()` call each, and the derived outbound-frame adapter contains one type test, one
+  `await` and a `super()` call; every decision (window expiry, session reload, actor
+  write-back, revoke-or-continue) lives in the shared function, and the revoke-and-close
+  response is a second shared coroutine both checkpoints reach
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+  The connection-local lock, the revoked flag and the last-validated timestamp are **one**
+  set of state on the adapter instance upstream already creates per connection — not three
+  parallel caches keyed by protocol.
+- **The WebSocket Host boundary calls Django and matches nothing itself.**
+  `DjangoWebSocketHostValidator` projects the handshake's Host metadata into a minimal
+  `HttpRequest` and calls the public `HttpRequest.get_host()`; `ALLOWED_HOSTS` matching,
+  wildcards, port and IPv6 handling, trailing dots, and the `DEBUG` localhost defaults are
+  Django's alone, and no second allowed-host expression exists in the package
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+- **The multipart control-field guard is one helper on the existing mixin.** Both views'
+  `parse_multipart` overrides are two-line delegates over it, in the same shape the two `run`
+  overrides already take, and the `400` they raise reuses the one `_JSON_PARSE_REASON`
+  constant rather than inventing a second reason string
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+- **The CSRF re-entry uses Django's two public decorators and reimplements neither.**
+  `csrf_exempt` on the callback `as_view()` returns, `csrf_protect` around the private
+  continuation — one `as_view` override on the shared mixin so the two views cannot diverge,
+  and no package-authored token validation, cookie rotation, or `Vary` handling anywhere
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
 - **The actor is written back to `scope["user"]` rather than plumbed to readers.** The
   existing [Channels request adapter][glossary-channels-request-adapter] and
   [`request_from_info`][glossary-request_from_info] single-siting is preserved; this card
@@ -1825,8 +2236,8 @@ removed in the change that ships the slice — the repo's standing staging disci
   the security property holds either way, and identically to a mount with the cap disabled.
   No test asserts a status code for this shape, deliberately: doing so would pin Django's
   exception as a package contract, and the two ways to avoid it — counting `request.body` or
-  rewriting `META` so the declaration parses — are both rejected by name in
-  [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared).
+  rewriting `META` so the declaration parses — are both rejected by name for
+  [Decision 7 in the rationale companion][rationale-d7].
   A conforming server rejects such a header before Django sees it.
 - **`request.body` is single-shot, and the cap must leave it usable.** Reading it caches
   `_body` and rebinds `_stream`; reading the *stream* first sets `_read_started` and makes a
@@ -1853,9 +2264,11 @@ removed in the change that ships the slice — the repo's standing staging disci
   stated.** Neither shape is hypothetical: a wrapper that answers `tell()` in the
   coordinates of the whole message over-reports the position, and a queue- or
   iterator-backed stream that can report a position but not take one returns the offset it
-  was handed, under-reporting the end. Both once produced a probed count of `0` — read as
-  "within the limit", with no byte read anywhere. A probe answering zero or less therefore
-  yields no measurement at all and the bounded read supplies the bound. The cost in the
+  was handed, under-reporting the end. Both make the probed difference zero or negative,
+  and zero taken at face value reads as "within the limit" with no byte read anywhere — the
+  one answer a size probe must never be believed on. A probe answering zero or less
+  therefore yields no measurement at all and the bounded read supplies the bound. The cost
+  in the
   over-reporting direction is disclosed rather than papered over: the restored position
   lands past the end, so the request reaches Strawberry with an **empty** body and is a
   `400` at the parse — never a bypass. Recovering the true bytes is impossible, and
@@ -1867,18 +2280,57 @@ removed in the change that ships the slice — the repo's standing staging disci
   lie — an end that is wrong but still ahead of the position — is indistinguishable from a
   measurement without reading the bytes it describes, which is the work the probe exists to
   avoid.
+- **A capability call that *raises* is a third outcome, not a variant of the second.** Every
+  call the probe makes into a stream it did not create — `seekable()`, the seek to the end,
+  the restoring seek, and the subtraction of the two answers — is guarded, and the guard
+  branches on *what has already been mutated*. A failure before anything moved leaves the
+  original position intact, so the bounded read supplies the bound; a failure of the
+  **restoring** seek leaves the position unknown, so the request is refused with the
+  package's own controlled rejection rather than read from an unknown offset, guessed back to
+  zero, or allowed to escape as an unrelated `500`
+  ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+  #"An unmeasurable stream has three outcomes, not two"). Production streams never take this
+  path; consumer middleware and custom ASGI servers are exactly where it would otherwise be
+  least visible.
 - **Multipart must not be materialized.** Reading `request.body` on a multipart request
   forces the whole payload into memory and defeats Django's streaming upload handlers,
   breaking the [`Upload` scalar][glossary-upload-scalar] /
   [`DjangoMutation`][glossary-djangomutation] file path. The cap branches on
   `request.content_type` and applies the declared-size gate only.
+- **The declared multipart gate is an ordering property, not just a cap property.** It runs
+  before `MultiPartParser` only because the view is `csrf_exempt` outside and
+  `csrf_protect` inside
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  A regression that proves the gate with a plain `Client()` proves nothing about ordering,
+  because that client disables CSRF and the global middleware exits before it reads
+  `request.POST`. `Client(enforce_csrf_checks=True)` with a real cookie and header, plus a
+  parser or upload-handler sentinel, is the only shape that observes it.
+- **A consumer middleware that reads `request.POST` before the view still defeats the
+  ordering.** The package can only guarantee that *its own* CSRF re-entry no longer parses
+  first; a project middleware that touches `request.POST` on the way in has already invoked
+  Django's parser, and the cap then refuses a request whose parse already happened. That is
+  stated rather than silently assumed away, and it is the same honesty the
+  already-materialized-body case gets in
+  [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared).
+- **The multipart control-field guard runs on the values, never on the wire bytes.** Django
+  has already decoded them; the guard checks the *effective form encoding* and the presence
+  of `U+FFFD`, and it accepts a document that legitimately contains a literal `U+FFFD` as
+  the one deliberate false positive of the contract
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+  It must not be written as a `bytes` decode, because there are no bytes left to decode.
 - **GET requests carry no body.** The cap is a no-op on GET; the `variables` /
   `extensions` query-param size is a `TODO-ALPHA-066-0.0.16` concern (S4), and the
   existing `_patched_parse_query_params` shield keeps the body contract off those parses.
 - **`ALLOWED_HOSTS = []` with `DEBUG=True`** (fakeshop's shape) makes Django accept
   `localhost` / `127.0.0.1` only. The hostile-`Host` live test must therefore assert a
   `400` from Django's own host validation, and must not depend on fakeshop's `DEBUG`
-  value; it sets `ALLOWED_HOSTS` explicitly with `override_settings`.
+  value; it sets `ALLOWED_HOSTS` explicitly with `override_settings`. The **WebSocket**
+  hostile-`Host` row inherits the same constraint for the same reason and through the same
+  `HttpRequest.get_host()` code path
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)),
+  which is the point of delegating: one configuration, one matcher, two transports. The row
+  that matters is an **allowed `Origin`** paired with a **hostile `Host`**, because either
+  check passing alone is not the contract.
 - **The router's `"http"` value is now an opaque callable.** The composition test asserts
   object identity with the supplied application rather than structural equality — there is
   nothing left to introspect, which is the point.
@@ -1886,11 +2338,31 @@ removed in the change that ships the slice — the repo's standing staging disci
   `ValueError` for unmapped scope types; uvicorn's startup probe still logs its benign
   "ASGI 'lifespan' protocol appears unsupported".
 - **A revalidation database error must fail closed.** A session-store or user-load failure
-  during revalidation rejects the operation and is logged; it never falls back to the stale
-  cached actor. This mirrors the fail-closed posture the shipped
+  during revalidation revokes and closes the connection and is logged; it never falls back to
+  the stale cached actor, and it never lets the pending frame out. This mirrors the
+  fail-closed posture the shipped
   [auth mutations][glossary-auth-mutations] already take after authentication. The guard
   catches `Exception`, not `BaseException`, so a cancellation raised while a task is being
-  torn down propagates instead of being reported to the client as a denied operation.
+  torn down propagates instead of being reported to the client as a revocation. Closing on a
+  transient store failure is the accepted cost of fail-closed at a connection-scoped
+  boundary: an actor the package cannot validate is an actor it cannot authorize a frame for,
+  and a reconnect re-reads the session honestly
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+- **The outbound gate must not deadlock or re-enter.** The connection-local lock is held
+  across the protected send, so nothing reached from inside that critical section may send
+  another protected frame: the revoke-and-close path writes no operation `error` frame (which
+  is why there is none —
+  [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)),
+  and `close` goes out through the adapter's own `close`, which is not a gated frame type. A
+  `complete` frame emitted by upstream's own cancellation handling after the close is
+  ungated by design and lands on an already-closing socket, which is upstream's existing
+  behavior on any disconnect and not a package concern.
+- **The Host projection must not swallow its own bugs.** Only `DisallowedHost` becomes a
+  denial; every other exception propagates
+  ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+  A projection bug that silently denied every handshake would be indistinguishable from
+  correct `ALLOWED_HOSTS` enforcement, which is the worst possible failure mode for a check
+  whose whole value is that it rejects.
 - **The revalidation read is router-decided, not alias-pinned.** Per
   [Multi-database cooperation][glossary-multi-database-cooperation] the session and user
   reads honor their models' normal **Django database-router** decisions — the session engine
@@ -1901,10 +2373,15 @@ removed in the change that ships the slice — the repo's standing staging disci
   deployment therefore gets exactly the routing it configured for those models, which is the
   cooperation the rule asks for; a stronger same-operation-alias guarantee is deliberately
   **not** claimed, because reaching it would mean reimplementing `get_user`.
-- **An injected consumer class opts out of revalidation, not out of the wrappers.** The
-  Host/Origin and authentication wrappers are applied by the router around whatever is
-  injected; a test asserts the wrapper nesting for an injected class as well as for the
-  default.
+- **An injected consumer class opts out of revalidation, not out of the wrappers.** All
+  **three** wrappers — the package's `DjangoWebSocketHostValidator`, Channels'
+  `AllowedHostsOriginValidator`, and `AuthMiddlewareStack` — are applied by the router around
+  whatever is injected; a test asserts the full nesting order for an injected class as well
+  as for the default. An injected class also opts out of the outbound-frame gate, because the
+  gate is installed on the *package's* consumer through its `websocket_adapter_class`; that is
+  the same explicit trade the admission hooks already carry, and the docs say so rather than
+  implying the gate is structural like the wrappers are
+  ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
 - **A positive `websocket_revalidation_window` is meaningless when a custom class is
   injected.** The constructor rejects that combination rather than silently ignoring the
   window — a knob that does nothing is worse than an error. An explicit `0.0` is accepted
@@ -1916,11 +2393,20 @@ removed in the change that ships the slice — the repo's standing staging disci
   concurrent work); `ruff format` + `ruff check --fix` after every edit;
   `::QualifiedName` doc references swept when `routers.py`'s symbols change.
 - **Coverage.** `fail_under = 100` must hold with all four new modules added — `views.py`,
-  `_request_body.py`, `consumers.py`, `utils/sessions.py`. The cap's settings-precedence and
+  `_request_body.py`, `consumers.py`, `utils/sessions.py`, and no fifth: the
+  outbound-frame adapter and the Host validator both live in `consumers.py`, and
+  the multipart guard and the CSRF re-entry both live in `views.py`). The cap's
+  settings-precedence and
   validation branches, the measurement's per-stream-shape branches, and the window's domain
   arms are package-tier; every request-shaped row is live-tier. No branch of the measurement
   needs a `pragma: no cover`: each stream shape it distinguishes is reachable from a real
-  request or from a stand-in that subclasses the production stream class.
+  request or from a stand-in that subclasses the production stream class. Two
+  consequences are coverage obligations rather than optional tidying: the per-operation
+  revoked-session `error` message, its `errors_as_list` per-protocol split, and the
+  `graphql.GraphQLError` import that formatted them become unreachable under
+  [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+  and must be **deleted** in the same change rather than left as dead code; and the adapter
+  gate's every-type-delegates path needs a row per ungated frame type it must not touch.
 
 ## Test plan
 
@@ -1972,7 +2458,13 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     in either direction — an over-reported position, an under-reported end — is refused a
     measurement and bounded by the read instead, in both the over-limit direction (`413`,
     one bounded read) and the genuinely-empty one (allowed, one bounded read), so the
-    probe's zero is never taken on trust.
+    probe's zero is never taken on trust. And the **third** probe outcome is pinned
+    separately: a stand-in whose `seekable()` raises, one whose seek-to-end raises, one whose
+    subtraction result cannot be produced, and one whose **restoring** seek raises — the
+    first three bounded by the read with the original position intact, the last refused with
+    the package's own controlled rejection and never a raw `500`
+    ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+    #"An unmeasurable stream has three outcomes, not two").
 16. Which ceiling fired: package cap vs. Django's `DATA_UPLOAD_MAX_MEMORY_SIZE`, both
     directions.
 17. `max_request_body_bytes=` view kwarg beats `MAX_REQUEST_BODY_BYTES`; the setting beats
@@ -2010,7 +2502,10 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
 **S11 — actor revalidation** (package, communicator-driven):
 
 25. Establish a socket, then revoke / flush / disable the session through a **separate**
-    request; the next operation is denied **without reconnecting**. Both tiers of "separate"
+    request; the next operation is refused **without reconnecting**, as a connection close
+    (`4403` / `"Forbidden"`) with **no** preceding operation `error` frame
+    ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
+    Both tiers of "separate"
     are owed and neither subsumes the other: a **real second HTTP request** — an
     `AsyncClient` carrying the socket's own session cookie to a logout view on a
     [Probe URLconf][glossary-probe-urlconf], while the communicator stays open, asserting it
@@ -2028,14 +2523,20 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     put sync ORM on the event loop inside a deliberately ORM-free test module; the proof is
     an out-of-band change to the user row that the next operation reads back.
 27. `websocket_revalidation_window` > 0: a revoked session still executes inside the
-    window and is denied after it.
-28. An injected `websocket_consumer_class` is still wrapped by
-    `AllowedHostsOriginValidator` and `AuthMiddlewareStack`.
+    window and is refused after it — asserted at **both** checkpoints, since the window's
+    meaning is now "the maximum age of a successful validation that may authorize a new
+    operation **or** an information-bearing outbound frame". Plus the property the window
+    exists to buy: an **idle** authenticated socket performs zero session reads however long
+    it sits.
+28. An injected `websocket_consumer_class` is still wrapped by **all three** router-applied
+    wrappers, in order: `DjangoWebSocketHostValidator`, `AllowedHostsOriginValidator`, and
+    `AuthMiddlewareStack`.
 29. Injecting a class **and** passing a **positive** window is a construction error; an
     explicit `0.0` alongside an injected class is accepted, since it configures nothing
     either way.
-30. A revalidation store failure denies the operation (fail-closed), never falls back to
-    the cached actor.
+30. A revalidation store failure revokes and closes the connection (fail-closed) and never
+    falls back to the cached actor — at both checkpoints, and with the pending frame proven
+    not to have been sent.
 31. The window's construction-time domain: `bool`, a non-numeric value, a negative number,
     `nan` / `inf`, and an integer with no `float` image are each a
     [`ConfigurationError`][glossary-configurationerror] — with the conversion's
@@ -2057,6 +2558,88 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     ran the auth suite has those modules cached, so a bare absence assertion would pass
     whatever production imports.
 
+**Active-operation revocation**
+([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam);
+package, communicator-driven, **once per protocol**):
+
+34. The active-operation gate, in full: a controlled **multi-yield**
+    async subscription; receive result 1; revoke through the existing **real second HTTP
+    request** while the operation is still open; release result 2's event; prove result 2 is
+    **never delivered**, that the operation is cancelled or completed, and that the connection
+    is closed with `4403` / `"Forbidden"` and no operation `error` frame; plus a
+    **valid-session control** on the same fixture that receives both results. Both `next`
+    (`graphql-transport-ws`) and `data` (legacy `graphql-ws`) are owed; neither protocol's row
+    substitutes for the other's, because the two payload sends reach the adapter by different
+    call chains.
+35. Frame-type discrimination, positively and negatively: an operation-scoped `error` frame is
+    gated (a revoked connection does not deliver it), while `complete`, `connection_ack`,
+    `ping` / `pong` and `ka` delegate unchanged — a revoked-but-not-yet-closed connection is
+    not the fixture for this row; the fixture is a **valid** connection with a session-read
+    counter, proving the ungated types cost zero reads.
+36. The seam is structural, not incidental: the generated consumer's
+    `websocket_adapter_class` **is** the package's derived adapter, that adapter's base **is**
+    the one read off `base_consumer_cls.websocket_adapter_class`, and an injected consumer
+    class keeps its own adapter untouched.
+37. Serialization: two concurrent operations on one socket cannot interleave a passed
+    validation with a sibling's revocation — the losing task's payload is never emitted. And
+    the lock's blast radius is bounded: a second connection is unaffected while the first is
+    inside the critical section.
+38. The window at the frame checkpoint: with a positive window a revoked subscription keeps
+    emitting until the window elapses and is then closed at the next frame, with exactly one
+    session read per window rather than per frame.
+
+**Multipart control fields**
+([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard);
+live, real multipart requests, **both** package views):
+
+39. The full matrix, as real `multipart/form-data` requests rather than a direct
+    `parse_json(str)` call — which cannot prove a wire boundary at all: malformed UTF-8 with
+    no charset → `400`; explicit `charset=iso-8859-1` → `400`; a JSON `\uXXXX` escape →
+    success; genuine multibyte UTF-8 (the ordinary `JSON.stringify` shape) → success; a
+    literal `U+FFFD` in an otherwise-clean document → `400`, the contract's one deliberate
+    narrowing. The `map` field carries its own row, so the guard is proven not to inspect
+    `operations` alone.
+40. The upload path still works: an accepted multipart request with a real file reaches the
+    [`Upload` scalar][glossary-upload-scalar] mutation unchanged, so the guard is shown to
+    have added a boundary without taking Django's streaming upload handling away.
+
+**Cap ordering against CSRF**
+([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry);
+live):
+
+41. `Client(enforce_csrf_checks=True)`, a valid CSRF cookie **and** header, an
+    over-package-limit multipart body, and an upload-handler or parser sentinel that must not
+    fire: `413` with the sentinel silent. Status `413` alone is explicitly **not** evidence of
+    ordering, which is why the sentinel is the assertion and the status is the control.
+42. The exemption is not a bypass: with the global `CsrfViewMiddleware` installed, an
+    under-limit POST with a missing token → rejected, a wrong token → rejected, a correct
+    token → succeeds (the row 4 matrix, re-earned through the inner `csrf_protect`); and
+    **with the global middleware removed entirely**, the same three outcomes still hold —
+    which is the invariant the re-entry buys and the single most important row of this block.
+    Both package views, since the sync and async `csrf_protect` wrappers are different code
+    paths in Django.
+
+**The WebSocket Host boundary**
+([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check);
+package, communicator-driven):
+
+43. An **allowed `Origin`** with a **hostile
+    `Host`** is denied. Plus the converse control (allowed `Host`, hostile `Origin` → denied
+    by Channels' validator) and the both-allowed control, so neither check is shown to be
+    doing the other's work.
+44. Django owns the matching, proven by delegation rather than by re-assertion: under
+    `override_settings(ALLOWED_HOSTS=[...])` a wildcard entry, a leading-dot subdomain entry,
+    a `Host` carrying an explicit port, an IPv6 literal, and a trailing-dot form each behave
+    exactly as `HttpRequest.get_host()` behaves for the same value on HTTP.
+45. Ambiguity fails closed: duplicate `Host` headers are comma-joined the way Django's ASGI
+    request adapter joins them, so the resulting value fails validation instead of one of the
+    two being silently chosen. Header-name casing does not change the outcome.
+46. `X-Forwarded-Host` is honoured **only** under `USE_X_FORWARDED_HOST`, identically to HTTP;
+    with no host header at all, `scope["server"]` supplies Django's normal fallback.
+47. Only `DisallowedHost` becomes a denial: an unexpected exception raised inside the
+    projection propagates rather than being reported as a rejected host, and the row asserts
+    the exception type rather than a denial.
+
 **Gates.** Full suite green under `fail_under = 100`; `ruff format` / `ruff check` clean;
 `scripts/check_trailing_commas.py --check` clean on the touched paths; `manage.py check`
 and `makemigrations --check` clean; pre-commit run before any commit.
@@ -2072,16 +2655,41 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   cap as a co-requirement, and the WebSocket revalidation window and connection-lifetime
   expectations). The existing "Channels GraphQL consumers do not enforce CSRF" sentence
   in the [session-auth deployment boundary][glossary-auth-mutations] section is corrected:
-  HTTP is Django-CSRF-protected now, and the sentence narrows to WebSocket.
+  HTTP is Django-CSRF-protected now, and the sentence narrows to WebSocket. That guidance
+  carries four further paragraphs, and each must name the specific
+  mechanism rather than a family:
+  - **Revocation.** The exact claim from
+    [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+    (*a revoked actor cannot admit another operation or emit another information-bearing
+    operation frame; detection is event-boundary-driven*), the connection close a client
+    should expect, the window's expanded meaning, and — stated, not implied — the
+    idle-socket residue plus the deployment knobs that bound it.
+  - **WebSocket Host.** That the handshake is validated on `Host` **and** `Origin`, by two
+    separate wrappers, that `Host` follows the project's existing `ALLOWED_HOSTS` and
+    `USE_X_FORWARDED_HOST` exactly as HTTP does, and that no new setting exists
+    ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
+  - **CSRF ordering.** That the GraphQL view is `csrf_exempt` outside and `csrf_protect`
+    inside, in one sentence that leads with *ordering mechanism, not bypass*, and that the
+    endpoint stays CSRF-protected even without the global middleware
+    ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+    A reader who skims this paragraph must not come away thinking CSRF was relaxed.
+  - **Multipart control documents.** That `operations` / `map` must be effectively UTF-8 and
+    must survive Django's decode without a replacement marker, with the `\uXXXX` escape named
+    as the way to send a literal `U+FFFD`
+    ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
 - **[`docs/GLOSSARY.md`][glossary]** via the glossary DB + `scripts/build_glossary_md.py`
   re-render — the [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter]
   entry rewritten to the new composition and constructor; the
   [Channels request adapter][glossary-channels-request-adapter] entry narrowed to
   WebSocket; the [auth-mutation][glossary-auth-mutations] transport matrix's HTTP row
   corrected; and the new terms this card authors (the package Django view, the body cap,
-  the UTF-8 wire contract, the consumer-injection seam, the revalidation window). New
+  the UTF-8 wire contract, the consumer-injection seam, the revalidation window, the
+  connection-scoped revocation contract, and the WebSocket Host
+  boundary). New
   glossary entries require the maintainer-authorized DB update; they are **not**
-  hand-written into the rendered file.
+  hand-written into the rendered file. Per [`AGENTS.md`][agents] the fold-in belongs to this
+  shipping slice, so this spec's own companion term ledger is deliberately **not** enriched
+  during authoring.
 - **[`docs/TREE.md`][tree]** via `scripts/build_tree_md.py` — all four modules the earlier
   slices add, in both the current and target package layouts: `views.py`, `_request_body.py`,
   `consumers.py`, and `utils/sessions.py`; plus `tests/test_views.py` in the test trees. The
@@ -2134,13 +2742,41 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   ASGI chooses the async one deliberately. Fallback: ship the sync view only and add the
   async twin when a live async tier exists — rejected for now because an ASGI-shaped card
   that omits the async view would be an odd omission.
-- **The revalidation's per-operation query cost.** One session read per operation is real
-  work on a socket's critical path, and the bounded window is the only mitigation this
-  card ships. Preferred answer: default to `0.0` (always revalidate), document the window
-  with the trade stated in one sentence, and let a measured deployment price it. Fallback:
+- **The revalidation's per-authorized-event query cost.** One
+  session read per operation is real work on a socket's critical path;
+  [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+  extends it to every information-bearing outbound frame, so a high-rate authenticated
+  subscription at the default window pays one session read **per emitted result**, serialized
+  behind one connection-local lock. The bounded window is the only mitigation this
+  card ships, and it is a consequential knob. Preferred answer:
+  keep the default at `0.0` (always revalidate) because a stale-actor default is the finding
+  being fixed, document the window with the trade stated in one sentence, name the
+  per-result cost explicitly in that sentence, and let a measured deployment price it.
+  Fallback:
   if a later benchmark shows the read dominating a subscription-heavy workload, a
   session-store-level cache belongs to [`TODO-ALPHA-066-0.0.16`][kanban]'s resource
-  policy, not to a second knob here.
+  policy, not to a second knob here. **Flagged for the maintainer** rather than settled:
+  whether a subscription-heavy deployment should be steered toward a non-zero default window
+  in the docs is a product judgement, not a spec one.
+- **`csrf_protect` on the async view at the Django 5.2.0 floor.** Django's
+  `make_middleware_decorator` branches on `iscoroutinefunction(view_func)` and produces an
+  async wrapper, verified at the installed 6.0.5; the same branch is expected at the 5.2.0
+  floor but has not been read there in this pass.
+  [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)
+  is written as **decided**, and a builder is verifying the floor empirically in an isolated
+  venv. Preferred answer: no change — the decorator is public API and its async support
+  predates the floor. Fallback if the floor lacks it: the async view's continuation is wrapped
+  by an explicit `sync_to_async`-free equivalent built from `CsrfViewMiddleware`'s own
+  `process_view` / `process_response`, which is still Django's implementation and still not a
+  reimplementation — **but that fallback is an amendment to Decision 18 and must be recorded
+  as one, not applied silently.**
+- **The multipart contract's one deliberate false positive.** A control document containing a
+  literal `U+FFFD` is refused, because Django's replacement-decoding makes it
+  indistinguishable from a decode failure
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+  Preferred answer: accept the narrowing, document the `\uXXXX` escape, and record the
+  upstream-hook escalation path. Fallback: none inside this package — the alternative is a
+  Django parser fork, which the decision rejects by name.
 - **`websocket_url_pattern`'s default keeps a WS path that HTTP no longer serves.** After
   this card, `^graphql/?$` on WebSocket and `graphql/` in the URLconf are two independent
   declarations that a consumer must keep in sync by hand. Preferred answer: document that
@@ -2212,11 +2848,27 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
       `DATA_UPLOAD_MAX_MEMORY_SIZE` still applies, and every `_stream` / `_body` /
       `_read_started` reference confined to `_request_body.py` and pinned on both the
       py3.10 / Django 5.2.0 floor and the current stack.
+- [ ] The measurement's capability probe reports **three** outcomes and no capability call is
+      unguarded: measurable; safely unmeasurable with the original position intact so the
+      bounded read runs (a probed count of zero or less still counted as a measurement
+      *failure*); or position potentially corrupted, refused with the package's own controlled
+      rejection rather than a raw `500`.
+- [ ] The declared multipart ceiling runs **before** `request.POST`, `request.FILES`,
+      `MultiPartParser` and every upload handler, proven under
+      `Client(enforce_csrf_checks=True)` with a parser / upload-handler sentinel that must not
+      fire — and the `csrf_exempt` / `csrf_protect` re-entry is shown to be an ordering
+      mechanism and not a bypass, including with the global `CsrfViewMiddleware` removed.
 - [ ] `MAX_REQUEST_BODY_BYTES` exists in `conf.py` with a per-mount view-kwarg override
       and the documented precedence; it is the only settings key this card adds.
-- [ ] Request JSON is UTF-8-only: UTF-16 / UTF-32 (BOM and BOM-less) and a UTF-8 BOM all
-      return `400`; ordinary UTF-8 is unchanged; sync and async behave identically; the
-      three live UTF-16/32/BOM success tests are inverted.
+- [ ] An `application/json` request body is UTF-8-only: UTF-16 / UTF-32 (BOM and BOM-less)
+      and a UTF-8 BOM all return `400`; ordinary UTF-8 is unchanged; sync and async behave
+      identically; the three live UTF-16/32/BOM success tests are inverted.
+- [ ] A multipart `operations` / `map` control document must use an effective UTF-8 encoding
+      and must survive Django's decoding without a `U+FFFD` replacement marker, enforced
+      before either value is parsed as JSON, with genuine multibyte UTF-8 and ordinary
+      `JSON.stringify` output still accepted — and with Django's `MultiPartParser`,
+      `request.POST` / `request.FILES` and the upload handlers still the sole owners of
+      multipart parsing (no copy, no subclass, no monkeypatch, no second parser).
 - [ ] The wire contract is enforced by the package view itself — its own body source
       (`_RawBodyRequestAdapter`, installed as `request_adapter_class`) feeding one strict
       decode — and holds with `APPLY_UPSTREAM_PATCHES` disabled in either spelling, while
@@ -2225,17 +2877,40 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
       against the new HTTP path, the new wire contract, and the mount it now serves.
 - [ ] A WebSocket consumer-class/factory injection seam exists; an injected factory's calling
       convention and returned application are validated at construction; the injected class
-      still sits inside `AllowedHostsOriginValidator` + `AuthMiddlewareStack`; the package
-      default revalidates the session actor per operation — resolving its session store
-      outside the opt-in `auth` package — and denies an operation on a revoked session
-      without a reconnect; `websocket_revalidation_window` makes any accepted delay explicit
-      and rejects every unusable value as a
+      still sits inside all three router-applied wrappers —
+      `DjangoWebSocketHostValidator(AllowedHostsOriginValidator(AuthMiddlewareStack(...)))`;
+      the package
+      default revalidates the session actor at **both** checkpoints — resolving its session
+      store outside the opt-in `auth` package — so a revoked actor can neither admit another
+      operation nor emit another `next` / `data` / operation `error` frame, and the connection
+      is closed (`4403` / `"Forbidden"`, no preceding operation error) at whichever checkpoint
+      notices first, **without a reconnect**;
+      `websocket_revalidation_window` makes any accepted delay explicit, means the same thing
+      at both checkpoints, and rejects every unusable value as a
       [`ConfigurationError`][glossary-configurationerror].
+- [ ] A multi-yield subscription revoked mid-flight delivers **no** further result, on both
+      protocols, with a valid-session control that receives both results; the now-unreachable
+      per-operation revoked-session error message, its per-protocol payload split, and the
+      `graphql.GraphQLError` import are deleted rather than left as dead code.
+- [ ] A WebSocket handshake carrying an **allowed `Origin`** and a **hostile `Host`** is
+      denied, before authentication and before the consumer is constructed, by a private
+      package validator that delegates `ALLOWED_HOSTS` matching to Django's public
+      `HttpRequest.get_host()`; Channels' validator is untouched, no second host matcher or
+      settings key exists, and only `DisallowedHost` becomes a denial.
+- [ ] `routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT` and its pinning test name
+      `strawberry-graphql>=0.316.0`, matching the hard dependency and the minimum CI node, so
+      the recovery hint no longer recommends a rejected version.
 - [ ] Every preserved WebSocket Origin / auth test still passes unmodified; every rewritten
-      HTTP-branch test asserts the new contract.
+      HTTP-branch test asserts the new contract; every re-aimed test's inversion is
+      named in
+      [Decision 13](#decision-13--test-strategy-which-existing-tests-change-and-why).
 - [ ] Migration note (old vs new `asgi.py` **plus** the `urlpatterns` entry) and transport
-      deployment guidance authored; [`spec-041`][spec-041] amended with the three
-      superseded items.
+      deployment guidance authored, including the four mechanism paragraphs (revocation and its
+      idle-socket residue, the WebSocket Host boundary, the CSRF ordering statement, the
+      multipart control-document contract); [`spec-041`][spec-041] amended with the three
+      superseded items **and** its stale `strawberry-graphql>=0.262.0` floor prose reconciled
+      to `>=0.316.0` (factually-wrong prose only; checkbox state untouched; Status line the
+      source of truth).
 - [ ] [`docs/GLOSSARY.md`][glossary] updated via the glossary DB + re-render (never
       hand-edited); [`docs/TREE.md`][tree] regenerated; [`README.md`][readme] /
       [`TODAY.md`][today] transport wording corrected.
@@ -2295,6 +2970,26 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 [glossary-strawberry_config]: GLOSSARY.md#strawberry_config
 [glossary-testclient]: GLOSSARY.md#testclient
 [glossary-upload-scalar]: GLOSSARY.md#upload-scalar
+[rationale-d10]: spec-065-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
+[rationale-d11]: spec-065-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[rationale-d12]: spec-065-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[rationale-d13]: spec-065-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[rationale-d14]: spec-065-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[rationale-d15]: spec-065-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
+[rationale-d16]: spec-065-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[rationale-d17]: spec-065-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[rationale-d18]: spec-065-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[rationale-d19]: spec-065-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[rationale-d1]: spec-065-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d2]: spec-065-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[rationale-d3]: spec-065-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[rationale-d4]: spec-065-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[rationale-d5]: spec-065-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[rationale-d6]: spec-065-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[rationale-d7]: spec-065-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[rationale-d8]: spec-065-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[rationale-d9]: spec-065-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[rationale]: spec-065-transport_security-0_0_15-rationale.md
 [spec-045]: spec-045-debug_extraction-0_0_15.md
 [tree]: TREE.md
 

@@ -592,7 +592,13 @@ def test_reverse_fk_from_lookup_status_to_cards():
 
 @pytest.mark.django_db
 def test_select_board_docs_and_lookup_roots_for_static_dashboard():
-    """The static dashboard can fetch board docs and FK options directly."""
+    """The static dashboard can fetch board docs and FK options directly.
+
+    ``Section`` is the one lookup on this query whose table is non-empty in a
+    freshly migrated database (four rows seeded by a data migration), so its
+    root is narrowed to the key ``_seed_board`` creates; every other root here
+    is empty before seeding and stays an exact-equality assertion.
+    """
     _seed_board()
     _assert_graphql_data(
         """
@@ -610,7 +616,7 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
           }
           allKanbanPriorities { key }
           allKanbanParityLevels { key }
-          allKanbanSections { key }
+          allKanbanSections(filter: { key: { exact: "scope" } }) { key }
           allKanbanReferenceKinds { key }
           allKanbanBoardDocKinds { key docs { key } }
         }

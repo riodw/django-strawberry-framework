@@ -920,24 +920,33 @@ async def _reached(event, message, *, timeout=10):
 
 async def _wait_until(
     predicate,
-    message,
+    describe,
     *,
-    tries=500,
-    delay=0.001,
+    tries=2500,
+    delay=0.002,
 ):
     """Yield to the event loop until ``predicate()`` holds, or fail loudly.
 
-    Used only where the awaited state is a list the production code appends to
-    (gate entries), which carries no Event of its own. Every wait here is
-    satisfied by letting other tasks run rather than by the passage of time - the
-    delay is a scheduling courtesy for the executor-thread hops the session reads
-    make, not a timing assumption.
+    Used only where the awaited state is something the production code appends to
+    or counts up (gate entries, admission reads), which carries no Event of its
+    own. The awaited state is one the production code is about to produce, so
+    ``tries * delay`` is a FAILURE BOUND: it only bounds how long a genuinely
+    stuck run takes to report which contract broke, and a run that satisfies the
+    predicate returns as soon as it does. The bound is not free of real time
+    though - a predicate over session reads waits on one database round trip per
+    read through an executor thread, which on a networked vendor costs ~0.65s for
+    a hundred reads against ~0.1s on local SQLite, so the 5s ceiling here keeps
+    an order of magnitude of headroom over the slowest measured vendor.
+
+    ``describe`` is called only on failure, and must therefore be a callable so
+    the message reports the state AT failure time; an eagerly formatted string
+    would report the state before the wait began.
     """
     for _ in range(tries):
         if predicate():
             return
         await asyncio.sleep(delay)
-    raise AssertionError(message)
+    raise AssertionError(describe())
 
 
 async def _logout_through_a_real_second_request(session_key, username):
@@ -3344,7 +3353,7 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
         second_controller.release(0)
         await _wait_until(
             lambda: gate.entries == ["a", "b"],
-            f"the sibling never reached the outbound checkpoint: {gate.entries}",
+            lambda: f"the sibling never reached the outbound checkpoint: {gate.entries}",
         )
         assert probe.reads == 3
 
@@ -3629,7 +3638,7 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
             )
         await _wait_until(
             lambda: probe.reads == _UPSTREAM_SUBSCRIPTION_LIMIT,
-            f"not every operation was admitted: {probe.reads}",
+            lambda: f"not every operation was admitted: {probe.reads}",
         )
 
         # From here the NEXT read fails: operation 101's admission is read 101 and

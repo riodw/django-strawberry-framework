@@ -11,11 +11,12 @@ completion and rolls it back when completion adds an error.
 
 The trigger requires a row that can be written but not serialized back. Normal
 ORM writes can't produce one, so the tests corrupt the DB directly with raw
-SQL: a ``created_date`` of ``"not-a-date"`` hydrates to ``None`` on refetch or
-snapshot (no exception, so nothing fails at write time), and only fails at
-completion as ``Cannot return null for non-nullable field ...createdDate`` -
-by which point the create/update/delete side effect must ROLL BACK, not stay
-committed.
+SQL: a ``created_date`` that hydrates to ``None`` on refetch or snapshot (no
+exception, so nothing fails at write time) only fails at completion as
+``Cannot return null for non-nullable field ...createdDate`` - by which point
+the create/update/delete side effect must ROLL BACK, not stay committed. The
+stored corruption is vendor-shaped (``_corrupt_created_date``); the hydrated
+value, the failing field and the rollback assertion are identical on both.
 
 These began life as ``xfail(strict=True)`` regressions; the 0.0.14 mutation-atomicity work landed, they
 XPASSed, and the markers were removed - the assertions encode the shipped
@@ -119,11 +120,34 @@ def _global_id(type_name: str, pk: int) -> str:
     return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
+_VALID_DATE = "2026-01-02 03:04:05"
+
+
 def _execute_raw(sql: str, params: tuple = ()) -> int:
-    """Run a raw INSERT (bypassing the ORM, to plant un-serializable data) and return its pk."""
+    """Run a raw ``INSERT ... RETURNING id`` (bypassing the ORM) and return the new pk.
+
+    ``RETURNING`` keeps the pk read vendor-neutral: DB-API ``lastrowid`` is a
+    SQLite-only affordance.
+    """
     with connection.cursor() as cursor:
         cursor.execute(sql, params)
-        return cursor.cursor.lastrowid
+        return cursor.fetchone()[0]
+
+
+def _corrupt_created_date(table: str) -> str | None:
+    """Return the value to store so ``table``'s ``created_date`` hydrates to ``None``.
+
+    SQLite stores datetimes as text and hydrates an unparseable string to
+    ``None``. Postgres type-checks the column, so the equivalent stored value is
+    a real ``NULL``; ``created_date`` is declared NOT NULL, so relax that first.
+    Both vendors then hand the ORM the same ``None`` and fail the same
+    non-nullable ``createdDate`` at response completion.
+    """
+    if connection.vendor == "sqlite":
+        return "not-a-date"
+    with connection.cursor() as cursor:
+        cursor.execute(f"ALTER TABLE {table} ALTER COLUMN created_date DROP NOT NULL")
+    return None
 
 
 def _post_update(
@@ -164,41 +188,48 @@ def _post_delete(client: Client, item_pk: int):
     return res.response
 
 
-def _insert_category(name: str, *, created_date: str = "2026-01-02 03:04:05") -> int:
-    """Insert a category by raw SQL; a ``created_date`` of ``"not-a-date"`` corrupts it.
+def _insert_category(name: str, *, corrupt: bool = False) -> int:
+    """Insert a category by raw SQL; ``corrupt=True`` plants an un-hydratable ``created_date``.
 
     A corrupt date hydrates to ``None`` on refetch (no exception, nothing rolls
     back at write time) and only fails later, completing the non-nullable
-    ``createdDate``.
+    ``createdDate``. ``is_private`` is bound as a real Python ``bool`` so the
+    parameter matches Postgres' ``boolean`` column as well as SQLite's.
     """
+    created_date = _corrupt_created_date("products_category") if corrupt else _VALID_DATE
     return _execute_raw(
         """
         INSERT INTO products_category (name, description, is_private, created_date, updated_date)
-        VALUES (%s, %s, 0, %s, %s)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             name,
             "category created by raw SQL",
+            False,
             created_date,
-            created_date,
+            _VALID_DATE,
         ),
     )
 
 
-def _insert_item(name: str, category_pk: int, *, created_date: str = "2026-01-02 03:04:05") -> int:
-    """Insert an item by raw SQL; a ``created_date`` of ``"not-a-date"`` corrupts it."""
+def _insert_item(name: str, category_pk: int, *, corrupt: bool = False) -> int:
+    """Insert an item by raw SQL; ``corrupt=True`` plants an un-hydratable ``created_date``."""
+    created_date = _corrupt_created_date("products_item") if corrupt else _VALID_DATE
     return _execute_raw(
         """
         INSERT INTO products_item
             (name, description, category_id, is_private, created_date, updated_date)
-        VALUES (%s, %s, %s, 0, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             name,
             "item created by raw SQL",
             category_pk,
+            False,
             created_date,
-            created_date,
+            _VALID_DATE,
         ),
     )
 
@@ -217,7 +248,7 @@ def test_update_does_not_commit_when_response_completion_fails():
 
     # A category whose `created_date` cannot round-trip: it hydrates to None on
     # refetch (no exception), then fails the non-nullable `createdDate` at completion.
-    category_pk = _insert_category("raw-update-bad-date-category", created_date="not-a-date")
+    category_pk = _insert_category("raw-update-bad-date-category", corrupt=True)
     item_pk = _insert_item("raw-bad-date-item", category_pk)
 
     response = _post_update(client, item_pk, name="post-corruption-update")
@@ -245,7 +276,7 @@ def test_delete_does_not_commit_when_own_scalar_response_completion_fails():
     create_users(1)
     client = _login_with_perm("staff_1", "delete_item")
     category_pk = _insert_category("raw-own-scalar-category")
-    item_pk = _insert_item("raw-own-scalar-item", category_pk, created_date="not-a-date")
+    item_pk = _insert_item("raw-own-scalar-item", category_pk, corrupt=True)
 
     res = TestClient(client=client).query(
         _DELETE_ITEM_OWN_SCALAR,
@@ -267,7 +298,7 @@ def test_create_does_not_commit_when_response_completion_fails():
     """A create whose response can't be serialized must roll back, not leave a row."""
     create_users(1)
     client = _login_with_perm("view_item_1", "add_item")
-    category_pk = _insert_category("raw-create-bad-date-category", created_date="not-a-date")
+    category_pk = _insert_category("raw-create-bad-date-category", corrupt=True)
 
     response = _post_create(client, category_pk)
 
@@ -287,7 +318,7 @@ def test_delete_does_not_commit_when_response_completion_fails():
     """A delete whose response can't be serialized must roll back, not remove the row."""
     create_users(1)
     client = _login_with_perm("staff_1", "delete_item")
-    category_pk = _insert_category("raw-delete-bad-date-category", created_date="not-a-date")
+    category_pk = _insert_category("raw-delete-bad-date-category", corrupt=True)
     item_pk = _insert_item("raw-delete-bad-date-item", category_pk)
 
     response = _post_delete(client, item_pk)
@@ -330,7 +361,7 @@ def test_serial_top_level_mutations_keep_independent_transactions():
     create_users(1)
     client = _login_with_perm("view_item_1", "view_category", "change_item")
     healthy_category_pk = _insert_category("serial-healthy-category")
-    corrupt_category_pk = _insert_category("serial-corrupt-category", created_date="not-a-date")
+    corrupt_category_pk = _insert_category("serial-corrupt-category", corrupt=True)
     first_pk = _insert_item("serial-first-item", healthy_category_pk)
     second_pk = _insert_item("serial-second-item", corrupt_category_pk)
 

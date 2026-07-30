@@ -221,11 +221,24 @@ async def test_async_update_completion_failure_rolls_back():
 
     # Corrupt the row's category date AFTER seeding, via raw SQL, so the
     # post-write re-fetch hydrates ``created_date`` to None and the non-nullable
-    # ``createdDate`` fails at completion.
+    # ``createdDate`` fails at completion. SQLite stores datetimes as text and
+    # hydrates an unparseable string to None; Postgres type-checks the column, so
+    # the equivalent stored value is a real NULL and the column's NOT NULL has to
+    # be relaxed first. Both vendors then hand the ORM the same None.
     def _corrupt():
-        with connections["default"].cursor() as cursor:
+        connection = connections["default"]
+        with connection.cursor() as cursor:
+            if connection.vendor == "sqlite":
+                cursor.execute(
+                    "UPDATE products_category SET created_date = 'not-a-date' WHERE id = %s",
+                    (item.category_id,),
+                )
+                return
             cursor.execute(
-                "UPDATE products_category SET created_date = 'not-a-date' WHERE id = %s",
+                "ALTER TABLE products_category ALTER COLUMN created_date DROP NOT NULL",
+            )
+            cursor.execute(
+                "UPDATE products_category SET created_date = NULL WHERE id = %s",
                 (item.category_id,),
             )
 

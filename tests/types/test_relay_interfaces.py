@@ -244,9 +244,9 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
 def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
     """A consumer ``id: relay.NodeID[str]`` escape hatch bypasses the composite-pk gate.
 
-    Regression for ``docs/feedback.md`` section "Unconditional composite PK
-    rejection ignores explicit ``NodeID`` annotations". The gate's own
-    error message advertises the remediation; honor it.
+    Regression for the ``spec-015-relay_interfaces-0_0_5`` review finding
+    "Unconditional composite PK rejection ignores explicit ``NodeID``
+    annotations". The gate's own error message advertises the remediation; honor it.
     """
 
     class CategoryNode(DjangoType):
@@ -365,7 +365,8 @@ def test_relay_node_strips_django_id_annotation():
 
 
 def test_extended_node_interface_subclass_suppresses_id_annotation():
-    """Regression for ``docs/feedback.md`` section extended Node interfaces.
+    """Regression for the ``spec-015-relay_interfaces-0_0_5`` review: extended Node
+    interfaces.
 
     A consumer-defined ``@strawberry.interface`` that subclasses
     ``relay.Node`` (e.g. ``class CustomNode(relay.Node): ...`` placed in
@@ -558,7 +559,7 @@ def test_resolve_node_applies_get_queryset():
 def test_resolve_node_accepts_strawberry_positional_call_shape():
     """Strawberry calls ``cls.resolve_node(node_id, info=info)`` - positional ``node_id``.
 
-    Pins the review-feedback regression (``feedback.md`` section High
+    Pins the review regression (``spec-015-relay_interfaces-0_0_5`` High:
     ``resolve_node`` default has the wrong bound signature): Strawberry's
     Relay machinery passes ``node_id`` positionally and ``info`` as a
     keyword. With the corrected signature ``(cls, node_id, *, info,
@@ -767,8 +768,8 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     has been awaited. The caller awaits the resolver call to obtain the
     queryset, then iterates with ``async for``. Pins the spec-015
     #"same for ``_resolve_nodes_default``" "node_ids=None" branch of
-    Decision 9 under the corrected awaitable contract described in
-    ``feedback.md`` section High.
+    Decision 9 under the corrected awaitable contract the
+    ``spec-015-relay_interfaces-0_0_5`` review recorded under High.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
     qs = await CategoryNode.resolve_nodes(info=None)
@@ -804,7 +805,7 @@ def _build_seeded_category_node_with_async_get_queryset():
 async def test_resolve_node_async_awaits_async_get_queryset():
     """Async ``get_queryset`` is awaited before the id filter on the async branch.
 
-    Pins the review-feedback regression (``feedback.md`` section High): the
+    Pins the review regression (``spec-015-relay_interfaces-0_0_5`` High): the
     previous implementation called ``cls.get_queryset(qs, info)``
     synchronously and then invoked ``.filter`` on the resulting
     coroutine, raising ``AttributeError``. The corrected async branch
@@ -872,7 +873,7 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
     ``.filter`` blow up on a coroutine, the framework closes the
     unawaited coroutine and raises a named ``ConfigurationError``
     pointing the consumer at the async resolver path or a sync hook
-    rewrite (review feedback ``feedback.md`` section High).
+    rewrite (``spec-015-relay_interfaces-0_0_5`` review, High).
     """
 
     class CategoryNode(DjangoType):
@@ -1453,7 +1454,7 @@ def test_install_relay_node_resolvers_idempotent():
 def test_direct_relay_node_inheritance_suppresses_id_annotation():
     """Direct ``class Foo(DjangoType, relay.Node)`` suppresses the synthesized pk.
 
-    Pins the review-feedback regression (``feedback.md`` section High "Direct
+    Pins the review regression (``spec-015-relay_interfaces-0_0_5`` High "Direct
     ``relay.Node`` inheritance bypasses Relay finalization"): when a
     consumer follows Strawberry's native inheritance style without
     declaring ``Meta.interfaces``, the package must still drop the
@@ -1486,7 +1487,7 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
 def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     """End-to-end: ``class Foo(DjangoType, relay.Node)`` finalizes the Relay shape.
 
-    Pins the review-feedback regression (``feedback.md`` section High "Direct
+    Pins the review regression (``spec-015-relay_interfaces-0_0_5`` High "Direct
     ``relay.Node`` inheritance bypasses Relay finalization"): Phase 2.5
     must run the composite-pk gate and the four ``resolve_*`` defaults
     for every class whose resolved MRO includes ``relay.Node``, not only
@@ -1527,7 +1528,7 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
 def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
     """Direct ``relay.Node`` inheritance + composite pk raises at finalization.
 
-    Pins the review-feedback regression (``feedback.md`` section High): the
+    Pins the review regression (``spec-015-relay_interfaces-0_0_5`` High): the
     composite-pk gate must fire for every Relay-shaped type, including
     consumers who inherit ``relay.Node`` directly without declaring
     ``Meta.interfaces``. Detection uses Phase 2.5's
@@ -2198,9 +2199,9 @@ def test_callable_setting_async_callable_object_raises(settings):
     """A callable *instance* with ``async def __call__`` as the setting raises too.
 
     The setting path shares ``_validate_globalid_callable`` with the ``Meta`` path,
-    so the ``__call__``-arm sync-ness check (``docs/feedback.md`` P2) guards both:
-    the instance is caught at finalization rather than leaking a coroutine at the
-    first encode.
+    so the ``__call__``-arm sync-ness check (``spec-031-globalid_encoding-0_0_9`` P2)
+    guards both: the instance is caught at finalization rather than leaking a
+    coroutine at the first encode.
     """
 
     class Encoder:
@@ -2228,9 +2229,9 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
     """A ``functools.partial`` around an async callable instance as the setting raises too.
 
     Shares ``_validate_globalid_callable`` (and its partial-unwrapping sync-ness
-    check, ``docs/feedback.md`` P2) with the ``Meta`` path, so the setting path
-    inherits the fix: the wrapper is caught at finalization, not at the first
-    encode.
+    check, ``spec-031-globalid_encoding-0_0_9`` P2) with the ``Meta`` path, so the
+    setting path inherits the fix: the wrapper is caught at finalization, not at
+    the first encode.
     """
 
     class Encoder:

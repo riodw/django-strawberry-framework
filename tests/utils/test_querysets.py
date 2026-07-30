@@ -1,6 +1,6 @@
 """Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
 
-The 0.0.9 DRY pass (``docs/feedback.md`` Major 1) single-sited the query-source
+The 0.0.9 DRY pass (Major 1) single-sited the query-source
 contract the list field, connection field, optimizer middleware, Relay node
 defaults, and filter related-visibility derive had each spelled separately:
 ``Manager`` -> ``QuerySet`` coercion, the is-queryset decision, and the sync /

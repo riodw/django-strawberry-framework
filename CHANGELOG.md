@@ -327,7 +327,6 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [today]: TODAY.md
 
 <!-- docs/ -->
-[feedback]: docs/feedback.md
 [glossary]: docs/GLOSSARY.md
 [glossary-apply_cascade_permissions]: docs/GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: docs/GLOSSARY.md#auth-mutations

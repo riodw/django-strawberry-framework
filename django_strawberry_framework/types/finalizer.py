@@ -984,7 +984,7 @@ def _bind_set_owner_common(
     """Bind ``set_cls._owner_definition`` with shared first-bind/idempotency/target checks.
 
     The phase-2.5 owner-binding skeleton shared by FilterSet and OrderSet (the
-    0.0.9 DRY pass, ``docs/feedback.md`` Major 2). Family-specific behaviour
+    0.0.9 DRY pass). Family-specific behaviour
     enters through hooks:
 
     - ``get_model`` reads the set's ``Meta.model`` (FilterSet exposes it via
@@ -1467,9 +1467,9 @@ class _SidecarBindingSpec:
     """Per-family configuration for the shared phase-2.5 binding driver.
 
     The ordered four-subpass binding skeleton (``_bind_sidecar_sets``) is shared
-    by FilterSet and OrderSet (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 2);
-    this carries the family differences. ``expand`` runs Layer-4 expansion for
-    one set; ``post_expand_audit`` is the optional filter-only
+    by FilterSet and OrderSet (the 0.0.9 DRY pass); this carries the family
+    differences. ``expand`` runs Layer-4 expansion for one set;
+    ``post_expand_audit`` is the optional filter-only
     unregistered-``RelatedFilter``-target walk (``None`` for orders).
     """
 
@@ -1541,10 +1541,10 @@ def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
 def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
     """Run the ordered phase-2.5 subpasses for one sidecar family.
 
-    Shared by ``_bind_filtersets`` / ``_bind_ordersets`` (the 0.0.9 DRY pass,
-    ``docs/feedback.md`` Major 2). The ordering is load-bearing: every subpass
-    MUST complete across all wired types before the next starts so cross-set
-    references resolve against bound owners regardless of registration order.
+    Shared by ``_bind_filtersets`` / ``_bind_ordersets`` (the 0.0.9 DRY pass).
+    The ordering is load-bearing: every subpass MUST complete across all wired
+    types before the next starts so cross-set references resolve against bound
+    owners regardless of registration order.
 
     1. Bind every owner (``spec.bind_owner``) before any expansion runs.
     2. Expand every set (``spec.expand``); ``ImportError`` from an unresolved

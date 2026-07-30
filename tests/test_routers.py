@@ -128,7 +128,7 @@ _HINT_SUBSTRING = "channels>=4.3.2"
 # accepts: ``pyproject.toml`` requires ``strawberry-graphql>=0.316.0`` and the
 # minimum CI matrix node pins exactly ``0.316.0``, so the older ``0.262.0`` this
 # literal used to pin was advice to install a version the install would reject
-# (docs/feedback.md Medium 5).
+# (``spec-046-transport_security-0_0_15`` Medium 5).
 _STRAWBERRY_FLOOR_SUBSTRING = "strawberry-graphql>=0.316.0"
 
 # Same discipline for the revocation close and the two new construction hints: a
@@ -1712,7 +1712,7 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
 
 # ---------------------------------------------------------------------------
 # Channels-present: the WebSocket Host boundary (spec-046 Decision 19, Test plan
-# rows 43-47). ``docs/feedback.md`` Medium 4: Channels'
+# rows 43-47). ``spec-046-transport_security-0_0_15`` Medium 4: Channels'
 # ``OriginValidator.__call__`` reads the ``Origin`` header and nothing else, so a
 # handshake with an allowed ``Origin`` and a hostile ``Host`` connected - while
 # ``routers.py`` promised an injected consumer "cannot escape Host/Origin

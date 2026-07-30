@@ -25,8 +25,7 @@ finished engine ([spec-054][spec-054], Decision 7). The postponed half — the
 `search:` argument, `Meta.search_fields` validation, the pipeline step, live
 search fixtures, benchmarking — stays with the respecced card.
 
-Rev 2 incorporated the first adversarial review ([`feedback.md`][feedback])
-in full; Rev 3 folded in the Fable-agent round (adapter no-op detection,
+Rev 2 incorporated the first adversarial review in full; Rev 3 folded in the Fable-agent round (adapter no-op detection,
 metadata build-site mechanics, package filter-class eligibility). Rev 4
 incorporates the second maintainer review (all claims empirically
 verified): origin-scoped classification (finding 1), frozen
@@ -39,8 +38,7 @@ pre-fanned inputs (finding 5, maintainer-decided), removal of the
 evaluated-outer-queryset rejection (finding 6), the permanent test-local
 baseline oracle (finding 7), the direct-deep live proof (finding 8), and
 the identity/documentation ownership above (findings 9–10). Rev 5 folds in
-the cross-spec review of the Medtrics production reproduction
-([`feedback.md`][feedback]): the [`GOAL.md`][goal] rationale anchoring the
+the cross-spec review of the Medtrics production reproduction: the [`GOAL.md`][goal] rationale anchoring the
 multiset contract, the named reverse-FK-after-to-one classifier and
 adapter category, the shared `Loan` reproduction fixture with its
 ordered-sequence oracle, and the explicit rule that the original DRF
@@ -51,8 +49,7 @@ SQL shape named as an asserted case, nullable-intermediate-hop and
 the shared fixture, live-tier client/reload discipline per
 `examples/fakeshop/test_query/README.md`, the dead C.5 fallback clause
 removed (the loan surface exists), and the `test_query` README added to
-Slice D's bookkeeping. Rev 7 enacts the follow-up multiplicity review
-([`feedback.md`][feedback]): the prior-art statement about admin's
+Slice D's bookkeeping. Rev 7 enacts the follow-up multiplicity review: the prior-art statement about admin's
 `lookup_spawns_duplicates` corrected (it detects reverse FK through
 `PathInfo.m2m`; the earlier "misses reverse FK" reading of the `m2m`
 name was false), `PathInfo` named as Slice A's SQL-multiplicity
@@ -60,7 +57,7 @@ authority beside `relation_kind()`'s semantic topology, the
 admin-helper-as-differential-oracle-only rule, the reverse-FK category
 rationale recast from detection to compilation, and the exact
 Python 3.10 + `Django==5.2.0` acceptance floor. Rev 8 enacts the first
-round-1 review ([`feedback.md`][feedback]): live capability-token
+round-1 review: live capability-token
 authorization for routing a leaf through the correlated adapter (only a
 LIVE per-request token + fingerprint match, never a frozen candidate row,
 grants routing — **retired in Rev 15**, which moves the whole verdict to build
@@ -73,12 +70,12 @@ real `LoanType` / `LoanFilter` connection is gated OFF by default and
 exposed only under `override_settings` + `project_schema_override` for the
 acceptance test), and the correction of this document's lenient-fallback
 wording to the actual three-part `path_traverses_to_many` rule. Rev 9 enacts
-the round-4 review ([`feedback.md`][feedback]): Relay-conversion ownership
+the round-4 review: Relay-conversion ownership
 resolved once before conversion through the single `_generation_origin_for_field`
 oracle (a consumer relation override survives), the effective `.filter` call
 graph (`get_method` / `get_filter_predicate` / `is_noop`) added to the semantic
 signature, and a consumer `__init__` override made a capability break. Rev 10
-enacts the round-5 review ([`feedback.md`][feedback]): a shadowed class-level
+enacts the round-5 review: a shadowed class-level
 `FILTER_DEFAULTS` is now owned by **whole-entry object identity** (an
 `extra`-only override — same filter class, different `extra` provider — is
 consumer-owned too, not just a `filter_class` change — round-5 Blocker 1); the
@@ -117,7 +114,7 @@ executable source of truth for which generated families are supported (High 4). 
 supersedes both of these round-7 mechanisms (see below), which the sixth review found
 incomplete.
 
-Rev 13 enacts the sixth adversarial review ([`feedback.md`][feedback]). The
+Rev 13 enacts the sixth adversarial review. The
 generation-ownership baseline no longer snapshots django-filter's mutable global: the
 package now AUTHORS its own defaults as the plain, deepcopyable
 `django_strawberry_framework/filters/sets.py::_PUBLIC_PACKAGE_FILTER_DEFAULTS` dict
@@ -165,7 +162,7 @@ family-identity half of the eligibility check, but the fingerprint, its extracto
 and the behavioral `test_signature_matrix_*` suite that audited it are all removed, because
 the only thing they detected — post-build mutation — is out of contract.
 
-Rev 15 enacts the seventh adversarial review ([`feedback.md`][feedback]) and the
+Rev 15 enacts the seventh adversarial review and the
 maintainer's accompanying **contract decision**, which NARROWS this feature's scope rather
 than extending its machinery. The review proved the request-time integrity gate answered the
 wrong question: it detected drift *after* the build-time capture, but a consumer who mutates
@@ -1266,7 +1263,6 @@ the previous commit added tracked files.
 [repro]: ../to-many-search-optimizer-reproduction.md
 
 <!-- docs/ -->
-[feedback]: feedback.md
 [part1-plan]: row-preserving-predicates-part1-plan.md
 [spec-054]: spec-054-search_fields-0_1_2.md
 

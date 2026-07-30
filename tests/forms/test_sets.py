@@ -262,8 +262,8 @@ def test_modelform_missing_operation_rejected():
         "delete",
         "upsert",
         # An explicit ``operation = None`` is rejected by KEY PRESENCE, not value
-        # (docs/feedback.md Finding 5): the fixed ``"form"`` sentinel accepts no
-        # copied ``Meta.operation`` key, even one set to ``None``.
+        # (``spec-038-form_mutations-0_0_12`` Finding 5): the fixed ``"form"`` sentinel
+        # accepts no copied ``Meta.operation`` key, even one set to ``None``.
         None,
     ],
 )

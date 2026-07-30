@@ -22,8 +22,8 @@ slate), `docs/builder/worker-memory/` + `docs/builder/temp-tests/` empty and see
 > **Baseline moved at review round 1.** The maintainer committed slices 1-4 *and* the concurrent
 > row-preserving filter work together as `537e4951`, so the original pre-flight list below is now
 > historical: those files are committed, not dirty. The review-round-1 baseline is a clean tree
-> except `docs/feedback.md` (modified — the maintainer replaced the filter review with the
-> transport review; **never touch or revert it**) and the untracked `drys.md` / `vulns.md`
+> except the maintainer's incoming review document (modified — the filter review was replaced
+> with the transport review; **never touch or revert it**) and the untracked `drys.md` / `vulns.md`
 > (maintainer scoping notes; **never touch**). The concurrent-writer hazards on
 > `examples/fakeshop/db.sqlite3`, `KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` still stand
 > in full — they remain tracked, generated, and writable by parallel maintainer sessions.
@@ -37,7 +37,7 @@ edit them unless this build's own slice contract names them.**
 - `django_strawberry_framework/filters/sets.py` — row-preserving remediation (concurrent)
 - `tests/filters/test_sets.py` — row-preserving remediation (concurrent)
 - `docs/row-preserving-predicates-part1-plan.md` — concurrent
-- `docs/feedback.md` — the prior review, maintainer-owned (never touch)
+- the maintainer's incoming review document — the prior review, maintainer-owned (never touch)
 - `drys.md`, `vulns.md` (untracked) — maintainer scoping notes (never touch)
 - `docs/GLOSSARY.md` — **generated** from the glossary DB; currently carries the concurrent
   row-preserving FilterSet edit. Slice 5 legitimately adds to it, but ONLY via the DB +
@@ -133,7 +133,7 @@ between modules, and repeated string/key/tuple literals are build-time defects.
 ## Review round 1 — maintainer adversarial review of slices 1-4
 
 Slices 1-4 were **committed by the maintainer at `537e4951`**, which also swept in the
-concurrent row-preserving filter work. The maintainer then replaced `docs/feedback.md` with a
+concurrent row-preserving filter work. The maintainer then issued a
 fresh adversarial review of *this* card's transport implementation (S1 / S2 / S9 / S11).
 Slice 5 is explicitly **not** judged missing by that review while this plan marks it unbuilt.
 
@@ -205,8 +205,8 @@ render is per-module and `views.py` is already on Slice 5's list — but still n
 
 ## Review round 2 — maintainer adversarial review of the round-1 tree
 
-Round 1 was **committed by the maintainer at `511aec8a`**, who then replaced `docs/feedback.md`
-again with a second adversarial review of this card. It confirms round 1's findings as
+Round 1 was **committed by the maintainer at `511aec8a`**, who then issued a
+second adversarial review of this card. It confirms round 1's findings as
 materially fixed and lists seven properties as satisfactorily closed, but does not close the
 card: the strongest S11 claim is false for an *already-running* subscription, and the multipart
 path sits outside both the strict UTF-8 boundary and the claimed pre-parse declared-size

@@ -179,8 +179,8 @@ def test_connection_type_for_generates_named_subclass_when_opted_in():
 def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     """Generated ``<Type>Connection`` names derive from ``graphql_type_name``, not ``__name__``.
 
-    P1 (``docs/feedback.md``): two DjangoType classes can share a Python
-    ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
+    P1 (``spec-030-connection_field-0_0_9`` review): two DjangoType classes can share a
+    Python ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
     generated connection from ``__name__`` produces two classes with the SAME
     SDL type name, which Strawberry collapses into one - corrupting both root
     fields' ``edges`` / node types. Deriving from ``graphql_type_name`` (the
@@ -325,9 +325,9 @@ def test_total_count_requested_scoped_to_direct_children():
     """A ``totalCount`` nested in ``edges { node { ... } }`` does NOT fire the predicate (P2).
 
     ``_total_count_requested`` checks only the connection's DIRECT children, so a
-    (future) node-level ``totalCount`` deep in the subtree must not make the
-    OUTER connection count spuriously (``docs/feedback.md`` P2). A direct-child
-    ``totalCount`` still counts.
+    (future) node-level ``totalCount`` deep in the subtree must not make the OUTER
+    connection count spuriously (``spec-030-connection_field-0_0_9`` P2). A
+    direct-child ``totalCount`` still counts.
     """
     # Direct-child ``totalCount`` still counts.
     assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
@@ -588,12 +588,12 @@ def test_connection_field_requires_relay_node():
 def test_connection_field_accepts_direct_relay_node_inheritance():
     """A direct ``class Foo(DjangoType, relay.Node)`` (no ``Meta.interfaces``) is accepted.
 
-    ``docs/feedback.md`` Open Question: direct ``relay.Node`` inheritance is a
-    supported, fully-finalizable Relay shape (the finalizer keys Relay wiring off
-    ``implements_relay_node``, not a non-empty ``Meta.interfaces``). The
-    connection guard reuses the canonical ``_is_relay_shaped`` predicate, so it
-    accepts this Strawberry-native spelling without a ``ConfigurationError`` -
-    even though ``definition.interfaces`` is empty.
+    ``spec-030-connection_field-0_0_9`` Open Question: direct ``relay.Node``
+    inheritance is a supported, fully-finalizable Relay shape (the finalizer keys
+    Relay wiring off ``implements_relay_node``, not a non-empty
+    ``Meta.interfaces``). The connection guard reuses the canonical
+    ``_is_relay_shaped`` predicate, so it accepts this Strawberry-native spelling
+    without a ``ConfigurationError`` - even though ``definition.interfaces`` is empty.
     """
 
     class DirectRelayNode(DjangoType, relay.Node):
@@ -613,8 +613,8 @@ def test_connection_field_accepts_direct_relay_node_inheritance():
 def test_connection_type_for_generates_total_count_for_direct_relay_inheritance():
     """Direct ``relay.Node`` inheritance can use the per-type ``totalCount`` opt-in (P2).
 
-    ``docs/feedback.md`` P2: once ``Meta.connection`` validation accepts direct
-    inheritance, the ``totalCount`` surface works for it too -
+    ``spec-030-connection_field-0_0_9`` P2: once ``Meta.connection`` validation
+    accepts direct inheritance, the ``totalCount`` surface works for it too -
     ``_connection_type_for`` generates the concrete ``<Name>Connection`` carrying
     ``total_count`` exactly as it does for the ``Meta.interfaces`` spelling.
     """
@@ -1237,7 +1237,7 @@ def test_nested_connection_unplanned_raises_under_strictness():
 
 
 # =============================================================================
-# Deterministic-total-order tiebreaker (P1 - docs/feedback.md)
+# Deterministic-total-order tiebreaker (P1 - ``spec-030-connection_field-0_0_9``)
 # =============================================================================
 
 
@@ -1301,8 +1301,8 @@ def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
     even though ``qs.ordered`` is True; ``_finalize_queryset`` resolves the
     effective ordering from ``_meta.ordering`` so ``ORDER BY order`` becomes
     ``ORDER BY order, pk`` rather than dropping to ``ORDER BY pk``
-    (``docs/feedback.md`` P1 correction). ``Status`` (kanban) declares
-    ``Meta.ordering = ["order"]`` over a non-unique ``PositiveIntegerField``.
+    (``spec-030-connection_field-0_0_9`` P1 correction). ``Status`` (kanban)
+    declares ``Meta.ordering = ["order"]`` over a non-unique ``PositiveIntegerField``.
     """
     node = _node_over(Status, "P1StatusNode", fields=("id",))
     qs = Status.objects.all()
@@ -1322,7 +1322,7 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
 
     The connection field does NOT fabricate a throwaway optimizer to
     self-optimize; outside an execution the ``_active_optimizer`` ``ContextVar``
-    is ``None`` so the helper short-circuits (``docs/feedback.md`` P3a).
+    is ``None`` so the helper short-circuits (``spec-030-connection_field-0_0_9`` P3a).
     """
     from django_strawberry_framework.optimizer.extension import apply_connection_optimization
 

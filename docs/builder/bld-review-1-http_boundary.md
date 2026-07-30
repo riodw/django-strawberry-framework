@@ -1,6 +1,6 @@
 # Build: Review round 1 — the HTTP body / parsing boundary findings
 
-Review reference: `docs/feedback.md` — Blocker 1 (the counted body cap materializes the unbounded
+Review reference: the maintainer's round-1 transport review — Blocker 1 (the counted body cap materializes the unbounded
 body before rejecting it) and High 2 (a package security policy is disabled by the unrelated
 upstream-patch kill switch).
 Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Decision 7 (the counted cap),

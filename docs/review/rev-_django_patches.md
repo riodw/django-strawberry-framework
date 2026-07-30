@@ -265,8 +265,9 @@ Working-tree classification at completion: slice-intended — `_django_patches.p
 `tests/test_django_patches.py`, this artifact, and the untracked worker-2 scratch file. Untouched
 concurrent work preserved — `_cross_web_patches.py` + `tests/test_cross_web_patches.py` (verified
 item-1 diff), `mutations/resolvers.py`, `tests/mutations/test_resolvers.py`,
-`mutations/review.md`, `docs/GLOSSARY.md`, `docs/README.md`, `examples/fakeshop/db.sqlite3`, both
-`test_query` files, the untracked `<folder>/review.md` notes, and
+the `mutations/` review notes, `docs/GLOSSARY.md`, `docs/README.md`,
+`examples/fakeshop/db.sqlite3`, both
+`test_query` files, the untracked per-folder review notes, and
 `docs/review/rev-optimizer__walker.md`.
 
 Changelog-worthiness (not edited, per policy): yes-worthy if authorized — the validator now
@@ -278,7 +279,7 @@ consumer-visible hardening of a shipped patch's upgrade behavior.
 Scope confirmed: `git --no-pager diff ada14039` for `_django_patches.py` /
 `tests/test_django_patches.py` contains only the described changes (source-pin constant, third
 validation tier, docstring updates; retirement-test rewrite plus two new fail-loud tests); all
-concurrent work (item-1 files, `mutations/`, `test_query`, docs, `<folder>/review.md` notes,
+concurrent work (item-1 files, `mutations/`, `test_query`, docs, the per-folder review notes,
 `rev-optimizer__walker.md`) untouched.
 
 Behavior re-traced independently: import-time capture (`_django_patches.py::_original_remove_databases_failures`)

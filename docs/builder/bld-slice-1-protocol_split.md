@@ -507,7 +507,7 @@ editing.
    (spec Edge cases; build-plan baseline-dirty list). ASCII-only in every `.py`. Then
    `git status --short` and classify every modified file per BUILD.md's Validation-run rule.
    The baseline-dirty files (`django_strawberry_framework/filters/sets.py`,
-   `tests/filters/test_sets.py`, `docs/feedback.md`, `docs/feedback2.md`, `drys.md`, `vulns.md`,
+   `tests/filters/test_sets.py`, the maintainer's incoming review, `docs/feedback2.md`, `drys.md`, `vulns.md`,
    `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`, `KANBAN.md`,
    `KANBAN.html`, `examples/fakeshop/db.sqlite3`) are out of scope: do not edit, do not revert.
 
@@ -714,8 +714,8 @@ Slice-intended, from `git status --short` (not memory):
   breaking change. See `### Notes for Worker 1` item 6 and `### Implementation notes`.
 
 Baseline-dirty, untouched and not reverted (build plan's out-of-scope list):
-`django_strawberry_framework/filters/sets.py`, `tests/filters/test_sets.py`, `docs/feedback.md`,
-`docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`,
+`django_strawberry_framework/filters/sets.py`, `tests/filters/test_sets.py`,
+the maintainer's incoming review, `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`,
 `examples/fakeshop/db.sqlite3`, `drys.md`, `vulns.md`, the spec + terms CSV, the build plan.
 No `.md` outside this artifact was edited; no version quintet, no `CHANGELOG.md`, no
 `django_strawberry_framework/__init__.py`, no `conf.py`, no `examples/fakeshop/config/asgi.py`.
@@ -835,7 +835,7 @@ No `.md` outside this artifact was edited; no version quintet, no `CHANGELOG.md`
    (`django_strawberry_framework/views.py`, `tests/test_views.py`,
    `examples/fakeshop/test_query/test_transport_api.py`) plus this artifact. Everything else
    (`KANBAN.html`, `KANBAN.md`, `django_strawberry_framework/filters/sets.py`,
-   `docs/GLOSSARY.md`, `docs/feedback.md`, `docs/row-preserving-predicates-part1-plan.md`,
+   `docs/GLOSSARY.md`, the maintainer's incoming review, `docs/row-preserving-predicates-part1-plan.md`,
    `examples/fakeshop/db.sqlite3`, `tests/filters/test_sets.py`, `drys.md`, `vulns.md`, the
    spec + terms CSV, the build plan) is on the baseline-dirty list: left exactly as found,
    never `git checkout --`ed. **No unrelated tool churn was produced, so nothing was reverted.**
@@ -1857,7 +1857,7 @@ Unchanged from pass 1 and NOT re-touched: `django_strawberry_framework/routers.p
 `examples/fakeshop/config/urls.py`, `tests/auth/test_mutations.py`.
 
 Baseline-dirty, untouched and not reverted: `django_strawberry_framework/filters/sets.py`,
-`tests/filters/test_sets.py`, `docs/feedback.md`,
+`tests/filters/test_sets.py`, the maintainer's incoming review,
 `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`,
 `examples/fakeshop/db.sqlite3`, `drys.md`, `vulns.md`, the spec + terms CSV, the build plan.
 
@@ -1899,7 +1899,7 @@ In the required order:
    (`django_strawberry_framework/views.py`, `tests/test_views.py`,
    `examples/fakeshop/test_query/test_transport_api.py`) plus this artifact. **Baseline-dirty,
    left exactly as found:** `KANBAN.html`, `KANBAN.md`,
-   `django_strawberry_framework/filters/sets.py`, `docs/GLOSSARY.md`, `docs/feedback.md`,
+   `django_strawberry_framework/filters/sets.py`, `docs/GLOSSARY.md`, the incoming review,
    `docs/row-preserving-predicates-part1-plan.md`, `examples/fakeshop/db.sqlite3`,
    `tests/filters/test_sets.py`, `drys.md`, `vulns.md`, the spec + terms CSV, the build plan.
    **No unrelated tool churn was produced, so nothing was reverted** and nothing on the

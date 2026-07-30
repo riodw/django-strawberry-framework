@@ -2,8 +2,8 @@
 
 Reviewer: Worker 3 (isolated from all three builder cohorts).
 Subject: the combined round-2 tree — `docs/builder/bld-review-2-ws_revocation.md`,
-`bld-review-2-http_boundary.md`, `bld-review-2-ws_host_boundary.md`, against `docs/feedback.md`
-(round-2 maintainer review) and `docs/spec-046-transport_security-0_0_15.md`.
+`bld-review-2-http_boundary.md`, `bld-review-2-ws_host_boundary.md`, against the maintainer's
+round-2 transport review and `docs/spec-046-transport_security-0_0_15.md`.
 
 Status: **revision-needed** — five Medium findings (three from the primary pass, two from the
 obligations `worker-3.md` / `BUILD.md` gained mid-pass; see the Addendum), one of which reopens the
@@ -68,7 +68,7 @@ Proved end to end at `docs/builder/temp-tests/review-2/test_encoding_rung_order.
   `U+FFFD`**, so `_reject_lossy_multipart_control_fields` cannot see it either;
 - a non-UTF-8-decoded control document reaches `json.loads`.
 
-That is exactly `docs/feedback.md` High 2's "an `operations` field declared with
+That is exactly round-2 High 2's "an `operations` field declared with
 `charset=iso-8859-1` and carrying a raw Latin-1 byte executed successfully with HTTP `200`",
 re-achievable behind one line of consumer middleware.
 
@@ -430,7 +430,7 @@ Verified, not assumed:
 
 Ruling: **documentation is what shipped and it is accurate and complete** (`views.py:636-645`
 names the shape, the loss, and the retained protection). A Django system check is nonetheless the
-right root-cause answer and the one `docs/feedback.md` High 3 itself proposed — the failure mode is
+right root-cause answer and the one round-2 High 3 itself proposed — the failure mode is
 *silent* and the property it silently drops is the entire subject of Decision 18. A
 `register(Tags.urls)` check can walk the resolver and warn when a callback whose `view_class` is a
 package view lacks `csrf_exempt`, without rebuilding any part of Django's stack. Because protection
@@ -856,7 +856,7 @@ the new one adds. Nothing above is retracted.
 Per the new `## Review-round duties`: the test is not "did code move", it is "name the input that is
 now refused and was previously accepted".
 
-| `docs/feedback.md` finding | Input now refused that was previously accepted | Real bound? |
+| Round-2 finding | Input now refused that was previously accepted | Real bound? |
 |---|---|---|
 | **Blocker 1** — revocation does not stop a running subscription | a `next` / `data` / operation-`error` frame whose actor no longer validates. Previously emitted; now suppressed and the socket closed `4403`. Verified: mutant removing the adapter fails 16 rows, and `controller.emitted` proves the resolver *produced* the payload that never reached the wire | **yes** |
 | **High 2** — multipart `operations` / `map` bypass strict UTF-8 | (a) a multipart request whose effective form encoding is not UTF-8 — `charset=iso-8859-1`, `utf-16`, `utf-8-sig`, an unloadable codec name; (b) an `operations` / `map` value carrying `U+FFFD`. Both `400`. Mutants: 13 and 8 failures | **partially** — refused for the shapes the review probed, but **M1**: a client-declared `charset=utf-8` still masks a middleware-set `request.encoding`, so the Latin-1 direction the review actually demonstrated is re-achievable. Not closed. |

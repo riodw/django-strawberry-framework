@@ -142,7 +142,7 @@ When a slice's spec contract is to ship nothing in this card ("carried by siblin
 
 ## Review rounds
 
-A **review round** is a cycle whose input is a maintainer adversarial review of **already-built** (possibly already-committed) work — typically delivered by replacing `docs/feedback.md` with a fresh review — rather than a slice from the spec's `## Slice checklist`. Rounds are normal, not exceptional: one prior build ran **nine**. Each was improvised because this document knew only spec slices, and the artifact template and `Status:` chain fell away as a direct result. They do not fall away: a round runs the same worker cycle, the same artifact contract, and the same final gate as a spec slice.
+A **review round** is a cycle whose input is a maintainer adversarial review of **already-built** (possibly already-committed) work — typically delivered as the maintainer's incoming review document — rather than a slice from the spec's `## Slice checklist`. Rounds are normal, not exceptional: one prior build ran **nine**. Each was improvised because this document knew only spec slices, and the artifact template and `Status:` chain fell away as a direct result. They do not fall away: a round runs the same worker cycle, the same artifact contract, and the same final gate as a spec slice.
 
 ### The review document is evidence, not contract
 

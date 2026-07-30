@@ -1,6 +1,6 @@
 # Build: Review round 2 — the HTTP boundary findings (multipart wire contract, CSRF ordering, stream probe)
 
-Review reference: `docs/feedback.md` — High 2 (multipart `operations` / `map` bypass the strict
+Review reference: the maintainer's round-2 transport review — High 2 (multipart `operations` / `map` bypass the strict
 UTF-8 wire contract), High 3 (the multipart declared cap runs after CSRF has already parsed the
 body), Low 6 (stream capability failures escape the body boundary as raw errors).
 Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Decision 7 (the counted cap and the
@@ -395,7 +395,7 @@ above is the closest thing it carries, and every item is dispositioned below.
 
 Grounded in `git status --short` after both ruff invocations. The four files below are this
 cohort's; everything else `git status` reports (`README.md`, `TODAY.md`, `conf.py`, `auth/*`,
-`consumers.py`, `routers.py`, `tests/test_routers.py`, `docs/README.md`, `docs/feedback.md`,
+`consumers.py`, `routers.py`, `tests/test_routers.py`, `docs/README.md`, the incoming review,
 `docs/spec-046-*.md`, `docs/builder/BUILD.md`, `docs/builder/worker-*.md`,
 `docs/builder/build-046-*.md`, the three sibling `bld-review-2-*.md`, `drys.md`, `vulns.md`) is
 the concurrent WS cohorts', the coordinator's, or the maintainer's, and was neither read for

@@ -198,7 +198,7 @@ Revision history (kept inline so the spec is self-contained):
   fixture; the manual reloads were removed so `seed_data(1)` is the first
   domain-setup line after `super().setUp()`, per the [`AGENTS.md`][agents]
   seed-helper rule.
-- **Revision 3** — adversarial-review absorption (2026-07-10, `docs/feedback.md`),
+- **Revision 3** — adversarial-review absorption (2026-07-10),
   the spec-043 post-ship review. Four findings, all addressed at the source.
   **F1 (medium) — the DoD claimed multipart "on both clients" but no test drove
   `AsyncTestClient.query(..., files=...)`.** The sync multipart path was proven
@@ -1596,7 +1596,7 @@ possible form of "the covering test lives in the live tier", since the
 covering tests are the package's actual acceptance suites. `tests/testing/test_client.py`
 (the card's DoD row) then owns only what a live request cannot (or need not)
 pin. **The shipped split moved more live than this list first anticipated**
-(Revision 3, `docs/feedback.md` F2): the `AsyncTestClient` real-request paths,
+(Revision 3 F2): the `AsyncTestClient` real-request paths,
 the unittest family end to end, and the `assert_no_errors=True` raising
 direction all proved live-reachable and shipped in
 [`test_client_api.py`][test-client-api], leaving the package tier **entirely
@@ -1946,7 +1946,7 @@ real requests through `AsyncClientHandler`, sync `transactional_db` seeding,
 10. **Async `login()`.** The Test-4 bracket through
     `async with client.login(user):` — `sync_to_async`-wrapped session
     round trip.
-10b. **Async multipart upload** (Revision 3, `docs/feedback.md` F1). The
+10b. **Async multipart upload** (Revision 3 F1). The
     scenario-5 nested two-file `createMediaSpecimen` upload driven through
     `AsyncTestClient` (superuser seeded in a sync `transactional_db` fixture,
     `MEDIA_ROOT=tmp_path`, assertions on the returned `result` payload so no ORM

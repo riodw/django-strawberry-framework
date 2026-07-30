@@ -671,9 +671,10 @@ def test_meta_connection_non_relay_type_raises():
 def test_meta_connection_accepts_direct_relay_node_inheritance():
     """``Meta.connection`` opt-in works on a direct ``relay.Node`` subclass (P2).
 
-    ``docs/feedback.md`` P2: the Relay-shape gate for ``Meta.connection`` runs in
-    ``__init_subclass__`` using the canonical ``_is_relay_shaped`` predicate, so a
-    direct ``class Foo(DjangoType, relay.Node)`` - Relay-shaped WITHOUT
+    ``spec-030-connection_field-0_0_9`` P2: the Relay-shape gate for
+    ``Meta.connection`` runs in ``__init_subclass__`` using the canonical
+    ``_is_relay_shaped`` predicate, so a direct
+    ``class Foo(DjangoType, relay.Node)`` - Relay-shaped WITHOUT
     ``Meta.interfaces`` - can opt into ``total_count``, matching the
     ``DjangoConnectionField`` field guard. One consistent definition of
     "Relay-shaped" across both surfaces.
@@ -864,7 +865,7 @@ def test_meta_globalid_strategy_async_callable_object_raises():
     without the ``__call__`` arm of the sync-ness check this object would survive
     validation and only blow up at first encode (a coroutine return + an unawaited
     -coroutine warning) instead of failing loud at type creation
-    (``docs/feedback.md`` P2).
+    (``spec-031-globalid_encoding-0_0_9`` P2).
     """
     from strawberry import relay
 
@@ -894,7 +895,8 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
     ``async def`` function - NOT a partial around an async callable *instance*, so
     both the partial and its ``__call__`` read as sync. The validator unwraps
     ``partial.func`` before the sync-ness check, so it fails loud at type creation
-    instead of leaking a coroutine at the first encode (``docs/feedback.md`` P2).
+    instead of leaking a coroutine at the first encode
+    (``spec-031-globalid_encoding-0_0_9`` P2).
     """
     from strawberry import relay
 

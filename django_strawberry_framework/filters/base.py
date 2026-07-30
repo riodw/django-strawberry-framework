@@ -844,9 +844,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     """
 
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
-    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass,
-    # ``docs/feedback.md`` Major 3). The order twin uses
-    # ``("_orderset", "bound_orderset")``.
+    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass). The order
+    # twin uses ``("_orderset", "bound_orderset")``.
     _target_attr = "_filterset"
     _owner_attr = "bound_filterset"
 

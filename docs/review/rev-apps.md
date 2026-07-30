@@ -245,7 +245,7 @@ Working-tree classification at completion: slice-intended = `django_strawberry_f
 work, untouched: the verified item 1-3 diffs (three `_*_patches.py` modules + their test files +
 `examples/fakeshop/test_query/test_products_api.py`), a concurrent DRY-cycle session
 (`docs/dry/*`, `tests/test_export_dry_review.py`), the maintainer's untracked
-`<folder>/review.md` notes (including the deleted `optimizer/review.md`), and the untracked
+per-folder review notes (including the deleted `optimizer/` one), and the untracked
 review artifacts.
 
 Changelog-worthiness: not changelog-worthy - a test-gap closure plus docstring de-duplication;

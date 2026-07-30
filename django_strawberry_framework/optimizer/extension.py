@@ -95,12 +95,11 @@ from .selections import (
 from .walker import plan_optimizations, plan_relation
 
 # The selection-traversal primitives moved to ``optimizer/selections.py`` in the
-# 0.0.9 DRY pass (``docs/feedback.md`` Major 2). The underscore aliases keep this
-# module's bodies - and the tests that import ``_named_children`` /
-# ``_node_children_with_runtime_prefix`` from ``optimizer.extension`` - working
-# unchanged. ``extension`` no longer imports the converted-selection helpers back
-# from ``walker`` (the reverse dependency the substrate removes); both modules now
-# source them from ``selections``.
+# 0.0.9 DRY pass. The underscore aliases keep this module's bodies - and the tests
+# that import ``_named_children`` / ``_node_children_with_runtime_prefix`` from
+# ``optimizer.extension`` - working unchanged. ``extension`` no longer imports the
+# converted-selection helpers back from ``walker`` (the reverse dependency the
+# substrate removes); both modules now source them from ``selections``.
 _child_selections = ast_child_selections
 _unvisited_fragment_definition = resolve_unvisited_fragment
 _named_children = named_children
@@ -973,7 +972,7 @@ class DjangoOptimizerExtension(SchemaExtension):
            Steps 1-2 are the shared ``utils/querysets.py::normalize_query_source``
            contract - the same Manager-coercion + is-queryset decision the
            list / connection field consumer paths use, so the middleware never
-           decides it independently (``docs/feedback.md`` Major 1).
+           decides it independently (the 0.0.9 DRY pass).
         3. An already-evaluated queryset (``_result_cache`` populated) is
            returned unchanged (G1, ``spec-035`` Decision 3). The consumer's
            root resolver already ran the SQL (a ``len(qs)`` guard, a

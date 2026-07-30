@@ -6,7 +6,7 @@ dedupe ``check_<field>_permission`` calls by class, recurse into active related
 branches, and fire both child gates and parent branch gates. A divergence
 between the two copies is a real authorization-bug class -- a fix to one side is
 easy to miss on the other -- so the neutral mechanics are single-sited here (the
-0.0.9 DRY pass, ``docs/feedback.md`` Major 3).
+0.0.9 DRY pass).
 
 This module owns mechanics only; the family-specific shape stays at the call
 sites as configuration:
@@ -82,9 +82,9 @@ def _check_method_name(field_path: str) -> str:
 
 
 # ``iter_input_items`` is single-sited in ``utils/input_values.py`` (the 0.0.9
-# DRY pass, ``docs/feedback.md`` Major 1). Re-exported here so the existing
-# ``from ..utils.permissions import iter_input_items`` consumers (``filters/sets.py``,
-# the permission test suite) keep their import path.
+# DRY pass). Re-exported here so the existing ``from ..utils.permissions import
+# iter_input_items`` consumers (``filters/sets.py``, the permission test suite) keep
+# their import path.
 __all__ = [
     "ChannelsRequestAdapter",
     "active_permission_field_paths",
@@ -278,8 +278,8 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
     the sentinel check a harmless ``value is None`` no-op.
 
     Shares the active-value rule with every traversal surface via
-    ``input_values.is_inactive_value`` (the 0.0.9 DRY pass, ``docs/feedback.md``
-    Major 1). Used by the filter side's logical-branch pre-walk
+    ``input_values.is_inactive_value`` (the 0.0.9 DRY pass). Used by the filter
+    side's logical-branch pre-walk
     (``_collect_nested_visibility_querysets_async``) to read ``and_`` / ``or_`` /
     ``not_`` arms off the raw input. The dict-vs-dataclass single-field read is
     ``input_values.input_field_value`` (DRY review C6), so the shape sniff stays
@@ -414,10 +414,10 @@ def active_related_branches(
     top-level list separately so the parent gate fires once per active branch
     occurrence (the caller's ``_fired`` dedup collapses repeats per class).
 
-    Consumes the shared ``iter_active_fields`` classifier (the 0.0.9 DRY pass,
-    ``docs/feedback.md`` Major 1), keeping the ``RELATED`` records; the yield
-    order is the input-iteration order rather than the declared-collection order,
-    which is immaterial here (the per-class ``_fired`` dedup, the AND-commutative
+    Consumes the shared ``iter_active_fields`` classifier (the 0.0.9 DRY pass),
+    keeping the ``RELATED`` records; the yield order is the input-iteration order
+    rather than the declared-collection order, which is immaterial here (the
+    per-class ``_fired`` dedup, the AND-commutative
     ``_apply_related_constraints`` narrowing, and the field-name-keyed visibility
     map are all order-independent).
 
@@ -468,7 +468,7 @@ def active_permission_field_paths(
     are kept. ``None`` / ``unset_sentinel`` values are skipped (active-input-only)
     and ``handle_top_level_list`` (order side) aggregates across the elements of
     a top-level list input -- both handled inside the classifier (the 0.0.9 DRY
-    pass, ``docs/feedback.md`` Major 1).
+    pass).
 
     Thin wrapper over ``active_permission_targets`` (single-sited classification,
     feedback H3): returns only the ``LEAF`` half.

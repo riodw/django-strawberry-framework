@@ -679,7 +679,7 @@ existing `_derive_related_visibility_querysets_sync` / `_async` split.
 Plan reading, `Q` construction, and `EXISTS` attachment remain shared,
 un-awaited helper code so the twins stay thin. **The permission-gate
 pass is NOT colorless-by-sharing** (implementation-gate review,
-[`feedback.md`][feedback] P1-3): it ships as one synchronous, path-driven
+P1-3): it ships as one synchronous, path-driven
 gate runner that `apply_search_sync` calls directly, while
 `apply_search_async` awaits `run_in_one_sync_boundary(<gate runner>, ...)`
 — exactly the boundary `FilterSet.apply_async` and `OrderSet.apply_async`
@@ -1106,8 +1106,8 @@ ship-it-today-defer-the-real-fix shape [`AGENTS.md`][agents] forbids.
 
 ### Decision 14 — Search scope is type-definition-wide and immutable
 
-The Medtrics production reproduction (cross-spec review in
-[`feedback.md`][feedback]) surfaces a second application concern beyond
+The Medtrics production reproduction (cross-spec review recorded in the
+[Part 1 plan][part1-plan], Rev 5) surfaces a second application concern beyond
 cardinality: the same DRF viewset intentionally exposes group-name search
 on one action and withholds it from three others, via
 `SearchFilter.get_search_fields(view, request)` action/request dynamism.
@@ -1585,8 +1585,7 @@ compiler shape.
 - [ ] Relational search is visibility-aware (Decision 12) and honors
   FilterSet permission gates (Decision 13), with live anonymous/staff and
   hidden-related-row proofs.
-- [ ] The five implementation-gate findings
-  ([`feedback.md`][feedback]) are closed in code and tests:
+- [ ] The five implementation-gate findings are closed in code and tests:
   one-`filter()`-call same-related-row compilation (shared inner alias
   asserted, leak counterexample live), exact-owner visibility for
   root-model re-entry (secondary-type regression), the
@@ -1623,7 +1622,6 @@ compiler shape.
 [goal]: ../GOAL.md
 
 <!-- docs/ -->
-[feedback]: feedback.md
 [part1-plan]: row-preserving-predicates-part1-plan.md
 [glossary-aggregateset]: GLOSSARY.md#aggregateset
 [glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions

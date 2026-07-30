@@ -30,7 +30,7 @@ single-sited), the [`DjangoMutationField`][glossary-djangomutationfield] exposur
 factory for the register flavor, the write-authorization seam
 (`Meta.permission_classes` / `check_permission`), and the phase-2.5
 materialize-before-`Schema` bind discipline. **The register flavor is deliberately NOT
-a fourth write-flavor plumbing kit** ([`docs/feedback.md`][feedback]'s standing DRY
+a fourth write-flavor plumbing kit** (the standing DRY
 review of the three-flavor stack): it is a thin
 [`DjangoMutation`][glossary-djangomutation] rider — a `create` over
 `get_user_model()` with a password-hashing write step — that adds **no** new field
@@ -187,8 +187,7 @@ Revision history (kept inline so the spec is self-contained):
   instance, not optimizer-planned — asymmetric with `register`'s G2-planned
   re-fetch, deliberately)
   ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
-- **Revision 3** — applied a second code-review pass ([`docs/feedback.md`][feedback];
-  every finding re-verified against the package source before editing — the
+- **Revision 3** — applied a second code-review pass (every finding re-verified against the package source before editing — the
   `registry.py` `_subsystem_clears` "pre-bind INPUT-namespace clears only, NOT
   declaration registries" contract, the `_bind_mutation` /
   `_synthesized_mutation_signature` payload name derived solely from
@@ -251,8 +250,7 @@ Revision history (kept inline so the spec is self-contained):
   restates the repo's first-line seed-helper rule (every
   `test_auth_api.py` test opens with `create_users(N)`, even the register /
   anonymous-`me` cases) ([Test plan](#test-plan)).
-- **Revision 4** — applied a third code-review pass ([`docs/feedback.md`][feedback];
-  every load-bearing reuse claim re-grounded against the package source before editing
+- **Revision 4** — applied a third code-review pass (every load-bearing reuse claim re-grounded against the package source before editing
   — `_resolve_primary_type`'s generic no-`DjangoType` raise naming `mutation_cls.__name__`,
   `check_permission` passing `type(self)` as the `has_permission` `mutation` positional,
   and `authorize_or_raise` threading `data` / `instance` straight into the gate were all
@@ -297,7 +295,7 @@ Revision history (kept inline so the spec is self-contained):
   parity in the [`GOAL.md`][goal] north-star (the cookbook reference carries no auth
   surface; this card advances the fakeshop target-example direction, adjacent to the
   six-file north-star shape).
-- **Revision 5** — applied a fourth code-review pass ([`docs/feedback.md`][feedback]).
+- **Revision 5** — applied a fourth code-review pass.
   The one genuinely new finding was **(P1, error keying)**: `validate_password` raises
   a **list-style** `ValidationError` (a bare message list, **no** `error_dict`), and
   the shared `validation_error_to_field_errors` mapper's non-dict branch keys such an
@@ -325,8 +323,7 @@ Revision history (kept inline so the spec is self-contained):
   ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
   / [Edge cases](#edge-cases-and-constraints)), and the first-line `create_users(N)`
   seed rule (Rev 3, [Test plan](#test-plan)).
-- **Revision 6** — applied a fifth code-review pass ([`docs/feedback.md`][feedback]
-  Round 2; both new findings re-grounded against source before editing).
+- **Revision 6** — applied a fifth code-review pass (Round 2; both new findings re-grounded against source before editing).
   **(P2, return-typing mechanism)** the way the custom `login` / `logout` /
   `current_user` factories attach their unresolved-at-class-body-time return types is
   now pinned to the **field family's own signature-injection idiom**:
@@ -357,7 +354,7 @@ Revision history (kept inline so the spec is self-contained):
   [Borrowing posture](#borrowing-posture) "borrow the session semantics as-is") and
   required no change.
 - **Revision 7** — applied the verified pre-build review round
-  ([`docs/feedback.md`][feedback]; every item re-grounded against the scaffolded
+  (every item re-grounded against the scaffolded
   fail-loud stubs — the `auth/mutations.py` / `auth/queries.py` TODO pseudocode,
   [`schema_reload.py`][schema-reload]'s `_PROJECT_APP_SCHEMA_MODULES`, and
   `resolvers.py::_model_decode_step`'s AR-H2 exclude calculation — before
@@ -765,7 +762,7 @@ A true description of the repo as this spec is authored:
   rider and the model-less plain-form sibling with its pinned `{ ok, errors }`
   payload and [`DenyAll`][mutations-permissions] default); `rest_framework/`
   ([`spec-039`][spec-039], implemented on main) proves it a third time. The
-  [`docs/feedback.md`][feedback] DRY review of that three-flavor stack is the
+  earlier DRY review of that three-flavor stack is the
   standing warning this card heeds by **not** becoming a fourth flavor
   ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 - **The payload builder already emits both shapes this card needs.**
@@ -1241,7 +1238,7 @@ credential slot, not a claim the column is called "username").
    request resolver every permission seam uses ([`utils/permissions.py`][utils-permissions]);
    the `family_label` is a single module-level `_AUTH_FAMILY_LABEL` constant reused by
    every auth surface, never a per-field string literal, so the resolution wording cannot
-   drift between fields (the [`docs/feedback.md`][feedback] D1 reuse directive).
+   drift between fields (the helper-reuse review's D1 reuse directive).
 2. Authorization: run the field's `permission_classes` through the shared
    `authorize_or_raise` gate via the permission carrier (named below). A denial is a
    top-level `GraphQLError` — identical to every write flavor.
@@ -1251,7 +1248,7 @@ credential slot, not a claim the column is called "username").
    (`"Incorrect username/password"`) — built via the `field_error("", …)` empty-path
    leaf ctor ([`mutations/resolvers.py`][mutations-resolvers]), which normalizes the
    empty path to `NON_FIELD_ERROR_KEY`, **never** a hard-coded `"__all__"` string (the
-   [`docs/feedback.md`][feedback] D8 reuse directive — the leaf ctor owns the sentinel).
+   helper-reuse review's D8 reuse directive — the leaf ctor owns the sentinel).
    Success → `auth.login(request, user)`, then
    the payload with the user in the slot. The message is deliberately
    undifferentiated (no "unknown user" vs "wrong password" split — no
@@ -1303,7 +1300,7 @@ suffices — it is **not** a `_ValidatedMutationMeta`, which would require `mode
 `login` / `logout` / `current_user` all call it rather than each spelling a
 near-identical class body, so the duck-typed `_mutation_meta` shape lives in one place;
 the only per-field inputs are the pinned `operation` string and the `_primary_type`
-(the [`docs/feedback.md`][feedback] D3 / P4 reuse directive). The factory's resolver then calls
+(the helper-reuse review's D3 / P4 reuse directive). The factory's resolver then calls
 `authorize_or_raise(holder_cls, info, operation, data, instance=instance)` before the
 session work, so the iteration, the `GraphQLError` denial, and the async-hook
 [`SyncMisuseError`][glossary-syncmisuseerror] guard (`reject_async_in_sync_context`
@@ -1458,7 +1455,7 @@ to `Register`** (the P1 naming fix — see below) with:
   wires **none** of the relation-visibility helpers (`relation_kind` /
   `is_forward_many_to_many` / `visible_related_object(s)`); they return for free via the
   inherited decode only if a consumer ever widens `Meta.fields`, and must not be added
-  preemptively (the [`docs/feedback.md`][feedback] D-N3 deliberate-non-reuse note).
+  preemptively (the helper-reuse review's D-N3 deliberate-non-reuse note).
 - `Meta.permission_classes` defaulted to the explicit AllowAny (Decision 5's
   inversion), overridable through the factory's `permission_classes=` kwarg.
   **`permission_classes` is class-local, so `register` is one declaration per
@@ -1516,7 +1513,7 @@ to `Register`** (the P1 naming fix — see below) with:
   ([`mutations/resolvers.py`][mutations-resolvers] `::_model_decode_step`) with the
   raw password appended as a fourth element that never touches
   `model(**scalar_and_fk_attrs)`. **The decode reuses the shared UNSET-strip walk, not
-  a second copy** (the [`docs/feedback.md`][feedback] D6 reuse directive): the
+  a second copy** (the helper-reuse review's D6 reuse directive): the
   provided-field iteration goes through [`iter_provided_input_fields`][utils-inputs] (the
   same walk `_decode_relations` opens with), and the auth-specific delta — capturing
   `password` out of the constructed model attrs — is a small reusable **exclusion
@@ -1550,7 +1547,7 @@ to `Register`** (the P1 naming fix — see below) with:
   validator's messages land under the single `password` key, not `"__all__"`. It then
   runs `user.set_password(raw_password)`
   **before** `full_clean()` / `save()`. **`validate_password` + `set_password` are the
-  ONLY auth-specific steps** (the [`docs/feedback.md`][feedback] D7 reuse directive): the
+  ONLY auth-specific steps** (the helper-reuse review's D7 reuse directive): the
   `full_clean()` + `save()` + `IntegrityError` mapping are delegated to the shared
   write path (`_full_clean_or_field_errors` / [`save_or_field_errors`][mutations-resolvers]),
   so the duplicate-`USERNAME_FIELD` unique error and the concurrent-race `IntegrityError`
@@ -1626,7 +1623,7 @@ auth-specific error (not the generic `_resolve_primary_type` one). Calls after
 [`finalize_django_types`][glossary-finalize_django_types] raise the standing
 declare-after-finalize [`ConfigurationError`][glossary-configurationerror].
 
-Justification: [`docs/feedback.md`][feedback]'s three-flavor DRY review is the
+Justification: the three-flavor DRY review is the
 standing warning — "every new write flavor re-spells the same ~8 pieces of glue."
 The register flavor dodges the *kit* by being a rider: no new converter (the
 model-column converter covers `AbstractBaseUser` columns), no new input generator
@@ -1714,13 +1711,13 @@ the same builder [`DjangoMutationField`][glossary-djangomutationfield] uses for 
 `<Name>Payload` refs — not a hand-spelled `Annotated[...]`, and the whole
 resolve-request → gate → session-work → inject-signature dispatcher is **single-sited in
 ONE auth field-construction helper** the three factories share, not copied per field (the
-[`docs/feedback.md`][feedback] D12 / P1 / P2 reuse directive). To keep that single copy
+helper-reuse review's D12 / P1 / P2 reuse directive). To keep that single copy
 honest across `mutations/` and `auth/`, [`_lazy_ref`][mutations-fields] and the
 `_resolve.__signature__` / `_resolve.__annotations__` injection assignment are promoted to
 shared machinery rather than re-spelled in `auth/`. **The `"CurrentUserAlias"` slot is owned by a
 [`make_input_namespace`][utils-inputs]`("django_strawberry_framework.auth.queries",
 "AuthMutation")` trio, not a hand-rolled `setattr` / `delattr` pair** (the
-[`docs/feedback.md`][feedback] D13 reuse directive): `bind_auth_mutations()` pins the
+helper-reuse review's D13 reuse directive): `bind_auth_mutations()` pins the
 alias by calling that trio's `materialize_fn("CurrentUserAlias", primary_type)` — which
 sets the module global through the blessed [`materialize_generated_input_class`][utils-inputs]
 parked-global path — and the trio's `clear_fn` empties the ledger. Because that `clear_fn`
@@ -1778,7 +1775,7 @@ surface-keyed bind, the Revision-7 foundational fix): it resolves the user prima
 [`registry.get`][registry]`(get_user_model())` — **the same getter
 `_resolve_primary_type` uses**, so "what counts as a registered primary" stays
 single-sited and only the raise *message* differs between the auth check and the generic
-mutation bind (the [`docs/feedback.md`][feedback] D16 reuse directive). It consults
+mutation bind (the helper-reuse review's D16 reuse directive). It consults
 [`registry.types_for`][registry] only to split the no-registered-type message from the
 multiple-types-without-primary ambiguity message. If any of the three user-typed fields
 was declared while that lookup returns `None`,
@@ -1876,7 +1873,7 @@ factories cannot resolve types eagerly; they follow the exact
 
 - Each factory call records a declaration in a module-level auth ledger — **a
   [`make_declaration_registry`][mutations-sets]`("AuthMutation")` instance, not a
-  hand-rolled list** (the [`docs/feedback.md`][feedback] D14 reuse directive), so the
+  hand-rolled list** (the helper-reuse review's D14 reuse directive), so the
   every-call identity-deduped `.register` and the `TypeRegistry.clear()` drain are the
   same ones the model / form / serializer flavors use — (**surface-keyed**: which of
   `login` / `logout` / `register` / `current_user` was declared, with which
@@ -2034,7 +2031,7 @@ the gate's own `instance=request.user` argument forces that lazy object as it is
 gate-then-session-work block in one sync helper run via
 `await sync_to_async(helper, thread_sensitive=True)()`. **That boundary is single-sited
 in ONE auth async helper the three async resolvers share** (the
-[`docs/feedback.md`][feedback] D17 reuse directive), never a per-field copy of the
+helper-reuse review's D17 reuse directive), never a per-field copy of the
 `sync_to_async(..., thread_sensitive=True)` call; the `036` boundary wrapper
 ([`mutations/resolvers.py`][mutations-resolvers]) is itself mutation-shaped (it takes
 `mutation_cls` / `data` / `id`), so a follow-on **may** factor its
@@ -2169,7 +2166,7 @@ it).
 
 The auth surface is a thin layer over the frozen foundation, so its correctness leans on
 **reusing** the write-stack / [`utils/`][utils-inputs] helpers rather than re-spelling
-them. This checklist consolidates the [`docs/feedback.md`][feedback] helper-reuse review
+them. This checklist consolidates the helper-reuse review
 (a deep pass over all ten [`utils/`][utils-inputs] modules against the planned surface);
 each item is single-sited in the decision it cross-references, and the implementation is
 verified against it slice by slice. The three `D-N*` items are deliberate **non**-reuse —
@@ -2761,7 +2758,7 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
    `ruff format` + `ruff check` are clean; the `036` / `038` / `039` mutation
    surfaces and the read side are unchanged. Every
    [Helper-reuse obligation](#helper-reuse-obligations-dry) (the
-   [`docs/feedback.md`][feedback] D1–D19 / P1–P4 / D-N1–D-N3 directives) is satisfied —
+   helper-reuse review's D1–D19 / P1–P4 / D-N1–D-N3 directives) is satisfied —
    the auth code routes through the named write-stack / [`utils/`][utils-inputs] helpers
    and does not re-spell them, and the three deliberate non-reuse points carry their
    source comment.
@@ -2798,7 +2795,6 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 
 <!-- docs/ -->
 [docs-readme]: ../README.md
-[feedback]: ../feedback.md
 [feedback2]: ../feedback2.md
 [glossary]: ../GLOSSARY.md
 [glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions

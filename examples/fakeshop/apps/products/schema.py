@@ -346,7 +346,7 @@ class SubmitPing(DjangoFormMutation):
     to the ``DenyAll`` deny-by-default default (spec-038 Decision 11). Every live call
     is rejected with a top-level ``GraphQLError`` before the form runs, so the deny
     posture is earned over a real ``/graphql`` request rather than only in package
-    tests (``docs/feedback.md`` - live deny-default coverage).
+    tests (``spec-038-form_mutations-0_0_12`` review - live deny-default coverage).
     """
 
     class Meta:

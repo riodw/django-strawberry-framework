@@ -352,7 +352,7 @@ editing.
    only in every `.py` (the reason string and every docstring stay ASCII). Then `git status
    --short` and classify every modified file per BUILD.md's Validation-run rule. The
    baseline-dirty files (`django_strawberry_framework/filters/sets.py`, `tests/filters/test_sets.py`,
-   `docs/feedback.md`, `docs/feedback2.md`, `drys.md`, `vulns.md`,
+   the maintainer's incoming review, `docs/feedback2.md`, `drys.md`, `vulns.md`,
    `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`,
    `examples/fakeshop/db.sqlite3`) are out of scope: do not edit, do not revert.
 
@@ -706,7 +706,7 @@ override plus `max_request_body_bytes_setting() == 1_048_576` after the `del`, i
      `docs/builder/bld-slice-1-protocol_split.md`,
      `docs/builder/build-046-transport_security-0_0_15.md`.
    - *Baseline-dirty / concurrent, untouched:* `django_strawberry_framework/filters/sets.py`,
-     `tests/filters/test_sets.py`, `docs/feedback.md`,
+     `tests/filters/test_sets.py`, the maintainer's incoming review,
      `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`,
      `examples/fakeshop/db.sqlite3`, `KANBAN.md`, `KANBAN.html`, `drys.md`, `vulns.md`,
      `docs/spec-046-transport_security-0_0_15.md` + `-terms.csv`.

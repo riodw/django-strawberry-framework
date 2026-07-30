@@ -660,7 +660,7 @@ in the meantime.
   `### Notes for Worker 1 (spec reconciliation)` **on disk**, not only in the return report:
   round 1's custodian had to re-derive a list that never reached disk.
 - **`docs/spec-046-transport_security-0_0_15-terms.csv`** — stays at 37 rows (Ruling 3).
-- **`docs/feedback.md`** — the maintainer's review document. Evidence, never edited, never
+- **The maintainer's incoming review document** — evidence, never edited, never
   annotated, never ticked.
 - **`drys.md`, `vulns.md`** (untracked maintainer scoping notes) — never touch. This is
   the concrete reason the `check_trailing_commas.py` invocation above carries explicit
@@ -981,7 +981,7 @@ regenerate. Every line below is on the artifact's `### Files Worker 2 may write`
 
 **Baseline-dirty, untouched by me** (`AGENTS.md` L34, and the artifact's do-not-revert list):
 `django_strawberry_framework/auth/mutations.py`, `auth/sessions.py`, `conf.py`,
-`docs/feedback.md`, `docs/spec-046-transport_security-0_0_15.md`,
+the maintainer's incoming review, `docs/spec-046-transport_security-0_0_15.md`,
 `docs/spec-046-transport_security-0_0_15-rationale.md` (never read),
 `docs/builder/build-046-transport_security-0_0_15.md`,
 `docs/builder/bld-review-2-w3_residual.md`, `drys.md`, `vulns.md`. Nothing was reverted.

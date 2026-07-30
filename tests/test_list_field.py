@@ -8,9 +8,9 @@ Package tests; system-under-test is ``django_strawberry_framework``
 single-file Layer-3 module's mirror per ``docs/TREE.md #"test_list_field.py       # DjangoListField (single-file Layer-3 module)"``.
 
 Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
-cluster (17 tests) - 22 total. Four of the tests are ``docs/feedback.md``
-review additions: three are real bug fixes - the own-class-registration
-guard (High #1, rejects ``DjangoType`` subclass that omits its own
+cluster (17 tests) - 22 total. Four of the tests are
+``spec-020-list_field-0_0_7`` review additions: three are real bug fixes -
+the own-class-registration guard (High #1, rejects ``DjangoType`` subclass that omits its own
 ``Meta``), the async-callable-object detection (High #2, detects
 ``async def __call__`` at construction time so the coroutine return
 doesn't bypass ``_post_process_consumer_async``), and the
@@ -144,8 +144,8 @@ def test_djangolistfield_rejects_djangotype_subclass_without_own_meta() -> None:
     ``DjangoType.__init_subclass__`` (``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"cls.__django_strawberry_definition__ = definition"``) and inherited via
     MRO; a subclass that omits ``Meta`` would otherwise pass the guard via the
     parent's definition and bind the field to a target whose model, selected
-    fields, and ``Meta.primary`` state belong to the parent class (docs/feedback.md
-    High #1).
+    fields, and ``Meta.primary`` state belong to the parent class
+    (``spec-020-list_field-0_0_7`` High #1).
     """
 
     class ParentCategoryType(DjangoType):
@@ -573,7 +573,7 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
     wrapper would call the instance, receive a coroutine, find no
     ``Manager``/``QuerySet`` to coerce, and pass the coroutine through; under
     async schema execution Strawberry would still await the coroutine and
-    silently skip ``target_type.get_queryset(...)`` (docs/feedback.md High #2).
+    silently skip ``target_type.get_queryset(...)`` (``spec-020-list_field-0_0_7`` High #2).
     """
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
@@ -664,7 +664,7 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
     contract end-to-end through the field's pipeline: ``get_queryset``'s
     ``startswith("a")`` exclusion fires on the awaited QuerySet, proving the
     partial reached ``_post_process_consumer_async`` and not the sync wrapper.
-    The post-High-#2 review note in ``docs/feedback.md`` recommended an explicit
+    The post-High-#2 ``spec-020-list_field-0_0_7`` review note recommended an explicit
     ``.func`` unwrap. For this shape (partial of a plain ``async def``)
     ``inspect.iscoroutinefunction(partial(async_fn))`` is True directly, so the
     first branch already routes it - but the unwrap turned out to be load-bearing
@@ -719,9 +719,9 @@ async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_ge
     the partial's own ``__call__`` (also False), so before ``is_async_callable``
     unwrapped the partial first this resolver was misclassified as sync - its
     coroutine return bypassed ``_post_process_consumer_async`` and silently
-    skipped ``target_type.get_queryset(...)`` (docs/feedback.md). Pins the
-    ``.func`` unwrap fix: ``get_queryset``'s ``startswith("a")`` exclusion must
-    fire on the awaited QuerySet.
+    skipped ``target_type.get_queryset(...)`` (``spec-020-list_field-0_0_7`` review).
+    Pins the ``.func`` unwrap fix: ``get_queryset``'s ``startswith("a")`` exclusion
+    must fire on the awaited QuerySet.
     """
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)

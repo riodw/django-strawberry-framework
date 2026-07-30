@@ -44,7 +44,7 @@ responsibility groups:
   instead of a re-spelled tuple at the reset call site).
 
 Every one of these six exports already carries an explicit "single-sited /
-0.0.9 DRY pass / `docs/feedback.md` Major 3 / DRY review A8" provenance note
+0.0.9 DRY pass Major 3 / DRY review A8" provenance note
 in its own docstring -- this module IS the outcome of an earlier DRY pass that
 found the filter/order byte-parallel copies and consolidated them here. The
 question for this fresh review is whether that consolidation still holds
@@ -118,7 +118,7 @@ elsewhere in the package (mutation/form input naming, CLI dotted-path
 import, best-effort module import, relation-connection teardown, shape-keyed
 build caches) was verified to encode a genuinely different contract with a
 different owner and different reasons to change. This module is itself the
-product of the package's `0.0.9` DRY pass (`docs/feedback.md` Major 3) plus
+product of the package's `0.0.9` DRY pass (Major 3) plus
 later single-sitings (DRY review A8, A9, D1); a fresh trace of every consumer
 found no new fork and no new duplication that has crept back in since.
 

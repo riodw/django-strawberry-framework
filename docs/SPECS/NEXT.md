@@ -314,7 +314,7 @@ Concrete sequence:
    Classify each target into one of these buckets:
 
    - **Repo-root files** (`KANBAN.md`, `README.md`, `GOAL.md`, `TODAY.md`, `AGENTS.md`, `CHANGELOG.md`, `pyproject.toml`, `BACKLOG.md`, …): `[kanban]: ../KANBAN.md` → `[kanban]: ../../KANBAN.md`, `](../README.md)` → `](../../README.md)`, etc.
-   - **`docs/` siblings** (`GLOSSARY.md`, `TREE.md`, `README.md`, `feedback.md`, the new active spec): `[glossary]: GLOSSARY.md` → `[glossary]: ../GLOSSARY.md`, `[glossary-foo]: GLOSSARY.md#foo` → `[glossary-foo]: ../GLOSSARY.md#foo`, `[tree]: TREE.md` → `[tree]: ../TREE.md`.
+   - **`docs/` siblings** (`GLOSSARY.md`, `TREE.md`, `README.md`, the new active spec): `[glossary]: GLOSSARY.md` → `[glossary]: ../GLOSSARY.md`, `[glossary-foo]: GLOSSARY.md#foo` → `[glossary-foo]: ../GLOSSARY.md#foo`, `[tree]: TREE.md` → `[tree]: ../TREE.md`.
    - **`NEXT.md`**: because this flow itself lives at `docs/SPECS/NEXT.md`, `[next]: SPECS/NEXT.md` from a `docs/` spec becomes `[next]: NEXT.md` after the spec moves into `docs/SPECS/`. Verify the actual file location before rewriting any nonstandard target.
    - **Specs that ALSO moved in the same sweep** — these are now `docs/SPECS/` siblings of the file being rewritten, so paths simplify: `[spec-YYY]: SPECS/spec-YYY-…` → `[spec-YYY]: spec-YYY-…`, and a former `[spec-YYY]: spec-YYY-…` sibling-under-`docs/` reference stays `[spec-YYY]: spec-YYY-…` (now a sibling under `docs/SPECS/`).
    - **The new active spec** — from a moved spec under `docs/SPECS/`, a link to the newly-authored live spec under `docs/` must use `../spec-<NNN>-<topic>-<X_Y_Z>.md`.

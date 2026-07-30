@@ -12,8 +12,8 @@ multi-type-over-one-model dispatch, custom ``relay.NodeID`` attributes, exact
 query-count side channels, ``GLOBALID_INVALID`` error-code shapes,
 construction- / finalize-time guards, ``SyncMisuseError`` discrimination, and
 the public-export surface. Behavior-only twins whose contract the live suite
-now carries are migration candidates (``docs/feedback.md`` /
-``examples/fakeshop/test_query/README.md``).
+now carries are migration candidates under the live-first coverage mandate
+(``examples/fakeshop/test_query/README.md``).
 """
 
 import pytest

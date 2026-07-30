@@ -118,7 +118,7 @@ None blocking 0.0.3. The two follow-on specs (`Meta.primary` and consumer overri
 
 ## References
 
-- `docs/alpha-review-feedback.md` — recommendations #1 (silent acceptance), #3 (invalid field names), and the consumer-override portion of #5.
+- The original alpha review — recommendations #1 (silent acceptance), #3 (invalid field names), and the consumer-override portion of #5; this spec is the durable record of those findings.
 - `docs/SPECS/spec-001-django_types-0_0_1.md` — the implementation spec this contract spec sits on top of.
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` — for the `has_custom_get_queryset` sentinel that consumers of this contract spec will eventually use.
 - `docs/SPECS/spec-006-public_surface-0_0_3.md` — companion spec covering the package-level public-surface and documentation-discipline rules that this contract feeds into.

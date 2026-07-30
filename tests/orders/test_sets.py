@@ -636,7 +636,7 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 
 # =============================================================================
 # Row-preserving to-many ordering - aggregate, not fan-out JOIN (P1-B,
-# docs/feedback.md)
+# ``spec-030-connection_field-0_0_9`` review round)
 # =============================================================================
 
 

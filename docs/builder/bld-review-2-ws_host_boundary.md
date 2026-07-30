@@ -202,7 +202,7 @@ under test, so the rows cannot encode one version's answer.
 ## 6. Files I did not touch
 
 Confirmed with `git diff --stat`. The other dirty paths in the tree — `views.py`,
-`_request_body.py`, `conf.py`, `auth/*`, `README.md`, `docs/README.md`, `docs/feedback.md`,
+`_request_body.py`, `conf.py`, `auth/*`, `README.md`, `docs/README.md`, the incoming review,
 `docs/spec-046-*`, `docs/builder/build-046-*`, `TODAY.md`, `drys.md`, `vulns.md`,
 `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py` — are concurrent
 maintainer / other-builder work and carry none of my edits. I ran no `git` command that writes.
@@ -364,7 +364,7 @@ Recorded with their previous wording so the custodian can confirm the replacemen
 - Now (`routers.py:13`-`30`): three named wrappers, the Host check attributed to
   `consumers.py::DjangoWebSocketHostValidator` and to `HttpRequest.get_host()`, "all three
   wrappers are the ROUTER's", and "two separate checks, in that order, neither standing in for
-  the other". The old sentence was the one `docs/feedback.md` Medium 4 quoted.
+  the other". The old sentence was the one round-2 Medium 4 quoted.
 
 **B2 — the class docstring's Origin-only paragraph.**
 
@@ -657,7 +657,7 @@ clean, so **nothing in `routers.py` is a pass-2 edit of mine**.
 
 Untouched and unread-for-modification: `views.py`, `_request_body.py`, `tests/test_views.py`,
 `examples/fakeshop/test_query/test_transport_api.py` (the concurrent HTTP-boundary builder's),
-`docs/builder/BUILD.md` and `worker-*.md` (the coordinator's), `docs/feedback.md`,
+`docs/builder/BUILD.md` and `worker-*.md` (the coordinator's), the incoming review,
 `docs/feedback2.md`, `drys.md`, `vulns.md`, `TODAY.md`, `README.md`, `docs/README.md`, `conf.py`,
 `auth/*`, `docs/spec-*`, `docs/SPECS/*`, `db.sqlite3`, `docs/GLOSSARY.md`, `docs/TREE.md`.
 

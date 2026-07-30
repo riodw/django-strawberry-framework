@@ -48,11 +48,11 @@ from .selections import (
 )
 
 # The selection-traversal primitives moved to ``optimizer/selections.py`` in the
-# 0.0.9 DRY pass (``docs/feedback.md`` Major 2) so the walker and the AST seam in
-# ``extension.py`` share ONE fragment/directive/response-key implementation. The
-# underscore aliases keep this module's bodies - and the tests that import these
-# names from ``optimizer.walker`` - working unchanged; the walker-specific merge
-# / runtime-prefix / argument helpers below consume them.
+# 0.0.9 DRY pass so the walker and the AST seam in ``extension.py`` share ONE
+# fragment/directive/response-key implementation. The underscore aliases keep
+# this module's bodies - and the tests that import these names from
+# ``optimizer.walker`` - working unchanged; the walker-specific merge /
+# runtime-prefix / argument helpers below consume them.
 _should_include = should_include
 _is_fragment = is_fragment
 _response_key = response_key
@@ -362,12 +362,12 @@ def _build_child_queryset(
     method does not need to be called twice on the prefetch path.
 
     The custom ``get_queryset`` visibility hook runs through the shared
-    ``utils/querysets.py::apply_type_visibility_sync`` (the 0.0.9 DRY pass,
-    ``docs/feedback.md`` Major 1) so plan-time prefetch visibility uses the SAME
-    sync routing the resolver surfaces do: an async-only related ``get_queryset``
-    surfaces a clean ``SyncMisuseError`` here (the optimizer walker is sync; a
-    coroutine would otherwise leak into ``OptimizationPlan.apply``) - consistent
-    with the connection field's documented "nested async ``get_queryset`` ->
+    ``utils/querysets.py::apply_type_visibility_sync`` (the 0.0.9 DRY pass) so
+    plan-time prefetch visibility uses the SAME sync routing the resolver
+    surfaces do: an async-only related ``get_queryset`` surfaces a clean
+    ``SyncMisuseError`` here (the optimizer walker is sync; a coroutine would
+    otherwise leak into ``OptimizationPlan.apply``) - consistent with the
+    connection field's documented "nested async ``get_queryset`` ->
     ``relation_shapes = list``" recourse. The base queryset stays the related
     model's own ``_default_manager.all()`` (NOT ``initial_queryset(target_type)``
     - the prefetch child is keyed on ``field.related_model``).
@@ -380,7 +380,8 @@ def _build_child_queryset(
         # and degrades to the fully-unplanned per-parent fallback WITHOUT recomposing
         # filters / ordering, so the seal's slice rejection (which exists because
         # recomposing surfaces would raise a raw ``TypeError``) must not pre-empt the
-        # designed degradation (``docs/feedback2.md`` P0-3 degrade-to-unplanned).
+        # designed degradation (``spec-045-visibility_boundary-0_0_14`` Decision 5
+        # degrade-to-unplanned).
         queryset = apply_type_visibility_sync(target_type, queryset, info, allow_sliced=True)
     return queryset
 

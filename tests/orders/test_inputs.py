@@ -309,9 +309,9 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form():
     """A raw-dict order input flattens identically to the dataclass form.
 
     The 0.0.9 DRY pass routed ``normalize_input_value`` through the shared
-    ``utils/input_values.py::iter_active_fields`` classifier (``docs/feedback.md``
+    ``utils/input_values.py::iter_active_fields`` classifier (that pass's
     Major 1), whose ``iter_input_items`` walk accepts the dict shape as well as
-    the Strawberry input dataclass. This pins the feedback's required equivalence
+    the Strawberry input dataclass. This pins the review's required equivalence
     -- dataclass and raw-dict forms (including a nested ``RelatedOrder`` branch)
     produce the same flattened ``(field_path, direction)`` tuples.
     """

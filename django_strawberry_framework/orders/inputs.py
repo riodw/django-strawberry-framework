@@ -74,15 +74,15 @@ class Ordering(enum.Enum):
     database's default null-ordering applies (per spec-028 Decision 5's
     True-or-None semantics).
 
-    Portability note (``docs/feedback.md``): a bare ``ASC`` / ``DESC`` over a
-    NULLABLE column defers NULL placement to the backend - SQLite sorts NULLs
-    first on ``ASC``, Postgres / MySQL sort them last - so the NULL partition
-    (and thus the page boundaries of a connection paged over a nullable column)
-    differs across databases, and the test suite runs on SQLite. This does NOT
-    break cursor stability WITHIN one backend (positional cursors only need a
-    stable order across requests on the same database); use the explicit
-    ``ASC_NULLS_FIRST`` / ``ASC_NULLS_LAST`` (and ``DESC_*``) variants for a
-    backend-independent NULL partition.
+    Portability note: a bare ``ASC`` / ``DESC`` over a NULLABLE column defers
+    NULL placement to the backend - SQLite sorts NULLs first on ``ASC``,
+    Postgres / MySQL sort them last - so the NULL partition (and thus the page
+    boundaries of a connection paged over a nullable column) differs across
+    databases, and the test suite runs on SQLite. This does NOT break cursor
+    stability WITHIN one backend (positional cursors only need a stable order
+    across requests on the same database); use the explicit ``ASC_NULLS_FIRST``
+    / ``ASC_NULLS_LAST`` (and ``DESC_*``) variants for a backend-independent
+    NULL partition.
     """
 
     ASC = "ASC"
@@ -300,13 +300,12 @@ def normalize_input_value(
     The dataclass-vs-dict walk, the top-level ``list[<T>]`` flattening, the
     ``None`` active-input skip, the ``_field_specs`` lookup, and the
     leaf-vs-related classification are the shared traversal mechanics owned by
-    ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass,
-    ``docs/feedback.md`` Major 1). This function keeps only the order-side leaf
-    semantics: a ``RelatedOrder`` branch recurses into the target orderset with
-    the django source path as a prefix (e.g. ``shelf`` -> ``shelf__code``); a
-    leaf appends ``(django_source_path, Ordering | None)``. ``handle_top_level_list``
-    is set because the resolver-facing order argument shape is
-    ``list[<T>OrderInputType] | None``.
+    ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass). This function
+    keeps only the order-side leaf semantics: a ``RelatedOrder`` branch recurses into
+    the target orderset with the django source path as a prefix (e.g. ``shelf`` ->
+    ``shelf__code``); a leaf appends ``(django_source_path, Ordering | None)``.
+    ``handle_top_level_list`` is set because the resolver-facing order argument shape
+    is ``list[<T>OrderInputType] | None``.
     """
     config = SetInputTraversal(
         field_specs=_field_specs,

@@ -1,7 +1,7 @@
 """Tests for input permissions, relation-path gates, and Django/Channels request decoding.
 
 The 0.0.9 DRY pass single-sited the active-input permission traversal that the
-filter and order families had grown as parallel copies (``docs/feedback.md``
+filter and order families had grown as parallel copies (that pass's
 Major 3 -- an authorization surface where a divergence between the two copies is
 a real bug class). These tests pin the shared mechanics directly and the
 configuration points (the family label, the ``unset_sentinel``) that keep the

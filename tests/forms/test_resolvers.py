@@ -1137,9 +1137,10 @@ def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
     (``_to_form_key_value``); ``model_to_dict`` would reconstruct an OMITTED one as
     related INSTANCES (effectively pks), which a ``ModelMultipleChoiceField`` keyed
     by ``to_field_name`` cannot resolve - so an omitted M2M would spuriously fail
-    validation on a one-field update (``docs/feedback.md`` Finding 3). Reconstruction
-    now converts each member by ``to_field_name`` too, so omitted and provided M2M
-    bind in the same shape. Fails on the pre-fix ``model_to_dict`` reconstruction.
+    validation on a one-field update (``spec-038-form_mutations-0_0_12`` Finding 3).
+    Reconstruction now converts each member by ``to_field_name`` too, so omitted and
+    provided M2M bind in the same shape. Fails on the pre-fix ``model_to_dict``
+    reconstruction.
     """
 
     class BookForm(forms.ModelForm):
@@ -1271,7 +1272,8 @@ def test_partial_update_preserves_unprovided_fk_with_to_field_name():
 @pytest.mark.django_db
 def test_required_extra_field_omitted_on_update_is_coercion_error():
     """A required non-model extra field stays required in the partial input; omitting it
-    is a GraphQL coercion error BEFORE the resolver (P2 / docs/feedback.md Finding 2).
+    is a GraphQL coercion error BEFORE the resolver
+    (P2 / ``spec-038-form_mutations-0_0_12`` Finding 2).
 
     The Slice-1 partial input keeps a required non-model extra field required (it
     is not a model-backed field forced optional). Now that a required generated
@@ -1785,7 +1787,7 @@ def test_modelform_refetch_keeps_select_related_and_suppresses_only():
 
 
 # ---------------------------------------------------------------------------
-# docs/feedback.md review fixes
+# ``spec-038-form_mutations-0_0_12`` review fixes
 # ---------------------------------------------------------------------------
 
 
@@ -1797,7 +1799,7 @@ def test_plain_form_unset_permission_classes_denies_by_default():
     (that class reads the resolved model, which the plain flavor never provides -
     it would raise at request time). An unset ``permission_classes`` therefore
     installs ``DenyAll`` and the write is denied with the top-level authorization
-    error, not an ``AttributeError`` (docs/feedback.md Finding 1).
+    error, not an ``AttributeError`` (``spec-038-form_mutations-0_0_12`` Finding 1).
     """
 
     class ContactForm(forms.Form):
@@ -1829,7 +1831,8 @@ def test_required_form_field_omitted_yields_coercion_error():
 
     ``Item.name`` is required, so the create input's ``name`` is non-null AND now
     carries no class default: omitting it produces a top-level GraphQL coercion
-    error before the resolver and writes no row (docs/feedback.md Finding 2).
+    error before the resolver and writes no row
+    (``spec-038-form_mutations-0_0_12`` Finding 2).
     """
     (
         schema,
@@ -1859,7 +1862,8 @@ def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint
     narrows the GraphQL input to ``('name',)``. A name-only update must preserve
     the located row's ``category`` (the bound ModelForm validates ``category`` even
     though it is off the wire), and the ``unique_item_per_category`` constraint
-    must still validate against that preserved FK (docs/feedback.md Finding 3).
+    must still validate against that preserved FK
+    (``spec-038-form_mutations-0_0_12`` Finding 3).
     """
 
     class NameCategoryForm(forms.ModelForm):
@@ -1966,7 +1970,8 @@ def test_decode_relation_multi_empty_values_return_empty_list():
 @pytest.mark.django_db
 def test_explicit_null_fk_on_update_yields_form_required_error_not_invalid_id():
     """Explicit ``null`` on a required FK surfaces the FORM's field-keyed required error,
-    NOT a decode-level 'Invalid id' on the relation (docs/feedback.md Finding 4)."""
+    NOT a decode-level 'Invalid id' on the relation
+    (``spec-038-form_mutations-0_0_12`` Finding 4)."""
     (
         schema,
         (
@@ -1996,7 +2001,7 @@ def test_explicit_null_m2m_on_update_clears_not_crashes():
 
     A required M2M cleared to empty surfaces the bound form's field-keyed required
     error; before the fix the multi decoder iterated ``None`` and raised a
-    top-level ``TypeError`` (docs/feedback.md Finding 4).
+    top-level ``TypeError`` (``spec-038-form_mutations-0_0_12`` Finding 4).
     """
 
     class BookForm(forms.ModelForm):

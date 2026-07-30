@@ -271,7 +271,7 @@ Revision history (kept inline so the spec is self-contained):
   0.0.14` until the joint cut). The kanban tables stay owned by the concurrent
   writer; the mixed DB + generated-doc diff is handed to the maintainer to
   reconcile at commit.
-- **Revision 8** — eighth-review absorption (2026-07-08, `docs/feedback.md`).
+- **Revision 8** — eighth-review absorption (2026-07-08).
   **P2 — the GraphiQL bridge could still leak the server-only `debugToolbar` key
   and could throw inside the global `JSON.parse` patch.** Revision 7's
   `if (djDebug === null) return data;` guard returned *before*

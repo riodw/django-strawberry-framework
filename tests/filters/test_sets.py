@@ -529,7 +529,7 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
 
 
 # ---------------------------------------------------------------------------
-# High 3 (feedback.md): a forward, single-valued Relay relation ``in`` lookup
+# High 3 (``spec-054`` Part 1 plan): a forward, single-valued Relay relation ``in`` lookup
 # is list-shaped over the wire, so the PRODUCTION generation path must emit
 # ``GlobalIDMultipleChoiceFilter`` -- NOT the scalar ``GlobalIDFilter`` that a
 # cardinality-only reselection produced. These tests drive the real
@@ -795,7 +795,7 @@ def test_expanded_related_filter_derives_pk_path_from_live_field_name():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 1 (feedback.md): a framework-owned Relay relation supports ONLY the
+# Blocker 1 (``spec-054`` Part 1 plan): a framework-owned Relay relation supports ONLY the
 # ``{exact, in, isnull}`` wire shapes. Any other lookup (pattern / ordering /
 # range) has no GlobalID semantics and must be rejected at BUILD time with a
 # typed ``ConfigurationError`` naming the filterset, field, and lookup -- never
@@ -1159,7 +1159,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
 
 
 # ---------------------------------------------------------------------------
-# Round-4 Blocker 2 (feedback.md): a consumer-selected relation filter over a
+# Round-4 Blocker 2 (``spec-054`` Part 1 plan): a consumer-selected relation filter over a
 # Relay-node target -- chosen via ``Meta.filter_overrides`` OR a shadowed
 # class-level ``FILTER_DEFAULTS`` -- must be honored byte-for-byte. Before the
 # fix, ``filter_for_lookup`` unconditionally replaced ANY Relay-node relation
@@ -4187,10 +4187,11 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 #
 # The scalar ``and``/``or`` union/intersection contracts and the nested
 # malformed-subbranch validation contract moved to the live library API suite
-# (``examples/fakeshop/test_query/test_library_api.py``) per feedback3.md: those
-# behaviors are reachable through the real ``BranchFilter``/``PatronFilter`` over
-# ``/graphql/``, where the replacements also prove GraphQL input coercion, root
-# visibility, and the HTTP error/data envelope.
+# (``examples/fakeshop/test_query/test_library_api.py``) under the live-first
+# coverage mandate: those behaviors are reachable through the real
+# ``BranchFilter``/``PatronFilter`` over ``/graphql/``, where the replacements
+# also prove GraphQL input coercion, root visibility, and the HTTP error/data
+# envelope.
 # ---------------------------------------------------------------------------
 
 
@@ -6725,7 +6726,7 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     expansion (asserted via the expanded row's provenance below).
 
     The custom child class is an unaudited ``CharFilter`` subclass, so under the
-    exact-class family gate (feedback.md Blocker 2) it resolves to NO profile and
+    exact-class family gate (``spec-054`` Part 1 plan, Blocker 2) it resolves to NO profile and
     the expanded ``loans__note__icontains`` row is INELIGIBLE -- a fail-closed
     FAMILY-gate layer that subsumes the capability gate: even were it eligible, the
     propagated ``generation_capable=False`` would still make it non-routable. Either
@@ -7050,7 +7051,7 @@ def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
 
     ``_candidate_metadata_for`` eligibility requires ``method is None`` -- a set method
     routes through a consumer ``FilterMethod`` whose semantics the correlated adapter
-    must never smuggle into a subquery (``docs/feedback.md`` High 5). A synthetic
+    must never smuggle into a subquery (``spec-054`` Part 1 plan, High 5). A synthetic
     framework-stamped leaf with a genuine to-many ``field_name`` but a set method gets
     a candidate row that is ineligible SOLELY because of the method (mirrors the
     unknown-family eligibility probe).
@@ -7295,7 +7296,7 @@ def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
 
 
 # ======================================================================
-# High 3 (``docs/feedback.md`` "Required regressions"): the public
+# High 3 (``spec-054`` Part 1 plan, "Required regressions"): the public
 # ------------------------------------------------------------------------
 # ``FilterSet.FILTER_DEFAULTS`` must stay a drop-in django-filter mapping -- a plain,
 # deepcopyable ``dict`` a consumer can copy and customize (django-filter's inherited
@@ -7410,11 +7411,11 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 
     High 3 / Blocker 1 replaced a snapshot of django-filter's mutable global with a
     package-AUTHORED copy. That copy is deliberate duplication, so it can silently drift
-    from django-filter across versions (``docs/feedback.md`` Sixth-review bug hunt): a new
+    from django-filter across versions (``spec-054`` Part 1 plan, Sixth-review bug hunt): a new
     field type, a changed default ``filter_class``, or an added/removed ``extra`` in a
     future release would go unnoticed.
 
-    SCOPE -- what this actually compares (``docs/feedback.md`` Seventh review, High 2):
+    SCOPE -- what this actually compares (``spec-054`` Part 1 plan, Seventh review, High 2):
     the key SET, the per-key ``filter_class`` IDENTITY, ``extra`` PRESENCE per key, and for
     the six relation kinds the provider's OUTPUT keys plus ``to_field_name`` /
     ``null_label`` / ``queryset.model``. It does NOT compare full queryset semantics
@@ -7488,7 +7489,7 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 
 
 # ======================================================================
-# Blocker 1 (``docs/feedback.md`` "Required regressions"): package ownership must be
+# Blocker 1 (``spec-054`` Part 1 plan, "Required regressions"): package ownership must be
 # ------------------------------------------------------------------------
 # anchored on the package-AUTHORED table, not on a snapshot of django-filter's mutable
 # global. These regressions prove: (a) a consumer mutation of the global BEFORE the
@@ -7997,7 +7998,7 @@ def test_r6_benign_base_override_does_not_block_to_many_routing():
 
 
 # ======================================================================
-# docs/feedback.md High 4: the supported generated django-filter families are an
+# ``spec-054`` Part 1 plan, High 4: the supported generated django-filter families are an
 # EXECUTABLE fail-closed boundary (``_FILTER_FAMILY_REGISTRY`` +
 # ``_family_profile_for``), not prose. A framework-origin many-side leaf whose
 # filter class resolves to no registered family is ineligible, and therefore never
@@ -8143,7 +8144,7 @@ def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
     exact-audited scalar. Each variant below violates exactly one condition and must
     resolve to ``None``. Crucially this covers DUNDER-NAMED state and behavior, not just
     non-dunder members: an exact own-name-set compare against a ``pass``-body reference is
-    what closes the ``docs/feedback.md`` Sixth-review bug-hunt gap, where a
+    what closes the ``spec-054`` Part 1 plan's Sixth-review bug-hunt gap, where a
     "startswith/endswith ``__``" test let ``__evil_state__`` / an overridden
     ``__getattribute__`` / ``__init_subclass__`` / ``__slots__`` slip through.
     """
@@ -8252,7 +8253,7 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
     ("genres" is an M2M on ``Book``) DOES get a candidate row and DOES cross a
     many-side hop, yet is INELIGIBLE because its class resolves to no registered
     family. Without the family gate this leaf would be routable before its runtime
-    reads were audited (feedback.md High 4).
+    reads were audited (``spec-054`` Part 1 plan, High 4).
     """
     leaf = _UnknownFamilyFilter(field_name="genres")
     _stamp_generation_provenance(
@@ -8268,7 +8269,7 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
 
 
 # ======================================================================
-# docs/feedback.md (Seventh review) High 2: the AUDITED django-filter range gates
+# ``spec-054`` Part 1 plan (Seventh review) High 2: the AUDITED django-filter range gates
 # the OPTIMIZATION, not the dependency.
 # ----------------------------------------------------------------------
 # ``pyproject.toml`` keeps ``django-filter>=25.2`` UNBOUNDED so a consumer

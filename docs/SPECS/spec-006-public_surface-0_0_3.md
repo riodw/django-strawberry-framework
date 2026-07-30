@@ -142,7 +142,7 @@ None blocking 0.0.3.
 
 ## References
 
-- `docs/alpha-review-feedback.md` — recommendations #1 (silent acceptance), #2 (README aspirational), #7 (docs gap), #8 (alpha guarantees).
+- The original alpha review — recommendations #1 (silent acceptance), #2 (README aspirational), #7 (docs gap), #8 (alpha guarantees); this spec is the durable record of those findings.
 - `docs/SPECS/spec-005-django_type_contract-0_0_3.md` — companion spec for the DjangoType-side contract.
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` — carries the local visibility-status amendment that this spec governs.
 - `docs/README.md` — the surface this spec governs.

@@ -1697,8 +1697,8 @@ def _seed_branches_with_varying_shelves():
     """Seed Alpha (shelves A, C, E) + Beta (shelf B), both ``city="Boston"``.
 
     Load-bearing for the row-preserving reverse-FK ordering contract
-    (``docs/feedback.md`` P1-B): ordering by ``shelves: { code: ASC }`` orders
-    each Branch by an AGGREGATE of its shelf codes (``Min`` for ASC), so a
+    (``spec-030-connection_field-0_0_9`` P1-B): ordering by ``shelves: { code: ASC }``
+    orders each Branch by an AGGREGATE of its shelf codes (``Min`` for ASC), so a
     Branch with N shelves appears ONCE -- Alpha (min code A) then Beta (min code
     B) -- not N times.
     """
@@ -1838,7 +1838,7 @@ def test_library_branches_order_by_reverse_fk_relation():
     shelves appears ONCE, not N times: Alpha (min code A) then Beta (min code
     B).
 
-    Corrected contract per ``docs/feedback.md`` P1-B. The old raw
+    Corrected contract per the ``spec-030-connection_field-0_0_9`` review, P1-B. The old raw
     ``order_by("shelves__code")`` multiplied parent rows (one per child), which
     silently corrupted cursors / ``totalCount`` on a connection. ``OrderSet``
     now orders to-many paths by ``Min`` / ``Max`` of the child column so the
@@ -1876,9 +1876,9 @@ def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplicati
     ``.annotate(<alias>=Min("shelves__code")).order_by("city", <alias>)``: a
     ``GROUP BY`` on the parent that ALSO orders by a non-aggregate scalar
     column. This live query exercises that GROUP-BY functional-dependency shape
-    end-to-end (``docs/feedback.md`` round-2 follow-up): the unit test in
-    ``tests/orders/test_sets.py`` asserts the expression SHAPE, while this
-    asserts the EXECUTED result on a real backend, and proves both terms are
+    end-to-end (``spec-030-connection_field-0_0_9`` review, round-2 follow-up): the
+    unit test in ``tests/orders/test_sets.py`` asserts the expression SHAPE, while
+    this asserts the EXECUTED result on a real backend, and proves both terms are
     load-bearing AND no parent row is multiplied despite multi-shelf branches.
 
     Seed -- each branch's MIN shelf code in parentheses:
@@ -3633,9 +3633,9 @@ def test_genre_connection_order_by_to_many_no_node_multiplication():
     its book titles (``Min`` for ASC) rather than a fan-out JOIN. A Genre with
     several books therefore appears in ``edges`` exactly ONCE (no duplicate node,
     no skipped distinct node under the positional cursors), and ``totalCount``
-    counts DISTINCT genres -- the ``docs/feedback.md`` P1-B contract. The old raw
-    ``order_by("books__title")`` form would have listed ``Fiction`` twice (one
-    row per book) and inflated ``totalCount``.
+    counts DISTINCT genres -- the ``spec-030-connection_field-0_0_9`` P1-B contract.
+    The old raw ``order_by("books__title")`` form would have listed ``Fiction``
+    twice (one row per book) and inflated ``totalCount``.
     """
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="S-1", topic="general", branch=branch)
@@ -5981,11 +5981,12 @@ def test_branches_via_list_field_default_resolver_applies_get_queryset_live():
 
 # ---------------------------------------------------------------------------
 # Scalar logic-tree filter unions/intersections and nested-branch validation
-# over live /graphql/ (feedback3.md high-confidence + qualifying conditional
-# moves from ``tests/filters/test_sets.py``). The live ``BranchFilter`` exposes
-# ``name``/``city`` scalar lookups and the ``PatronFilter`` carries the
-# ``emailMustHaveAtSign`` custom-validator filter, so the union/intersection
-# and per-branch form-validation contracts are reachable through the real API.
+# over live /graphql/ (the high-confidence and qualifying conditional moves from
+# ``tests/filters/test_sets.py`` under the live-first coverage mandate). The
+# live ``BranchFilter`` exposes ``name``/``city`` scalar lookups and the
+# ``PatronFilter`` carries the ``emailMustHaveAtSign`` custom-validator filter,
+# so the union/intersection and per-branch form-validation contracts are
+# reachable through the real API.
 # ---------------------------------------------------------------------------
 
 

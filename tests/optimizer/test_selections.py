@@ -1,6 +1,6 @@
 """Tests for the selection-traversal substrate (``optimizer/selections.py``).
 
-The 0.0.9 DRY pass (``docs/feedback.md`` Major 2) single-sited the
+The 0.0.9 DRY pass (Major 2) single-sited the
 selection-tree rules the optimizer had split between the AST cache-key walk
 (``optimizer/extension.py``), the converted-selection plan walker
 (``optimizer/walker.py``), and the connection ``totalCount`` detection

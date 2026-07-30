@@ -44,7 +44,7 @@ The review-round framing the spec carried while round 2 was in flight, moved her
 spec is a contract rather than a changelog:
 
 **Review rounds are evidence, not contract.** Round 1's findings are closed and
-committed. Round 2 (currently in [`docs/feedback.md`][feedback]) raised six items; four
+committed. Round 2 of the maintainer's transport review raised six items; four
 became decisions of this spec's own —
 [Decision 16][s65-d16]
 (active-operation revocation),
@@ -1221,7 +1221,6 @@ reader who takes the bullet as a statement about their own development stack.
 [agents]: ../AGENTS.md
 
 <!-- docs/ -->
-[feedback]: feedback.md
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
 [glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
 [glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut

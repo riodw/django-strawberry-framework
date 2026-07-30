@@ -15,8 +15,8 @@ The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
   used by ``RelatedFilter`` / ``RelatedOrder``.
 
 Plus the set-family DECLARATION-LIFECYCLE substrate the 0.0.9 DRY pass
-single-sited (``docs/feedback.md`` Major 3), so a future set family does not
-copy the related-declaration + metaclass + expansion lifecycle a fourth time:
+single-sited, so a future set family does not copy the related-declaration +
+metaclass + expansion lifecycle a fourth time:
 
 - ``RelatedSetTargetMixin`` -- the idempotent owner-bind + lazy target-class
   property machinery, parameterized by the per-family attr names.
@@ -147,7 +147,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
     """Idempotent owner-bind + lazy target-class resolution for a related-set declaration.
 
     The machinery ``RelatedFilter`` / ``RelatedOrder`` grew as byte-parallel
-    copies (``docs/feedback.md`` Major 3): an idempotent ``bind_*`` that records
+    copies (the 0.0.9 DRY pass): an idempotent ``bind_*`` that records
     the owning set ONCE (a second, possibly divergent, bind is a no-op - strict
     cross-owner mismatch is caught later at finalize), and a lazy ``.<target>``
     property that resolves a string / callable target through
@@ -205,7 +205,7 @@ def collect_related_declarations(
     """Collect a metaclass's related-set declarations onto ``new_class`` and bind each.
 
     The shared ``FilterSetMetaclass`` / ``OrderSetMetaclass`` collect-and-bind
-    step (``docs/feedback.md`` Major 3): build an ``OrderedDict`` of the
+    step (the 0.0.9 DRY pass): build an ``OrderedDict`` of the
     ``declaration_type`` instances, store it on ``new_class`` under
     ``collection_attr``, and call each declaration's ``_bind_owner(new_class)``
     (the ``RelatedSetTargetMixin`` idempotent owner bind).
@@ -288,7 +288,7 @@ def expanded_once(
     """Run ``build()`` once under a class-level expansion cache + reentry guard.
 
     The control-flow skeleton ``FilterSet.get_filters`` / ``OrderSet.get_fields``
-    grew separately (``docs/feedback.md`` Major 3):
+    grew separately (the 0.0.9 DRY pass):
 
     - Return ``cls.__dict__[cache_attr]`` when populated. Read from the class's
       OWN ``__dict__`` (NOT ``getattr``) so a subclass never inherits a parent's
@@ -354,7 +354,7 @@ class SetLifecycleAttrs:
     family's class body, its ``get_filters`` / ``get_fields`` expansion, and the
     ``registry.clear()`` binding-state reset (the tuple
     ``utils/inputs.py::clear_generated_input_namespace`` consumes). Each family
-    declares ONE instance on its set class (``docs/feedback.md`` Major 3).
+    declares ONE instance on its set class (the 0.0.9 DRY pass).
     """
 
     owner: str  # the finalizer-bound owner-definition slot (``_owner_definition``).

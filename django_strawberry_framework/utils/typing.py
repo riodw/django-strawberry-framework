@@ -9,7 +9,7 @@ parallel unwrap loops.
 
 Also home to ``is_async_callable`` -- the partial-aware coroutine-callable
 predicate the public field factories and the GlobalID-callable validator share
-(the 0.0.9 DRY pass, ``docs/feedback.md`` Major 4).
+(the 0.0.9 DRY pass).
 
 And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
 accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the

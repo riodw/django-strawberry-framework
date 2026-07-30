@@ -81,12 +81,11 @@ class OrderSetMetaclass(type):
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedOrder`` declarations and bind each to the new
-        # class via the shared set-family collector (the 0.0.9 DRY pass,
-        # ``docs/feedback.md`` Major 3). The plain ``type`` metaclass does no MRO
-        # merge, so ``inherit_from_bases=True`` copies each base's
-        # ``related_orders`` first (reverse iteration lets earlier bases win)
-        # before the class body's own ``attrs`` override - the cookbook lines
-        # 30-38 behavior.
+        # class via the shared set-family collector (the 0.0.9 DRY pass). The
+        # plain ``type`` metaclass does no MRO merge, so
+        # ``inherit_from_bases=True`` copies each base's ``related_orders``
+        # first (reverse iteration lets earlier bases win) before the class
+        # body's own ``attrs`` override - the cookbook lines 30-38 behavior.
         collect_related_declarations(
             new_class,
             bases,
@@ -145,7 +144,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names ``get_fields`` (via ``expanded_once``) and ``registry.clear()`` (via
     # ``clear_order_input_namespace``'s ``binding_attrs``) reference, instead of
-    # re-spelling the tuple (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 3).
+    # re-spelling the tuple (the 0.0.9 DRY pass).
     # Mirrors ``FilterSet._lifecycle`` with the order-side slot names.
     _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
         owner="_owner_definition",
@@ -192,9 +191,9 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
         # The class-level expansion cache + reentry-guard skeleton is shared with
         # ``FilterSet.get_filters`` through ``sets_mixins.expanded_once`` (the
-        # 0.0.9 DRY pass, ``docs/feedback.md`` Major 3). The order side passes no
-        # ``on_reentry``: its expansion never re-enters ``get_fields`` (the
-        # filter side's self-referential-cycle fallback has no order analogue).
+        # 0.0.9 DRY pass). The order side passes no ``on_reentry``: its
+        # expansion never re-enters ``get_fields`` (the filter side's
+        # self-referential-cycle fallback has no order analogue).
         return expanded_once(
             cls,
             cache_attr=cls._lifecycle.cache,
@@ -474,9 +473,9 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         inflates ``totalCount``; the aggregate keeps exactly one row per parent
         (the annotation forces a GROUP BY on the parent), so cursors index
         distinct nodes and ``.count()`` counts distinct parents
-        (``docs/feedback.md`` P1-B). Scalar columns and to-one relation paths
-        (forward FK / O2O, reverse O2O -- which never multiply) are ordered
-        directly, unchanged.
+        (``spec-030-connection_field-0_0_9`` P1-B). Scalar columns and to-one
+        relation paths (forward FK / O2O, reverse O2O -- which never
+        multiply) are ordered directly, unchanged.
 
         NULLS positioning carries onto the aggregate's ``OrderBy`` because the
         alias is resolved through the same ``Ordering.resolve``; mixed scalar +
@@ -571,8 +570,9 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
            scalar / to-one paths order directly via
            ``direction.resolve(field_path)``, while a to-many path orders by an
            aggregate annotation (``Min`` / ``Max``) so the parent row is not
-           multiplied (``docs/feedback.md`` P1-B); ``None`` directions are
-           filtered (Spec Decision 13 -- null-direction edge case).
+           multiplied (``spec-030-connection_field-0_0_9`` P1-B); ``None``
+           directions are filtered (Spec Decision 13 -- null-direction
+           edge case).
         5. ``annotate(**annotations)`` (when any to-many term produced one) then
            ``order_by(*expressions)`` when at least one expression survived;
            otherwise return ``queryset`` unchanged.

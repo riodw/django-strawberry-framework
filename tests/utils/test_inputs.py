@@ -4,7 +4,7 @@ The 0.0.9 DRY pass single-sited the neutral generated-input mechanics that the
 filter and order families had grown as parallel copies. These tests pin the
 substrate directly and assert that BOTH families route through the one builder /
 field-spec / camel-name path, so a future re-divergence is caught here rather
-than via a silently drifted second copy (``docs/feedback.md`` Major 1).
+than via a silently drifted second copy (that pass's Major 1).
 """
 
 import sys

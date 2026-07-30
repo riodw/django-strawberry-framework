@@ -525,7 +525,7 @@ intentionally resolve only there.
 
 Grounded in `git status --short` after both ruff invocations. Every other modified path in that
 listing is either baseline-dirty (`filters/sets.py`, `tests/filters/test_sets.py`,
-`docs/feedback.md`, `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`,
+the maintainer's incoming review, `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`,
 `examples/fakeshop/db.sqlite3`, `KANBAN.md` / `KANBAN.html`, `drys.md`, `vulns.md`) or Slice 1-2
 output (`conf.py`, `routers.py`, `views.py`, `examples/fakeshop/config/urls.py`,
 `tests/test_routers.py`, `tests/test_views.py`, `tests/base/test_conf.py`,

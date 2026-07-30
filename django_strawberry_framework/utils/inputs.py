@@ -7,7 +7,7 @@ reset stale binding state during ``registry.clear()``. spec-027 and spec-028
 grew those mechanics as parallel copies; this module single-sites the NEUTRAL
 machinery so a fix to the materialization ledger, the BFS collision check, or
 the namespace-clear lifecycle lands once instead of being hand-mirrored (the
-0.0.9 DRY pass, ``docs/feedback.md`` Major 1).
+0.0.9 DRY pass).
 
 What lives here is mechanics only. Domain semantics stay at the call sites:
 ``filters/inputs.py`` keeps ``convert_filter_to_input_annotation`` /
@@ -633,12 +633,12 @@ def build_strawberry_input_class(
     default is set, so ``@strawberry.input`` renders the field non-null and
     rejects an omitted value at GraphQL coercion. A bare ``None`` default
     (the prior behavior) renders non-null SDL *yet still accepts omission*,
-    delivering ``None`` to the resolver and masking the missing-input error
-    (``docs/feedback.md`` Finding 2). An OPTIONAL field must therefore pass an
-    explicit ``default`` - ``strawberry.UNSET`` for the mutation / form
-    ``annotation | None`` widening, ``None`` for the filter / order optional
-    inputs (Strawberry tolerates a required field after a defaulted one; its
-    inputs are keyword-only).
+    delivering ``None`` to the resolver and masking the missing-input error.
+    An OPTIONAL field must therefore pass an explicit ``default`` -
+    ``strawberry.UNSET`` for the mutation / form ``annotation | None``
+    widening, ``None`` for the filter / order optional inputs (Strawberry
+    tolerates a required field after a defaulted one; its inputs are
+    keyword-only).
 
     Every field receives an explicit GraphQL name. When a triple omits ``name``,
     the package's injective ``graphql_camel_name`` result is pinned rather than
@@ -953,7 +953,7 @@ def clear_generated_input_namespace(
     - every set subclass's phase-2.5 binding state. The reset attrs come from the
       resolved set base's ``_lifecycle`` descriptor (``SetLifecycleAttrs``) rather
       than a re-spelled tuple, so the family names them in ONE place (the 0.0.9
-      DRY pass, ``docs/feedback.md`` Major 3).
+      DRY pass).
 
     **Materialized class objects are intentionally left parked** in the family
     ``inputs`` module ``__dict__``: the materialization helper overwrites the

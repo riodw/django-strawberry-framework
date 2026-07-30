@@ -3923,7 +3923,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 
 ## Round-6 improvements (better-than-graphene-django)
 
-A review pass (`docs/feedback.md`, rev6) proposed 16 improvements that make the serializer
+A review pass (rev6) proposed 16 improvements that make the serializer
 lane stricter, safer, and more diagnosable than graphene-django's DRF integration, plus one
 follow-on (#17 — opt-in nested serializer inputs). They are all in-scope for `0.0.13` (not
 backlog). Each keeps the existing wins (fail-loud unmapped fields, visibility-checked

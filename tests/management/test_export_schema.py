@@ -118,6 +118,7 @@ def test_export_schema_raises_command_error_when_path_flag_is_whitespace_only(mo
 
 # The ``--path`` directory-missing and empty-string failure branches moved to
 # the fakeshop project suite (examples/fakeshop/tests/test_export_schema.py),
-# where they run against the real ``config.schema`` per feedback4.md. The
-# parser-only ``--path`` no-value contract above stays package-side (it short-
-# circuits in argparse, before any project schema matters).
+# where they run against the real ``config.schema`` under the live-first
+# coverage mandate. The parser-only ``--path`` no-value contract above stays
+# package-side (it short-circuits in argparse, before any project schema
+# matters).

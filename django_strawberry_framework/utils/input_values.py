@@ -12,8 +12,7 @@ correctness-sensitive call sites -- the filter normalizer
 ``active_related_branches``). A drift between any two copies in the active-input
 decision is a real bug class -- a filter applied without its permission gate, a
 related visibility hook skipped, work done on inactive input -- so the neutral
-mechanics are single-sited here (the 0.0.9 DRY pass, ``docs/feedback.md``
-Major 1).
+mechanics are single-sited here (the 0.0.9 DRY pass).
 
 This module owns the *traversal mechanics* only; the family-specific *leaf
 semantics* stay at the call sites:

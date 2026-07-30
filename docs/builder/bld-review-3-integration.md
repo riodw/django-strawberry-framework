@@ -24,8 +24,8 @@ logic to any package file (proved by AST identity below) and 39 insertions to on
 none of `worker-3.md`'s three triggers fires. No shadow file was used or cited.
 
 M4 and M5 are pending maintainer decisions and are not re-litigated. `conf.py:117`,
-`auth/mutations.py`, `auth/sessions.py`, `docs/feedback.md`, `docs/feedback2.md`, `drys.md`,
-`vulns.md`, `TODAY.md`, `tests/test_views.py` were read only.
+`auth/mutations.py`, `auth/sessions.py`, the maintainer's incoming review, `docs/feedback2.md`,
+`drys.md`, `vulns.md`, `TODAY.md`, `tests/test_views.py` were read only.
 
 ---
 
@@ -367,7 +367,7 @@ own artifact; cohort A `routers.py`, `_strawberry_patches.py`, `views.py`, `exce
   POST scoping — i.e. the fifth L3 surface is genuinely still open and genuinely still routed to
   the maintainer, not quietly fixed across the boundary. `grep "POST-scoped"` over `conf.py`,
   `tests/test_views.py`, `TODAY.md`, `README.md` → **no hit**.
-- `auth/mutations.py`, `auth/sessions.py`, `docs/feedback.md`, `docs/feedback2.md`, `drys.md`,
+- `auth/mutations.py`, `auth/sessions.py`, the maintainer's incoming review, `docs/feedback2.md`, `drys.md`,
   `vulns.md`, `TODAY.md`, `tests/test_views.py`, `KANBAN.*`, `docs/TREE.md`, `CHANGELOG.md`,
   `pyproject.toml`, `__init__.py`, `consumers.py` are all consistent with their pre-round state
   (`consumers.py` is not even dirty; the others carry only prior-slice or maintainer content, and

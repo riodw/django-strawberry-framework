@@ -44,7 +44,7 @@ Connected surfaces traced:
 - `utils/typing.py::is_async_callable` and `types/base.py::_is_relay_shaped` are
   each single-sited and consumed here by name, not re-implemented.
 - `tests/test_list_field.py` (27 test functions / 30 collected cases) pins every branch named above,
-  including the four `docs/feedback.md`-era bug fixes (own-class registration,
+  including the four `0.0.9`-review-era bug fixes (own-class registration,
   async-callable-object detection, `functools.partial` unwrap for both async
   functions and async callable instances) and the sync-coroutine / sync-custom-
   awaitable / sync-future rejection paths.

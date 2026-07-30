@@ -492,7 +492,7 @@ Every Low is dispositioned; none is silently unaddressed.
 This artifact carries no `## Plan (Worker 1)` section, so there is no
 `### Dispatched findings checklist` to walk; the dispatch was M1 / M2 / M3, and each is
 dispositioned in `## The three verdicts, first` with a mutation and a node-id set. The predecessor's
-own audit of the six `docs/feedback.md` round-2 findings against "name the input now refused" stands
+own audit of the six round-2 review findings against "name the input now refused" stands
 unchanged except for its one open entry, **High 2**, which it graded "partially — not closed" on M1's
 account. **M1 is now closed**, so all six round-2 findings are closed by real bounds.
 
@@ -677,7 +677,7 @@ revert, no `git checkout`, no `git add`, no commit:
 | `django_strawberry_framework/auth/mutations.py`, `auth/sessions.py`, `conf.py`, `drys.md`, `vulns.md` | baseline-dirty concurrent session |
 | `docs/spec-046-transport_security-0_0_15.md`, `…-rationale.md` | Worker 1 (custodian) |
 | `docs/builder/build-046-transport_security-0_0_15.md` | Worker 0 |
-| `docs/feedback.md` | the maintainer's review document - evidence, never edited |
+| the maintainer's incoming round-2 review | evidence, never edited |
 | `docs/builder/bld-review-2-w3_residual.md` (untracked), `bld-slice-5-docs_foldin.md` (untracked) | this artifact / Slice 5's |
 
 One observation rather than a finding: **HEAD moved during this pass's dispatch window.**
@@ -1278,7 +1278,7 @@ dispatch asked which I did.
 
 ### The round, finding by finding
 
-`docs/feedback.md`'s six dispatched findings. For each I read the shipped code and the row that
+The round-2 review's six dispatched findings. For each I read the shipped code and the row that
 pins it, rather than the artifact's claim about them.
 
 | Finding | Closed by | Verified how |

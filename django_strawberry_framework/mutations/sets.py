@@ -740,7 +740,7 @@ def _validate_permission_classes(
       ``DjangoFormMutation`` passes ``unset_default=(DenyAll,)`` so an unset
       ``permission_classes`` denies rather than crashing in the model-permission
       default (spec-038 Decision 11 - there is no safe model-permission default
-      without a model; ``docs/feedback.md`` Finding 1).
+      without a model).
     - a bare ``str`` / ``bytes`` (a single name) or a bare class (forgot the
       enclosing sequence) -> ``ConfigurationError``: the contract is a *sequence*
       of permission classes.

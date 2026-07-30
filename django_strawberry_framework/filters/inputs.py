@@ -811,16 +811,16 @@ def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Fil
     rule. The filterset / ``field_name`` guards stay here because the converter
     receives a filter instance, not a bare ``(model, path)`` pair.
 
-    Contract note (``docs/feedback.md`` Finding 2): ``get_model_field`` raises
-    ``RuntimeError`` when a relation hop is still an *unresolved* lazy string
-    (``field.remote_field.model`` has no ``_meta``) -- i.e. Django's app
-    registry is not populated. That state is unreachable here: this helper runs
-    only under ``_build_input_fields`` during ``finalize_django_types()``, which
-    Django guarantees runs after ``apps.populate()`` has resolved every FK. A
-    raise therefore signals a genuine "``FilterSet`` loaded before Django setup"
-    misconfiguration and MUST surface loudly rather than degrade to ``None``
-    (which would silently treat a real relation as an unknown field). The
-    reachable ``None`` path -- typo / missing hop -- is preserved unchanged.
+    Contract note: ``get_model_field`` raises ``RuntimeError`` when a relation
+    hop is still an *unresolved* lazy string (``field.remote_field.model`` has
+    no ``_meta``) -- i.e. Django's app registry is not populated. That state is
+    unreachable here: this helper runs only under ``_build_input_fields`` during
+    ``finalize_django_types()``, which Django guarantees runs after
+    ``apps.populate()`` has resolved every FK. A raise therefore signals a
+    genuine "``FilterSet`` loaded before Django setup" misconfiguration and MUST
+    surface loudly rather than degrade to ``None`` (which would silently treat a
+    real relation as an unknown field). The reachable ``None`` path -- typo /
+    missing hop -- is preserved unchanged.
     """
     model = getattr(getattr(filterset_cls, "_meta", None), "model", None)
     if model is None:

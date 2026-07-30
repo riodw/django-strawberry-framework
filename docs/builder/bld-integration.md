@@ -635,7 +635,7 @@ closed as Slice 5's, and the integration pass is the pass its own final verifica
 ### Files Worker 2 must NOT touch
 
 `django_strawberry_framework/conf.py`, `auth/mutations.py`, `auth/sessions.py`, `drys.md`,
-`vulns.md` — never edited, **never reverted**. `docs/feedback.md`. Every `bld-*.md` but this
+`vulns.md` — never edited, **never reverted**. The maintainer's incoming review document. Every `bld-*.md` but this
 one. `docs/builder/build-046-transport_security-0_0_15.md` and every checkbox in it.
 `docs/spec-046-*.md` and its rationale (Worker 1's alone). `docs/GLOSSARY.md` as **text** (it
 is rendered), `docs/TREE.md`, `KANBAN.md`, `KANBAN.html`. `README.md`, `TODAY.md`,
@@ -870,7 +870,7 @@ pass's start (`views.py`, `docs/README.md`, `docs/GLOSSARY.md`, `examples/fakesh
 **Nothing was reverted and nothing outside the list moved.** `git status --short` reads 23 `M`
 + 5 `??`; the declared baseline was 19 `M` + 5 `??` and the four new `M` lines are
 `_strawberry_patches.py`, `exceptions.py`, `routers.py`, `test_transport_api.py` — all
-slice-intended. `conf.py`, `auth/mutations.py`, `auth/sessions.py`, `docs/feedback.md`,
+slice-intended. `conf.py`, `auth/mutations.py`, `auth/sessions.py`, the maintainer's review document,
 `drys.md`, `vulns.md`, `tests/test_views.py`, `KANBAN.*`, `TODAY.md`, `README.md` were neither
 read-modified nor cleaned. `pre-commit`'s `kanban-tracked-path-constants` hook (which runs
 `pass_filenames: false`) reported **Passed** and wrote nothing, so no constants-sync commit is

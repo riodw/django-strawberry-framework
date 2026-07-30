@@ -458,7 +458,7 @@ identically" mechanism is now the connection-local revoked flag, so the comment 
 
 Confirmed by `git diff --stat`: the other dirty paths in the tree
 (`_request_body.py`, `views.py`, `conf.py`, `auth/*`, `README.md`, `docs/README.md`,
-`docs/feedback.md`, `docs/spec-046-*`, `docs/builder/build-046-*`, `TODAY.md`,
+the incoming review, `docs/spec-046-*`, `docs/builder/build-046-*`, `TODAY.md`,
 `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py`) are concurrent
 maintainer / other-worker work and carry none of my edits.
 

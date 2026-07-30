@@ -33,10 +33,10 @@ __all__ = ("DjangoListField",)
 # rev6 H3: ``_consumer`` suffix). The field-wrapper Manager -> QuerySet coercion
 # + visibility-hook contract is single-sited in
 # ``utils/querysets.py::post_process_queryset_result_sync`` / ``_async`` (the
-# 0.0.9 DRY pass, ``docs/feedback.md`` Major 1); these stay as the named
-# consumer-wrapper entry points the ``_wrap`` resolvers call. The
-# default-resolver path bypasses them because ``qs`` is already known to be a
-# ``QuerySet`` from ``initial_queryset(...)`` - no normalization is needed there.
+# 0.0.9 DRY pass); these stay as the named consumer-wrapper entry points the
+# ``_wrap`` resolvers call. The default-resolver path bypasses them because
+# ``qs`` is already known to be a ``QuerySet`` from ``initial_queryset(...)`` -
+# no normalization is needed there.
 
 
 def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> Any:
@@ -107,14 +107,14 @@ def _validate_relay_djangotype_target(
 
     The Relay-shaped target guard shared by ``DjangoConnectionField`` and
     ``relay.py::_validate_node_target`` (which backs ``DjangoNodeField`` /
-    ``DjangoNodesField``) -- single-sited per the 0.0.9 DRY pass
-    (``docs/feedback.md`` Major 4). Delegates the four base checks to
-    ``_validate_djangotype_target`` (with the call site's ``resolver`` seam),
-    then rejects a non-Relay-Node-shaped target. ``_is_relay_shaped`` reads the
-    declared ``Meta.interfaces`` (a Meta-declared ``relay.Node`` is in
-    ``definition.interfaces`` before Phase 2.5 injects it into ``__bases__``)
-    OR direct ``relay.Node`` inheritance. The caller supplies the full
-    ``relay_error_message`` so each factory keeps its own wording.
+    ``DjangoNodesField``) -- single-sited per the 0.0.9 DRY pass. Delegates the
+    four base checks to ``_validate_djangotype_target`` (with the call site's
+    ``resolver`` seam), then rejects a non-Relay-Node-shaped target.
+    ``_is_relay_shaped`` reads the declared ``Meta.interfaces`` (a
+    Meta-declared ``relay.Node`` is in ``definition.interfaces`` before Phase
+    2.5 injects it into ``__bases__``) OR direct ``relay.Node`` inheritance.
+    The caller supplies the full ``relay_error_message`` so each factory keeps
+    its own wording.
     """
     _validate_djangotype_target(target_type, resolver, field=field)
     definition = target_type.__django_strawberry_definition__
@@ -135,9 +135,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     See ``docs/SPECS/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
     Decision 2 (default-resolver shape) for the design contract.
 
-    Ordering contract (``docs/feedback.md``): a ``DjangoListField`` does NOT
-    guarantee row order unless the query supplies an ``orderBy`` argument or the
-    model declares ``Meta.ordering``. The default resolver returns
+    Ordering contract: a ``DjangoListField`` does NOT guarantee row order unless
+    the query supplies an ``orderBy`` argument or the model declares
+    ``Meta.ordering``. The default resolver returns
     ``model._default_manager.all()`` with no tiebreaker, so the response array
     order is database-dependent. This is intentional and asymmetric with
     ``DjangoConnectionField``, which appends a pk tiebreaker to guarantee a

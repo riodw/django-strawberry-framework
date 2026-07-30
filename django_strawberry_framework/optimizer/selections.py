@@ -10,8 +10,8 @@ directive handling, response-key preservation, and ``edges { node { ... } }``
 unwrapping. The plan cache and nested-connection windows depend on those rules
 being aligned across the two shapes; a directive or fragment fix landing on one
 traversal but not the other produces wrong cached plans, missed nested
-prefetches, false strictness warnings, or extra ``COUNT`` work
-(``docs/feedback.md`` Major 2).
+prefetches, false strictness warnings, or extra ``COUNT`` work (the 0.0.9
+DRY pass).
 
 This module is the single home for both, deliberately split into two explicit
 adapters rather than one over-generic polymorphic walker (per the review:

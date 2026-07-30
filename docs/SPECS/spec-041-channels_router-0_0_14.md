@@ -387,8 +387,8 @@ Revision history (kept inline so the spec is self-contained):
   edge); the Strawberry-floor gate checks only the two imported consumers (not
   the unused `GraphQLProtocolTypeRouter`); the HTTP-fallback-inside-`AuthMiddlewareStack`
   behavior is documented as accepted upstream parity
-  ([Edge cases](#edge-cases-and-constraints)); and durable `docs/feedback.md`
-  citations were folded into owner-symbol / Decision references (the file is
+  ([Edge cases](#edge-cases-and-constraints)); and durable review-document
+  citations were folded into owner-symbol / Decision references (that artifact is
   transient scratch). **(P3)** the auth-mutation "if nearly free, add a smoke
   test" hedge is removed (out of scope with a named follow-on owner), and the
   missing-`Origin` WebSocket denial is documented and added as a third

@@ -1,6 +1,6 @@
 # Build: Review round 1 — the WebSocket / router boundary findings
 
-Review reference: `docs/feedback.md` — High 3 (the consumer factory contract accepts a non-ASGI
+Review reference: the maintainer's round-1 transport review — High 3 (the consumer factory contract accepts a non-ASGI
 result), Medium 4 (the revalidation helper breaks the auth subsystem's opt-in import boundary),
 Medium 5 (the revocation acceptance row does not reproduce the promised separate-request flow),
 and the lower-severity "An enormous integer window escapes the typed configuration boundary".

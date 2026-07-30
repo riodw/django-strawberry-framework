@@ -8,7 +8,7 @@ Dispatch mode: autonomous — no pause between items; blockers escalate to the m
 Cycle baseline: `HEAD` = `ff6215ef` (tracked tree clean at plan creation; per-item baselines captured at dispatch via `git stash create`).
 
 Concurrent work present at plan creation, out of scope, preserved untouched: untracked
-`django_strawberry_framework/<folder>/review.md` pre-BETA review notes (middleware, mutations,
+per-folder pre-BETA review notes under `django_strawberry_framework/` (middleware, mutations,
 optimizer, orders, rest_framework, testing, types, utils).
 
 Adopted artifact: `docs/review/rev-optimizer__walker.md` existed at plan creation with

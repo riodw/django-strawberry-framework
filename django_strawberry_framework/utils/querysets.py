@@ -4,11 +4,11 @@ The neutral query-source mechanics every resolver surface shares: coerce a
 ``Manager`` to a ``QuerySet`` exactly once, decide whether a value is a
 queryset, run the ``DjangoType.get_queryset`` visibility hook through the sync
 or async path, and combine those into the list-field consumer-resolver shape.
-Extracted here (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 1) so list
-fields, connection fields, the optimizer middleware, the Relay node defaults,
-and the filter related-visibility derive all reach ONE implementation of the
-contract -- ``get_queryset`` is the visibility hook, and a visibility-hook
-mistake is a data-leak bug, so the routing must not be re-decided per surface.
+Extracted here (the 0.0.9 DRY pass) so list fields, connection fields, the
+optimizer middleware, the Relay node defaults, and the filter
+related-visibility derive all reach ONE implementation of the contract --
+``get_queryset`` is the visibility hook, and a visibility-hook mistake is a
+data-leak bug, so the routing must not be re-decided per surface.
 
 ``coerce_field_value_or_none`` (0.0.13 DRY pass) is the sibling neutral
 primitive for the "raw literal -> Django field value, or nothing" safety
@@ -1753,12 +1753,12 @@ def _prepared_visibility_source(
     child and degrades to the fully-unplanned per-parent fallback WITHOUT
     recomposing filters / ordering -- so the "next transform would recompose"
     premise the rejection guards against does not hold there
-    (``docs/feedback2.md`` P0-3 degrade-to-unplanned). The sealed object is a fresh
-    framework-owned plain ``QuerySet`` rebuilt from the source's query state, so
-    the hook receives a trusted queryset regardless of what the caller passed;
-    an already-evaluated source seals to a fresh, unevaluated queryset (the seal
-    never copies ``_result_cache``), so cached rows never reach the hook. The
-    required alias is then resolved in priority order:
+    (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned). The
+    sealed object is a fresh framework-owned plain ``QuerySet`` rebuilt from the
+    source's query state, so the hook receives a trusted queryset regardless of
+    what the caller passed; an already-evaluated source seals to a fresh,
+    unevaluated queryset (the seal never copies ``_result_cache``), so cached rows
+    never reach the hook. The required alias is then resolved in priority order:
 
     1. An active write pipeline's alias - the sealed source is pinned through
        ``pin_write_queryset`` (a genuine ``.using()`` on the trusted object),
@@ -1933,8 +1933,9 @@ def apply_type_visibility_sync(
     gate (``nested_fetch.py::unwindowable_child_queryset_reason``) detects the
     sliced child and degrades the nested connection to the fully-unplanned
     per-parent fallback WITHOUT recomposing, so the rejection's "next transform
-    would recompose" premise does not hold one edge down (``docs/feedback2.md``
-    P0-3 degrade-to-unplanned; mirrors the prefetch-child ``allow_sliced``).
+    would recompose" premise does not hold one edge down
+    (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned;
+    mirrors the prefetch-child ``allow_sliced``).
     """
     queryset, required_alias = _prepared_visibility_source(
         type_cls,

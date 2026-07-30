@@ -28,7 +28,7 @@ New deep-review workflow::
     python docs/dry/export_dry_review.py audit \
       --target django_strawberry_framework/utils \
       --context docs/spec-044-debug_extension-0_0_14.md \
-      --exclude docs/feedback.md \
+      --exclude docs/review/REVIEW.md \
       --search-term force_debug_cursor \
       --output docs/dry/dry-audit.md
 

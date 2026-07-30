@@ -222,8 +222,8 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in extra.items() if key not in _MODEL_CHOICE_ONLY_EXTRAS}
 
 
-# Blocker 1 + High 3 (``docs/feedback.md``): package ownership must NOT be derived
-# from whatever happens to sit in django-filter's LIVE, mutable, process-shared
+# Blocker 1 + High 3 (``row-preserving-predicates-part1-plan``): package ownership must NOT be
+# derived from whatever happens to sit in django-filter's LIVE, mutable, process-shared
 # ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at import time. Snapshotting (even
 # freezing) that global does not establish who AUTHORED its contents: any consumer,
 # reusable app, or init hook that mutated the global -- a ``filter_class`` swap OR an
@@ -400,8 +400,8 @@ _PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = Mapping
 
 
 # ======================================================================
-# Audited ``django-filter`` release range for the OPTIMIZER (``docs/feedback.md``
-# High 2).
+# Audited ``django-filter`` release range for the OPTIMIZER
+# (``row-preserving-predicates-part1-plan`` High 2).
 #
 # This gates the row-preserving correlated-``EXISTS`` OPTIMIZATION only -- never
 # whether filtering works. The package dependency stays deliberately UNBOUNDED
@@ -594,7 +594,7 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 
 # ======================================================================
 # Executable behavior-profile registry -- the SINGLE source of truth for the
-# supported generated django-filter families (``docs/feedback.md`` High 4).
+# supported generated django-filter families (``row-preserving-predicates-part1-plan`` High 4).
 #
 # A framework-generated many-side leaf is routable through the correlated
 # ``EXISTS`` adapter ONLY if its filter class belongs to a family this package has
@@ -609,15 +609,15 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 # therefore never routable, and falls back to django-filter's original outer
 # invocation until it is audited and added here.
 #
-# Family recognition is EXACT-CLASS (``docs/feedback.md`` Blocker 2): a profile is
-# minted from a known generation decision, never rediscovered from arbitrary
-# ancestry. An unregistered subclass of an audited base is a CONSUMER-owned class
-# whose behavior this package has not reviewed, so it receives NO profile -- it
-# stays fully supported and simply runs on the outer queryset. The only two
-# recognized shapes are (a) exact audited / package-owned classes (registry keys)
-# and (b) django-filter's genuine empty-body dynamic ``in`` / ``range`` CSV classes
-# over an exact-audited scalar family, validated structurally in
-# ``_family_profile_for``.
+# Family recognition is EXACT-CLASS (``row-preserving-predicates-part1-plan``
+# Blocker 2): a profile is minted from a known generation decision, never
+# rediscovered from arbitrary ancestry. An unregistered subclass of an audited
+# base is a CONSUMER-owned class whose behavior this package has not reviewed, so
+# it receives NO profile -- it stays fully supported and simply runs on the outer
+# queryset. The only two recognized shapes are (a) exact audited / package-owned
+# classes (registry keys) and (b) django-filter's genuine empty-body dynamic
+# ``in`` / ``range`` CSV classes over an exact-audited scalar family, validated
+# structurally in ``_family_profile_for``.
 #
 # A profile is a bare family IDENTITY. There is deliberately no per-family runtime
 # read table and no request-time re-verification of a leaf's behavior: routing is
@@ -735,7 +735,8 @@ _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
 # allowlist, so any body member that adds state or behavior -- dunder-named (``__evil_state__``,
 # an overridden ``__getattribute__`` / ``__init_subclass__``, ``__slots__``) OR not
 # (``reverse``, ``filter``) -- surfaces as an extra own name and fails the check closed
-# (``docs/feedback.md`` Sixth-review bug hunt: a dunder-named member must not slip through).
+# (``row-preserving-predicates-part1-plan`` Sixth-review bug hunt: a dunder-named
+# member must not slip through).
 class _EmptyBodyDynamicCsvReference(Filter):
     pass
 
@@ -751,8 +752,9 @@ def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
     -- a NEW class object each call, so it can never be a ``_FILTER_FAMILY_REGISTRY`` key,
     yet it is genuine framework machinery and must still route. Rather than trust every
     descendant of ``BaseInFilter`` / ``BaseRangeFilter`` (the retired MRO walk -- an open
-    ancestry allowlist, ``docs/feedback.md`` Blocker 2), this validates the EXACT MRO and
-    class body, so anything a future django-filter release or a consumer adds fails closed:
+    ancestry allowlist, ``row-preserving-predicates-part1-plan`` Blocker 2), this
+    validates the EXACT MRO and class body, so anything a future django-filter
+    release or a consumer adds fails closed:
 
     - ``klass.__bases__`` is exactly a 2-tuple whose FIRST element IS ``BaseInFilter`` or
       ``BaseRangeFilter`` (a genuine dynamic class has exactly ``(BaseInFilter, <scalar>)``);
@@ -791,7 +793,7 @@ def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
     """Return the behavior profile of ``filter_instance``'s supported filter family.
 
     Resolution is fail-closed and never rediscovered from arbitrary ancestry
-    (``docs/feedback.md`` Blocker 2):
+    (``row-preserving-predicates-part1-plan`` Blocker 2):
 
     1. EXACT match first -- ``_FILTER_FAMILY_REGISTRY[type(filter_instance)]``. No MRO
        walk, so an unregistered subclass of an audited base is NOT accepted through its
@@ -849,14 +851,14 @@ class CandidateFilterMetadata:
       (``path_plan.first_many_index is not None``), the leaf carries no
       consumer ``method``, AND its filter class resolves to an audited supported
       family (``_family_profile_for`` is not ``None``). The last conjunct is the
-      executable fail-closed boundary (``docs/feedback.md`` High 4): an unaudited
-      family placed behind a framework origin -- e.g. a consumer subclass, or a class
-      introduced by a future ``django-filter`` release -- has no profile and is
-      ineligible, so it is never routed until it is audited and registered in
-      ``_FILTER_FAMILY_REGISTRY``. No consumer-origin ``distinct`` check is needed: a
-      consumer-origin ``distinct`` can exist only on a ``declared`` /
-      ``override_generated`` leaf, which is already ineligible by origin and
-      never reaches this record.
+      executable fail-closed boundary (``row-preserving-predicates-part1-plan``
+      High 4): an unaudited family placed behind a framework origin -- e.g. a
+      consumer subclass, or a class introduced by a future ``django-filter`` release
+      -- has no profile and is ineligible, so it is never routed until it is audited
+      and registered in ``_FILTER_FAMILY_REGISTRY``. No consumer-origin ``distinct``
+      check is needed: a consumer-origin ``distinct`` can exist only on a
+      ``declared`` / ``override_generated`` leaf, which is already ineligible by
+      origin and never reaches this record.
     - ``routable`` -- the FROZEN build-time routing verdict, and the ONLY thing the
       applicator consults. ``True`` iff ALL of:
 
@@ -881,10 +883,10 @@ class CandidateFilterMetadata:
 
     Deliberately NOT modelled: post-build mutation of a live per-request filter
     instance, or of ``django-filter``'s own classes. Process-wide monkeypatching is
-    out of contract (``docs/feedback.md`` Seventh review): code able to replace
-    ``CharFilter.filter`` can equally replace this package's own methods, so no
-    in-process signature could make it a trust boundary. This package protects the
-    DOCUMENTED extension points above.
+    out of contract (``row-preserving-predicates-part1-plan`` Seventh review):
+    code able to replace ``CharFilter.filter`` can equally replace this package's
+    own methods, so no in-process signature could make it a trust boundary. This
+    package protects the DOCUMENTED extension points above.
     """
 
     path_plan: ClassifiedPath
@@ -963,7 +965,7 @@ def _candidate_metadata_for(model: type, filter_instance: Any) -> CandidateFilte
     unaudited / ambiguous family resolves to no profile and is ineligible -- so a
     consumer subclass, or a future ``django-filter`` release that places a novel class
     behind a framework origin, fails CLOSED to the outer invocation until it is
-    registered (``docs/feedback.md`` High 4).
+    registered (``row-preserving-predicates-part1-plan`` High 4).
 
     This function computes only the leaf-INTRINSIC half. The owning class's
     generation capability and the audited-release check are applied by
@@ -1024,11 +1026,11 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedFilter`` declarations and bind each to the new
-        # class via the shared set-family collector (the 0.0.9 DRY pass,
-        # ``docs/feedback.md`` Major 3). ``declared_filters`` supplies the
-        # django-filter-ordered candidate stream; the shared collector reconciles
-        # it against the unmodified class body and direct-base precedence so a
-        # tombstone cannot be lost in a diamond hierarchy.
+        # class via the shared set-family collector (the 0.0.9 DRY pass).
+        # ``declared_filters`` supplies the django-filter-ordered candidate
+        # stream; the shared collector reconciles it against the unmodified class
+        # body and direct-base precedence so a tombstone cannot be lost in a
+        # diamond hierarchy.
         related_candidates = {
             name
             for name, declaration in new_class.declared_filters.items()
@@ -1157,15 +1159,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     """
 
     # The package-AUTHORED public generation-policy table (Blocker 1 + High 3,
-    # ``docs/feedback.md``). Installed in place of django-filter's mutable,
-    # process-shared ``BaseFilterSet.FILTER_DEFAULTS`` -- but as our OWN plain,
-    # deepcopyable ``dict`` (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``), NOT a snapshot of
-    # the global -- so package ownership derives from a table this module authored and
-    # the inherited django-filter customization seam (``deepcopy`` / ``dict(...)`` /
-    # ``[cls][key] = ...``) keeps working. An unmodified subclass inherits this by
-    # identity (``_is_generation_capable`` checks it); ownership is decided against the
-    # PRIVATE normalized ``_PACKAGE_POLICY_BASELINE`` by value, not against this public
-    # object's identity.
+    # ``row-preserving-predicates-part1-plan``). Installed in place of django-filter's
+    # mutable, process-shared ``BaseFilterSet.FILTER_DEFAULTS`` -- but as our OWN
+    # plain, deepcopyable ``dict`` (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``), NOT a
+    # snapshot of the global -- so package ownership derives from a table this module
+    # authored and the inherited django-filter customization seam (``deepcopy`` /
+    # ``dict(...)`` / ``[cls][key] = ...``) keeps working. An unmodified subclass
+    # inherits this by identity (``_is_generation_capable`` checks it); ownership is
+    # decided against the PRIVATE normalized ``_PACKAGE_POLICY_BASELINE`` by value, not
+    # against this public object's identity.
     FILTER_DEFAULTS: ClassVar[dict[type, dict[str, Any]]] = _PUBLIC_PACKAGE_FILTER_DEFAULTS
 
     # Binding seam - populated by `finalize_django_types` phase 2.5.
@@ -1191,7 +1193,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names `get_filters` (via `expanded_once`) and `registry.clear()` (via
     # `clear_filter_input_namespace`'s `binding_attrs`) reference, instead of
-    # re-spelling the tuple (the 0.0.9 DRY pass, `docs/feedback.md` Major 3).
+    # re-spelling the tuple (the 0.0.9 DRY pass).
     _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
         owner="_owner_definition",
         cache="_expanded_filters",
@@ -1379,10 +1381,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         # The class-level expansion cache + reentry-guard skeleton is shared with
         # `OrderSet.get_fields` through `sets_mixins.expanded_once` (the 0.0.9 DRY
-        # pass, `docs/feedback.md` Major 3). `on_reentry` returns the unexpanded
-        # `super().get_filters()` when this class is already mid-expansion, so a
-        # self-referential `RelatedFilter` neither blows the stack nor caches a
-        # half-built result.
+        # pass). `on_reentry` returns the unexpanded `super().get_filters()`
+        # when this class is already mid-expansion, so a self-referential
+        # `RelatedFilter` neither blows the stack nor caches a half-built
+        # result.
         return expanded_once(
             cls,
             cache_attr=cls._lifecycle.cache,
@@ -2159,13 +2161,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
         # the ``_field_specs`` lookup, and the leaf / related / logic
         # classification are the shared traversal mechanics owned by
-        # ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass,
-        # ``docs/feedback.md`` Major 1). Each yielded ``ActiveField`` is
-        # dispatched here by ``kind``: ``LOGIC`` copies the raw sub-tree under
-        # its ``django-filter`` wire key, ``RELATED`` is stripped (owned by
-        # ``_apply_related_constraints``, since the parent form cannot validate a
-        # nested-dict shape), and ``LEAF`` runs the per-field operator-bag /
-        # range normalization that stays local to the filter family.
+        # ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass). Each
+        # yielded ``ActiveField`` is dispatched here by ``kind``: ``LOGIC`` copies
+        # the raw sub-tree under its ``django-filter`` wire key, ``RELATED`` is
+        # stripped (owned by ``_apply_related_constraints``, since the parent form
+        # cannot validate a nested-dict shape), and ``LEAF`` runs the per-field
+        # operator-bag / range normalization that stays local to the filter family.
         data: dict[str, Any] = {}
         for field in iter_active_fields(cls, input_value, _NORMALIZE_TRAVERSAL):
             if field.kind == LOGIC:
@@ -2946,10 +2947,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``FILTER_DEFAULTS``, an overridden generation hook, an ``__init__`` that
         replaces or mutates ``self.filters`` -- is refused at BUILD time, so it never
         reaches this loop as routable. Process-wide monkeypatching of django-filter's
-        own classes is OUT OF CONTRACT (``docs/feedback.md`` Seventh review): code
-        able to replace ``CharFilter.filter`` can equally replace this package's
-        methods, so an in-process signature check cannot be a trust boundary, and
-        maintaining one bought complexity without a defensible guarantee.
+        own classes is OUT OF CONTRACT (``row-preserving-predicates-part1-plan``
+        Seventh review): code able to replace ``CharFilter.filter`` can equally
+        replace this package's methods, so an in-process signature check cannot
+        be a trust boundary, and maintaining one bought complexity without a
+        defensible guarantee.
 
         A non-routable name runs the ORIGINAL
         ``self.filters[name].filter(queryset, value)`` byte-for-byte, preserving

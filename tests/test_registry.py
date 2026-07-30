@@ -1689,9 +1689,10 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry):
 
     Connection twin of ``test_clear_tolerates_unimportable_order_submodules``. The
     connection-type-cache co-clear (``clear_connection_type_cache``) uses a
-    cycle-safe local import (``docs/feedback.md`` P3b). If ``connection.py`` cannot
-    be imported (forced here by poisoning ``sys.modules``), ``clear()`` skips that
-    block and still clears the registry's own state rather than raising.
+    cycle-safe local import (``spec-030-connection_field-0_0_9`` P3b). If
+    ``connection.py`` cannot be imported (forced here by poisoning ``sys.modules``),
+    ``clear()`` skips that block and still clears the registry's own state rather
+    than raising.
     """
     import sys
 

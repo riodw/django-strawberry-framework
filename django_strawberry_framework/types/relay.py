@@ -34,10 +34,10 @@ from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
 
-# ``SyncMisuseError`` moved to ``utils/querysets.py`` in the 0.0.9 DRY pass
-# (``docs/feedback.md`` Major 1); the redundant ``as`` alias re-exports it from
-# this module so ``from ...types.relay import SyncMisuseError`` and the
-# ``types/__init__.py`` re-export keep working unchanged.
+# ``SyncMisuseError`` moved to ``utils/querysets.py`` in the 0.0.9 DRY pass; the
+# redundant ``as`` alias re-exports it from this module so ``from
+# ...types.relay import SyncMisuseError`` and the ``types/__init__.py`` re-export
+# keep working unchanged.
 from ..utils.querysets import SyncMisuseError as SyncMisuseError
 from ..utils.querysets import (
     apply_type_visibility_async,

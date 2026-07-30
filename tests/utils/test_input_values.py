@@ -2,7 +2,7 @@
 
 The 0.0.9 DRY pass single-sited the runtime walk over a generated Strawberry
 input value that the filter / order normalizers and the permission walkers had
-each spelled inline (``docs/feedback.md`` Major 1 -- a divergence in the
+each spelled inline (that pass's Major 1 -- a divergence in the
 active-input decision is a real bug class). These tests pin the shared mechanics
 directly: the ``None`` / ``UNSET`` active-value rule, the dict-vs-dataclass walk,
 the leaf / related / logic classification, and the order-side top-level-list

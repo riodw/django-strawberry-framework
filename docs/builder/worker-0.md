@@ -23,7 +23,7 @@ Must not:
 - read Worker 1/2/3 memory during the active cycle, or edit any memory file but its own
 - write dispatch prompts that instruct a worker to run `pytest` with `--cov*` flags or chase coverage gates (`docs/builder/BUILD.md` `## Coverage is the maintainer's gate, not a worker's tool`). Do not add exception clauses ("a focused coverage command for review concerns" or similar); the rule has no carve-outs
 - dispatch a builder against a finding Worker 0 has not verified against source, or against a contract choice the maintainer has not decided (`## Review-round dispatch`)
-- let any worker edit the maintainer's incoming review document (e.g. `docs/feedback.md`) — it is evidence of what was found; the contract is the round artifact
+- let any worker edit the maintainer's incoming review document — it is evidence of what was found; the contract is the round artifact
 - commit. Only the maintainer commits; Worker 0 never commits, even if asked
 
 ## Slice status legend

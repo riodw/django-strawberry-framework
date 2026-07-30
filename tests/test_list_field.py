@@ -1,13 +1,12 @@
 """DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
 
-Spec: ``docs/spec-020-list_field-0_0_7.md`` (Test plan section, the
-``tests/test_list_field.py (new)`` subsection).
+Spec: ``docs/spec-020-list_field-0_0_7.md``.
 
 Package tests; system-under-test is ``django_strawberry_framework``
 (``AGENTS.md #"Package source lives in django_strawberry_framework"``). The file
 is the flat single-file Layer-3 module's mirror per ``docs/TREE.md #"test_list_field.py       # DjangoListField (single-file Layer-3 module)"``.
 
-Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
+Holds the validation cluster (5 tests) and the behavior
 cluster (17 tests) - 22 total. Three of them cover real bug fixes -
 the own-class-registration guard (rejects a ``DjangoType`` subclass that omits
 its own ``Meta``), the async-callable-object detection (detects
@@ -22,7 +21,7 @@ sync and skipped ``get_queryset``). The fourth is a contract pin for
 natively (3.8+), so the first branch already routes them; the test pins
 the end-to-end behavior.
 
-The spec's Slice-3 inventory at ``docs/SPECS/spec-020-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
+The spec's inventory at ``docs/SPECS/spec-020-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
 both arms are load-bearing (the field wrapper owns the
 ``Manager -> QuerySet`` coercion; the optimizer's downstream coercion is
@@ -75,12 +74,12 @@ def _isolate_global_registry() -> None:
 
 
 # =============================================================================
-# Slice 2 - Validation tests (Decision 5).
+# Validation tests (Decision 5).
 # =============================================================================
 #
-# Each test below maps one-to-one with a bullet in the Test plan's
-# "Validation tests (Slice 2)" subsection. They assert that the constructor
-# raises ``ConfigurationError`` with the documented message shape.
+# Each test below maps one-to-one with a bullet in the spec's validation test
+# plan. They assert that the constructor raises ``ConfigurationError`` with the
+# documented message shape.
 
 
 @pytest.mark.parametrize(
@@ -181,11 +180,11 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
 
 
 # =============================================================================
-# Slice 3 - Behavior tests (Decisions 2, 3, 4, 6).
+# Behavior tests (Decisions 2, 3, 4, 6).
 # =============================================================================
 #
-# Slice 3 ships 14 tests, one-to-one with the named methods in the spec Test
-# plan plus the dual-execution test. Tests pin the
+# One test per named method in the spec test plan, plus the dual-execution
+# test. Tests pin the
 # production contract through ``schema.execute_sync(...)`` /
 # ``await schema.execute(...)`` against real Django models; the autouse
 # fixture above isolates each test's registry state.
@@ -1035,7 +1034,7 @@ def test_djangolistfield_non_nullable_outer_default_via_consumer_annotation() ->
     """``list[CategoryType]`` renders as ``[CategoryType!]!`` (non-null outer + items).
 
     Pins that the default annotation (``list[T]`` without ``| None``)
-    renders as ``[T!]!`` - four levels of unwrap match Slice 0's pinned
+    renders as ``[T!]!`` - four levels of unwrap match the spec's pinned
     introspection shape (spec #"locate `fields[name == \"allBranches\"]`";
     spec #"`strawberry.field` in the installed Strawberry version is a function, not a class";
     spec #"pin the introspection-query mechanism");
@@ -1228,10 +1227,9 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): list field <-> cascade composition pin.
-# NO list_field.py source change - the default resolver (and the consumer-resolver
-# wrap) already apply the type's get_queryset (Decision 12). Fill in + drop the
-# skip in Slice 3.
+# List field <-> cascade composition pin (spec-034). No list_field.py source change
+# is involved: the default resolver (and the consumer-resolver wrap) already apply
+# the type's get_queryset (Decision 12).
 # =============================================================================
 
 

@@ -1,7 +1,6 @@
 """Transport classification, session pre-check, scope lock, and capability tests.
 
-Commit 1 of the auth session-lifecycle hardening plan introduces the private
-``auth/sessions.py`` transport boundary. These are pure-unit tests over
+The private ``auth/sessions.py`` transport boundary. These are pure-unit tests over
 fabricated request / scope shapes (no ``create_users`` / ``seed_data`` seeding is
 needed -- no user rows are touched): they pin the ``isinstance``-first
 classification, the actionable missing-session error, the per-scope
@@ -319,7 +318,6 @@ def test_logout_unsupported_on_a_signed_cookie_websocket():
 
 # ---------------------------------------------------------------------------
 # Lock lifecycle: cancellation release, scope-ownership, no global registry
-# (auth session-lifecycle hardening, Commit 5)
 # ---------------------------------------------------------------------------
 
 

@@ -109,8 +109,8 @@ _response_key = response_key
 _MAX_PLAN_CACHE_SIZE = 256
 
 # The Relay pagination argument names whose variable-supplied values must key
-# the plan cache when they appear on a NON-ROOT field node (Slice 1 bakes those
-# resolved values into windowed prefetch querysets, so two requests differing
+# the plan cache when they appear on a NON-ROOT field node (the planner bakes
+# those resolved values into windowed prefetch querysets, so two requests differing
 # only in a nested ``first: $n`` value need distinct cached plans -- Decision 7).
 # Single source of truth for the four argument names; a future ``search:``
 # extension (``0.1.2``) would extend the family here, not re-spell it inline.
@@ -264,7 +264,7 @@ def _collect_nested_pagination_var_names(
 
     Thin wrapper over the unified ``_collect_cache_var_families`` traversal,
     returning only the pagination family (``first`` / ``last`` / ``before`` /
-    ``after`` variables on a field node at response-path depth >= 1). Slice 1
+    ``after`` variables on a field node at response-path depth >= 1). The planner
     bakes those resolved pagination values into windowed prefetch querysets, so
     two requests sharing a printed AST (``booksConnection(first: $n)``) but
     differing in ``$n`` must NOT share a cached plan -- a correctness rule
@@ -1261,7 +1261,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         reachable = _collect_schema_reachable_types(schema)
         # Dedupe (source_model, field_name) so multi-type models do not
         # double-warn: registry.iter_types() yields one entry per registered
-        # type after spec-018 Slice 1, so a model with multiple types whose
+        # type after spec-018, so a model with multiple types whose
         # field maps overlap on the same unregistered-target relation would
         # otherwise produce one identical warning per registered type. The
         # dedupe is a multi-type artifact, not generic defensiveness - every
@@ -1318,7 +1318,7 @@ class DjangoOptimizerExtension(SchemaExtension):
            referenced in ``@skip``/``@include`` directives and in
            ``first``/``last``/``before``/``after`` arguments on non-root
            field nodes (nested pagination values are baked into windowed
-           prefetch plans by Slice 1, so they must key the cache; root
+           prefetch plans, so they must key the cache; root
            pagination variables stay out -- root slicing is post-plan).
         3. The target Django model class (different root fields in the
            same operation can return different models).

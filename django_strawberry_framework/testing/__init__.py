@@ -31,7 +31,7 @@ Currently exports
 - :func:`global_id_for` / :func:`decode_global_id` - the public Relay test
   helpers, importable at the dotted
   ``django_strawberry_framework.testing.relay`` submodule path (NOT
-  re-exported here; the card's DoD names the submodule path). Minting the
+  re-exported here - the dotted submodule path is the public one). Minting the
   strategy-aware encoded ``GlobalID`` a finalized Relay-Node-shaped type
   emits, and decoding one back to ``(target_type, node_id)`` - see
   :mod:`django_strawberry_framework.testing.relay` for the full contract,

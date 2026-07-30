@@ -382,7 +382,7 @@ def path_traverses_to_many(model: type, field_path: str) -> bool:
     That fallback keeps the resolvable-vs-unresolvable boundary faithful: the
     old walk returned ``True`` the instant it reached a many-side hop and never
     saw a garbage tail beyond it, while ``classify_path`` raises on that tail. A
-    32-path adversarial matrix (``tests/utils/test_relations.py``) confirms the
+    32-path matrix (``tests/utils/test_relations.py``) confirms the
     fallback reproduces the pre-refactor answers on the raise paths, including
     ``genres__nonexistent`` -> ``True`` and ``genres__name__icontains`` ->
     ``True`` (many-then-garbage), where a plain ``False`` would have diverged.

@@ -1,4 +1,4 @@
-"""FilterSet declarations for the library acceptance app (Slice 4).
+"""FilterSet declarations for the library acceptance app (spec-021).
 
 Five filtersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-filterset references use
@@ -6,8 +6,8 @@ the same-module unqualified-name form (e.g. ``RelatedFilter("ShelfFilter")``)
 so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
 to end; the ``BookFilter.genres = RelatedFilter("apps.library.filters_genre.GenreFilter")``
 declaration deliberately uses the absolute-import-path form so the
-Layer-2 ``import_string`` first-attempt branch is also exercised (spec
-L988 + L1052).
+Layer-2 ``import_string`` first-attempt branch is also exercised
+(spec-021).
 
 ``GenreFilter`` lives in the sibling ``filters_genre.py`` module so the
 absolute-import-path resolution path has a real cross-module target;
@@ -78,7 +78,7 @@ class BookFilter(FilterSet):
     ``BookFilter.genres`` uses the absolute-import-path form
     ``"apps.library.filters_genre.GenreFilter"`` so the Layer-2
     ``import_string`` first-attempt branch resolves cross-module per
-    spec-021 L988 + L1052.
+    spec-021.
     """
 
     shelf = RelatedFilter("ShelfFilter", field_name="shelf")
@@ -140,7 +140,7 @@ class PatronFilter(FilterSet):
         super().__init__(*args, **kwargs)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without
-        # an ``@`` sign per spec-021 L1054.
+        # an ``@`` sign per spec-021.
         email_filter = self.filters.get("email_must_have_at_sign")
         if email_filter is not None:
             email_filter.field.validators.append(_validate_email_must_have_at_sign)

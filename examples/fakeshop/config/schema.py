@@ -46,7 +46,7 @@ class Mutation(
 ):
     """Top-level Mutation - extends each app's Mutation.
 
-    Products carries the create/update/delete write surface (spec-036 Slice 4);
+    Products carries the create/update/delete write surface (spec-036);
     the scalars app adds the file-backed ``createMediaSpecimen`` so the spec-037
     ``Upload`` mutation-input mapping is exercised over a live multipart
     ``/graphql/`` request; the library app adds the raw-pk relation form/model

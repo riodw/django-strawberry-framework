@@ -1,4 +1,4 @@
-"""Transport-owned auth session boundary (auth session-lifecycle hardening, Commit 1).
+"""Transport-owned auth session boundary: transport classification + capability.
 
 The private classification + capability layer the login / logout state machines
 build on. It is deliberately NOT re-exported: neither ``auth.__all__`` nor the
@@ -78,7 +78,7 @@ class Transport(enum.Enum):
     """The explicit auth transport modes ``classify_transport`` resolves.
 
     Each mode carries a distinct native session-mutation path and persistence
-    contract (auth session-lifecycle hardening plan, Transport contract table):
+    contract:
     ``DJANGO_HTTP`` uses Django's native ``authenticate`` / ``login`` / ``logout``;
     both Channels modes use ``channels.auth`` and require the soft dependency.
     """

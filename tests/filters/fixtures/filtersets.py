@@ -1,7 +1,7 @@
 """Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.
 
 Carries minimal `FilterSet` subclasses over the fakeshop library models
-so the Slice-1 tests can exercise the absolute-import-path and
+so the tests can exercise the absolute-import-path and
 unqualified-name resolution branches of
 `LazyRelatedClassMixin.resolve_lazy_class`.
 """

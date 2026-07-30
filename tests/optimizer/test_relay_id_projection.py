@@ -143,7 +143,7 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
                 model = CustomPKItem
                 # ``Meta.fields`` lists Django field names; the model's pk
                 # is ``uuid`` (not ``id``), so the user must include
-                # ``"uuid"`` here. Slice 3's id-suppression then strips
+                # ``"uuid"`` here. Relay id-suppression then strips
                 # the synthesized ``uuid`` annotation so the schema
                 # surface is ``id: GlobalID!`` (from ``relay.Node``)
                 # plus ``name``, without leaking ``uuid: str!``.
@@ -166,9 +166,9 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
         assert result.errors is None
         plan = ctx.dst_optimizer_plan
         # The walker projected the real pk attname (``uuid``), not the
-        # GraphQL literal ``id`` - this is the fix from
-        # the ``spec-015-relay_interfaces-0_0_5`` review, High "Optimizer misses
-        # projecting custom primary keys for Relay nodes".
+        # GraphQL literal ``id``: without this, the optimizer would fail to
+        # project a custom primary key for a Relay node
+        # (``spec-015-relay_interfaces-0_0_5``).
         assert "uuid" in plan.only_fields
         assert "id" not in plan.only_fields
         assert result.data == {

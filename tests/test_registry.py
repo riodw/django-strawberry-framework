@@ -45,7 +45,7 @@ def _isolate_global_registry():
     registry.clear()
 
 
-# spec-031 Slice 3 - ``definition_for_graphql_name`` (the GlobalID type-name
+# spec-031 - ``definition_for_graphql_name`` (the GlobalID type-name
 # decode entry point: a unique ``graphql_type_name`` lookup over Relay-Node
 # definitions only, raising ``ConfigurationError`` on miss / ambiguity).
 # ---------------------------------------------------------------------------
@@ -932,10 +932,10 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(fres
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 (spec-018-meta_primary-0_0_6.md) - multi-type storage + primary
-# tracking. Tests below exercise the new contract through ``register`` /
+# Multi-type storage + primary tracking (spec-018-meta_primary-0_0_6.md).
+# Tests below exercise the contract through ``register`` /
 # ``register_with_definition`` directly with plain test classes (no
-# ``DjangoType`` subclasses) per spec slice-1 paragraph at ``spec:656``.
+# ``DjangoType`` subclasses).
 # ---------------------------------------------------------------------------
 
 
@@ -967,7 +967,7 @@ def test_register_second_type_for_same_model_no_longer_raises_collision(fresh_re
     try:
         fresh_registry.register(Item, ItemTypeB)
     except ConfigurationError:
-        pytest.fail("Slice 1: second registration without primary must not raise")
+        pytest.fail("second registration without primary must not raise")
 
 
 def test_register_same_type_twice_is_idempotent(fresh_registry):
@@ -1241,7 +1241,7 @@ def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_mode
 
 
 def test_register_same_type_against_two_models_still_raises(fresh_registry):
-    """Reverse-collision contract is preserved after the Slice 1 rewrite (spec:108)."""
+    """Reverse-collision contract is preserved by the multi-type registry."""
 
     class SharedType:
         pass
@@ -1295,7 +1295,7 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_re
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-018-meta_primary-0_0_6.md) - finalize-time ambiguity audit.
+# Finalize-time ambiguity audit (spec-018-meta_primary-0_0_6.md).
 # Tests below cover ``_audit_primary_ambiguity()`` running inside
 # ``finalize_django_types()``. The audit-success and audit-vs-unresolved
 # tests live in ``tests/types/test_definition_order.py``; this file hosts
@@ -1380,7 +1380,7 @@ def test_audit_runs_once_per_build(monkeypatch):
 # ---------------------------------------------------------------------------
 # The ``unregister`` public helper. Tests below
 # exercise the new public surface that replaces the direct private-map
-# pokes in Slice 4 walker/extension fixtures and the older
+# pokes in the walker/extension fixtures and the older
 # check_schema-audit fixtures (types list, model index, primary slot, and
 # definition map).
 # ---------------------------------------------------------------------------
@@ -1540,7 +1540,7 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     Concretely: register three types against the same model with the
     first as primary, unregister the primary, then call
     ``finalize_django_types()`` and confirm it raises the canonical
-    ambiguity error. Prevents a future maintainer from "helpfully"
+    ambiguity error. Prevents a later change from "helpfully"
     auto-promoting the next sibling to primary on unregister, which
     would silently change the relation-resolution target.
     """

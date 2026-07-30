@@ -466,7 +466,7 @@ def test_register_arm_error_survives_a_reload_cycle():
 
 
 # ---------------------------------------------------------------------------
-# Native sync / async dispatch seam (auth session-lifecycle hardening Commit 2)
+# Native sync / async dispatch seam
 # ---------------------------------------------------------------------------
 
 
@@ -984,7 +984,7 @@ def test_register_input_name_is_pinned_and_payload_derives_from_the_rider_name()
 
 
 # ===========================================================================
-# Commit 3 - login persistence-safe across Django and Channels HTTP
+# Login persistence-safe across Django and Channels HTTP
 # ===========================================================================
 #
 # These package tests own the login rows a live fakeshop `/graphql/` request
@@ -1910,7 +1910,7 @@ def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
 
 
 # ===========================================================================
-# Commit 4 - logout durable and fail-closed on every supported transport
+# Logout durable and fail-closed on every supported transport
 # ===========================================================================
 #
 # These package tests own the logout rows a live fakeshop `/graphql/` request
@@ -2203,15 +2203,15 @@ async def test_websocket_server_side_logout_invalidates_and_survives_reconnect()
 
 
 # =============================================================================
-# Commit 5 -- same-scope auth serialization and race behavior
+# Same-scope auth serialization and race behavior
 # =============================================================================
 #
-# These prove the plan's Concurrent mutation policy: same-scope Channels
+# These prove the concurrent-mutation policy: same-scope Channels
 # operations are linearized by the ONE scope-owned ``asyncio.Lock`` (security
 # invariant 12), and cross-request HTTP session deletion propagates the upstream
 # interruption instead of recreating the logged-out session.
 #
-# Race-driving approach (recorded per the Commit 5 brief): the two multiplexed
+# Race-driving approach: the two multiplexed
 # WebSocket races drive the resolver bodies (``_channels_logout`` /
 # ``_login_resolve_body_async``) directly over ONE shared scope adapter rather
 # than pushing two frames through the real graphql-transport-ws consumer. Frame

@@ -197,7 +197,7 @@ def _check_n1(
     ``_dst_<field>$<key>_connection`` when a divergent-alias window held
     rows (the caller threads whichever attr its fast-path probe
     found). The access truly queries iff that ``to_attr`` is ABSENT on
-    ``root`` - when present, Slice 1's window already served the page, so no
+    ``root`` - when present, the window already served the page, so no
     lazy load happens and the check is silent. ``reason`` (the per-parent-fallback
     cause, supplied by the connection call site) is appended to the
     ``"raise"`` / ``"warn"`` message when present so a flagged fallback

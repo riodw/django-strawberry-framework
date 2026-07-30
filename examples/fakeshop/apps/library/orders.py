@@ -7,7 +7,7 @@ so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
 to end; the ``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
 declaration deliberately uses the absolute-import-path form so the
 Layer-2 ``import_string`` first-attempt branch is also exercised
-(spec-028 Slice 4 + Decision 11).
+(spec-028 + Decision 11).
 
 ``GenreOrder`` lives in the sibling ``orders_genre.py`` module so the
 absolute-import-path resolution path has a real cross-module target;
@@ -29,9 +29,8 @@ class BranchOrder(OrderSet):
     """Branch orderset bound to ``BranchType`` at finalize phase 2.5.
 
     Carries two ``check_*_permission`` gates load-bearing for the
-    Slice-4 active-input-only / active-related-branch coverage tests
-    (spec-028 Slice 4 Tests 9, 10, 11 per Spec test plan). The gates
-    raise ``GraphQLError`` with the explicit
+    active-input-only / active-related-branch coverage tests
+    (spec-028 test plan). The gates raise ``GraphQLError`` with the explicit
     ``code="ORDER_PERMISSION_DENIED"`` extension code so the live HTTP
     tests can assert the extension-code value verbatim.
     """
@@ -93,11 +92,11 @@ class BookOrder(OrderSet):
     ``BookOrder.genres`` uses the absolute-import-path form
     ``"apps.library.orders_genre.GenreOrder"`` so the Layer-2
     ``import_string`` first-attempt branch resolves cross-module per
-    spec-028 Slice 4 Test 5 (M2M absolute-import-path).
+    spec-028 test plan (M2M absolute-import-path).
 
     ``BookOrder.Meta.fields`` carries the path-shorthand ``"shelf__code"``
     which renders as ``shelfCode: Ordering`` on the input type per
-    spec-028 Slice 4 Test 13 (flat-shorthand path). The explicit
+    spec-028 test plan (flat-shorthand path). The explicit
     ``shelf = RelatedOrder("ShelfOrder", field_name="shelf")``
     declaration produces the nested-shape ``shelf: ShelfOrderInputType``
     surface used by Tests 3, 7, 8, and 12. Both surfaces coexist on

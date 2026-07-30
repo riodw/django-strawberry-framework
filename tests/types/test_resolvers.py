@@ -563,15 +563,12 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 
 
 # ---------------------------------------------------------------------------
-# Multi-database cooperation - spec-019 Slice 1
+# Multi-database cooperation (spec-019)
 # ---------------------------------------------------------------------------
 #
-# TODO(spec-019 Slice 1, tests/types/test_resolvers.py extension - append-only):
-# pre-staged scaffold per ``docs/spec-023-multi_db-0_0_7.md`` Slice 1. Worker 2
-# replaces the ``raise NotImplementedError`` body in each test below with the
-# pseudocode that follows it.
+# Per ``docs/SPECS/spec-023-multi_db-0_0_7.md``.
 #
-# Five new resolver-level tests pin Decision 3 axis 1 (FK-id elision router
+# Five resolver-level tests pin Decision 3 axis 1 (FK-id elision router
 # call shape; four tests) and axis 4 (strictness connection-agnostic shape;
 # one test). The four FK-id tests mock ``router.db_for_read`` per Decision 5;
 # the strictness test does NOT mock the router (it never reaches that path
@@ -601,9 +598,8 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 #         <related_model>, instance=<expected_instance>
 #     )
 #
-# Both shapes are acceptable per Decision 5; tests pick whichever reads
-# cleaner per test. Worker 2 picks one shape consistently across the four
-# FK-id tests.
+# Both shapes are acceptable per Decision 5; the four FK-id tests below use
+# one shape consistently.
 #
 # Fixture row pattern: the FK-id elision path needs a ``root`` with the
 # FK ``attname`` populated (so ``getattr(root, field_meta.attname)`` is
@@ -1003,14 +999,14 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog):
 
 
 # ---------------------------------------------------------------------------
-# File / image output resolvers (spec-037 Slice 1, Decision 4)
+# File / image output resolvers (spec-037 Decision 4)
 # ---------------------------------------------------------------------------
 
 
 def _tiny_png_bytes():
     """Return the bytes of a 2x3 PNG built with Pillow (a real, parseable image).
 
-    Pillow is a dev/test-only dependency added by spec-037 Slice 1 so the
+    Pillow is a dev/test-only dependency added by spec-037 so the
     ``DjangoImageType`` ``width`` / ``height`` resolvers exercise a real
     image-dimension read rather than a stand-in. The package itself never
     imports Pillow.
@@ -1243,7 +1239,7 @@ def test_suspicious_file_operation_is_not_swallowed(tmp_path, monkeypatch):
 def test_vanished_file_degrades_size_to_null(tmp_path):
     """A vanished-on-disk file nulls ``size`` (the ``OSError`` arm).
 
-    Slice 1 fired only the ``NotImplementedError`` arm of ``_safe_file_attr``
+    An earlier revision fired only the ``NotImplementedError`` arm of ``_safe_file_attr``
     (the non-filesystem ``.path`` case). This pins the ``OSError`` / ``ValueError``
     arms: a populated file deleted from disk makes ``FieldFile.size`` raise
     ``FileNotFoundError`` (an ``OSError`` subclass), so ``_safe_file_attr``
@@ -1283,7 +1279,7 @@ def test_vanished_file_degrades_size_to_null(tmp_path):
 def test_corrupt_image_degrades_width_and_height_to_null(tmp_path):
     """A corrupt image nulls ``width`` / ``height`` (the dimension-read FAILURE path).
 
-    Slice 1 read ``width`` / ``height`` only from a VALID Pillow image (the
+    Sibling tests read ``width`` / ``height`` from a VALID Pillow image (the
     success path). This pins the FAILURE path: bytes that are not a parseable
     image make ``ImageFieldFile.width`` / ``.height`` raise when Pillow reads the
     dimensions, so ``_safe_file_attr`` degrades each to ``null`` -- the spec-037

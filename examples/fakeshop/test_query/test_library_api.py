@@ -356,8 +356,8 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
             ],
         },
     }
-    # Slice 4 added ShelfType.get_queryset for the nested-visibility
-    # contract; the optimizer correctly downgrades select_related("shelf") to
+    # ShelfType.get_queryset implements the nested-visibility contract; the
+    # optimizer correctly downgrades select_related("shelf") to
     # Prefetch so the visibility hook applies before the join surfaces hidden
     # rows. Two queries - one for the books, one prefetch for shelves through
     # the visibility-scoped queryset.
@@ -635,7 +635,7 @@ def test_library_relation_override_shapes_http_response_data():
 def test_library_branches_via_djangolistfield_optimized_nested_selection():
     """End-to-end pipeline coverage for ``DjangoListField`` via ``/graphql/``.
 
-    Pins the Slice 4 end-to-end contract (spec-016 Decision 4,
+    Pins the end-to-end contract (spec-016 Decision 4,
     spec-016 #"live HTTP test in `examples/fakeshop/test_query/test_library_api.py` covers"):
     URL routing + view + schema execution + JSON serialization + optimizer
     cooperation through the real Django + Strawberry HTTP stack. The package-
@@ -658,7 +658,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
         ``test_library_relation_override_shapes_http_response_data`` above
         for the same nested-selection shape.
 
-    Total: 1 + 0 + 2 = 3 queries. If a future maintainer adds ``order_by`` to
+    Total: 1 + 0 + 2 = 3 queries. If a later change adds ``order_by`` to
     the new field, removes the consumer override on ``BranchType.shelves`` (or
     opts it back into planning with an ``OptimizerHint``), or changes the
     seeded branch count, recompute N accordingly.
@@ -819,14 +819,14 @@ def test_library_relay_node_global_id_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - live HTTP filter coverage (spec-021 L1044-1057).
+# Live HTTP filter coverage for the library FilterSet declarations (spec-021).
 # ---------------------------------------------------------------------------
 
 
 def _post_graphql_as_staff(query: str):
     """Issue a GraphQL POST authenticated as a freshly-created staff user, via ``TestClient``.
 
-    The authenticated flow through ``TestClient.login()`` (spec-043 Slice 2): the
+    The authenticated flow through ``TestClient.login()`` (spec-043): the
     force-login/logout bracket wraps the one post, and the raw ``HttpResponse``
     the client kept on ``Response.response`` is returned so callers keep their
     ``.status_code`` / ``.json()`` assertions.
@@ -844,7 +844,7 @@ def _post_graphql_as_staff(query: str):
 
 @pytest.mark.django_db
 def test_library_branches_filter_by_name_icontains():
-    """Spec-021 L1044: scalar-field filter clause + ``iContains`` lookup name."""
+    """Spec-021: scalar-field filter clause + ``iContains`` lookup name."""
     models.Branch.objects.create(name="Andromeda Main", city="Boston")
     models.Branch.objects.create(name="Side Branch", city="Cambridge")
 
@@ -869,8 +869,8 @@ def test_library_loans_filter_by_deep_to_many_email_is_row_preserving_over_http(
     ``iContains: "Cardio"`` returns exactly the two loans on the shared book
     whose patrons carry "Cardio" emails - ordered, each once, with no framework
     fan-out. ``direct_only`` (a "Cardio" note but a "Neurology" patron on a book
-    with no Cardio-patron loan) is excluded: the note-OR belongs to card 054's
-    search, not this relational filter.
+    with no Cardio-patron loan) is excluded: the note-OR belongs to the
+    (unshipped) search surface, not this relational filter.
     """
     branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
     shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
@@ -968,7 +968,7 @@ def test_library_branches_not_filter_respects_root_visibility_over_http():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_choice_enum():
-    """Spec-021 L1045: choice-enum filter clause coerces via Strawberry enum."""
+    """Spec-021: choice-enum filter clause coerces via Strawberry enum."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     models.Book.objects.create(
@@ -1031,7 +1031,7 @@ def test_library_books_filter_by_choice_enum_in():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_non_relay_fk_scalar_id():
-    """Spec-021 L1046: ``ShelfType`` is non-Relay so ``shelf.id`` is a scalar PK."""
+    """Spec-021: ``ShelfType`` is non-Relay so ``shelf.id`` is a scalar PK."""
     branch_a = models.Branch.objects.create(name="Branch A", city="Boston")
     branch_b = models.Branch.objects.create(name="Branch B", city="Cambridge")
     shelf_a = models.Shelf.objects.create(code="A-1", topic="general", branch=branch_a)
@@ -1053,7 +1053,7 @@ def test_library_books_filter_by_non_relay_fk_scalar_id():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_relay_m2m_global_id():
-    """Spec-021 L1047: ``GenreType`` is Relay-Node so ``genres.id`` is a GlobalID."""
+    """Spec-021: ``GenreType`` is Relay-Node so ``genres.id`` is a GlobalID."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1303,11 +1303,11 @@ def test_library_genres_filter_mixed_empty_id_in_list_rejects_whole_input_at_ind
 
 @pytest.mark.django_db
 def test_library_branches_filter_by_reverse_fk_lookup():
-    """Spec-021 L1048: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
+    """Spec-021: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")
     branch_without = models.Branch.objects.create(name="Without Match", city="Boston")
     # ``BranchFilter.shelves`` carries the explicit ``queryset=Shelf.objects.filter(
-    # topic="permanent collection")`` constraint per spec-021 L1051 - seed both
+    # topic="permanent collection")`` constraint per spec-021 - seed both
     # shelves under that topic so only the per-shelf code clause narrows the
     # result; the topic-scope test (#8) inverts this pattern.
     models.Shelf.objects.create(code="A-Main", topic="permanent collection", branch=branch_with)
@@ -1335,7 +1335,7 @@ def test_library_branches_filter_by_reverse_fk_lookup():
 
 @pytest.mark.django_db
 def test_library_books_filter_combines_and_or_not():
-    """Spec-021 L1049: ``and_`` / ``not_`` Python attrs surface as ``and`` / ``not``."""
+    """Spec-021: ``and_`` / ``not_`` Python attrs surface as ``and`` / ``not``."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     models.Book.objects.create(
@@ -1373,7 +1373,7 @@ def test_library_books_filter_combines_and_or_not():
 
 @pytest.mark.django_db
 def test_library_books_filter_preserves_optimizer_cooperation():
-    """Spec-021 L1050: ``select_related`` / ``prefetch_related`` survive ``.filter(...)``."""
+    """Spec-021: ``select_related`` / ``prefetch_related`` survive ``.filter(...)``."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1414,7 +1414,7 @@ def test_library_books_filter_preserves_optimizer_cooperation():
     # SELECT, a ``select_related("shelf")`` JOINed pull, and the
     # ``prefetch_related("genres")`` SELECT. The filter clause itself
     # adds no additional queries - the count survives ``.filter(...)``
-    # per spec-021 L1050.
+    # per spec-021.
     assert len(captured) == 3
     joined_sql = "\n".join(query["sql"] for query in captured)
     assert "library_book" in joined_sql
@@ -1424,7 +1424,7 @@ def test_library_books_filter_preserves_optimizer_cooperation():
 
 @pytest.mark.django_db
 def test_library_branches_filter_respects_related_queryset_boundary_on_parent():
-    """Spec-021 L1051: ``RelatedFilter(queryset=...)`` scopes the parent only."""
+    """Spec-021: ``RelatedFilter(queryset=...)`` scopes the parent only."""
     branch_a = models.Branch.objects.create(name="Branch A", city="Cambridge")
     branch_b = models.Branch.objects.create(name="Branch B", city="Cambridge")
     models.Shelf.objects.create(code="A-1", topic="permanent collection", branch=branch_a)
@@ -1455,7 +1455,7 @@ def test_library_branches_filter_respects_related_queryset_boundary_on_parent():
 
 @pytest.mark.django_db
 def test_book_genres_uses_absolute_import_path_related_filter():
-    """Spec-021 L1052: ``BookFilter.genres`` resolves via the Layer-2 absolute path."""
+    """Spec-021: ``BookFilter.genres`` resolves via the Layer-2 absolute path."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1688,7 +1688,7 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - live HTTP order coverage (spec-028 Slice 4 - 14 acceptance tests).
+# Live HTTP order coverage (spec-028 - 14 acceptance tests).
 # ---------------------------------------------------------------------------
 
 
@@ -1713,7 +1713,7 @@ def _seed_books_with_nullable_subtitles():
     """Seed one nullable-subtitle book + two non-null-subtitle books.
 
     Load-bearing for the ``NULLS_FIRST`` / ``NULLS_LAST`` contracts per
-    spec-028 Slice 4 Test 2: the null row must move to the
+    spec-028 test plan: the null row must move to the
     requested edge, while the two non-null rows still prove ASC versus
     DESC ordering inside the non-null partition.
     """
@@ -1734,7 +1734,7 @@ def _seed_books_with_nullable_subtitles():
 
 @pytest.mark.django_db
 def test_library_branches_order_by_name_asc():
-    """Spec-028 Slice 4 Test 1: scalar ASC on ``Branch.name``.
+    """Spec-028 test plan - scalar ASC on ``Branch.name``.
 
     Uses staff context because ``BranchOrder.check_name_permission``
     (declared in ``apps.library.orders``) denies anonymous requests
@@ -1774,7 +1774,7 @@ def test_library_branches_order_by_name_asc():
 )
 @pytest.mark.django_db
 def test_library_books_order_by_subtitle_null_positioning(direction, expected_subtitles):
-    """Spec-028 Slice 4 Test 2: NULLS positioning through real ``/graphql/``."""
+    """Spec-028 test plan - NULLS positioning through real ``/graphql/``."""
     _seed_books_with_nullable_subtitles()
 
     response = _post_graphql(
@@ -1796,7 +1796,7 @@ def test_library_books_order_by_subtitle_null_positioning(direction, expected_su
 
 @pytest.mark.django_db
 def test_library_books_order_by_forward_fk_relation():
-    """Spec-028 Slice 4 Test 3: forward-FK nested ``shelf: { code: ASC }``.
+    """Spec-028 test plan - forward-FK nested ``shelf: { code: ASC }``.
 
     Exercises the same-module ``RelatedOrder("ShelfOrder")``
     declaration on ``BookOrder.shelf``.
@@ -1829,7 +1829,7 @@ def test_library_books_order_by_forward_fk_relation():
 
 @pytest.mark.django_db
 def test_library_branches_order_by_reverse_fk_relation():
-    """Spec-028 Slice 4 Test 4: reverse-FK ordering is row-preserving (aggregate).
+    """Spec-028 test plan - reverse-FK ordering is row-preserving (aggregate).
 
     Alpha branch has shelves A, C, E; Beta branch has shelf B. Ordering by
     ``shelves: { code: ASC }`` orders each Branch by an AGGREGATE of its shelf
@@ -2012,7 +2012,7 @@ def test_library_genres_connection_pages_by_to_many_aggregate():
 
 @pytest.mark.django_db
 def test_library_books_order_by_m2m_absolute_import_path():
-    """Spec-028 Slice 4 Test 5: M2M order via Layer-2 absolute-import-path.
+    """Spec-028 test plan - M2M order via Layer-2 absolute-import-path.
 
     ``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
     exercises the ``import_string`` first-attempt branch -- the
@@ -2050,7 +2050,7 @@ def test_library_books_order_by_m2m_absolute_import_path():
 
 @pytest.mark.django_db
 def test_library_books_filter_and_order_compose():
-    """Spec-028 Slice 4 Test 6: filter + order compose cleanly.
+    """Spec-028 test plan - filter + order compose cleanly.
 
     ``{ circulationStatus: { exact: available } }`` narrows the rows;
     ``orderBy: [{ title: ASC }]`` arranges the survivors.
@@ -2096,7 +2096,7 @@ def test_library_books_filter_and_order_compose():
 
 @pytest.mark.django_db
 def test_library_books_order_preserves_optimizer_cooperation():
-    """Spec-028 Slice 4 Test 7: ``order_by(...)`` survives the optimizer plan.
+    """Spec-028 test plan - ``order_by(...)`` survives the optimizer plan.
 
     ``select_related("shelf")`` + ``prefetch_related("genres")`` survive
     ``.order_by(...)``; the query count is identical to the shipped
@@ -2150,7 +2150,7 @@ def test_library_books_order_preserves_optimizer_cooperation():
 
 @pytest.mark.django_db
 def test_root_get_queryset_runs_before_order_apply():
-    """Spec-028 Slice 4 Test 8: root ``get_queryset`` runs before ``apply_sync``.
+    """Spec-028 test plan - root ``get_queryset`` runs before ``apply_sync``.
 
     ``BranchType.get_queryset`` strips ``city="restricted"`` for
     anonymous users so the DESC order clause sees only the visible
@@ -2160,15 +2160,14 @@ def test_root_get_queryset_runs_before_order_apply():
     ``BranchOrder.check_name_permission`` (declared per spec line
     1039) denies anonymous queries on ``name`` -- the gate fires
     before ``get_queryset`` returns rows would matter. To pin the
-    Test 8 contract (visibility scope BEFORE order arrangement)
-    without colliding with the Test 9 gate, this test orders by
+    visibility-scope-before-order-arrangement contract without
+    colliding with the ``name`` permission gate, this test orders by
     ``city: DESC`` (an unguarded scalar). The same Branch+city
     fixture pinned by the spec proves the contract: the
     ``city="restricted"`` row is hidden by ``get_queryset`` and so
-    does NOT appear at the head of the descending order list. Same
-    spec-reconciliation flag Worker 1 raised for Test 11's quiet
-    half (substitute ``city`` for ``name`` when the ``name`` gate
-    would denial-trigger).
+    does NOT appear at the head of the descending order list. The
+    relation-gate test's quiet half substitutes ``city`` for ``name``
+    for the same reason - the ``name`` gate would denial-trigger.
     """
     models.Branch.objects.create(name="Alpha", city="Boston")
     models.Branch.objects.create(name="Zeta", city="restricted")
@@ -2214,7 +2213,7 @@ def test_root_get_queryset_runs_before_order_apply():
 
 @pytest.mark.django_db
 def test_order_check_permission_denies_for_active_field():
-    """Spec-028 Slice 4 Test 9: scalar gate fires for active field.
+    """Spec-028 test plan - scalar gate fires for active field.
 
     ``BranchOrder.check_name_permission`` fires for anonymous request
     because ``name`` is active in the input; the gate raises
@@ -2239,7 +2238,7 @@ def test_order_check_permission_denies_for_active_field():
 
 @pytest.mark.django_db
 def test_order_check_permission_quiet_for_inactive_field():
-    """Spec-028 Slice 4 Test 10: scalar gate quiet for inactive field.
+    """Spec-028 test plan - scalar gate quiet for inactive field.
 
     ``BranchOrder.check_name_permission`` does NOT fire because
     ``name`` is absent from the input; the only active field is
@@ -2267,13 +2266,13 @@ def test_order_check_permission_quiet_for_inactive_field():
 
 @pytest.mark.django_db
 def test_order_check_permission_denies_active_related_branch():
-    """Spec-028 Slice 4 Test 11: active-branch relation-level gate.
+    """Spec-028 test plan - active-branch relation-level gate.
 
     ``BranchOrder.check_shelves_permission`` fires when the ``shelves``
     RelatedOrder branch is active in the input; quiet when the branch
-    is absent. The quiet half uses ``city`` (unguarded scalar) per
-    Worker 1's spec-reconciliation note -- ``name`` collides with the
-    Test 9 / 10 gate, so the quiet half routes around it.
+    is absent. The quiet half uses ``city`` (unguarded scalar) because
+    ``name`` collides with the scalar permission gate, so the quiet half
+    routes around it.
     """
     branch = models.Branch.objects.create(name="Alpha", city="Boston")
     models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
@@ -2311,7 +2310,7 @@ def test_order_check_permission_denies_active_related_branch():
 
 @pytest.mark.django_db
 def test_library_books_order_by_multi_field_priority():
-    """Spec-028 Slice 4 Test 12: multi-field priority via list-element ordering.
+    """Spec-028 test plan - multi-field priority via list-element ordering.
 
     ``orderBy: [{ shelf: { code: ASC } }, { title: DESC }]`` -- shelf
     code dominates (ASC); title is the secondary tie-breaker (DESC,
@@ -2351,7 +2350,7 @@ def test_library_books_order_by_multi_field_priority():
 
 @pytest.mark.django_db
 def test_library_books_order_by_flat_shorthand_path():
-    """Spec-028 Slice 4 Test 13: flat-shorthand ``shelfCode: ASC``.
+    """Spec-028 test plan - flat-shorthand ``shelfCode: ASC``.
 
     ``BookOrder.Meta.fields = [..., "shelf__code"]`` renders as
     ``shelfCode: Ordering`` on the GraphQL input type; the runtime
@@ -2386,7 +2385,7 @@ def test_library_books_order_by_flat_shorthand_path():
 
 @pytest.mark.django_db
 def test_library_branches_order_empty_list_and_null_direction_no_op():
-    """Spec-028 Slice 4 Test 14: combined empty-list + null-direction no-op.
+    """Spec-028 test plan - combined empty-list + null-direction no-op.
 
     Both halves return the queryset in its default resolver-level
     order (``models.Branch.objects.order_by("id")``) without raising.
@@ -2434,7 +2433,7 @@ def test_library_branches_order_empty_list_and_null_direction_no_op():
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 - Meta.nullable_overrides / Meta.required_overrides
+# spec-029 - Meta.nullable_overrides / Meta.required_overrides
 #
 # Live HTTP coverage against the acceptance-only ``NullabilityOverrideBookType``
 # secondary type on ``library.Book``: the SDL flip (title String! -> String,
@@ -2604,7 +2603,7 @@ def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
 
 
 # ---------------------------------------------------------------------------
-# spec-030 Slice 4 - live DjangoConnectionField HTTP coverage.
+# spec-030 - live DjangoConnectionField HTTP coverage.
 #
 # ``allLibraryGenresConnection`` is the root ``DjangoConnectionField(GenreType)``
 # field (``Meta.connection = {"total_count": True}``, ``GenreFilter`` /
@@ -2614,10 +2613,10 @@ def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
 # ``first: 0`` empty-window shape, ``totalCount`` selection-gating, and the
 # per-instance count across two aliases.
 #
-# spec-032 Slice 4 - this block is also the live PRIMARY home of the
+# spec-032 - this block is also the live PRIMARY home of the
 # cursor-contract conformance matrix (Decision 9; the test_query README
-# coverage rule; no Slice-6 dependency - ``allLibraryGenresConnection`` is
-# already shipped). ``test_genre_connection_first_zero_empty_edges`` and
+# coverage rule; ``allLibraryGenresConnection`` is already shipped, so this
+# block has no unshipped dependency). ``test_genre_connection_first_zero_empty_edges`` and
 # ``test_genre_connection_first_and_last_rejected`` above are the matrix's
 # ``first: 0`` and ``first`` + ``last`` pins (re-affirmed, not duplicated);
 # the five conformance tests at the end of the block (``test_first_overrun``
@@ -3553,7 +3552,7 @@ def test_anonymous_inline_fragment_with_directive_around_node_field_resolves():
     assert all("id" not in edge["node"] for edge in edges)
 
 
-# TODO(spec-035 Slice 3): extend this live connection-fragment block with the
+# TODO(spec-035): extend this live connection-fragment block with the
 # matching-type relation-planning acceptance test required by the test_query
 # README. Pseudocode: seed multiple genres and books, capture SQL around
 # ``allLibraryGenresConnection { edges { node { ... on GenreType { books {
@@ -3803,7 +3802,7 @@ def test_backward_pagination_last_before():
 
 
 # ---------------------------------------------------------------------------
-# Slice 6 - fakeshop library activation (spec-032 Decision 12): live root
+# Fakeshop library activation (spec-032 Decision 12): live root
 # node(id:) / nodes(ids:) / typed genre(id:) refetch plus the synthesized
 # relation-as-Connection surfaces, the mandated live coverage home per the
 # test_query README rule. Every test rides the autouse
@@ -4700,7 +4699,7 @@ def test_book_genres_connection_last_page_with_total_count_stays_counted():
 def test_genre_books_connection_divergent_sidecar_alias_isolated():
     """A sidecar alias resolves per-parent WITHOUT dragging its divergent sibling.
 
-    Mixed shape (idea #2 per-key gates): ``a`` carries an ``orderBy`` sidecar
+    Mixed shape (per-key conflict gates): ``a`` carries an ``orderBy`` sidecar
     (per-parent by design - Decision 6), ``b`` is a plain page served from its
     own per-key window. Each alias's rows must be correct for ITS arguments,
     and exactly ONE batched window query runs (``b``'s; ``a`` never plans one).
@@ -4851,8 +4850,8 @@ def test_identical_aliases_nested_same_key_conflict_serves_each_subtree_args():
     Same-argument outer aliases share ONE merged window (spec-033 Decision 6),
     so their union-merged children hit the same conflict: ``a``'s subtree
     selects ``genresConnection(first: 1)`` and ``b``'s ``(first: 2)`` under
-    one response key. This shape returned wrong data even BEFORE idea #2
-    (first-payload-wins at HEAD); the conflict gate now routes the nested
+    one response key. This shape returned wrong data even before the
+    per-key conflict gates existed (first-payload-wins); the gate now routes the nested
     level per-parent while the outer keeps its shared window.
     """
     _seed_two_genres_three_shared_books()
@@ -5097,11 +5096,11 @@ def test_node_hidden_row_null_live():
 
 
 # ---------------------------------------------------------------------------
-# Slice 5 (spec-033) - live nested-connection SQL-shape coverage.
+# Live nested-connection SQL-shape coverage (spec-033).
 #
-# The spec-032 Slice-6 behavior pins above (test_genre_books_connection_behavior,
-# test_book_genres_connection_sidecars_and_total_count) asserted BEHAVIOR ONLY and
-# named THIS card as the owner of the deferred SQL-shape pins. The three tests
+# The spec-032 behavior pins above (test_genre_books_connection_behavior,
+# test_book_genres_connection_sidecars_and_total_count) assert BEHAVIOR ONLY;
+# the SQL-shape pins they deferred live here. The three tests
 # below add them, live over /graphql/, riding the
 # _reload_project_schema_for_acceptance_tests autouse fixture. No source change.
 #
@@ -5155,7 +5154,7 @@ def test_nested_books_connection_fixed_query_count():
 
     The literal N+1 disproof: the captured query count for the nested
     ``booksConnection`` window is INDEPENDENT of the number of parent genres
-    (spec-033 Slice 5 / Goal 5 / DoD item 8). The window is one prefetch over
+    (spec-033 / Goal 5 / DoD item 8). The window is one prefetch over
     all parents, not one query per parent. ``totalCount`` is not selected -
     ``BookType`` has no ``Meta.connection`` opt-in, so the field does not exist.
     """
@@ -5319,7 +5318,7 @@ def test_nested_total_count_no_per_parent_count():
     shape ``test_book_genres_connection_sidecars_and_total_count`` established.
     The count comes from the window's ``_dst_total_count`` annotation, NOT a
     per-book ``COUNT``, so adding ``totalCount`` to the selection costs nothing
-    extra even with multiple parent books (spec-033 Slice 5 / Edge case;
+    extra even with multiple parent books (spec-033 / Edge case;
     DoD item 8).
     """
     shelf = _seed_shelf()
@@ -5413,7 +5412,7 @@ def test_nested_window_respects_book_visibility():
     count IS the visible count. The ``GenreType`` connection that DOES carry
     ``totalCount`` has no visibility filter, so a visibility-filtered
     ``totalCount`` field is unavailable live; the ``booksConnection`` edge set
-    is the correct live surface for ``BookType`` visibility (spec-033 Slice 5 /
+    is the correct live surface for ``BookType`` visibility (spec-033 /
     Edge case "visibility-filtered targets" / DoD item 8).
     """
     # No ``orderBy:`` - the plain selection is window-planned (the deterministic
@@ -5598,10 +5597,10 @@ def test_list_relation_and_connection_sibling_coexist_live():
 def test_nested_connection_pagination_from_graphql_variable_live():
     """A GraphQL VARIABLE drives the nested window over ``/graphql/`` (not just a literal).
 
-    The in-process Slice-3 cache-key tests pin variable resolution at the plan
+    The in-process cache-key tests pin variable resolution at the plan
     layer; this earns the end-to-end half live - ``$n`` flows through the request
     body, ``ConnectionExtension``, and the window so the page size IS the
-    variable's value (spec-033 Slice 5).
+    variable's value (spec-033).
     """
     shelf = _seed_shelf()
     _seed_genre_with_books(
@@ -5737,8 +5736,9 @@ def test_nested_empty_parent_serves_zero_total_count_no_fallback_live():
 
 
 # ---------------------------------------------------------------------------
-# RelatedFilter behavior over live /graphql/ (feedback2.md high-confidence
-# moves from ``tests/filters/test_sets.py``). The live ``BranchFilter.shelves``
+# RelatedFilter behavior over live /graphql/: nested-filter input coercion,
+# explicit-queryset intersection, and empty/absent-input handling. The live
+# ``BranchFilter.shelves``
 # carries an explicit ``queryset=Shelf.objects.filter(topic="permanent collection")``
 # (apps/library/filters.py), so these exercise GraphQL input coercion, root
 # visibility, the real configured RelatedFilter + explicit-queryset
@@ -5859,8 +5859,9 @@ def test_related_filter_identical_direct_and_inside_logic_tree_live():
 
 
 # ---------------------------------------------------------------------------
-# Schema-shape introspection over live /graphql/ (feedback2.md high-confidence
-# moves from ``tests/types/test_definition_order_schema.py``). The library
+# Schema-shape introspection over live /graphql/: rendered M2M list nullability,
+# the Relay ``Node`` interface and ``ID!`` on a Relay-declared type, and the
+# plain non-Relay type's own id shape. The library
 # schema already exposes the M2M (``BookType.genres``), a Relay-declared
 # ``GenreType``, and a non-Relay ``ShelfType``, so the rendered shapes are
 # assertable through the real ``__type`` introspection over HTTP.
@@ -5945,8 +5946,8 @@ def test_mixed_relay_and_non_relay_no_interface_bleed_live():
 
 
 # ---------------------------------------------------------------------------
-# DjangoListField default resolver visibility over live /graphql/ (feedback2.md
-# high-confidence move from ``tests/test_list_field.py``). ``BranchType.get_queryset``
+# DjangoListField default resolver visibility over live /graphql/.
+# ``BranchType.get_queryset``
 # excludes ``city="restricted"`` for anonymous requests; the default list-field
 # resolver must apply it, so the restricted branch is absent from the HTTP result.
 # ---------------------------------------------------------------------------
@@ -6099,8 +6100,7 @@ def test_malformed_nested_branch_form_raises_filter_invalid_live():
 
 
 # ---------------------------------------------------------------------------
-# Consumer-prefetch collision over live /graphql/ (feedback2.md high-confidence
-# moves from tests/optimizer/test_extension.py). A consumer resolver returning a
+# Consumer-prefetch collision over live /graphql/. A consumer resolver returning a
 # queryset whose prefetch_related overlaps the optimizer's own Genre -> books ->
 # loans plan must reconcile, not raise, and must stay flat (no per-row prefetch)
 # through the configured project schema, the view/request stack, and real

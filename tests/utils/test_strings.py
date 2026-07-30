@@ -75,7 +75,7 @@ def test_pascal_case_empty_output_edges():
 
 
 def test_flatten_lookup_path_flattens_every_lookup_sep():
-    """LOOKUP_SEP never survives into a generated identifier (DRY review A9)."""
+    """LOOKUP_SEP never survives into a generated identifier."""
     assert flatten_lookup_path("name") == "name"
     assert flatten_lookup_path("category__name") == "category_name"
     assert flatten_lookup_path("entries__property__category__name") == (

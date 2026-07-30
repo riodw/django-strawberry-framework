@@ -8,7 +8,7 @@ using the shipped `DjangoType` surface, with connections-only root fields
 across nested selections - and windowed `Prefetch`es for nested
 relation-connection siblings - without per-resolver boilerplate.
 
-The module also exposes a `Mutation` type (spec-036 Slice 4): the
+The module also exposes a `Mutation` type (spec-036): the
 `DjangoMutation` create / update / delete write surface over `Item` plus a
 `Category` create, each surfaced as an unannotated `DjangoMutationField`. The
 defaults apply - `DjangoModelPermission` write authorization and the post-write
@@ -261,7 +261,7 @@ class CreateCategory(DjangoMutation):
 
 
 # --------------------------------------------------------------------------- #
-# Form-mutation write surface (spec-038 Slice 4 / Decision 12)
+# Form-mutation write surface (spec-038 / Decision 12)
 # --------------------------------------------------------------------------- #
 
 
@@ -354,7 +354,7 @@ class SubmitPing(DjangoFormMutation):
 
 
 # --------------------------------------------------------------------------- #
-# Serializer-mutation write surface (spec-039 Slice 3 / Decision 13)
+# Serializer-mutation write surface (spec-039 / Decision 13)
 # --------------------------------------------------------------------------- #
 
 
@@ -412,7 +412,7 @@ class Mutation:
     `DjangoModelPermission` (the Django `add` / `change` / `delete` model perms) is
     exactly what the live write-authorization tests exercise (spec-036 Decision 15).
 
-    The form-mutation surface (spec-038 Slice 4) adds the `DjangoModelFormMutation`
+    The form-mutation surface (spec-038) adds the `DjangoModelFormMutation`
     create / update over `Item` via `ItemModelForm` (`createItemViaForm` /
     `updateItemViaForm`), the file-backed `Upload` form (`createItemWithFileViaForm`),
     the `get_form_kwargs`-injects-`user` form (`createStampedItemViaForm`), and the
@@ -420,7 +420,7 @@ class Mutation:
     inherit the same `DjangoModelPermission` default (codenames `add_item` /
     `change_item`); the plain form opts in with an explicit empty `permission_classes = []`.
 
-    The serializer-mutation surface (spec-039 Slice 3) adds the `SerializerMutation`
+    The serializer-mutation surface (spec-039) adds the `SerializerMutation`
     create / update over `Item` via `ItemSerializer` (`createItemViaSerializer` /
     `updateItemViaSerializer`), inheriting the same `DjangoModelPermission` default
     (codenames `add_item` / `change_item`). The serializer's `validate_<field>` /

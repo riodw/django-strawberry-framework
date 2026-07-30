@@ -1,7 +1,6 @@
 """DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 
-Spec: ``docs/spec-030-connection_field-0_0_9.md`` (Slice 1 / Slice 2 checklists;
-Test plan Slice 1 / Slice 2 sections). Package tests; system-under-test is
+Spec: ``docs/spec-030-connection_field-0_0_9.md``. Package tests; system-under-test is
 ``django_strawberry_framework`` itself. The flat file mirrors the flat
 ``connection.py`` module per ``docs/TREE.md`` and the ``tests/test_list_field.py``
 precedent.
@@ -253,7 +252,7 @@ def test_connection_type_for_returns_concrete_subclass_without_opt_in():
     Never the ``DjangoConnection[T]`` generic alias: a generic alias handed to
     the schema loses the ``resolve_connection`` override (and with it the
     ``first`` + ``last`` guard) at Strawberry's generic specialization - the
-    spec-032 Slice-4 discovered bug. The non-opted path must be a concrete
+    bug spec-032 uncovered. The non-opted path must be a concrete
     class too, just with no ``total_count`` members.
     """
     node_type = _make_node_type("BareNode", total_count=None)
@@ -286,7 +285,7 @@ def test_total_count_present_only_when_opted_in():
 
     bare_schema = _schema_for(_make_node_type("PresentBare", total_count=None))
     assert "totalCount" not in str(bare_schema)
-    # SDL description parity (spec-032 Slice-4 amendment): the always-concrete
+    # SDL description parity (spec-032): the always-concrete
     # non-opted ``<TypeName>Connection`` must preserve the description the bare
     # ``DjangoConnection[T]`` alias inherited from Strawberry's ``Connection``
     # base - the production code reads it from the parent strawberry definition;
@@ -389,7 +388,7 @@ def test_first_and_last_graphql_error_through_schema_without_opt_in():
 
     Deliberate near-twin of the opted sibling above: the two dispatch shapes
     (opted ``totalCount`` subclass vs the non-opted generated subclass) are
-    exactly the contract under test. Before the spec-032 Slice-4 fix the
+    exactly the contract under test. Before the spec-032 fix the
     non-opted path handed the schema the bare ``DjangoConnection[T]`` alias,
     whose ``resolve_connection`` override Strawberry's generic specialization
     dropped - ``first: 1, last: 1`` resolved silently. This is the ROOT-level
@@ -423,7 +422,7 @@ async def test_total_count_async_path_counts_via_acount():
 
 
 # =============================================================================
-# Slice 2 - DjangoConnectionField factory + pipeline + sidecar args
+# DjangoConnectionField factory + pipeline + sidecar args
 # =============================================================================
 
 
@@ -986,7 +985,7 @@ def test_connection_resolver_composition_order():
 
 @pytest.mark.django_db
 def test_relay_max_results_cap():
-    """``strawberry_config(relay_max_results=N)`` caps any single page (spec-032 Slice 4).
+    """``strawberry_config(relay_max_results=N)`` caps any single page (spec-032).
 
     The one conformance-matrix entry a live fakeshop query cannot reach
     (the project schema uses the default ``StrawberryConfig``): ``first``
@@ -1097,14 +1096,14 @@ async def test_connection_async_resolver_resolving_to_residual_awaitable_fails_c
 
 
 # =============================================================================
-# Slice 3 - optimizer cooperation point + connection-aware-planning gap guard
+# Optimizer cooperation point + connection-aware-planning gap guard
 # =============================================================================
 
 
 def _make_relation_node_type(name: str, *, fields: tuple[str, ...], model=Category) -> type:
     """Build a bare Relay-Node ``DjangoType`` (no sidecars) exposing ``fields``.
 
-    Slice 3's optimizer tests reach a relation under ``edges { node }``; the
+    The optimizer tests below reach a relation under ``edges { node }``; the
     sidecar machinery (``_make_sidecar_node_type``) is irrelevant noise here, so
     this builds the minimal Relay-Node shape with the relation field exposed.
     """
@@ -1424,16 +1423,15 @@ def test_registry_clear_also_clears_connection_type_cache():
 # TODO(spec-033 Slice 1-2): root-connection no-regression fence. The shipped
 # root-connection planning pins here (edges { node } extraction -> select_related
 # / Prefetch on the pre-slice queryset) must stay GREEN UNMODIFIED through the
-# helper consolidation (Decision 9) and the fast-path addition (Decision 5) --
-# this card touches only the NESTED half. No new tests required here; this marker
+# helper consolidation (Decision 9) and the fast-path addition (Decision 5),
+# which touch only the NESTED half. No new tests required here; this marker
 # records the fence (DoD item 12, "no root-connection regression").
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): connection <-> cascade composition pin.
-# NO connection.py source change - the pipeline already applies get_queryset
-# (where the cascade lives) before filter / order / slice (Decision 12). Fill in
-# + drop the skip in Slice 3.
+# Connection <-> cascade composition pin (spec-034). No connection.py source change
+# is involved: the pipeline already applies get_queryset (where the cascade lives)
+# before filter / order / slice (Decision 12).
 # =============================================================================
 
 

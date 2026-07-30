@@ -1157,8 +1157,8 @@ def test_hook_exception_propagates_unchanged():
 
 # ---------------------------------------------------------------------------
 # The hardened visibility boundary -- objects embedded in the query graph
-# (a review found consumer objects riding through the seal one edge down: a
-# ``Prefetch`` queryset and a combinator-branch ``Query`` subclass)
+# consumer objects can ride through the seal one edge down: a ``Prefetch``
+# queryset and a combinator-branch ``Query`` subclass
 # ---------------------------------------------------------------------------
 
 

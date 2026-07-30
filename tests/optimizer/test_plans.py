@@ -336,7 +336,7 @@ class TestPlanHelperRelocations:
     def test_append_prefetch_unique_keeps_distinct_to_attrs_on_one_lookup(self):
         """Two windows on ONE relation coexist when their ``to_attr``s differ.
 
-        The divergent-alias per-key scheme (idea #2) attaches one ``Prefetch``
+        The divergent-alias per-key scheme attaches one ``Prefetch``
         per response key to the SAME lookup; Django's ``prefetch_to`` replaces
         the last path segment with ``to_attr``, so the ``_lookup_path`` dedupe
         keys them apart - both survive (and a true duplicate still dedupes).

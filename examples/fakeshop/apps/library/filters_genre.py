@@ -1,11 +1,11 @@
-"""Cross-module fixture for the absolute-import-path ``RelatedFilter`` (Slice 4).
+"""Cross-module fixture for the absolute-import-path ``RelatedFilter``.
 
 ``GenreFilter`` lives in its own module so the
 ``BookFilter.genres = RelatedFilter("apps.library.filters_genre.GenreFilter")``
 declaration in ``filters.py`` exercises Layer-2 absolute-import-path
-resolution per spec-021 L988 + L1052. The single same-module unqualified-
-name branch is exercised by every other ``RelatedFilter("XFilter")``
-declaration in ``filters.py``.
+resolution per spec-021. The single same-module unqualified-name branch is
+exercised by every other ``RelatedFilter("XFilter")`` declaration in
+``filters.py``.
 """
 
 from __future__ import annotations

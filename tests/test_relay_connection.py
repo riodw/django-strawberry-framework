@@ -751,7 +751,7 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 
 
 # =============================================================================
-# spec-032 Slice 4 - cursor-contract conformance on the synthesized relation
+# spec-032 - cursor-contract conformance on the synthesized relation
 # connection (Decision 9). The live PRIMARY matrix runs against the shipped
 # root ``allLibraryGenresConnection``; this mirror exercises the same matrix
 # through the relation-manager-seeded pipeline on a reverse-FK cardinality
@@ -962,8 +962,8 @@ def test_relation_connection_backward_pagination_last_before(shape):
 
 
 # =============================================================================
-# spec-033 Slice 2 - connection-class fast path (Decision 5). The walker's
-# windowed prefetch (Slice 1) only lands on ``root`` when the PARENT queryset
+# spec-033 - connection-class fast path (Decision 5). The walker's
+# windowed prefetch only lands on ``root`` when the PARENT queryset
 # flows through ``DjangoOptimizerExtension``, so the fast-path schemas use a
 # ``DjangoListField`` root (which the optimizer plans) with the extension
 # installed. The existing ``_schema_with_root`` (a plain list resolver the
@@ -980,8 +980,8 @@ def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="
     ``_dst_books_connection`` ``to_attr`` and the fast path fires.
     ``book_total_count`` opts ``BookType`` into ``Meta.connection`` so the
     nested connection carries ``totalCount``. ``strictness`` (``"off"`` /
-    ``"warn"`` / ``"raise"``) wires the B3 contract for the Slice-4 strictness
-    pins; it is only meaningful with ``optimizer=True`` (no extension stashes
+    ``"warn"`` / ``"raise"``) wires the B3 contract for the strictness
+    pins below; it is only meaningful with ``optimizer=True`` (no extension stashes
     no sentinel - the no-op baseline).
     """
     make_django_type(
@@ -1131,7 +1131,7 @@ def test_fast_path_through_schema_connection_extension(django_assert_num_queries
 
 @pytest.mark.django_db
 def test_divergent_aliases_one_window_query_per_alias(django_assert_num_queries):
-    """Divergent aliases cost parents + ONE window query per alias (idea #2).
+    """Divergent aliases cost parents + ONE window query per alias.
 
     ``a: booksConnection(first: 2)`` + ``b: booksConnection(first: 5)`` was the
     historical whole-relation fallback (O(parents x aliases) per-parent
@@ -1302,7 +1302,7 @@ def test_divergent_aliases_strictness_raise_planned_keys_silent():
 def test_divergent_mixed_sidecar_strictness_flags_only_the_sidecar_key():
     """Under ``"raise"``, only the sidecar alias flags - its planned sibling is silent.
 
-    Per-key strictness visibility (idea #2): the sidecar key stays a real,
+    Per-key strictness visibility: the sidecar key stays a real,
     flagged per-parent access with the actionable filter/orderBy reason; the
     planned sibling's identity was recorded, so it never flags.
     """
@@ -1395,7 +1395,7 @@ def test_fast_path_wire_parity_with_pipeline(args):
 def test_fast_path_wire_parity_last_only():
     """Reversed (``last``-only) window maps to the SAME cursors and page flags.
 
-    Slice 1 keeps ``_dst_row_number`` forward (a separate
+    The planner keeps ``_dst_row_number`` forward (a separate
     ``_dst_row_number_reversed`` drives only the plan-time row filter), so the
     fast path's positional cursor (``_dst_row_number - 1``) and forward page-flag
     comparisons land on the pipeline's values for a ``last``-only page too.
@@ -2111,7 +2111,7 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
 
 
 # =============================================================================
-# Slice 4: strictness wiring for connection paths (spec-033 Decision 8).
+# Strictness wiring for connection paths (spec-033 Decision 8).
 #
 # The synthesized relation-connection resolver consults the union-published
 # optimizer sentinels via the PARAMETERIZED ``types/resolvers.py::_check_n1``
@@ -2226,7 +2226,7 @@ def test_strictness_warn_logs_once_per_occurrence(caplog):
 def test_strictness_warn_nested_fallback_preserves_parent_plan_context():
     """A warn-mode nested fallback does not corrupt the parent's PLANNED siblings.
 
-    The Slice-1 union-publish foundation: a nested fallback connection's own
+    The union-publish foundation: a nested fallback connection's own
     optimizer publish must not shrink the parent ``DST_OPTIMIZER_PLANNED`` set.
     A planned parent-level relation sibling (``books``, the plain list field)
     selected alongside the fallback nested connection must NOT warn or raise -
@@ -2257,7 +2257,7 @@ def test_strictness_warn_nested_fallback_preserves_parent_plan_context():
 def test_nested_fallback_does_not_clobber_fk_id_elisions():
     """A planned forward-FK sibling still elides after a nested fallback publishes.
 
-    The ``DST_OPTIMIZER_FK_ID_ELISIONS`` union (Slice 1) must survive the nested
+    The ``DST_OPTIMIZER_FK_ID_ELISIONS`` union must survive the nested
     fallback pipeline's own publish: a query selecting an elided forward-FK
     (``shelf { id }`` on each book) alongside a fallback nested connection
     resolves with no spurious strictness flag on the FK-id resolver and no extra

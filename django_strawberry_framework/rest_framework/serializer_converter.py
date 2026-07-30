@@ -77,7 +77,7 @@ from ..utils.converters import convert_with_mro
 # The decode kinds the reverse-map record carries. The four base kinds are
 # single-sourced in ``utils/inputs.py`` (one conceptual enum,
 # not a per-flavor copy); re-exported here (the ``as`` form marks the explicit
-# re-export) so the Slice 3 resolver + the tests keep addressing them on this
+# re-export) so the resolver + the tests keep addressing them on this
 # module. ``NESTED_SINGLE`` / ``NESTED_MULTI`` are the serializer-only
 # nested-serializer kinds: an EXPLICITLY-opted-in nested
 # ``Serializer`` (single) / ``ListSerializer`` (many), whose recursion is owned
@@ -349,7 +349,7 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
 
     A ``ListField(child=IntegerField())`` becomes ``list[int]`` by recursing the
     child through the SAME scalar registry. A relation / nested-serializer child
-    raises ``ConfigurationError`` (the spec-039 Slice-1 contract: only a scalar
+    raises ``ConfigurationError`` (the spec-039 contract: only a scalar
     child is supported - a list of relation ids is expressed as
     ``PrimaryKeyRelatedField(many=True)``, not ``ListField(child=relation)``).
     """
@@ -870,7 +870,7 @@ def resolve_serializer_field(
     the id-like-suffix rule (never ``source``). Returns the BASE (non-nullable)
     annotation; the create/partial requiredness + ``allow_null`` widening is
     applied by the caller. The returned ``InputFieldSpec`` records the reverse map
-    the Slice 3 resolver consults - ``target_name`` is the DECLARED serializer
+    the resolver consults - ``target_name`` is the DECLARED serializer
     field name (the ``validated_data`` key), ``source`` the resolved one-segment
     source.
     """
@@ -887,7 +887,7 @@ def resolve_serializer_field(
     # the declared name - keeps the reverse map terse and form-symmetric).
     source = field.source if (field.source and field.source != field_name) else None
     # The relation target model recorded on the spec (``None`` for a non-relation),
-    # so the Slice-3 decode reads it off the bind-stashed reverse map instead of
+    # so the decode reads it off the bind-stashed reverse map instead of
     # re-discovering the serializer field set per request.
     related_model: type[models.Model] | None = None
 

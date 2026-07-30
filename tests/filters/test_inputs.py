@@ -874,7 +874,7 @@ def test_build_range_input_class_name_unqualified_without_filterset():
 def test_range_input_type_name_is_scoped_per_filterset():
     """Two filtersets sharing a ``field_name`` mint DISTINCT range sub-input classes.
 
-    Regression pin for the spec-027 Slice-2 collision hazard. The nested
+    Regression pin for the spec-027 collision hazard. The nested
     ``RangeFilter`` sub-input class name derived from ``field_name`` alone, so two
     filtersets that each declare a ``RangeFilter`` for a same-named column both
     stamped one GraphQL name (``PriceRangeInputType``). These nested classes are

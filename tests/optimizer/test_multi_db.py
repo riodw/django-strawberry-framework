@@ -13,7 +13,7 @@ FK-id elision, so it does not need a ``router.db_for_read`` mock.
   Decision 2.
 
 Decision 3 axis 2 (explicit ``.using(alias)`` ``_db`` preservation through
-``OptimizationPlan.apply``) is verified transitively by the Slice 2 live
+``OptimizationPlan.apply``) is verified transitively by the live
 ``/graphql/`` test ``test_using_shard_b_resolver_returns_rows_seeded_on_shard_b``
 in ``examples/fakeshop/test_query/test_multi_db.py``: if a future refactor
 caused ``OptimizationPlan.apply`` to drop ``_db``, the resolver's
@@ -22,7 +22,7 @@ return zero rows, and the live test's seeded-titles assertion would fail.
 Per ``AGENTS.md #"Test through real usage and prefer the example project"``, real-world live-HTTP coverage is preferred over
 package-internal mocking when both reach the line.
 
-The five resolver-level Slice 1 tests (FK-id elision branches + strictness
+The five resolver-level tests (FK-id elision branches + strictness
 connection-agnostic shape) live in ``tests/types/test_resolvers.py``: both
 ``_build_fk_id_stub`` and ``_check_n1`` live in
 ``django_strawberry_framework/types/resolvers.py``, so the source-mirror
@@ -60,8 +60,8 @@ def _register_type_definition(model, type_cls, *, optimizer_hints=None):
     """Register a minimal definition for walker-only synthetic type classes.
 
     Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` -
-    inlined here per Worker 1's plan to keep this file's fixtures local
-    and avoid cross-test-module import coupling.
+    inlined here to keep this file's fixtures local and avoid
+    cross-test-module import coupling.
     """
     selected_fields = tuple(model._meta.get_fields())
     registry.register(model, type_cls, primary=False)

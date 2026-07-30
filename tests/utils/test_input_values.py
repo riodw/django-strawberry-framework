@@ -113,7 +113,7 @@ def test_iter_active_fields_classifies_and_skips_inactive():
 
 
 def test_iter_active_fields_dict_and_dataclass_classify_identically():
-    """The DRY intent: the dataclass and raw-dict shapes yield the same records."""
+    """The dataclass and raw-dict shapes yield the same records."""
 
     class _Set:
         related_filters = {"shelf": object()}

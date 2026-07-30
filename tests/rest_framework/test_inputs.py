@@ -1,6 +1,6 @@
 """Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
 
-Covers ``django_strawberry_framework/rest_framework/inputs.py`` (Slice 1 generation
+Covers ``django_strawberry_framework/rest_framework/inputs.py`` (the generation
 substrate):
 
 - ``get_serializer_for_schema`` discovery from a no-arg ``serializer_class()`` +
@@ -66,8 +66,8 @@ from django_strawberry_framework.scalars import Upload
 def _isolate_registry_and_ledger():
     """Reset registry + the serializer-input ledger so each test starts clean.
 
-    Slice 1 does not wire ``clear_serializer_input_namespace`` into
-    ``registry.clear()`` (that is Slice 2), so the ledger is cleared explicitly.
+    ``clear_serializer_input_namespace`` is not wired into
+    ``registry.clear()`` here, so the ledger is cleared explicitly.
     """
     registry.clear()
     clear_serializer_input_namespace()
@@ -204,7 +204,7 @@ def test_context_reading_get_fields_rejected_at_fields_access():
 def test_schema_hook_stable_field_map_generates_input():
     """A stable ``field_map`` supplied to the generator builds the input without no-arg discovery.
 
-    The Slice-2 ``get_serializer_for_schema()`` classmethod hook returns a stable map
+    The ``get_serializer_for_schema()`` classmethod hook returns a stable map
     for a context-requiring serializer; the generators build off the supplied
     ``field_map`` directly (no monkeypatching of the module-level discovery - the
     bind threads the hook's result through this parameter).
@@ -434,7 +434,7 @@ def test_empty_effective_field_set_raises():
 
 
 def test_serializer_meta_optional_fields_is_not_the_api():
-    """``optional_fields`` on the SERIALIZER's own ``Meta`` is ignored - it is the mutation key (Critical-1)."""
+    """``optional_fields`` on the SERIALIZER's own ``Meta`` is ignored - it is the mutation key."""
 
     class S(serializers.Serializer):
         a = serializers.CharField()

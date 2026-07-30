@@ -1,17 +1,17 @@
 """Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 
-Slice 2 introduced ``install_is_type_of``; Slice 4 extends this module with
-the interface base-class injection step and the four Relay node resolver
-defaults. The helpers split by lifecycle phase:
+This module owns ``install_is_type_of``, the interface base-class injection
+step, and the four Relay node resolver defaults. The helpers split by
+lifecycle phase:
 
-- Class-creation time (``__init_subclass__``): ``install_is_type_of``
-  (Slice 2). Discriminator: ``cls.__dict__`` membership.
+- Class-creation time (``__init_subclass__``): ``install_is_type_of``.
+  Discriminator: ``cls.__dict__`` membership.
 - Annotation synthesis time (``_build_annotations``): the
-  ``relay.Node in interfaces`` tuple-membership check (Slice 3, in
+  ``relay.Node in interfaces`` tuple-membership check (in
   ``types/base.py``).
 - Finalization Phase 2.5 (``finalize_django_types()``): ``apply_interfaces``,
-  ``_check_composite_pk_for_relay_node``, ``install_relay_node_resolvers``
-  (Slice 4). The last uses the ``__func__`` identity test that distinguishes
+  ``_check_composite_pk_for_relay_node``, ``install_relay_node_resolvers``.
+  The last uses the ``__func__`` identity test that distinguishes
   consumer-overridden ``resolve_*`` methods from the ``relay.Node`` defaults
   inherited through MRO.
 
@@ -46,7 +46,7 @@ from ..utils.querysets import (
     model_for,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (Slice 4 quoted hint).
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (quoted annotation).
     from .definition import DjangoTypeDefinition
 
 
@@ -55,7 +55,7 @@ def implements_relay_node(type_cls: type) -> bool:
 
     Used by ``finalize_django_types()`` Phase 2.5 (after ``__bases__``
     mutation) to decide whether to run the composite-pk gate and the
-    four ``resolve_*`` defaults. Distinct from Slice 3's tuple-membership
+    four ``resolve_*`` defaults. Distinct from the tuple-membership
     check (``relay.Node in interfaces`` at ``types/base.py``), which
     runs pre-base-injection at collection time against the validated
     ``Meta.interfaces`` tuple.
@@ -101,9 +101,9 @@ def install_is_type_of(type_cls: type) -> None:
 
     The upstream ``get_strawberry_type_cast`` branch is intentionally
     omitted - our package does not yet expose ``strawberry.cast(...)``
-    integration anywhere else, and adding it now would couple this slice
+    integration anywhere else, and adding it now would couple this module
     to a Strawberry surface we have not committed to. If a future adopter
-    needs ``strawberry.cast(...)`` support, a focused follow-up slice can
+    needs ``strawberry.cast(...)`` support, a focused follow-up can
     add the branch without churn to the rest of the Relay machinery.
     """
     if "is_type_of" in type_cls.__dict__:
@@ -401,7 +401,7 @@ def _resolve_globalid_strategy(
     Returns the resolved raw strategy (a string in ``STRING_GLOBALID_STRATEGIES``
     or a validated callable); never ``None``.
 
-    Called at finalization (Slice 2's ``install_globalid_typename_resolver``)
+    Called at finalization (``install_globalid_typename_resolver``)
     for a type the Relay-shape gate already accepted.
     """
     from .base import DEFAULT_GLOBALID_STRATEGY
@@ -414,11 +414,11 @@ def _resolve_globalid_strategy(
     return DEFAULT_GLOBALID_STRATEGY
 
 
-# Single source of truth for the "strategy -> payload shape" mapping (spec-031
-# Slice 2/3 plan, DRY watch point). The string constants ``STRING_GLOBALID_STRATEGIES``
-# / ``DEFAULT_GLOBALID_STRATEGY`` live in ``types/base.py`` (Slice 1); these are the
+# Single source of truth for the "strategy -> payload shape" mapping
+# (spec-031). The string constants ``STRING_GLOBALID_STRATEGIES``
+# / ``DEFAULT_GLOBALID_STRATEGY`` live in ``types/base.py``; these are the
 # payload-shape memberships the encoder, the model-label-routing audit, the
-# strategy-aware filter (``filters/base.py``), and the Slice-3 decoder all
+# strategy-aware filter (``filters/base.py``), and the decoder all
 # reference rather than re-typing ``{"model", "type+model"}`` / ``{"type",
 # "type+model"}`` at each site. ``callable`` and ``custom`` are intentionally in
 # neither set: they are encode-only in 0.0.9 (no decode path), so the decoder's
@@ -443,10 +443,10 @@ def _accepts_model_label_decode(effective_strategy: str | None) -> bool:
 
     Identical membership to ``_emits_model_label`` - ``model`` and ``type+model``
     both decode model labels - but named distinctly because the audit's
-    ``accepts_model_label(primary)`` predicate and the Slice-3 decode-Step-2
+    ``accepts_model_label(primary)`` predicate and the decode-Step-2
     enforcement read the *acceptance* side. Encode and decode acceptance of the
     model-label shape coincide for the framework strategies, so one frozenset
-    serves both; Slice 3 splits this if a divergence ever surfaces.
+    serves both; split them if a divergence ever surfaces.
     """
     return effective_strategy in MODEL_LABEL_STRATEGIES
 
@@ -456,7 +456,7 @@ def _accepts_type_name_decode(effective_strategy: str | None) -> bool:
 
     ``type`` and ``type+model`` both accept a bare ``graphql_type_name`` payload.
     Sibling of ``_accepts_model_label_decode`` for the type-name shape. Read by
-    BOTH the Slice-3 decode-Step-2 enforcement (the no-dot branch) AND
+    BOTH the decode-Step-2 enforcement (the no-dot branch) AND
     ``filters/base.py::_accepted_globalid_type_names`` (the strategy-aware filter),
     so the ``{"type", "type+model"}`` membership lives in one place
     (``TYPE_NAME_STRATEGIES``) instead of being re-typed at each site.
@@ -488,7 +488,7 @@ def encode_typename(
       letting Strawberry's ``Node._id`` ``assert isinstance(type_name, str)``
       fire as an opaque ``AssertionError`` (spec-031 Decision 4/10).
       The callable's arity / sync-ness were already
-      validated at type creation (Slice 1) - this is ONLY the per-call
+      validated at type creation - this is ONLY the per-call
       return-value check. A callable encoder is a deterministic pure
       per-(type, object) function; ``info`` is deliberately NOT passed so the
       encoder cannot easily depend on the request / actor (purity remains the
@@ -967,8 +967,8 @@ def install_relay_node_resolvers(type_cls: type) -> None:
 
     Direct port of ``strawberry_django/type.py::_process_type``
     (the ``if issubclass(cls, relay.Node)`` branch). The ``__func__``
-    discriminator is structurally distinct from Slice 2's ``__dict__``
-    membership discriminator (``is_type_of`` injection) and Slice 3's
+    discriminator is structurally distinct from the ``__dict__``
+    membership discriminator (``is_type_of`` injection) and the
     tuple-membership discriminator (``relay.Node in interfaces``) - the
     three answer different questions at three lifecycle phases.
     """

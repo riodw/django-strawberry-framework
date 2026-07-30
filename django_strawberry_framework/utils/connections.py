@@ -73,7 +73,7 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
     still recording the field as accounted-for (it will raise its OWN error), but
     must treat THIS shape as a fully-unplanned Decision-6 fallback (no
     ``planned_resolver_keys`` entry) so the per-parent access stays visible to the
-    Slice-4 strictness contract. A distinct type keeps the two paths separable.
+    strictness contract. A distinct type keeps the two paths separable.
     """
 
 

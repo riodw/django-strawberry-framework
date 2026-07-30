@@ -65,9 +65,9 @@ def test_related_order_accepts_unqualified_name_in_same_module():
 def test_related_order_unresolved_target_raises_importerror_through_lazy_mixin():
     """Unresolvable strings surface the raw ``ImportError`` from the mixin.
 
-    Pins the contract Slice 3's ``_bind_ordersets`` subpass depends on
+    Pins the contract the finalizer's ``_bind_ordersets`` subpass depends on
     - the finalizer rewraps this ``ImportError`` as ``ConfigurationError``
-    with a typed message; Slice 1's primitive raises the underlying
+    with a typed message; the primitive raises the underlying
     error unchanged so the finalizer's wrap is observable.
     """
 
@@ -100,12 +100,12 @@ def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 -- Meta.orderset_class promotion + validator surface
+# Meta.orderset_class promotion + validator surface
 # ---------------------------------------------------------------------------
 
 
 def test_meta_orderset_class_is_in_allowed_meta_keys():
-    """``"orderset_class"`` is now in ``ALLOWED_META_KEYS`` (spec-028 Slice 3)."""
+    """``"orderset_class"`` is now in ``ALLOWED_META_KEYS`` (spec-028)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS
 
     assert "orderset_class" in ALLOWED_META_KEYS

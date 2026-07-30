@@ -1,4 +1,4 @@
-"""The sync + async create / update / delete write pipeline (spec-036 Slice 3).
+"""The sync + async create / update / delete write pipeline (spec-036).
 
 The write-side runtime: one pipeline per operation, in a sync and an async form
 (spec-036 Decision 8). The pipeline is
@@ -59,9 +59,9 @@ and the load-bearing invariants this module owns:
   get_queryset`` closes the coroutine and raises (spec-036 Decision 8).
 
 The ``DjangoMutationField`` factory + signature synthesis are the sibling module
-``fields.py``. The live products write surface (a products ``Mutation`` +
-``config/schema.py`` wiring + the live ``CaptureQueriesContext`` assertion) is
-Slice 4, NOT this slice.
+``fields.py``. The example project owns the live products write surface (a
+products ``Mutation`` + ``config/schema.py`` wiring + the live
+``CaptureQueriesContext`` assertion).
 """
 
 from __future__ import annotations
@@ -1004,9 +1004,9 @@ def refetch_optimized(
     """Re-fetch the written row by pk + optimizer plan (spec-036 Decision 9).
 
     ``qs = initial_queryset(target_type).filter(pk=pk)`` - **by pk, WITHOUT the
-    visibility ``get_queryset`` filter** (the deliberate GOAL crit-4
-    exception: the actor just wrote the row, so round-tripping their own write is
-    not an existence leak). Routes through ``apply_connection_optimization`` so
+    visibility ``get_queryset`` filter** - the one deliberate exception to the
+    visibility contract: the actor just wrote the row, so round-tripping their own
+    write back to them is not an existence leak. Routes through ``apply_connection_optimization`` so
     the active optimizer plans the response selection; because the operation is a
     ``MUTATION``, the spec-035 G2 gate keeps ``select_related`` /
     ``prefetch_related`` and applies NO ``.only(...)`` - Decision 9 comes for free.
@@ -1377,7 +1377,7 @@ def authorize_or_raise(
 ) -> None:
     """Run ``check_permission``; a ``False`` return raises a top-level ``GraphQLError`` (Decision 15).
 
-    Delegates to the Slice-2 ``check_permission`` method (which iterates
+    Delegates to the mutation's ``check_permission`` method (which iterates
     ``Meta.permission_classes``); the resolver only maps a denial to a raised
     ``GraphQLError`` (the authorization-failure surface, distinct from the
     field-keyed validation envelope - Decision 15). The mutation instance
@@ -1403,7 +1403,7 @@ def authorize_or_raise(
         # (``_primary_type.__name__``); a plain ``DjangoFormMutation`` carries
         # ``_primary_type is None`` (no object to return - spec-038 Decision 6), so
         # fall back to the mutation class name, keeping ONE auth gate for both
-        # flavors (spec-038 Slice 3 plain-form auth-message discretion).
+        # flavors (spec-038 plain-form auth-message discretion).
         target_name = getattr(mutation_cls._primary_type, "__name__", mutation_cls.__name__)
         raise GraphQLError(f"Not authorized to {operation} {target_name}.")
 
@@ -1505,7 +1505,7 @@ def _invalid_lookup_id_error() -> FieldError:
 def payload_cls_for(mutation_cls: type) -> type:
     """Return the materialized ``<Name>Payload`` class for a bound mutation (all three pipelines).
 
-    The Slice-2 bind stashes the payload class name on the mutation
+    The bind stashes the payload class name on the mutation
     (``_payload_type_name``) and materializes the class as a module global of
     ``mutations.inputs``; the resolver reads it from there so the payload type the
     field's lazy ref resolves to and the type the resolver instantiates are the
@@ -1515,7 +1515,7 @@ def payload_cls_for(mutation_cls: type) -> type:
     re-spelling it: both form flavors materialize their ``<Name>Payload`` into
     ``mutations.inputs`` too (the ``ModelForm`` via the ``036`` ``_bind_mutation``,
     the plain via ``_bind_form_mutation``), so this one ``getattr`` serves the model,
-    ``ModelForm``, and plain-form pipelines alike (spec-038 DRY).
+    ``ModelForm``, and plain-form pipelines alike (spec-038).
     """
     from . import inputs
 

@@ -461,7 +461,7 @@ def _walk_selections(
     """
     type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
     hints_map = _resolve_optimizer_hints(definition)
-    # TODO(spec-035 Slice 3): supply a registry-only type-condition classifier
+    # TODO(spec-035): supply a registry-only type-condition classifier
     # to ``included_field_selections`` at this planning seam.
     # Pseudocode: accept the planning type's GraphQL name plus declared and
     # MRO-inherited interface names; skip known sibling concrete types; recurse
@@ -1128,7 +1128,7 @@ def _selected_scalar_names(
     # exercised through the root _walk_selections path, not through this
     # helper. (An audit invariant.)
     type_cls, _definition, field_map = _resolve_field_map(model)
-    # TODO(spec-035 Slice 3): audit this FK-id-elision helper as the walker's
+    # TODO(spec-035): audit this FK-id-elision helper as the walker's
     # second ``included_field_selections`` consumer. Pseudocode: either share
     # the same type-condition classifier used by ``_walk_selections`` or prove
     # the helper only receives concretely typed relation child selections where

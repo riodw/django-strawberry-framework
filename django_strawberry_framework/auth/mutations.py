@@ -82,8 +82,8 @@ _AUTH_FAMILY_LABEL = "AuthMutation"
 # enumeration-guard test.
 _INCORRECT_CREDENTIALS_MESSAGE = "Incorrect username/password"
 
-# The actionable WebSocket-login rejection (auth session-lifecycle hardening,
-# Commit 3 / root cause 3): login rotates the session key, but an established
+# The actionable WebSocket-login rejection: login rotates the session key, but an
+# established
 # WebSocket cannot return the replacement cookie, so a "success" would establish a
 # server-side session the browser can never claim. The rejection fires BEFORE any
 # authentication or session mutation. This is NOT part of the byte-compatible
@@ -96,8 +96,8 @@ _WEBSOCKET_LOGIN_UNSUPPORTED = (
     "(Django HTTP or Channels HTTP) and connect the authenticated WebSocket afterwards."
 )
 
-# The actionable signed-cookie WebSocket-logout rejection (auth session-lifecycle
-# hardening, Commit 4 / root cause 3): logout is supportable on a server-side
+# The actionable signed-cookie WebSocket-logout rejection: logout is supportable
+# on a server-side
 # session engine (deleting the record invalidates the old cookie without sending a
 # new one), but a signed-cookie-engine WebSocket has NO server-side record to
 # revoke and cannot delete or replace the browser cookie over an established
@@ -317,18 +317,18 @@ def _declare_fixed_auth_surface(surface: str, holder_name: str, permission_class
 def _sync_bridged_async_body(sync_body: Any) -> Any:
     """Build the interim async resolver body that bridges to ``sync_body`` (spec-040 D17).
 
-    The auth session-lifecycle hardening plan (Commit 2) splits ``_make_auth_field``
-    into a real sync resolver body and a real *async* resolver body so later stages
-    can inject native per-transport async work. This slice is the SEAM only, so the
-    async body is (for now) a genuine ``async def`` coroutine function that bridges
-    to ``sync_body`` through the ONE shared ``sync_to_async(thread_sensitive=True)``
-    worker - request resolution, the permission gate (whose ``instance=request.user``
-    argument forces the ``SimpleLazyObject`` as it is computed, a sync ORM touch),
-    and the session work all run inside that single boundary. The ``SyncMisuseError``
-    discipline is unaffected: the worker is itself a sync context, so an ``async def
-    has_permission`` is still rejected there, never silently allowed. Commits 3/4
-    replace this bridge, per surface, with native Django/Channels async bodies
-    without touching the dispatch seam below.
+    ``_make_auth_field`` carries a real sync resolver body and a real *async*
+    resolver body as separate seams, so native per-transport async work can be
+    injected later. This is the SEAM only: the async body is a genuine ``async def``
+    coroutine function that bridges to ``sync_body`` through the ONE shared
+    ``sync_to_async(thread_sensitive=True)`` worker - request resolution, the
+    permission gate (whose ``instance=request.user`` argument forces the
+    ``SimpleLazyObject`` as it is computed, a sync ORM touch), and the session work
+    all run inside that single boundary. The ``SyncMisuseError`` discipline is
+    unaffected: the worker is itself a sync context, so an ``async def
+    has_permission`` is still rejected there, never silently allowed. A native
+    Django/Channels async body can replace this bridge per surface without touching
+    the dispatch seam below.
     """
 
     async def _async_body(info: Any, **kwargs: Any) -> Any:
@@ -350,7 +350,7 @@ def _make_auth_field(
     """Build one fixed auth field around split sync / async gate-then-session-work bodies.
 
     The ONE auth field-construction helper the three fixed factories share
-    (spec-040 D12 / auth session-lifecycle hardening Commit 2): the
+    (spec-040 D12): the
     dispatcher resolves sync-vs-async per call via ``in_async_context()`` (the
     ``DjangoMutationField`` runtime dispatch). The sync path calls ``sync_body``
     directly; the async path calls ``async_body`` - a real coroutine function whose
@@ -467,8 +467,7 @@ def _login_authenticate(
 ) -> tuple[Any, sessions.Transport, Any, type, str, Any]:
     """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
 
-    Runs steps 1-5 of the login state machine (auth session-lifecycle hardening,
-    Commit 3) with NO session mutation:
+    Runs steps 1-5 of the login state machine with NO session mutation:
 
     1. resolve + classify the transport (``sessions.classify_transport``);
     2. capability check - a WebSocket login is rejected here, BEFORE authentication
@@ -663,8 +662,7 @@ async def _login_resolve_body_async(
 def _logout_prologue(holder_cls: type, info: Any) -> tuple[Any, sessions.Transport, type]:
     """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
-    Runs steps 1-3 of the logout state machine (auth session-lifecycle hardening,
-    Commit 4) with NO session mutation:
+    Runs steps 1-3 of the logout state machine with NO session mutation:
 
     1. resolve + classify the transport (``sessions.classify_transport``), then the
        capability check - a signed-cookie-engine WebSocket logout is rejected here,
@@ -711,7 +709,7 @@ def _logout_observation(request: Any, payload_cls: type) -> Any:
 def _django_http_logout(request: Any, payload_cls: type) -> Any:
     """Capture the actor, build the payload, then run Django's native logout; fail closed.
 
-    The Django HTTP teardown (auth session-lifecycle hardening, Commit 4). The
+    The Django HTTP teardown. The
     ``ok`` observation is captured BEFORE teardown via ``_authenticated_actor_or_none``
     (the ONE anonymity definition shared with ``current_user``) and the payload is
     constructed before mutation, so ``ok`` describes the state actually being

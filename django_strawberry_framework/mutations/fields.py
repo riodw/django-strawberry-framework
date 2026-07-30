@@ -1,4 +1,4 @@
-"""``DjangoMutationField`` - the write-side field factory (spec-036 Slice 3).
+"""``DjangoMutationField`` - the write-side field factory (spec-036).
 
 The write-side sibling of ``connection.py::DjangoConnectionField`` /
 ``relay.py::DjangoNodeField`` (every root field the package ships is a factory
@@ -45,7 +45,7 @@ Fallback (NOT implemented - spec-036 Decision 5 / Risks): if Strawberry rejects 
 resolver-typed field assigned with no class annotation, the documented fallback is
 a ``.field()`` classmethod (``create_item = CreateItem.field()``, graphene-django's
 shape). This module ships the PRIMARY no-annotation form; if the schema build
-rejects it, that is surfaced to Worker 1 (not silently swapped).
+rejects it, that is surfaced rather than silently swapped.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ def _validate_mutation_target(mutation_cls: Any) -> None:
 def _has_mutation_protocol(mutation_cls: type) -> bool:
     """Return whether a class carries the duck-typed mutation / form-mutation protocol.
 
-    The protocol every dispatchable flavor exposes (the Slice-2 seams): a
+    The protocol every dispatchable flavor exposes: a
     ``_mutation_meta`` attribute (present even as ``None`` on an abstract base, so
     the next guard can distinguish "abstract base" from "not a mutation at all"),
     callable ``resolve_sync`` / ``resolve_async`` (the dispatch seams ``_resolve``
@@ -280,7 +280,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     # ``ModelForm`` operation (create / update / delete) DOES take ``id=`` (create
     # passes ``UNSET``, exactly as the ``036`` model dispatch always did), so the
     # only flavor that omits ``id`` is the plain ``"form"`` sentinel (spec-038
-    # Slice 3 ``_resolve`` id-kwarg gating).
+    # ``_resolve`` id-kwarg gating).
     takes_id = mutation_cls._mutation_meta.operation != "form"
 
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001

@@ -1,4 +1,4 @@
-"""``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039 Slice 2).
+"""``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039).
 
 Covers ``django_strawberry_framework/rest_framework/sets.py``:
 
@@ -269,7 +269,7 @@ def test_fields_and_exclude_both_raises():
 def test_optional_fields_bare_string_rejected_at_class_creation():
     """A bare-string mutation ``Meta.optional_fields`` (incl. ``"__all__"``) is rejected at class creation.
 
-    ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 Critical-1 - NOT the
+    ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 - NOT the
     serializer's own ``Meta``); it is normalized at class creation (a bare string would
     iterate as characters; there is no ``"__all__"`` sentinel for field SELECTORS), so
     the reject is immediate, not deferred to finalize.
@@ -362,7 +362,7 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace():
     The serializer-derived input materializes into ``rest_framework.inputs`` (NOT
     ``mutations.inputs``), and the model-backed ``<Name>Payload`` materializes into
     ``mutations.inputs`` (the ``DjangoMutation`` payload path, with a ``node`` /
-    ``result`` slot). The reverse-map ``_input_field_specs`` is stashed for Slice 3.
+    ``result`` slot). The reverse-map ``_input_field_specs`` is stashed for the decode.
     """
     import sys
 
@@ -396,7 +396,7 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace():
     assert "errors" in slots
     assert "node" in slots  # Item is Relay-shaped -> node slot
 
-    # The Slice-1 reverse map is stashed for the Slice-3 decode (non-None).
+    # The generated reverse map is stashed for the decode (non-None).
     assert CreateItem._input_field_specs is not None
     assert len(CreateItem._input_field_specs) > 0
 
@@ -504,7 +504,7 @@ def _item_serializer_with_required_extra():
 def test_create_required_guard_fires_through_build_input():
     """Narrowing a required writable field away on create raises at finalize via ``build_input``.
 
-    The genuinely-new Slice-2 wiring: ``build_input``'s ``_build`` closure runs
+    The bind's own wiring: ``build_input``'s ``_build`` closure runs
     ``guard_create_required_serializer_fields`` (only on ``CREATE``) BEFORE the
     per-shape descriptor dedupe. Dropping the required column-less ``confirm`` via
     ``Meta.fields`` makes the guard fire.
@@ -760,7 +760,7 @@ def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
 
 
 # ---------------------------------------------------------------------------
-# Meta.optional_fields is the MUTATION's key (Critical-1)
+# Meta.optional_fields is the MUTATION's key
 # ---------------------------------------------------------------------------
 
 
@@ -770,7 +770,7 @@ def _input_fields(input_cls):
 
 
 def test_serializer_meta_optional_fields_is_not_the_public_api():
-    """``optional_fields`` on the SERIALIZER's own ``Meta`` is IGNORED at bind (Critical-1).
+    """``optional_fields`` on the SERIALIZER's own ``Meta`` is IGNORED at bind.
 
     The masking the original implementation relied on: the spec documents
     ``optional_fields`` on the MUTATION's ``Meta``, so a serializer-level key must have
@@ -796,7 +796,7 @@ def test_serializer_meta_optional_fields_is_not_the_public_api():
 
 
 def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
-    """A mutation ``Meta.optional_fields`` naming a field not in the effective set raises (Critical-1)."""
+    """A mutation ``Meta.optional_fields`` naming a field not in the effective set raises."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="optional_fields"):
 
@@ -808,12 +808,12 @@ def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
 
 
 # ---------------------------------------------------------------------------
-# get_serializer_for_schema() classmethod hook + descriptor identity (Critical-2)
+# get_serializer_for_schema() classmethod hook + descriptor identity
 # ---------------------------------------------------------------------------
 
 
 def test_get_serializer_for_schema_classmethod_override_drives_bind():
-    """A concrete ``get_serializer_for_schema()`` override drives validation + bind (Critical-2).
+    """A concrete ``get_serializer_for_schema()`` override drives validation + bind.
 
     ``CtxItemSerializer.get_fields()`` reads ``self.context``, so DEFAULT no-arg
     discovery raises - overriding the classmethod to return a stable, context-supplied

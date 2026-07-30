@@ -55,7 +55,7 @@ class Item(models.Model):
         on_delete=models.CASCADE,
     )
     # Optional file column for the form-mutation multipart ``Upload`` test surface
-    # (spec-038 Slice 4). Nullable / blank so existing ``seed_data`` /
+    # (spec-038). Nullable / blank so existing ``seed_data`` /
     # ``Item.objects.create`` calls are unaffected, and a plain ``FileField`` (not
     # ``ImageField``) since the routing proof needs no image dimensions / Pillow.
     # ``upload_to`` mirrors ``scalars/models.py::MediaSpecimen`` (SQLite-compatible -

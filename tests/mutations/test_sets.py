@@ -1,17 +1,17 @@
 """``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
 
-Covers the spec-036 Slice 2 surface (``django_strawberry_framework/mutations/sets.py``):
+Covers the spec-036 surface (``django_strawberry_framework/mutations/sets.py``):
 
 - the ``Meta`` validation matrix at class creation (unknown key; no-resolvable-model
   via ``_resolve_model``; bad / missing ``operation``; ``fields`` + ``exclude``
   both supplied; ``input_class`` not a ``@strawberry.input`` type; the
-  diverging-field-name rejection - the Slice-1-deferred half);
+  diverging-field-name rejection);
 - ``permission_classes`` defaulting to ``[DjangoModelPermission]`` (and an explicit
   override honored);
 - the ``_resolve_model`` overridable seam;
 - declaration registration (concrete registered, abstract base not, post-finalize
   rejected);
-- the phase-2.5 bind - the finalize-time materialize trigger Slice 1 deferred:
+- the phase-2.5 bind - the finalize-time materialize trigger:
   generated ``<Model>Input`` / ``<Model>PartialInput`` / ``<Name>Payload`` become
   module globals of ``mutations.inputs``, identical shapes dedupe, distinct shapes
   colliding on one generated name raise ``ConfigurationError``, and the
@@ -593,7 +593,7 @@ def test_late_declaration_after_finalize_raises():
 
 
 # ---------------------------------------------------------------------------
-# Phase-2.5 bind - the finalize-time materialize trigger (Slice-1-deferred)
+# Phase-2.5 bind - the finalize-time materialize trigger
 # ---------------------------------------------------------------------------
 
 
@@ -661,7 +661,7 @@ def test_bind_materializes_input_and_payload_globals():
     # The materialized class is also a real module global (the lazy-ref contract).
     assert inputs_module.ItemInput is _materialized_names["ItemInput"]
 
-    # The bind stashes forward-compat refs for Slice 3.
+    # The bind stashes forward-compat refs for the resolver pipeline.
     assert CreateItem._input_class is _materialized_names["ItemInput"]
     assert CreateItem._payload_type_name == "CreateItemPayload"
     assert DeleteItem._input_class is None  # delete is id-only
@@ -1353,7 +1353,7 @@ def test_bind_skips_relation_lock_for_non_relay_target():
 
 # ---------------------------------------------------------------------------
 # No-model-flavor-regression: the new seams default to today's model behavior
-# (spec-038 Slice 2 / DoD item 6). The 036-surface generalization relocated the
+# (spec-038 / DoD item 6). The 036-surface generalization relocated the
 # validation body into ``_validate_meta`` and added ``build_input`` /
 # ``input_type_name`` / ``input_module_path`` / ``resolve_*`` seams; these pin
 # that the MODEL flavor's behavior is byte-identical to before.
@@ -1417,7 +1417,7 @@ def test_model_flavor_input_seams_produce_today_defaults():
     assert CreateItem.input_module_path == INPUTS_MODULE_PATH
     # input_type_name returns the canonical model-input name (full shape).
     assert CreateItem.input_type_name(CreateItem._mutation_meta) == "ItemInput"
-    # DRY-1: the seam reads mutation_input_shape(...).type_name - full AND narrowed
+    # The seam reads mutation_input_shape(...).type_name - full AND narrowed
     # must match the descriptor the bind / build_mutation_input path uses, so the
     # field's lazy data: ref can never disagree with the materialized class name.
     create_meta = CreateItem._mutation_meta
@@ -1463,7 +1463,7 @@ def test_model_flavor_resolve_seams_delegate_to_resolver_entry_points():
 
     The seams delegate to ``mutations/resolvers.py::resolve_mutation_sync`` /
     ``resolve_mutation_async`` (today's model dispatch), so the model resolver path
-    is unchanged when Slice 3 rewires ``fields.py::_resolve`` to call them.
+    is unchanged now that ``fields.py::_resolve`` calls them.
     """
     assert "resolve_sync" in vars(DjangoMutation)
     assert "resolve_async" in vars(DjangoMutation)

@@ -1,6 +1,6 @@
 """Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
 
-Covers the spec-036 Slice 1 generation substrate
+Covers the spec-036 generation substrate
 (``django_strawberry_framework/mutations/inputs.py``):
 
 - ``editable_input_fields`` selection (pk / auto-timestamp / reverse exclusion,
@@ -22,7 +22,7 @@ Covers the spec-036 Slice 1 generation substrate
 System-under-test is the generator itself, run against the realistic products
 ``Item`` / ``Category`` FK fixtures plus minimal package-local fixture models for
 the M2M, non-Relay-target, and ``FileField`` / ``ImageField`` shapes products does
-not carry (spec-036 Slice 1 test plan; products is every-Relay and has no M2M /
+not carry (spec-036 test plan; products is every-Relay and has no M2M /
 file field).
 """
 
@@ -65,8 +65,8 @@ from django_strawberry_framework.scalars import Upload
 def _isolate_registry_and_ledger():
     """Reset registry + the mutation-input ledger so each test starts clean.
 
-    Slice 1 does not wire ``clear_mutation_input_namespace`` into
-    ``registry.clear()`` (that is Slice 2), so the ledger is cleared explicitly
+    ``clear_mutation_input_namespace`` is not wired into
+    ``registry.clear()`` here, so the ledger is cleared explicitly
     here. ``registry.clear()`` is still needed because the products
     ``DjangoType``s and the local fixtures register themselves on import /
     declaration.

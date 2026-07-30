@@ -34,7 +34,7 @@ cross-flavor ``036`` convention (a ``ModelChoiceField`` named ``category`` emits
 by FORM-field name (``ItemModelForm(data={"category": pk})``, never
 ``{"category_id": pk}``). So ``forms/inputs.py`` retains, per generated input
 field, a ``utils/inputs.py::InputFieldSpec`` (``target_name`` = form field name)
-that ``forms/resolvers.py`` (Slice 3) consults at decode to produce a
+that ``forms/resolvers.py`` consults at decode to produce a
 form-field-keyed payload, where ``kind`` is one of the four module constants
 below. This module owns only the kind constants + ``convert_form_field``; the
 reverse-map record type is single-sited on ``InputFieldSpec``.
@@ -56,7 +56,7 @@ from ..utils.converters import convert_with_mro
 # The four decode kinds the reverse-map record carries. Single-sourced in
 # ``utils/inputs.py`` (one conceptual enum, not a per-flavor
 # copy); re-exported here (the ``as`` form marks the explicit re-export) so the
-# Slice 3 resolver, the input builder, and the tests keep addressing them on
+# form resolver, the input builder, and the tests keep addressing them on
 # this module (spec-038 Decision 7 P1).
 from ..utils.inputs import FILE as FILE
 from ..utils.inputs import RELATION_MULTI as RELATION_MULTI

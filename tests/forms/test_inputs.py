@@ -1,6 +1,6 @@
 """Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput`` (spec-038).
 
-Covers ``django_strawberry_framework/forms/inputs.py`` (Slice 1 generation
+Covers ``django_strawberry_framework/forms/inputs.py`` (the generation
 substrate):
 
 - ``get_form_fields`` discovery from ``base_fields`` with NO instantiation (incl.
@@ -22,7 +22,7 @@ substrate):
 System-under-test is the generator run against the products ``Item`` / ``Category``
 FK fixtures plus package-local fixture models / forms for the M2M, Relay-target,
 choices-enum, ``Upload``, and plain-``Form``-only shapes products does not carry
-(the spec-038 Slice 1 test plan; products is non-Relay and has no M2M / file /
+(the spec-038 test plan; products is non-Relay and has no M2M / file /
 choices column). Mirrors the ``tests/mutations/test_inputs.py`` fixture posture.
 """
 
@@ -69,8 +69,8 @@ from django_strawberry_framework.utils.inputs import InputFieldSpec
 def _isolate_registry_and_ledger():
     """Reset registry + the form-input ledger so each test starts clean.
 
-    Slice 1 does not wire ``clear_form_input_namespace`` into ``registry.clear()``
-    (that is Slice 2), so the ledger is cleared explicitly. ``registry.clear()``
+    ``clear_form_input_namespace`` is not wired into ``registry.clear()``
+    here, so the ledger is cleared explicitly. ``registry.clear()``
     is still needed because the products ``DjangoType``s and local fixtures
     register themselves on import / declaration.
     """
@@ -467,7 +467,7 @@ def test_choices_modelform_field_resolves_to_read_side_enum():
 
     Proves the model-backed overlap routes through ``convert_scalar`` /
     ``convert_choices_to_enum`` (the symmetric wire contract), not a parallel
-    form-field table (spec-038 Decision 7 - the over-DRY-into-drift guard).
+    form-field table (spec-038 Decision 7 - the shared-table drift guard).
     """
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
@@ -641,7 +641,7 @@ def test_partial_guard_allows_dropping_model_backed_required_field():
 
 
 def test_exclude_naming_unknown_field_raises():
-    """``Meta.exclude`` naming a field not on the form raises the Slice-1 narrowing fail-loud."""
+    """``Meta.exclude`` naming a field not on the form raises the narrowing fail-loud."""
     with pytest.raises(ConfigurationError, match="unknown form field"):
         build_form_inputs(
             _item_model_form(),

@@ -272,13 +272,13 @@ class InputFieldSpec:
       for a serializer field whose ``source`` equals its declared name.
     - ``related_model`` - the Django target model a relation field decodes its
       id(s) against (``Category`` for a ``category`` / ``category_pk`` relation),
-      recorded at BUILD/BIND time so the Slice-3 decode never re-discovers the
+      recorded at BUILD/BIND time so the decode never re-discovers the
       related model per request. ``None`` for a non-relation
       (``scalar`` / ``file``) field.
     - ``nested_specs`` - the serializer-only nested-serializer axis: the
       ordered reverse-map ``InputFieldSpec`` tuple of the NESTED input's
       OWN fields, recorded for a ``nested_single`` / ``nested_multi`` field so the
-      Slice-3 decode recurses into the nested input dataclass with the SAME
+      the decode recurses into the nested input dataclass with the SAME
       per-field machinery (scalar / relation / file / deeper-nested) the top level
       uses. ``None`` for every non-nested field (including every form field). A
       tuple of frozen ``InputFieldSpec`` is hashable, so it participates in the
@@ -352,7 +352,7 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
     """Return the ``(cache, clear_fn)`` pair for a per-shape build cache.
 
     The promoted plumbing the mutation + form + serializer bind caches share:
-    each consuming slice calls this factory for a fresh ``(cache, clear_fn)``
+    each consuming subsystem calls this factory for a fresh ``(cache, clear_fn)``
     pair and registers ``clear_fn`` into ``registry.clear()``. This single-sites
     that pair:
 
@@ -361,13 +361,13 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
       forms / mutation flavors; the ``SerializerInputShape`` descriptor for the
       serializer flavor) so identical shapes build once.
     - ``clear_fn()`` - empties the cache (registered into ``registry.clear()`` via
-      ``register_subsystem_clear`` by the CONSUMING slice, not here).
+      ``register_subsystem_clear`` by the CONSUMING subsystem, not here).
 
-    Pure plumbing; no registration. Slice 1 authors the helper (and unit-tests
+    Pure plumbing; no registration. This module owns the helper (and unit-tests
     it); the serializer cache CONSUMER (``rest_framework/sets.py``) and the
-    ``forms/sets.py`` re-point are Slice 2 (spec-039 SR-1 - the helper is
+    ``forms/sets.py`` re-point through it (the helper is
     authored here, the serializer cache is consumed there, matching the spec-038
-    "generators in the inputs slice, cache consumer in the sets slice" split).
+    split: generators in ``inputs.py``, cache consumer in ``sets.py``).
     """
     cache: dict[Any, Any] = {}
 

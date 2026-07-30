@@ -1,13 +1,14 @@
-"""DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
+"""DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039).
 
 Pure, finalizer-free machinery: given a DRF ``Serializer`` / ``ModelSerializer``
 class + an effective field set (after ``Meta.fields`` / ``Meta.exclude``), it
 builds the ``<Serializer>Input`` (create) / ``<Serializer>PartialInput`` (update)
 ``@strawberry.input`` classes from the serializer's SCHEMA-TIME field set. No
-metaclass, no resolver, no finalizer wiring lives here - those are Slice 2 (the
-``SerializerMutation`` base + the phase-2.5 bind) and Slice 3 (the resolver
-pipeline). The generators here are callable and unit-testable in isolation;
-Slice 2 calls them from the bind. This is exactly the role ``forms/inputs.py``
+metaclass, no resolver, no finalizer wiring lives here - the
+``SerializerMutation`` base + the phase-2.5 bind live in ``sets.py``, the
+resolver pipeline in ``resolvers.py``. The generators here are callable and
+unit-testable in isolation; the bind calls them. This is exactly the role
+``forms/inputs.py``
 plays for the form flavor.
 
 Generated input classes MUST become real globals of this module because
@@ -96,7 +97,7 @@ SERIALIZER_INPUTS_MODULE_PATH: str = "django_strawberry_framework.rest_framework
 # ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is the
 # ``name -> input_class`` ledger ``materialize_serializer_input_class`` writes;
-# ``registry.clear()`` (wired in Slice 2) routes through
+# ``registry.clear()`` routes through
 # ``clear_serializer_input_namespace`` to reset it. The public ``materialize_*`` /
 # ``clear_*`` names below stay thin wrappers so callers + tests address them
 # unchanged.
@@ -117,7 +118,7 @@ def materialize_serializer_input_class(name: str, input_cls: type) -> None:
     no-op, so identical descriptors dedupe), and the distinct-class collision
     raise (a second, DIFFERENT class under one name raises ``ConfigurationError``).
 
-    Defined here; called by Slice 2's phase-2.5 bind. On a distinct-class name COLLISION the
+    Defined here; called by the phase-2.5 bind. On a distinct-class name COLLISION the
     raised message is ENRICHED with the shape registered under ``name``
     (``describe_serializer_input``), so a clash between two descriptor-derived shapes is
     diagnosable (which serializer / operation / fields produced the contested name).
@@ -145,7 +146,7 @@ def clear_serializer_input_namespace() -> None:
     holder. Like ``clear_mutation_input_namespace`` (and unlike the set families'
     clear), this resets only the module-level ledger it owns - the serializer
     subsystem has no arguments-factory cache and no per-set ``_lifecycle`` binding
-    state. Wired into ``registry.clear()`` in Slice 2 (spec-039). Also resets the
+    state. Wired into ``registry.clear()`` (spec-039). Also resets the
     shape debug registry (same build lifecycle).
     """
     _clear_input_namespace()
@@ -229,7 +230,7 @@ def get_serializer_for_schema(
     surface here as a ``ConfigurationError`` pointing at the
     ``get_serializer_for_schema()`` override contract.
 
-    A serializer whose field set varies per request must override the Slice-2
+    A serializer whose field set varies per request must override the
     ``get_serializer_for_schema()`` classmethod hook to return a stable,
     request-independent field map; this module-level function is the DEFAULT the
     hook delegates to. The returned dict's fields are BOUND (``field_name`` /
@@ -448,7 +449,7 @@ def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], n
     DRF serializers carry their own ``Meta`` (``model`` / ``fields`` / ``exclude``);
     the package reads only the backing ``model`` from it (the narrowing /
     ``optional_fields`` keys are the MUTATION's ``Meta``, not the serializer's -
-    spec-039 Critical-1). A serializer with no ``Meta`` (a bare ``Serializer``)
+    spec-039). A serializer with no ``Meta`` (a bare ``Serializer``)
     yields ``None`` for every key.
     """
     meta = getattr(serializer_class, "Meta", None)
@@ -649,7 +650,7 @@ def resolve_optional_fields(
 ) -> frozenset[str]:
     """Return the normalized ``optional_fields`` set (create-only requiredness override).
 
-    The mutation's ``Meta.optional_fields`` (spec-039 Decision 7 / Critical-1 - the
+    The mutation's ``Meta.optional_fields`` (spec-039 Decision 7 - the
     PUBLIC key lives on ``SerializerMutation.Meta``, NOT the serializer's own
     ``Meta``) forces the named create fields optional regardless of
     ``field.required``. ``optional_fields`` is the consumer value (or the
@@ -686,7 +687,7 @@ def resolve_injected_field_specs(
     ``Meta.injected_fields`` names required schema-time fields a ``get_serializer_injected_data``
     override supplies (they are NARROWED OUT of the generated input, so their specs are NOT in
     ``_input_field_specs``). This resolves their schema-time specs from the SAME field map the
-    input build used, so the Slice-3 resolver can hold each injected field to the SAME
+    input build used, so the resolver can hold each injected field to the SAME
     present / writable / source / kind / relation-model runtime-agreement contract an
     input-exposed field gets - proving the runtime serializer will actually validate + save the
     injected value, not merely that its key is present in ``data``. ``None`` / empty yields
@@ -744,7 +745,7 @@ class SerializerInputShape:
     descriptor-derived name, never the canonical one - and a descriptor-derived name
     for any narrowed / ``optional_fields`` divergence). ``cache_key`` is the
     descriptor itself (it is frozen + hashable), the ``make_shape_build_cache`` key
-    the Slice-2 bind dedupes on.
+    the bind dedupes on.
     """
 
     serializer_class: type[serializers.BaseSerializer]
@@ -1000,7 +1001,7 @@ def guard_create_required_serializer_fields(
     dropped required field NOT declared injected STILL raises. The guard always runs on create,
     and declared injection is its only field-level subtraction.
 
-    Factored out so the Slice-2 bind's per-shape build cache can run it PER
+    Factored out so the bind's per-shape build cache can run it PER
     mutation DECLARATION rather than only on the first build of a given shape: the
     cache key (the ``SerializerInputShape`` descriptor) excludes the injection
     state, so a mutation that materializes a shape FIRST must not suppress the guard
@@ -1305,7 +1306,7 @@ def _resolve_nested_field(
     ``build_serializer_input_class`` the top level uses. The nested input is deduped +
     materialized (so identical nested shapes share one type), and the returned
     ``InputFieldSpec`` records ``nested_specs`` (the nested input's own reverse map) so the
-    Slice-3 decode recurses with the same per-field machinery. The annotation is the nested
+    The decode recurses with the same per-field machinery. The annotation is the nested
     input class (single) or ``list[<nested input>]`` (many); the caller applies the
     required / ``allow_null`` widening. The cycle / depth guard runs BEFORE the recursion.
 
@@ -1457,7 +1458,7 @@ def build_serializer_input_class(
     ``operation_kind`` is ``CREATE`` (each field's requiredness from
     ``field.required`` minus the ``optional_fields`` override) or ``PARTIAL`` (the
     update-shaped input - every field optional). ``optional_fields`` is the
-    mutation's ``Meta.optional_fields`` value (spec-039 Critical-1 - the PUBLIC key
+    mutation's ``Meta.optional_fields`` value (spec-039 - the PUBLIC key
     lives on the mutation, NOT the serializer's own ``Meta``); ``field_map`` is the
     ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
     default module discovery when called in isolation).
@@ -1479,7 +1480,7 @@ def build_serializer_input_class(
 
     Returns ``(input_cls, shape)`` - the UNMATERIALIZED ``@strawberry.input`` class
     and the ``SerializerInputShape`` descriptor (which carries the reverse-map
-    field specs + the generated name). Slice 2's phase-2.5 bind calls
+    field specs + the generated name). The phase-2.5 bind calls
     ``materialize_serializer_input_class`` to pin the class as a module global.
     Any NESTED input classes are deduped + materialized during the walk.
     """
@@ -1602,7 +1603,7 @@ def build_serializer_inputs(
     Single entry point producing ``(<Serializer>Input, create_shape,
     <Serializer>PartialInput, partial_shape)``. The create input honors
     ``field.required`` minus ``optional_fields`` (the mutation's
-    ``Meta.optional_fields`` value, spec-039 Critical-1); the partial input is
+    ``Meta.optional_fields`` value, spec-039); the partial input is
     always every-field-optional. ``field_map`` is the
     ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
     default module discovery when called in isolation).

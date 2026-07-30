@@ -741,8 +741,8 @@ def _relation_connection_to_attr(relation_field_name: str) -> str:
 
     ``_dst_<field>_connection``, keyed on the relation FIELD NAME (not the
     accessor). The single source for this literal across the walker (plan
-    site), the finalizer (resolver precompute, Slice 2), and the connection
-    resolver probe (Slice 2), so the ``_dst_`` namespace string is never
+    site), the finalizer (resolver precompute), and the connection
+    resolver probe, so the ``_dst_`` namespace string is never
     duplicated as a scattered f-string (Decision 4 / Decision 5).
     """
     return f"_dst_{relation_field_name}_connection"
@@ -1128,7 +1128,7 @@ def plan_connection_relation(
 
     Orchestrates the windowed-prefetch plan (spec-033 Decision 4); leaves the
     selection UNPLANNED (no ``Prefetch``, no ``planned_resolver_keys`` entry) for
-    each Decision-6 fallback shape so Slice 4's strictness contract still sees
+    each Decision-6 fallback shape so the strictness contract still sees
     the per-parent access. Delegates child-queryset construction to the same
     helpers the list path uses (``_build_prefetch_child_queryset`` /
     ``_build_child_queryset``); the only addition is the window applied after
@@ -1274,7 +1274,7 @@ def plan_connection_relation(
             # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
             # connection pipeline runs per-parent and raises its OWN cursor/pagination
             # validation error at the field. But RECORD the resolver identities so the
-            # Slice-4 strictness contract treats the field as accounted-for and does
+            # strictness contract treats the field as accounted-for and does
             # NOT preempt that error with a spurious "Unplanned N+1" OptimizerError
             # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
             # other Decision-6 fallback shapes (sidecar, hint SKIP,
@@ -1531,7 +1531,7 @@ def plan_connection_relation(
     # merged UNION children and are shared by every per-key window, so one
     # absorb covers all planned keys.
     plan.merge_metadata_from(sub_plan)
-    # (h) Record resolver identities so strictness (Slice 4) sees the field as
+    # (h) Record resolver identities so strictness sees the field as
     # planned - all identities for the shared window; only the planned keys'
     # identities under the divergent scheme (an unplanned sibling alias stays
     # strictness-visible as a real per-parent access).

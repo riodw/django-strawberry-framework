@@ -1,4 +1,4 @@
-"""``DjangoMutationField`` factory tests (spec-036 Slice 3).
+"""``DjangoMutationField`` factory tests (spec-036).
 
 System-under-test is ``mutations/fields.py``: the per-operation argument-signature
 synthesis, the no-class-attribute-annotation form typed via a ``strawberry.lazy``
@@ -311,14 +311,14 @@ def test_inherited_meta_target_rejected_at_construction():
 
 
 # ---------------------------------------------------------------------------
-# Three-axis generalization (spec-038 Slice 3)
+# Three-axis generalization (spec-038)
 # ---------------------------------------------------------------------------
 
 
 def test_generalized_target_accepts_modelform_and_plain_form_family():
     """``DjangoMutationField`` accepts both form-mutation flavors (the duck-typed target check).
 
-    The Slice-3 generalization recognizes the mutation / form family by the
+    The generalization recognizes the mutation / form family by the
     duck-typed ``_mutation_meta`` + ``resolve_sync`` / ``resolve_async`` +
     ``input_type_name`` / ``input_module_path`` protocol, NOT
     ``issubclass(DjangoMutation)`` - so a ``DjangoModelFormMutation`` (a
@@ -391,8 +391,8 @@ def test_model_flavor_dispatch_unchanged():
 def test_django_mutation_field_generalizes_to_serializer_mutation():
     """`DjangoMutationField` accepts a `SerializerMutation` and routes its resolver seam (Decision 5).
 
-    The spec-038-generalized factory was "for the 0.0.13 serializer flavor"; Slice 3
-    VERIFIES the generalization holds with NO `mutations/fields.py` edit: a create
+    The spec-038-generalized factory was written "for the 0.0.13 serializer flavor";
+    this VERIFIES the generalization holds with NO `mutations/fields.py` edit: a create
     `SerializerMutation` over the products `ItemSerializer`, wrapped with
     `DjangoMutationField`, finalizes and exposes the `data: ItemSerializerInput!`
     argument (the lazy ref resolves the serializer-derived input in

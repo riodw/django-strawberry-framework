@@ -3,7 +3,7 @@
 Spec: ``docs/spec-030-connection_field-0_0_9.md``.
 Target release: ``0.0.9``.
 
-Slice 1's surface (Decision 3 / Decision 4):
+The connection-class surface (Decision 3 / Decision 4):
 
 - ``DjangoConnection[NodeType]`` - a generic ``strawberry.relay.ListConnection``
   subclass that owns the package's ``first`` + ``last`` mutual-exclusivity
@@ -14,14 +14,14 @@ Slice 1's surface (Decision 3 / Decision 4):
 - ``_connection_type_for(target_type)`` - resolves and caches the connection
   class for a node type: always a generated concrete ``<TypeName>Connection``
   subclass of ``DjangoConnection[target_type]``; the ``totalCount`` opt-in only
-  controls whether the ``total_count`` members are added (spec-032 Slice 4 -
+  controls whether the ``total_count`` members are added (spec-032 -
   a generic ALIAS handed to the schema loses the ``resolve_connection``
   override at Strawberry's generic specialization, so the bare path must be
   concrete too). The opt-in is read from ``definition.connection`` (the
   ``Meta.connection`` value stored on ``DjangoTypeDefinition``), never
   re-parsed from ``Meta``.
 
-Slice 2's surface (Decision 5 / Decision 6 / Decision 7 / Decision 10):
+The window-pagination surface (Decision 5 / Decision 6 / Decision 7 / Decision 10):
 
 - ``DjangoConnectionField(target_type, *, resolver=None, ...)`` - the PascalCase
   factory: validates the target (the four ``DjangoListField``-style guards plus
@@ -356,7 +356,7 @@ def _resolve_from_window(
     read below).
 
     Cursor math is the positional offset cursor ``_dst_row_number - 1`` for
-    EVERY window, including the ``last``-only reversed one: Slice 1's
+    EVERY window, including the ``last``-only reversed one:
     ``apply_window_pagination`` keeps ``_dst_row_number`` as the FORWARD row
     number and uses a separate ``_dst_row_number_reversed`` only for the
     plan-time ``__lte`` row filter, so the rows arrive in forward order with
@@ -364,7 +364,7 @@ def _resolve_from_window(
     rows). The forward absolute-offset cursor therefore matches the pipeline's
     ``ListConnection`` cursors directly - no ``_dst_total_count - row_number``
     re-derivation (that is the scheme an earlier spec revision described;
-    neither upstream ``strawberry-django`` nor Slice 1's port overwrites the
+    neither upstream ``strawberry-django`` nor this package's port overwrites the
     forward row number - both keep it forward and use a separate reversed
     annotation only for the plan-time ``__lte`` filter). The cursor
     PREFIX / base64 stay owned by the edge class - the fast path passes only the
@@ -1500,7 +1500,7 @@ def _build_total_count_connection(target_type: type) -> type:
 def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
     """Raise ``GraphQLError`` when ``totalCount`` is selected over a non-queryset.
 
-    The M1 carry-forward (Decision 7): ``totalCount`` renders ``Int!``, and a
+    Decision 7: ``totalCount`` renders ``Int!``, and a
     non-queryset iterable cannot be ``.count()``-ed. Rather than skip the count
     and let the ``Int!`` field return ``None`` (which surfaces as the engine's
     opaque ``Cannot return null for non-nullable field ...totalCount`` violation),
@@ -1569,8 +1569,8 @@ def _connection_type_for(target_type: type) -> type:
         # ``resolve_connection`` override - Strawberry's schema-build generic
         # specialization copies the alias into a plain specialized class whose
         # ``resolve_connection`` is ``ListConnection``'s, so the ``first`` +
-        # ``last`` guard never ran through-schema (the spec-032 Slice-4
-        # discovered bug). A concrete class is used as-is by the schema build,
+        # ``last`` guard never ran through-schema (the bug spec-032
+        # records). A concrete class is used as-is by the schema build,
         # so the override survives. The description is read from the parent's
         # strawberry definition (never copied as a package literal), preserving
         # the previous bare-alias SDL byte-for-byte.

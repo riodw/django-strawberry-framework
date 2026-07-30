@@ -165,8 +165,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         so ``__enter__`` here, the pipeline's queries, and ``__exit__`` below all
         share one thread and one Django connection. The completion ``await``
         happens between them on the event loop; the transaction stays open on the
-        worker's (idle) connection meanwhile, exactly the verified-prototype
-        shape.
+        worker's (idle) connection meanwhile.
         """
         errors_before = len(self._execution_errors())
         atomic = transaction.atomic(using=alias)

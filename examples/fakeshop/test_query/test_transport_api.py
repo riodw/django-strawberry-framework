@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-3).
+"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046).
 
 The HTTP-boundary tier: every proof that Django's real request lifecycle
 executes on the package's GraphQL HTTP route now that ``routers.py`` no longer
@@ -23,9 +23,9 @@ or understated ``Content-Length`` can and cannot do on each transport, a
 cumulative multi-fragment body, malformed JSON on both sides of the cap,
 multipart, the parse-and-execution witnesses, which of the two ceilings fired,
 and the three precedence rungs. Row 18 (the py3.10 / Django 5.2 floor) is a
-maintainer-invoked run of this same file, not a separate row.
+separately-invoked run of this same file, not a separate row.
 
-Test plan rows 19 / 22 / 23 add one more async row (Slice 3). The strict UTF-8
+Test plan rows 19 / 22 / 23 add one more async row. The strict UTF-8
 wire contract (Decision 9) is enforced in
 ``views.py::_RequestBodyBoundaryMixin.parse_json``, which both views inherit, so
 the async transport must reject UTF-16 and a leading UTF-8 BOM exactly as the sync
@@ -201,7 +201,7 @@ async def _async_graphql_view(request, *args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Slice-2 scaffolding: three more mounts of the package view, differing only in
+# Body-cap scaffolding: three more mounts of the package view, differing only in
 # their ``max_request_body_bytes``. ``_TINY_CAP`` is small enough that a
 # hand-sized operation crosses it, so no row needs a megabyte-scale payload
 # except the one whose subject IS the 1 MiB default.
@@ -1037,7 +1037,7 @@ def test_the_package_view_serves_an_ordinary_graphql_response():
 
 
 # ===========================================================================
-# Slice 2: the cumulative request-body cap. Test-plan rows 13-18.
+# The cumulative request-body cap. Test-plan rows 13-18.
 # ===========================================================================
 
 
@@ -1202,7 +1202,7 @@ def test_malformed_json_over_the_cap_gets_413_and_under_it_still_gets_400():
     length, which is an independent witness that no parse happens above the cap:
     a ``400`` with upstream's parse message can only come from a parse that
     executed, so its absence in the over-cap direction is meaningful. The
-    under-cap direction also pins that Slice 2 did not disturb the shipped
+    under-cap direction also pins that the cap did not disturb the shipped
     malformed-body contract.
     """
     seed_data(1)

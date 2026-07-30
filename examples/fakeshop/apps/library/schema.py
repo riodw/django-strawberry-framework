@@ -161,7 +161,7 @@ class NullabilityOverrideBookType(DjangoType):
     ``nullable_overrides = ("title",)`` flips the ``NOT NULL`` ``title`` column
     from its native ``String!`` to ``String``; ``required_overrides = ("subtitle",)``
     flips the ``null=True`` ``subtitle`` column from its native ``String`` to
-    ``String!`` - both without touching the Django column (spec-029 Slice 3).
+    ``String!`` - both without touching the Django column (spec-029).
     ``Meta.primary = False`` keeps ``BookType`` the relation target; this type
     stays reverse-discoverable via the registry. The dedicated root resolver
     (``Query.all_library_nullability_override_books``) returns only rows with a
@@ -531,7 +531,7 @@ class Query:
         # ``String!`` on this type, but the column is ``null=True`` and fakeshop
         # seeds ``subtitle=None`` rows - so exclude null-subtitle rows to keep
         # the non-null GraphQL contract true at the boundary, ordered by id for
-        # deterministic responses (spec-029 Slice 3 / Edge cases).
+        # deterministic responses (spec-029 / Edge cases).
         return models.Book.objects.exclude(subtitle__isnull=True).order_by("id")
 
     @strawberry.field
@@ -548,9 +548,9 @@ class Query:
             queryset = orders_genre.GenreOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    # Relay connection field over the Relay-Node-shaped ``GenreType`` (spec-030
-    # Slice 4 / Decision 14). Additive alongside the ``all_library_genres`` list
-    # resolver above so both surfaces stay tested; ``filter:`` / ``orderBy:`` and
+    # Relay connection field over the Relay-Node-shaped ``GenreType``
+    # (spec-030 / Decision 14). Additive alongside the ``all_library_genres``
+    # list resolver above so both surfaces stay tested; ``filter:`` / ``orderBy:`` and
     # the opt-in ``totalCount`` are all Meta-derived (Decision 5) from
     # ``GenreType.Meta`` (``filterset_class`` / ``orderset_class`` /
     # ``connection = {"total_count": True}``). Imported from the public surface.
@@ -799,7 +799,7 @@ class CreateShelfViaSchemaHookSerializer(SerializerMutation):
 
     ``TenantShelfSerializer`` requires a ``tenant`` constructor kwarg, so DRF's default
     no-arg schema discovery fails. The consumer overrides ``get_serializer_for_schema()``
-    to supply a stable, request-independent schema-time field map (spec-039 Critical-2) and
+    to supply a stable, request-independent schema-time field map (spec-039) and
     overrides ``get_serializer_kwargs`` to inject the runtime ``tenant`` (the actor's
     username). The live test proves the schema-time hook and the runtime serializer
     construction AGREE end to end over ``/graphql/``. The generated input takes a

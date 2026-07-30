@@ -62,8 +62,8 @@ def test_typed_filter_drops_input_type_property():
     """The Graphene-port `input_type` property is intentionally dropped.
 
     The Strawberry-side annotation derives from the resolved filter
-    instance at materialization time via `convert_filter_to_input_annotation`
-    (Slice 2), so the Graphene-only property has no role here.
+    instance at materialization time via `convert_filter_to_input_annotation`,
+    so the Graphene-only property has no role here.
     """
     f = TypedFilter()
     assert not hasattr(f, "input_type")

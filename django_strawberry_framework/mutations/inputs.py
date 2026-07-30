@@ -1,20 +1,20 @@
 """Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
 
-This is the generation substrate for the write side (spec-036 Slice 1). It is
+This is the generation substrate for the write side (spec-036). It is
 pure, finalizer-free machinery: given a Django model + an operation kind + an
 effective field set + the resolved primary ``DjangoType``, it produces the
 ``<Model>Input`` / ``<Model>PartialInput`` ``@strawberry.input`` classes, the
 public ``FieldError`` ``@strawberry.type``, and a generated ``<Name>Payload``
 ``@strawberry.type``. No metaclass, no resolver, no finalizer wiring lives here
-- those are Slice 2 (``sets.py`` + the phase-2.5 bind) and Slice 3
-(``resolvers.py`` + ``fields.py``). The generators here are callable and
-unit-testable in isolation; Slice 2 calls them from the bind.
+- those live in ``sets.py`` (the base + the phase-2.5 bind) and in
+``resolvers.py`` + ``fields.py``. The generators here are callable and
+unit-testable in isolation; the bind calls them.
 
 Generated input classes MUST become real globals of this module because
 ``strawberry.lazy("django_strawberry_framework.mutations.inputs")`` resolves
 through ``module.__dict__`` (the same contract ``filters/inputs.py`` /
 ``orders/inputs.py`` rely on). The ``materialize_mutation_input_class`` /
-``clear_mutation_input_namespace`` pair owns that lifecycle; Slice 2's
+``clear_mutation_input_namespace`` pair owns that lifecycle; the
 phase-2.5 bind is the only caller of ``materialize_mutation_input_class`` and
 ``registry.clear()`` is the only caller of ``clear_mutation_input_namespace``.
 
@@ -68,7 +68,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.mutations.inputs"
 
 # The non-field error key Django's ``full_clean`` uses for model-wide
 # (multi-field-constraint) errors (Django's ``"__all__"`` sentinel). Pinned here
-# as the single source of truth so Slice 3's resolver keys a
+# as the single source of truth so the resolver keys a
 # multi-field-constraint ``ValidationError`` to the same sentinel the read of
 # ``error_dict`` produces.
 NON_FIELD_ERROR_KEY: str = NON_FIELD_ERRORS
@@ -76,7 +76,7 @@ NON_FIELD_ERROR_KEY: str = NON_FIELD_ERRORS
 # Operation kinds the input GENERATOR understands. ``CREATE`` honors the
 # per-field required rule; ``PARTIAL`` forces every field optional (the
 # ``update`` shape). The mutation ``operation`` ``Meta`` value ("create" /
-# "update" / "delete") is Slice 2's namespace; the generator only distinguishes
+# "update" / "delete") is ``sets.py``'s namespace; the generator only distinguishes
 # "build a create input" from "build a partial input".
 CREATE: str = "create"
 PARTIAL: str = "partial"
@@ -86,7 +86,7 @@ PARTIAL: str = "partial"
 class FieldError:
     """A field-keyed validation error in the shared mutation error envelope.
 
-    The single public symbol this slice exports. Every mutation flavor returns
+    The single public symbol this module exports. Every mutation flavor returns
     ``errors: list[FieldError]`` on its generated payload; a ``FieldError``
     carries a ``field`` path (a model field name, or the ``"__all__"`` sentinel
     for a model-wide / multi-field-constraint error) and the list of human
@@ -123,7 +123,7 @@ class FieldError:
 # ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is
 # the ``name -> input_class`` ledger ``materialize_mutation_input_class`` writes;
-# ``registry.clear()`` (wired in Slice 2) routes through
+# ``registry.clear()`` routes through
 # ``clear_mutation_input_namespace`` to reset it. Module globals stay parked per
 # the shared parked-globals lifecycle. The public ``materialize_*`` / ``clear_*``
 # names below stay thin wrappers so callers + tests address them unchanged.
@@ -157,7 +157,7 @@ def materialize_mutation_input_class(name: str, input_cls: type) -> None:
     idempotent ``(name, input_cls)`` clause, and the distinct-class name collision
     raise.
 
-    Defined here; called only by Slice 2's phase-2.5 bind.
+    Defined here; called only by the phase-2.5 bind.
     """
     _audit_mutation_input_surface(name, input_cls)
     _materialize_input(name, input_cls)
@@ -180,7 +180,7 @@ def clear_mutation_input_namespace() -> None:
     ``utils/inputs.py::clear_generated_input_namespace``: that helper resets an
     arguments-factory cache and per-set ``_lifecycle`` binding state, and the
     mutation subsystem has neither (input fields come from one model's columns,
-    not a related-set graph). Slice 2 wires this into ``registry.clear()``.
+    not a related-set graph). The bind wires this into ``registry.clear()``.
     """
     _clear_input_namespace()
 
@@ -309,14 +309,14 @@ def relation_input_annotation(
     wire-input the filter side uses for a GlobalID-shaped field), else the
     related model's raw pk scalar via ``scalar_for_field``.
 
-    The python attr is ``<field.name>_id`` for FK / OneToOne so Slice 3's
+    The python attr is ``<field.name>_id`` for FK / OneToOne so the
     resolver maps it back to the column with no per-field declaration (and a
     custom ``input_class`` must follow the same scheme - spec-036). The
     GraphQL alias camel-cases that attr (``category_id`` -> ``categoryId``). M2M
     keeps the plain field name (``genres``) - it is already a collection of ids.
 
     ``related_primary_type`` is the resolved primary ``DjangoType`` of the
-    related model (the Slice-2 bind looks it up via ``registry.get`` after the
+    related model (the bind looks it up via ``registry.get`` after the
     registry is fully populated); ``None`` means no primary is registered, in
     which case the raw pk scalar is used.
     """
@@ -532,7 +532,7 @@ def build_mutation_input(
     ``(model, operation_kind, fields, exclude)``. Either way the selected set and
     the generated name come from the SAME ``mutation_input_shape`` computation.
 
-    Returns an UNMATERIALIZED ``@strawberry.input`` class. Slice 2's phase-2.5
+    Returns an UNMATERIALIZED ``@strawberry.input`` class. The phase-2.5
     bind calls ``materialize_mutation_input_class`` to pin it as a module global.
     """
     del primary_type  # reserved: relation-id strategy resolves the RELATED primary itself.
@@ -577,7 +577,7 @@ def build_mutation_input(
             continue
 
         # M2M is ALWAYS optional, even in the create input: a parent row cannot
-        # carry M2M rows until it has a pk, and Slice 3's resolver contract is
+        # carry M2M rows until it has a pk, and the resolver contract is
         # "replace-on-provide / clear-on-empty / unchanged-on-omit" -
         # which requires the M2M input to be omittable. The per-field required
         # rule (``input_field_required``) is meaningless for M2M (a forward M2M
@@ -635,7 +635,7 @@ def payload_object_slot(primary_type: type) -> str:
     """Return the uniform payload object-slot name for a primary type.
 
     ``"node"`` for a Relay-Node-shaped primary type, ``"result"`` otherwise.
-    Single-sited so the payload builder and Slice 3's resolver agree on the slot
+    Single-sited so the payload builder and the resolver agree on the slot
     without re-deriving the Relay check.
     """
     return "node" if implements_relay_node(primary_type) else "result"
@@ -650,7 +650,7 @@ def build_payload_type(
     """Build the ``<Name>Payload`` ``@strawberry.type`` wrapper (spec-036 Decision 7 / spec-038 Decision 6).
 
     Two payload shapes from ONE builder + ONE materialize ledger (the
-    single-source DRY choice, spec-038 Decision 6):
+    single-source choice, spec-038 Decision 6):
 
     - **model-backed** (``object_type`` is non-``None``): ``object_slot`` is the
       UNIFORM object-field name from ``payload_object_slot(primary_type)`` -
@@ -660,10 +660,10 @@ def build_payload_type(
       (nullable - ``null`` on a validation failure) and ``errors:
       list[FieldError]`` (the non-null list of non-null ``FieldError`` the spec
       writes ``[FieldError!]!``). ``object_type`` is referenced directly: by the
-      time Slice 2's phase-2.5 bind calls this, the read ``DjangoType`` is a real
+      time the phase-2.5 bind calls this, the read ``DjangoType`` is a real
       class, so a direct ``object_type | None`` annotation resolves at schema build
       (the genuine import-time forward-ref hazard is the ``DjangoMutationField``
-      resolver return, Slice 3's concern).
+      resolver return).
     - **model-less** (``object_type`` is ``None``, the plain ``DjangoFormMutation``
       flavor, spec-038 Decision 6): NO object slot at all - a model-less mutation
       has no ``DjangoType`` to return. Fields: ``ok: bool`` (``Boolean!`` - the

@@ -447,7 +447,7 @@ def test_upload_is_strawberry_builtin_re_export_not_a_wrapper():
 
 
 def test_upload_is_importable_from_top_level_scalars_module():
-    """``Upload`` is importable from ``django_strawberry_framework.scalars`` (root export is Slice 3)."""
+    """``Upload`` is importable from ``django_strawberry_framework.scalars``."""
     from django_strawberry_framework.scalars import Upload as UploadFromScalars
 
     assert UploadFromScalars is strawberry.file_uploads.scalars.Upload

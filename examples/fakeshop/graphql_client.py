@@ -6,7 +6,7 @@ exact-data assertions. Superset signatures keep simple callers terse while
 letting variable-driven and custom-client tests use the same envelope.
 
 The JSON path now routes through the package's own
-:class:`django_strawberry_framework.testing.TestClient` (spec-043 Slice 2), so
+:class:`django_strawberry_framework.testing.TestClient` (spec-043), so
 every live suite's ordinary GraphQL post shares the one body-builder / decode
 path instead of re-spelling the ``json.dumps`` + content-type + envelope-split
 boilerplate. The functions keep their raw-``HttpResponse`` return contract (the
@@ -44,7 +44,7 @@ def post_graphql_raw(body: str | bytes, *, client: Client | None = None):
     Deliberately a raw ``client.post`` (not ``TestClient``): the subject is the
     wire envelope itself - a hand-built or malformed body - which the client's
     body-builder would otherwise replace. This is the documented raw-envelope
-    exemption (spec-043 Slice 2).
+    exemption (spec-043).
     """
     graphql_client = client or Client()
     return graphql_client.post(

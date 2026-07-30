@@ -619,8 +619,8 @@ class _RequestBodyBoundaryMixin:
         live in ``_strawberry_patches.py::_patched_parse_json``, which made a
         permanent package security contract share the lifecycle - and the
         ``APPLY_UPSTREAM_PATCHES`` kill switch - of temporary workarounds for
-        upstream bugs. A consumer disabling those workarounds (or a future
-        maintainer deleting them once upstream fixes them) silently restored
+        upstream bugs. A consumer disabling those workarounds (or a later change
+        deleting them once upstream fixes them) silently restored
         multi-encoding request bodies. Ownership now follows lifecycle: the patch
         module keeps translating the ``UnicodeDecodeError`` upstream's own
         ``except json.JSONDecodeError`` misses, which is a bug fix and stays

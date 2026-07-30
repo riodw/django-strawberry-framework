@@ -7,7 +7,7 @@ spec-039 the form converter spelled this walk free-standing; the serializer
 converter would have been the second copy of the subtle no-silent-catch-all
 contract. Promoting the skeleton single-sites it so the GOAL-mandated
 "unmapped field RAISES, never silently becomes ``String``" contract is written
-once (spec-039 Decision 4 / the Cross-flavor DRY obligation P1.4).
+once (spec-039 Decision 4).
 
 What lives here is mechanics only. Each caller supplies its own flavor-specific
 prechecks (the ``isinstance`` kind detections a relation / file / multi-choice

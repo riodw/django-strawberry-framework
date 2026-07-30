@@ -1345,7 +1345,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                         row,
                         routable=capable and row.eligible and row.provenance.generation_capable,
                     )
-            # TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2):
+            # TODO(spec-027-filters-0_0_8 Meta.search_fields):
             # wire `construct_search(all_filters)` from
             # `django_strawberry_framework.filters.inputs.LOOKUP_PREFIXES` here.
 
@@ -1373,8 +1373,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             return all_filters
 
         # The class-level expansion cache + reentry-guard skeleton is shared with
-        # `OrderSet.get_fields` through `sets_mixins.expanded_once` (the 0.0.9 DRY
-        # pass). `on_reentry` returns the unexpanded `super().get_filters()`
+        # `OrderSet.get_fields` through `sets_mixins.expanded_once`.
+        # `on_reentry` returns the unexpanded `super().get_filters()`
         # when this class is already mid-expansion, so a self-referential
         # `RelatedFilter` neither blows the stack nor caches a half-built
         # result.
@@ -1491,7 +1491,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Pick the Relay-aware filter for Relay-Node-shaped relation targets.
 
         Decision-4 conditional. Resolves the relation target via
-        `_owner_definition.related_target_for(field_name)` (Slice-3
+        `_owner_definition.related_target_for(field_name)` (the owner
         binding) and falls back to `registry.primary_for(target_model)`
         when the owner has not been bound yet. A target type implementing
         `relay.Node` produces `GlobalIDMultipleChoiceFilter` for

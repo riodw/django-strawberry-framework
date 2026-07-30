@@ -1,4 +1,4 @@
-"""``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038 Slice 2).
+"""``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038).
 
 Covers ``django_strawberry_framework/forms/sets.py``:
 
@@ -8,7 +8,7 @@ Covers ``django_strawberry_framework/forms/sets.py``:
   a ``ModelForm`` with no resolvable model; ``operation = "delete"`` rejected on
   the ``ModelForm`` base; ANY ``operation`` rejected on the plain base;
   ``form_class`` accepted as a known key; ``fields`` + ``exclude`` both set;
-  unknown key; the unknown-name narrowing routed through the Slice-1 machinery);
+  unknown key; the unknown-name narrowing routed through the input-generation machinery);
 - plain-form input dedupe via the ``"form"`` sentinel;
 - declaration registration (the ``ModelForm`` flavor in the ``DjangoMutation``
   registry, the plain flavor in the disjoint plain-form registry, abstract bases
@@ -439,7 +439,7 @@ def test_plain_form_fields_and_exclude_both_raises():
 
 
 def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
-    """An unknown ``Meta.fields`` name routes through the Slice-1 narrowing fail-loud."""
+    """An unknown ``Meta.fields`` name routes through the narrowing fail-loud."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown form field"):
 

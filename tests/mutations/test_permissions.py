@@ -1,12 +1,12 @@
-"""``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036 Slice 2 + Slice 3).
+"""``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036).
 
-Slice 2's class-behavior tests exercise ``DjangoModelPermission.has_permission``
+The class-behavior tests exercise ``DjangoModelPermission.has_permission``
 DIRECTLY - a stub ``info`` whose ``context.request.user`` is a real Django ``User``
 with / without the relevant ``add`` / ``change`` / ``delete`` model permission -
 pinning the operation -> Django-action map and the anonymous-is-denied safe
 default.
 
-Slice 3 adds the *enforcement* tests (the second section below): through a
+The *enforcement* tests (the second section below) run through a
 finalized schema, the resolver invokes ``check_permission`` /
 ``Meta.permission_classes`` at the spec-036 Decision 8 / Decision 15 placement
 (before validation for ``create``; after the visibility lookup for ``update`` /
@@ -135,7 +135,7 @@ def test_change_and_delete_perms_authorize_their_operations():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3: write-auth ENFORCEMENT through a schema (Decision 15)
+# Write-auth ENFORCEMENT through a schema (Decision 15)
 # ---------------------------------------------------------------------------
 
 

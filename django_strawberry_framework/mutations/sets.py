@@ -1,4 +1,4 @@
-"""``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036 Slice 2).
+"""``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).
 
 The write-side declarative surface, in the spirit of ``filters/sets.py`` /
 ``orders/sets.py`` (a base class with a nested ``class Meta``, never a decorator -
@@ -37,8 +37,9 @@ allowed-key set and does NOT import / extend ``types/base.py``'s
 ``ALLOWED_META_KEYS`` / ``DEFERRED_META_KEYS`` (which stay byte-unchanged).
 
 **No resolver, no ``DjangoMutationField``, no permission *enforcement* lands
-here.** Those are Slice 3 (``resolvers.py`` + ``fields.py``). A ``DjangoMutation``
-declared in this slice is inert: registered + bound at finalize, never resolved.
+here.** Those live in ``resolvers.py`` + ``fields.py``. A ``DjangoMutation``
+declared here is inert until a field exposes it: registered + bound at finalize,
+never resolved.
 """
 
 from __future__ import annotations
@@ -70,8 +71,8 @@ from .inputs import (
 )
 from .permissions import DjangoModelPermission, run_permission_classes
 
-# The mutation ``Meta``'s own allowed-key set (spec-036 Slice 2 line 53 +
-# Decision 12). Disjoint from ``types/base.py::ALLOWED_META_KEYS``: a mutation
+# The mutation ``Meta``'s own allowed-key set (spec-036 Decision 12). Disjoint
+# from ``types/base.py::ALLOWED_META_KEYS``: a mutation
 # ``Meta`` is the mutation class's own namespace, so this set is defined here and
 # the ``DjangoType`` sets stay byte-unchanged.
 _ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
@@ -126,7 +127,8 @@ NON_DELETE_WRITE_OPERATIONS: frozenset[str] = frozenset(NON_DELETE_OPERATION_INP
 # dispatches on the verb literals directly (``== "create"`` / ``"update"`` in
 # ``mutations/resolvers.py``) rather than testing this set, so it does not
 # import the constant. Not a package-wide OPERATIONS table - permissions /
-# resolvers / fields keep their own change axes (see fields / permissions DRY).
+# resolvers / fields keep their own change axes (see ``fields.py`` /
+# ``permissions.py``).
 _VALID_OPERATIONS: frozenset[str] = NON_DELETE_WRITE_OPERATIONS | frozenset({"delete"})
 
 
@@ -228,7 +230,7 @@ def build_and_stash_input(
     share: ``build()`` returns ``(input_cls, payload)`` (the per-flavor stash value),
     ``materialize(input_cls.__name__, input_cls)`` pins it as a module global of the
     flavor's input namespace, ``cls._input_field_specs = specs_of(payload)`` records
-    the Slice-1 reverse map for the Slice-3 decode, and the class is returned.
+    the reverse map for the decode, and the class is returned.
     ``specs_of`` extracts the reverse-map specs from the per-flavor payload (the form
     payload IS the specs list - identity; the serializer payload is the shape, from
     which ``shape.field_specs`` is read), so the one tail serves both flavors.
@@ -334,7 +336,7 @@ def resolver_seams(
     *,
     with_id: bool = True,
 ) -> tuple[Any, Any]:
-    """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes (spec-039 M1b).
+    """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes.
 
     Every write-flavor base (``DjangoMutation`` / ``DjangoModelFormMutation`` /
     ``DjangoFormMutation`` / ``SerializerMutation``) exposes an identical
@@ -453,7 +455,8 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
     The model flavor and the plain-form flavor (``forms/sets.py``) each instantiate
     this over their OWN list, so the dedup / reject / clear logic is single-sourced
     while the two ledgers stay disjoint (different ``bind_*`` bodies, different
-    ``registry.clear()`` rows - the over-DRY trap Decision 13 names is avoided by
+    ``registry.clear()`` rows - the over-consolidation trap Decision 13 names is
+    avoided by
     keeping the storage separate).
     """
     store: list[type] = []
@@ -626,8 +629,8 @@ def _expected_input_attr_names(
 class _ValidatedMutationMeta:
     """The validated ``Meta`` snapshot the metaclass stashes on a concrete mutation.
 
-    A flat record (not a dataclass, to stay dependency-light) the bind and Slice
-    3's resolver read instead of re-walking the raw ``Meta``. Mirrors
+    A flat record (not a dataclass, to stay dependency-light) the bind and the
+    resolver read instead of re-walking the raw ``Meta``. Mirrors
     ``types/base.py::_ValidatedMeta`` in role: validation happens once at class
     creation, then every downstream reader trusts this snapshot.
     """
@@ -674,20 +677,20 @@ class _ValidatedMutationMeta:
         self.fields = fields
         self.exclude = exclude
         self.permission_classes = permission_classes
-        # The form-flavor snapshot (spec-038 Slice 2): a ``DjangoModelFormMutation``
+        # The form-flavor snapshot (spec-038): a ``DjangoModelFormMutation``
         # / ``DjangoFormMutation`` records its ``Meta.form_class`` here so the form
         # ``build_input`` / resolver read one snapshot shape. The model flavor
         # leaves it ``None`` (it has no ``form_class``), so the model path is
         # byte-unchanged - the slot is net-new state never read by the model
         # bind/resolver.
         self.form_class = form_class
-        # The serializer-flavor snapshot (spec-039 Slice 2): a ``SerializerMutation``
+        # The serializer-flavor snapshot (spec-039): a ``SerializerMutation``
         # records its ``Meta.serializer_class`` here so the serializer ``build_input``
         # / resolver read one snapshot shape (mirroring ``form_class``). The model +
         # form flavors leave it ``None`` (net-new state, never read off the model /
         # form paths), so they stay byte-unchanged.
         self.serializer_class = serializer_class
-        # The serializer-flavor ``Meta.optional_fields`` (spec-039 Critical-1): the
+        # The serializer-flavor ``Meta.optional_fields`` (spec-039): the
         # create-only force-optional override lives on the MUTATION's ``Meta`` (the
         # documented public key), NOT the serializer's own ``Meta``. Normalized at
         # class creation and stored here as the validated tuple (``None`` when unset);
@@ -730,7 +733,7 @@ def _validate_permission_classes(
 ) -> list[Any]:
     """Validate + normalize ``Meta.permission_classes`` at class creation.
 
-    The DoD says an invalid ``permission_classes`` entry is rejected at
+    An invalid ``permission_classes`` entry is rejected at
     class-creation, not deferred to a request-time ``TypeError`` /
     ``AttributeError`` inside ``DjangoMutation.check_permission`` (which does
     ``permission_class().has_permission(...)``). So:
@@ -823,18 +826,19 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     ``DjangoType`` / ``FilterSet`` / ``OrderSet`` - a base class with a nested
     ``Meta``, never a decorator.
 
-    In Slice 2 a declared mutation is **inert**: registered + bound at finalize
-    (its generated ``Input`` / ``PartialInput`` / ``<Name>Payload`` classes are
-    materialized), but never resolved. The resolver pipeline + the
-    ``DjangoMutationField`` factory + permission *enforcement* are Slice 3.
+    A declared mutation is inert until a field exposes it: it is registered +
+    bound at finalize (its generated ``Input`` / ``PartialInput`` /
+    ``<Name>Payload`` classes are materialized), but never resolved. The
+    resolver pipeline, the ``DjangoMutationField`` factory, and permission
+    *enforcement* live in ``resolvers.py`` + ``fields.py``.
     """
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete
-    # subclass; the bind and Slice 3's resolver read it. ``None`` on the abstract
+    # subclass; the bind and the resolver read it. ``None`` on the abstract
     # base (which carries no ``Meta``).
     _mutation_meta: _ValidatedMutationMeta | None = None
 
-    # Bind outputs (forward-compat plumbing for Slice 3). The phase-2.5 bind
+    # Bind outputs. The phase-2.5 bind
     # stashes the resolved primary type, the materialized input class (create /
     # update; ``None`` for delete), and the materialized payload class name here;
     # ``DjangoMutationField`` reads them to synthesize the resolver signature +
@@ -865,8 +869,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         (the 0.0.11 body relocated verbatim from the former module-level
         ``_validate_mutation_meta``); the spec-038 form flavors override it with
         their own matrix (``forms/sets.py``). The validation matrix (raising
-        ``ConfigurationError`` naming the offending key, all at class-creation per
-        Slice 2 line 53):
+        ``ConfigurationError`` naming the offending key, all at class-creation):
 
         - **unknown ``Meta`` key** - the typo guard over
           ``_ALLOWED_MUTATION_META_KEYS`` (own keys only, no MRO walk), mirroring
@@ -897,7 +900,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         classes each exposing a callable ``has_permission``, and a bad entry is
         rejected here at class creation rather than as a request-time ``TypeError``
         / ``AttributeError`` inside ``check_permission`` (spec-036 Decision 15 - the
-        write-auth seam; the enforcement runs in Slice 3's resolver).
+        write-auth seam; the enforcement runs in the resolver).
         """
         name = cls.__name__
         reject_unknown_meta_keys(f"DjangoMutation {name}", meta, _ALLOWED_MUTATION_META_KEYS)
@@ -1025,7 +1028,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         )
 
     # Module path the generated input class is materialized into - the
-    # ``strawberry.lazy`` target Slice 3's ``DjangoMutationField`` references for
+    # ``strawberry.lazy`` target ``DjangoMutationField`` references for
     # the ``data:`` argument. The model default is ``mutations.inputs``; the form
     # flavors override it to ``forms.inputs`` (a disjoint namespace). A class
     # attribute (not a classmethod) because it has no per-``Meta`` dependence.
@@ -1049,7 +1052,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated input class name for a create / update mutation (the name seam).
 
-        The overridable input-name seam Slice 3's ``mutations/fields.py`` consults
+        The overridable input-name seam ``mutations/fields.py`` consults
         to synthesize the lazy ``data:`` forward-ref. The **model default** reads
         ``mutation_input_shape(...).type_name`` - the SAME descriptor the bind /
         ``build_mutation_input`` path uses for the materialize name and the shape
@@ -1057,7 +1060,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         with the class the bind pins. The form flavors override it with
         ``forms/inputs.py::form_input_type_name``.
 
-        Spec-038 Slice 3 rewired ``mutations/fields.py::_synthesized_mutation_signature``
+        Spec-038 rewired ``mutations/fields.py::_synthesized_mutation_signature``
         to consult this seam (deleting the transient ``_input_type_name`` twin), so
         this is now the single source for the model ``data:`` lazy-ref name.
         """
@@ -1074,7 +1077,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # to ``mutations/resolvers.py::resolve_mutation_sync`` / ``resolve_mutation_async``
     # (the function-local import inside the generated seam keeps the module-load order
     # independent of ``resolvers.py``); the form + serializer flavors override this
-    # pair with their own ``resolver_seams(...)`` call (spec-039 M1b - the eight
+    # pair with their own ``resolver_seams(...)`` call (the eight
     # near-identical seam bodies single-sited as one factory).
     resolve_sync, resolve_async = resolver_seams(
         "django_strawberry_framework.mutations.resolvers",
@@ -1094,16 +1097,16 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         The imperative override point: a subclass redefines this to replace /
         extend the class-based check. The default delegates to every
         ``Meta.permission_classes`` entry, returning ``False`` as soon as one
-        denies and ``True`` only when all allow. Slice 3's resolver maps a ``False``
+        denies and ``True`` only when all allow. The resolver maps a ``False``
         return to a raised ``GraphQLError`` (the top-level authorization failure,
         distinct from the field-keyed validation envelope).
 
-        **Defined here; not invoked in Slice 2.** Slice 3's resolver calls this at
+        **Defined here; invoked only by the resolver**, at
         the pipeline placement spec-036 Decision 8 step 3 / Decision 15 pins
         (before the write for ``create``; after the visibility lookup for
-        ``update`` / ``delete``). Slice 2 ships only the default method body + the
-        ``permission_classes`` default assignment; the resolver that raises on
-        denial is Slice 3.
+        ``update`` / ``delete``). This module ships only the default method body
+        + the ``permission_classes`` default assignment; the raise-on-denial lives
+        in ``resolvers.py``.
 
         An ``async def has_permission`` entry returns a coroutine, which is truthy:
         a naive ``if not has_permission(...)`` would never deny it, so an async
@@ -1165,8 +1168,8 @@ def _materialize_input_for(
     ``<Model>PartialInput`` (``PARTIAL`` kind); ``delete`` is ``id:``-only and
     needs no input (spec-036 Decision 14). A consumer ``input_class`` /
     ``partial_input_class`` is **merged** with the generated input, NOT a wholesale
-    replacement (the spec-010 relation-override contract, spec-036 DoD line 51 /
-    line 336): the consumer declares the field(s) it wants to customize
+    replacement (the spec-010 relation-override contract, spec-036 DoD): the
+    consumer declares the field(s) it wants to customize
     (using the generated naming scheme - validated at class creation), the
     generator fills the rest of the editable shape, and the consumer's fields are
     honored, never clobbered. See ``_materialize_merged_input``.
@@ -1415,7 +1418,7 @@ def _bind_mutation(mutation_cls: type) -> None:
     materializes the operation's input class (``create`` / ``update``) and the
     per-mutation ``<Name>Payload`` (every operation) as module globals of
     ``mutations.inputs`` before ``strawberry.Schema(...)`` runs, and stashes the
-    resolved refs on the mutation class for Slice 3's ``DjangoMutationField``.
+    resolved refs on the mutation class for the ``DjangoMutationField``.
     """
     meta = mutation_cls._mutation_meta
     primary_type = _resolve_primary_type(mutation_cls, meta.model)

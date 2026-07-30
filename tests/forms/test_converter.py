@@ -1,4 +1,4 @@
-"""Converter tests for the form-field -> Strawberry annotation registry (spec-038 Slice 1).
+"""Converter tests for the form-field -> Strawberry annotation registry (spec-038).
 
 Covers ``django_strawberry_framework/forms/converter.py``:
 

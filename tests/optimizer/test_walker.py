@@ -2020,7 +2020,7 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - root origin-type propagation
+# Root origin-type propagation
 # ---------------------------------------------------------------------------
 
 
@@ -2217,7 +2217,7 @@ def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# spec-033 Slice 1 - nested connection recognition + windowed-Prefetch planning
+# spec-033 - nested connection recognition + windowed-Prefetch planning
 # ---------------------------------------------------------------------------
 
 
@@ -3302,7 +3302,7 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
     Error-locality contract (spec-033 Decision 4 step f / Decision 8): the
     selection must NOT get a window prefetch (so the connection pipeline runs
     per-parent and raises its own cursor/pagination validation error), but the
-    resolver identity IS recorded so the Slice-4 strictness check does not preempt
+    resolver identity IS recorded so the strictness check does not preempt
     that error with a spurious "Unplanned N+1" under ``"raise"``. This is the
     distinction from the other Decision-6 fallbacks (sidecar / distinct / hint),
     which stay fully unplanned so strictness CAN flag them.
@@ -4399,12 +4399,12 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 
 
 # ---------------------------------------------------------------------------
-# spec-035 Slice 2 - G2 operation-type gating of ``.only()`` (Decision 4)
+# G2 operation-type gating of ``.only()`` (spec-035 Decision 4)
 # ---------------------------------------------------------------------------
 
-# spec-036 Slice 3: the package-tier exact-`only_fields` plan-state mirror
-# for the DjangoMutation post-write re-fetch. The live `CaptureQueriesContext`
-# bounded-count assertion is Slice 4; this is its exact-state counterpart.
+# The package-tier exact-`only_fields` plan-state mirror for the DjangoMutation
+# post-write re-fetch (spec-036); the live `CaptureQueriesContext` bounded-count
+# assertion lives in the fakeshop live suite.
 
 
 def _op_info(operation, relay_max_results=100):
@@ -4449,7 +4449,7 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
 def test_mutation_refetch_plan_drops_only_keeps_relations():
     """The DjangoMutation post-write re-fetch plan-state mirror (spec-036 Decision 9).
 
-    The package-tier exact-state counterpart to Slice 4's live behavioral
+    The package-tier exact-state counterpart to the live behavioral
     ``CaptureQueriesContext`` assertion. A mutation re-fetch hands the optimizer the
     payload's node-type selection (the children of ``CreateItemPayload.node``,
     flattened to the node-type selection - here a to-one ``category`` and a to-many

@@ -481,7 +481,7 @@ def test_an_absolute_leading_path_and_a_top_level_one_are_both_read_as_path_clai
 def test_a_scope_that_stops_the_run_early_is_refused_like_cov(fake_repo, tmp_path, fragment):
     # Verified against a real 9-row scope before this was written: `-n0 -x` grades a
     # 4-row boundary as 1 row (**WEAKLY PINNED**) and `-n0 --maxfail=3` grades it 3 rows
-    # (inside Worker 3's re-run floor), both at pytest exit 1 with every recorded field
+    # (inside the re-run acceptance floor), both at pytest exit 1 with every recorded field
     # present, and both reporting fewer pre-existing rows than were already failing. The
     # exit-code channel does not see it: it is only under this repo's default `-n auto`
     # that the same fragments interrupt the session (exit 2) and are already invalid.
@@ -1050,9 +1050,9 @@ def test_the_table_prints_the_scope_as_a_runnable_command_not_a_bare_path(
     tmp_path,
     monkeypatch,
 ):
-    # Worker 3 re-runs "at the scope Worker 2 recorded"; a bare path in the column
-    # headed "Scope as run" makes them reconstruct --no-cov and the rest of the flag
-    # set out of a prose paragraph instead of copying a command.
+    # The independent re-run happens "at the scope the record names"; a bare path in
+    # the column headed "Scope as run" forces the re-runner to reconstruct --no-cov and
+    # the rest of the flag set out of a prose paragraph instead of copying a command.
     _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
     entry = _single_entry(tmp_path)
 
@@ -1353,8 +1353,8 @@ def test_an_only_run_labels_its_report_a_partial_record_at_both_ends_and_in_the_
 ):
     # The fail-open this closes: `--only 3 --output` used to emit a block textually
     # identical to a complete run's, so a record covering one boundary of twenty could
-    # be pasted into a subsection that requires one entry per new boundary, and Worker
-    # 3 - who audits the record, not the command line - had nothing to notice.
+    # be pasted into a subsection that requires one entry per new boundary, and a
+    # reader of the record - who never sees the command line - had nothing to notice.
     _four_failing_rows(monkeypatch)
     output = tmp_path / "proofs.md"
 
@@ -1453,7 +1453,7 @@ def test_only_is_still_allowed_output_unlike_no_baseline_which_is_refused(
 ):
     # The two flags are not the same fault. --no-baseline omits a field ARTIFACT.md
     # requires, so no annotation can make that report a compliant record. --only emits
-    # a truthful record of fewer boundaries - and Worker 3's mandatory independent
+    # a truthful record of fewer boundaries - and the mandatory independent
     # re-run of a *subset* is exactly what it is for, and that re-run gets recorded.
     # Refusing --output would push that re-run back to hand-copied stdout, which is
     # where a banner gets dropped. So: labelled, not refused.

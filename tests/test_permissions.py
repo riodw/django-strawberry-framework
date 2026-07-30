@@ -30,14 +30,14 @@ MTI, identity-hook, multi-DB) need no table and assert on ``str(qs.query)`` /
 The multi-DB pin is ``FAKESHOP_SHARDED``-gated (the ``shard_b`` alias only exists
 under that env var) and does not run under a bare ``uv run pytest``.
 
-Test-plan homes (spec-034 Test plan):
-  * Slice 1 - the cascade foundation + its four upstream-invariant pins (THIS file).
-  * Slice 2 - N+1 / cacheability pins owned here; optimizer-plan pins extend
+Coverage homes for the cascade contract (spec-034):
+  * the cascade foundation + its four upstream-invariant pins - THIS file.
+  * N+1 / cacheability pins - here, with optimizer-plan pins in
     ``tests/optimizer/test_extension.py``.
-  * Slice 3 - gate-composition pins owned here; connection / node / list pins
-    extend ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
+  * gate-composition pins - here, with connection / node / list pins in
+    ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
     ``test_list_field.py``.
-  * Slice 4 - live HTTP coverage extends ``examples/fakeshop/test_query/test_products_api.py``.
+  * live HTTP coverage - ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
 # TODO(spec-036 Slice 3): add the package-level permission pin for mutation
@@ -169,7 +169,7 @@ def _cascade_only(cls, qs, info):
 
 
 # =============================================================================
-# Slice 1 - cascade foundation (per Decision 5 / 9 / 10), hardened: recursive
+# Cascade foundation (per Decision 5 / 9 / 10), hardened: recursive
 # graphs fail closed with a path-rich error; traversal state is immutable and
 # token-reset on every root, edge, and nested application.
 # =============================================================================
@@ -906,7 +906,7 @@ def test_nullable_fk_rows_preserved():
         assert null_row in result
 
 
-# --- the rest of the Slice 1 contract -----------------------------------------
+# --- the rest of the cascade-foundation contract -----------------------------
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1000,7 +1000,7 @@ def test_transitive_cascade_two_deep():
 
     Uses the real products ``Entry -> Item/Property -> Category`` chain with
     synthetic ``DjangoType`` hooks (the products schema hooks are not uncommented
-    until Slice 4). Hiding a ``Category`` must drop the ``Entry`` rows under its
+    not uncommented). Hiding a ``Category`` must drop the ``Entry`` rows under its
     ``Item`` (and ``Property``) two edges away - the transitive depth emerging from
     each target hook itself calling the helper.
     """
@@ -2258,7 +2258,7 @@ async def test_aapply_gather_restores_task_contexts():
 
 
 # =============================================================================
-# Slice 2 - N+1 audit (permissions-owned pins; optimizer-plan pins live in
+# N+1 audit (permissions-owned pins; optimizer-plan pins live in
 # tests/optimizer/test_extension.py). Per Decision 7.
 # =============================================================================
 
@@ -2271,7 +2271,7 @@ def test_cascaded_traversal_adds_zero_queries(django_assert_num_queries):
     so a cascaded ``Entry -> Item/Property -> Category`` list evaluation costs the
     SAME one query as its identity-hook twin - the cascade adds zero round-trips.
 
-    The pin is the LOAD-BEARING property (BUILD.md "Query-shape tests"): an
+    The pin is the LOAD-BEARING property: an
     ABSOLUTE count derived from a real run (both shapes == 1 query), not a bare
     ``cascaded == uncascaded`` equality (which a fallback that scaled both shapes
     identically would also satisfy). The ``"IN (SELECT"`` presence guard on the
@@ -2390,7 +2390,7 @@ def test_strictness_raise_silent_across_cascaded_shape():
     target downgrades to a ``Prefetch`` baked with the request ``info``) and never
     lazy-loads, so the N+1 sentinel never trips: ``result.errors is None`` (Edge
     case "Strictness interaction"). The query is kept minimal so it can only take
-    the planned downgraded-Prefetch path it claims to test (BUILD.md right-path).
+    the planned downgraded-Prefetch path it claims to test.
     """
 
     def _exclude_private(cls, qs, info):
@@ -2427,7 +2427,7 @@ def test_strictness_raise_silent_across_cascaded_shape():
 
 
 # =============================================================================
-# Slice 3 - gate-composition pins (connection / node / list pins live in their
+# Gate-composition pins (connection / node / list pins live in their
 # own files). Per Decision 11 / 12.
 # =============================================================================
 
@@ -2435,9 +2435,8 @@ def test_strictness_raise_silent_across_cascaded_shape():
 def _exclude_private(cls, qs, info):
     """The recurring cascading hook: row-narrow ``is_private=False`` then cascade.
 
-    Re-declared locally per the Slice-1/2 sibling pattern (a shared cross-file
-    fixture is the integration pass's call, not this slice's - see the artifact's
-    DRY analysis). The hook ignores ``info`` (it narrows unconditionally), so any
+    Re-declared locally, matching its sibling hooks above rather than sharing one
+    cross-file fixture. The hook ignores ``info`` (it narrows unconditionally), so any
     context value drives it.
     """
     return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
@@ -2668,10 +2667,9 @@ def test_nested_relation_traversal_respects_target_cascade():
     resolve to ``null``. The to-many list is the clean traversal-narrowing shape and
     matches the DoD's "nested relations" wording.)
 
-    Complementary to Slice 2's plan-level downgrade pin (plan shape + child SQL carries
+    Complementary to the plan-level downgrade pin above (plan shape + child SQL carries
     the request user); this asserts the narrowed nested ROWS. The query selects exactly
-    the nested relation so it can only take the planned-Prefetch path (BUILD.md
-    right-path).
+    the nested relation so it can only take the planned-Prefetch path.
     """
     _make_type("NtItemType", Item, get_queryset=_exclude_private, fields=("id", "name"))
     category_type = _make_type("NtCategoryType", Category, fields=("id", "name", "items"))

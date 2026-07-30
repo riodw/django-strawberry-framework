@@ -1,4 +1,4 @@
-"""The sync + async form-mutation resolver pipeline (spec-038 Slice 3).
+"""The sync + async form-mutation resolver pipeline (spec-038).
 
 The form-flavor write runtime, the sibling of ``mutations/resolvers.py`` (the
 ``036`` model pipeline). The pipeline is (spec-038 Decision 8):
@@ -18,7 +18,7 @@ and the form-specific invariants this module owns:
 - **The decode produces a FORM-field-keyed ``provided_data`` + a separate
   ``provided_files``** (Decision 8 step 1). A bound Django form is keyed by FORM
   field name (``ItemModelForm(data={"category": pk})``, never ``{"category_id":
-  pk}``) and reads uploads from ``files=``, never ``data=``. The Slice-1 reverse
+  pk}``) and reads uploads from ``files=``, never ``data=``. The reverse
   map (``mutation_cls._input_field_specs``, a list of
   ``utils/inputs.py::InputFieldSpec``) routes each provided input attr to its form
   field name + decode ``kind`` (``SCALAR`` / ``RELATION_SINGLE`` /
@@ -48,7 +48,7 @@ and the form-specific invariants this module owns:
   decodes to (Decision 8). An
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
-  required in the Slice-1 partial input, so it is always present in
+  required in the partial input, so it is always present in
   ``provided_data``. This is a partial-input transport, not partial validation:
   the reconstructed bound ``ModelForm`` revalidates every declared field. An
   omitted value that is already stored but no longer satisfies the current form
@@ -86,7 +86,7 @@ and the form-specific invariants this module owns:
   get_queryset`` (a relation decode or the update locate) closes the coroutine and
   raises.
 
-DRY-FIRST: the locate / authorize / id-decode / re-fetch / payload /
+Single-sourced: the locate / authorize / id-decode / re-fetch / payload /
 validation-mapper / save-mapper are the promoted ``036`` public helpers, CALLED
 not re-implemented. The genuinely net-new code is the visibility-on-every-branch
 relation decoder, the ``kind``-split decode, and the partial-update
@@ -163,7 +163,7 @@ def _decode_form_relation_single(
     type-check + pk coercion -> visible object (a hidden / missing / wrong-model
     / uncoercible id is the uniform field-keyed ``FieldError``, closing the
     raw-pk visibility gap) -> the form-key projection via ``to_field_name``
-    (``_to_form_key_value``). The ``related_model`` is the target the Slice-1
+    (``_to_form_key_value``). The ``related_model`` is the target the
     build recorded on the reverse-map spec (``InputFieldSpec.related_model``),
     from the SAME basis the generated id type used (the backing column's
     ``related_model`` for a ``ModelForm`` column, else the form field's

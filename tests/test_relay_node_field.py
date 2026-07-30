@@ -1106,10 +1106,9 @@ def test_public_exports():
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): node refetch <-> cascade composition pins.
-# NO relay.py source change - node/nodes defaults already route through
-# get_queryset (Decision 12), so a cascade-hidden row refetches as null with no
-# existence leak. Fill in + drop the skips in Slice 3.
+# Node refetch <-> cascade composition pins (spec-034). No relay.py source change is
+# involved: node/nodes defaults already route through get_queryset (Decision 12), so
+# a cascade-hidden row refetches as null with no existence leak.
 # =============================================================================
 
 

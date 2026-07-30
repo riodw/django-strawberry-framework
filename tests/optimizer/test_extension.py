@@ -557,7 +557,7 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
 
 
 # ---------------------------------------------------------------------------
-# G1 (spec-035 Slice 1): evaluated-queryset guard
+# G1 (spec-035): evaluated-queryset guard
 #
 # A consumer root resolver that already EVALUATED its queryset (``len(qs)``,
 # ``bool(qs)``, a slice) must pass through ``_optimize`` unchanged - the
@@ -1635,9 +1635,9 @@ def test_collect_directive_var_names_no_directives():
 
 
 # ---------------------------------------------------------------------------
-# B1: plan-cache key hygiene for nested pagination variables (spec-033 Slice 3,
+# B1: plan-cache key hygiene for nested pagination variables (spec-033
 # Decision 7). Nested ``first``/``last``/``before``/``after`` variables are
-# baked into windowed prefetch plans by Slice 1, so their values must key the
+# baked into windowed prefetch plans, so their values must key the
 # cache; root pagination variables stay out (root slicing is post-plan).
 # ---------------------------------------------------------------------------
 
@@ -2016,10 +2016,10 @@ def _categories_list_schema(ext):
     With the optimizer installed the parent ``Category`` queryset is planned, so
     the nested ``itemsConnection`` window lands on each category's ``to_attr``
     and the nested pagination value is baked into the cached plan - the
-    end-to-end shape Slice 3's cache-key rule must keep honest. A non-visibility
+    end-to-end shape the cache-key rule must keep honest. A non-visibility
     synthetic target (no ``get_queryset``), so the plan is cacheable (spec line
     350: the visibility-bearing library shape is uncacheable for an orthogonal
-    reason and is covered by Slice 5, not here).
+    reason and is covered elsewhere).
     """
     type(
         "ItemType",
@@ -4274,7 +4274,7 @@ def test_singleton_factory_extensions_form_emits_no_deprecation_warning():
     singleton-factory form passes a *callable*, so no such warning fires.
     ``simplefilter("always")`` is set inside the context so a warning that
     Strawberry already emitted-and-deduped earlier in the process cannot
-    produce a false green. Pins spec-029 Slice 1 / DoD item 4.
+    produce a false green. Pins spec-029 DoD item 4.
     """
 
     @strawberry.type
@@ -4313,7 +4313,7 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - plan-cache origin separation + multi-type audit dedupe
+# Plan-cache origin separation + multi-type audit dedupe
 # ---------------------------------------------------------------------------
 
 
@@ -4547,7 +4547,7 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - ``apply_connection_optimization`` helper extraction (no-regression)
+# ``apply_connection_optimization`` helper extraction (no-regression)
 # ---------------------------------------------------------------------------
 
 
@@ -4555,7 +4555,7 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
 def test_optimizer_helper_extraction_no_regression():
     """Extracting ``apply_to`` from ``_optimize`` leaves the middleware path identical.
 
-    Spec Slice 2 / Decision 11: the plan-build-and-apply tail was extracted into
+    Per Decision 11 the plan-build-and-apply tail was extracted into
     ``DjangoOptimizerExtension.apply_to`` (shared with the connection field's
     ``apply_connection_optimization``). The existing B1-B8 suite in this module
     is the broad regression guard; this focused test pins that a non-connection
@@ -4722,7 +4722,7 @@ def test_publish_plan_to_context_union_tolerates_non_set_existing_stash():
 def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end():
     """End-to-end: a real nested-connection fallback publish UNIONS, never clobbers.
 
-    spec-033 Slice 4 (Decision 8): the Slice-1 unit pin
+    spec-033 Decision 8: the unit pin
     (``test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets``)
     proves the helper unions; THIS pins the union holds through an actual nested
     -connection-fallback EXECUTION - the scenario that motivates the union. A
@@ -4796,10 +4796,9 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 2): cascade <-> optimizer cooperation pins.
-# NO optimizer source change - these pin that a type whose get_queryset CASCADES
-# is, to the optimizer, just a type with a custom hook, so the shipped rules fire
-# unchanged (Decision 7 / Goal 3). Fill in + drop the skips in Slice 2.
+# Cascade <-> optimizer cooperation pins (spec-034). No optimizer source change is
+# involved: a type whose get_queryset CASCADES is, to the optimizer, just a type
+# with a custom hook, so the shipped rules fire unchanged (Decision 7 / Goal 3).
 # =============================================================================
 
 

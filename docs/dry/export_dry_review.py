@@ -34,7 +34,7 @@ New deep-review workflow::
 
     python docs/dry/export_dry_review.py check \
       --target django_strawberry_framework/utils \
-      --review docs/feedback2.md \
+      --review docs/review/REVIEW.md \
       --require-topic SchemaExtension
 
 All Python inspection is static. Target and scan files are parsed as text/AST

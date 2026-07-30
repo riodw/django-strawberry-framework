@@ -20,7 +20,7 @@ from django_strawberry_framework.types.base import _build_annotations
 class _FakeUnsupportedField(models.Field):
     """One-line Django Field subclass with no SCALAR_MAP match.
 
-    Pins the unsupported-field-type bypass test for spec-015 Slice 1
+    Pins the unsupported-field-type bypass test for spec-015
     Decision 7a - the consumer's annotation override is a recourse
     parallel to ``Meta.exclude`` for unsupported scalar field types.
     """
@@ -62,7 +62,7 @@ def test_reverse_fk_resolves_when_parent_declared_before_child():
             fields = ("id", "name", "category")
 
     # Pre-finalize: every auto-synthesized relation is the pending sentinel
-    # under spec-014 Slice 4's always-defer contract, regardless of whether
+    # under spec-014's always-defer contract, regardless of whether
     # the target type happens to already be registered.
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
@@ -87,7 +87,7 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
             fields = ("id", "name", "items")
 
     # Pre-finalize: every auto-synthesized relation is the pending sentinel
-    # under spec-014 Slice 4's always-defer contract.
+    # under spec-014's always-defer contract.
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
 
@@ -394,7 +394,7 @@ def test_empty_field_surface_raises():
 
 
 # ---------------------------------------------------------------------------
-# Spec-015 Slice 1: annotation-only scalar override matrix completion.
+# Annotation-only scalar override matrix completion (spec-015).
 #
 # Four core override tests pin the new annotation-only scalar override
 # path; four converter-bypass tests pin Decision 7a's "consumer is
@@ -1034,7 +1034,7 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-018-meta_primary-0_0_6.md) - ambiguity-audit interaction
+# Ambiguity-audit interaction (spec-018-meta_primary-0_0_6.md)
 # with relation resolution. The raise-at-finalize and once-per-build
 # regression tests live in ``tests/test_registry.py``; this file hosts the
 # audit-success paths and the audit-vs-unresolved-target ordering test.
@@ -1111,7 +1111,7 @@ def test_filterset_class_resolves_across_module_boundary():
     module bodies (which declare ``DjangoType`` plus ``FilterSet`` and
     register them against the global registry) run inside this test
     after the autouse-fixture ``registry.clear()``. Pins spec-021
-    Slice 3's contract that the finalizer's filter-binding pass works
+    The contract that the finalizer's filter-binding pass works
     across module boundaries without ``ImportError``.
     """
     # Drop any previously-imported fixture module objects so the next

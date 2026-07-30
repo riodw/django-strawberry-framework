@@ -8,7 +8,7 @@ import behind one guard so every ``rest_framework/`` module + the root
 ``__getattr__`` route a DRF-absent build through the SAME install-hint
 ``ImportError``.
 
-The install hint names ``djangorestframework>=3.17.0`` - the Slice-0 verified
+The install hint names ``djangorestframework>=3.17.0`` - the verified
 floor (place 2 of the three-places-that-must-agree: place 1 is the
 ``[dependency-groups].dev`` pin in ``pyproject.toml``, place 3 is the spec Risks
 note; all three say ``>=3.17.0``). Importing THIS package runs ``require_drf()`` as
@@ -23,7 +23,7 @@ from typing import Any
 
 from ..utils.imports import require_optional_module
 
-# The single DRF install-hint string (spec-039 Slice 0 carry-forward, Decision 12).
+# The single DRF install-hint string (spec-039 carry-forward, Decision 12).
 # Every DRF-absent raise routes through ``require_drf()`` so the hint lives in
 # exactly one source location and names the verified floor.
 _DRF_INSTALL_HINT: str = (

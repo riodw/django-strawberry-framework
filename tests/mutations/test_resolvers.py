@@ -1,9 +1,9 @@
-"""Write-pipeline resolver tests (spec-036 Slice 3).
+"""Write-pipeline resolver tests (spec-036).
 
 System-under-test is ``mutations/resolvers.py`` - the sync + async create /
 update / delete pipeline driven through a package-test ``@strawberry.type
-Mutation`` over a finalized schema (per the Slice-3 boundary: the live products
-write surface + the ``CaptureQueriesContext`` assertion are Slice 4). Fixtures:
+Mutation`` over a finalized schema (the live products write surface and the
+``CaptureQueriesContext`` assertion live in the fakeshop suite). Fixtures:
 
 - the realistic products ``Item`` / ``Category`` (FK + ``unique_item_per_category``)
   cover the validation-envelope, ``"__all__"`` sentinel, partial-constraint,
@@ -187,7 +187,7 @@ def _build_item_schema(
 
 
 def assert_mutation_field_error(result, payload_key, field):
-    """Assert the common in-band mutation error envelope (DRY-4).
+    """Assert the common in-band mutation error envelope.
 
     Pins the shape every in-band failure test shares: no top-level GraphQL errors
     (the failure is in-band), a null object slot, and exactly one ``FieldError`` on
@@ -2010,7 +2010,7 @@ def test_relation_field_index_excludes_generic_foreign_key():
 # built-in ``DEFAULT_SCALAR_REGISTRY`` (Decision 5), which is itself corroborating
 # evidence. The synthetic model uses ``app_label="products"`` (installed) +
 # ``managed=False`` + ``schema_editor`` + ``override_settings(MEDIA_ROOT=tmp_path)``,
-# mirroring Slice 1's ``tests/types/test_resolvers.py`` shape.
+# mirroring the ``tests/types/test_resolvers.py`` shape.
 
 _asset_model_counter = itertools.count(1)
 

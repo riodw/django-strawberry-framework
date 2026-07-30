@@ -1114,7 +1114,7 @@ def test_emitted_globalid_is_model_anchored():
 
     Runs as ``staff_1`` so the first item is visible regardless of its
     (``seed_data``-randomized) ``is_private`` / category privacy under the
-    activated cascade hooks (spec-034 Slice 4); the GlobalID emit/decode subject
+    activated cascade hooks (spec-034); the GlobalID emit/decode subject
     is orthogonal to visibility.
     """
     seed_data(1)
@@ -1145,7 +1145,7 @@ def test_globalid_filter_round_trip():
     reconstructed one) so the test proves true emit -> filter symmetry.
 
     Runs as ``staff_1`` so the target item is visible for both the emit and the
-    filter-round-trip under the activated cascade hooks (spec-034 Slice 4); the
+    filter-round-trip under the activated cascade hooks (spec-034); the
     emit -> filter symmetry subject is orthogonal to visibility.
     """
     seed_data(1)
@@ -1184,7 +1184,7 @@ def test_type_strategy_opt_out_reproduces_type_name(project_schema_override):
 
     Runs as ``staff_1`` so the first item is visible regardless of its
     (``seed_data``-randomized) privacy under the activated cascade hooks
-    (spec-034 Slice 4); the strategy opt-out subject is orthogonal to visibility.
+    (spec-034); the strategy opt-out subject is orthogonal to visibility.
     """
     seed_data(1)
     client = _staff_client()
@@ -1214,7 +1214,7 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     The two `allItems` connection selections still merge into one node set (each
     `node` carries both `name` and `category { name }`) issuing exactly ONE
     `allItems` slice query, and NO COUNT runs (products declare no
-    `Meta.connection`). Under the activated cascade hooks (spec-034 Slice 4) the
+    `Meta.connection`). Under the activated cascade hooks (spec-034) the
     forward FK `item.category` no longer plans `select_related` - `CategoryType`
     now defines a custom `get_queryset`, so the optimizer downgrades it to a
     windowed `Prefetch` (the shipped `get_queryset` -> `Prefetch` rule). The
@@ -1271,7 +1271,7 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     `items` / `entries` stay LIST relations (`{ name }`, not `itemsConnection`)
     - the depth-2 reverse-FK prefetch chain the test pins is structurally
     unchanged: 1 categories slice + 1 `items` prefetch + 1 `entries` prefetch =
-    3 queries, no COUNT. The activated cascade hooks (spec-034 Slice 4) do NOT
+    3 queries, no COUNT. The activated cascade hooks (spec-034) do NOT
     add per-row queries - their `__in` subqueries compile inline (Decision 7) -
     so the count stays a fixed 3.
 
@@ -1338,7 +1338,7 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
 # schema sets no override. Used by the staff full-set cascade pin (staff sees all
 # rows, capped at 100) and the reverse-FK depth-2 pin's under-cap precondition.
 # The forward-FK depth-2 pin below runs anonymously under the activated cascade
-# (spec-034 Slice 4): the cascade narrows the visible entry set well under the
+# (spec-034): the cascade narrows the visible entry set well under the
 # cap, so that pin no longer exercises the cap boundary.
 _RELAY_MAX_RESULTS = 100
 
@@ -1347,7 +1347,7 @@ _RELAY_MAX_RESULTS = 100
 def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
     """Re-pinned for the activated cascade: depth-2 forward-FK plans a Prefetch chain.
 
-    Before spec-034 Slice 4 this query planned a single `select_related(
+    Before spec-034 this query planned a single `select_related(
     "item__category")` JOIN. With the cascade hooks active, `ItemType` and
     `CategoryType` both define a custom `get_queryset`, so the optimizer
     downgrades each forward FK in the `item -> category` chain to a windowed
@@ -1583,7 +1583,7 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     lookup resolves to ``GlobalIDMultipleChoiceFilter`` and each element is
     decoded + type-validated before the ``id__in`` clause runs. No
     permission gate guards ``id``, so this works anonymously (the targets
-    are PUBLIC rows, visible under the activated cascade - spec-034 Slice 4).
+    are PUBLIC rows, visible under the activated cascade - spec-034).
 
     The two target categories carry EXPLICIT multi-digit pks: the ``in``
     filter must consume the whole decoded id list in ONE predicate.
@@ -1677,7 +1677,7 @@ def test_products_items_filter_by_related_category_global_id():
     """``Item.category`` ``RelatedFilter`` traversal via the nested GlobalID input.
 
     Filters to a PUBLIC category (visible anonymously under the activated cascade,
-    spec-034 Slice 4). The cascade narrows the anonymous result to that category's
+    spec-034). The cascade narrows the anonymous result to that category's
     ``is_private=False`` items, so the expected rows are derived from the
     equivalent post-cascade ORM query (API == ORM) - the ``RelatedFilter`` content
     subject composed with the cascade's row narrowing.
@@ -1713,7 +1713,7 @@ def test_products_items_filter_by_related_category_global_id():
 def test_products_items_order_by_name_asc():
     """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate).
 
-    Runs anonymously, so the activated cascade (spec-034 Slice 4) narrows to
+    Runs anonymously, so the activated cascade (spec-034) narrows to
     non-private items under non-private categories before ordering; the expected
     rows are derived from the equivalent post-cascade ORM query (API == ORM), the
     ordering subject composed with the cascade's row narrowing.
@@ -1737,7 +1737,7 @@ def test_products_items_order_by_name_desc():
 
     Anonymous, so the cascade-narrowed visible set (non-private items under
     non-private categories) is ordered; expected rows come from the equivalent
-    post-cascade ORM query (spec-034 Slice 4).
+    post-cascade ORM query (spec-034).
     """
     seed_data(1)
     expected = [
@@ -1839,9 +1839,9 @@ def test_products_items_filter_and_order_compose():
     ``Item.name``), so the whole query runs anonymously.
 
     Uses a PUBLIC category (visible anonymously) and derives the expected rows
-    from the equivalent post-cascade ORM query - the activated cascade (spec-034
-    Slice 4) narrows the anonymous result to that category's ``is_private=False``
-    items, on top of which the filter -> order chain runs.
+    from the equivalent post-cascade ORM query - the activated cascade
+    (spec-034) narrows the anonymous result to that category's
+    ``is_private=False`` items, on top of which the filter -> order chain runs.
     """
     seed_data(1)
     category = models.Category.objects.filter(is_private=False).order_by("id").first()
@@ -1862,12 +1862,12 @@ def test_products_items_filter_and_order_compose():
 
 
 # ---------------------------------------------------------------------------
-# Nested relation-connection windowed-prefetch coverage (spec-033 Slice 6,
+# Nested relation-connection windowed-prefetch coverage (spec-033,
 # DoD item 10). The reverse-FK windowed nested-connection shape the M2M-only
 # library graph cannot express live: ``Category.items`` synthesizes an
 # ``itemsConnection`` sibling (both ``CategoryType`` and ``ItemType`` are
 # Relay-Node-shaped, so the ``DONE-032-0.0.9`` implicit ``"both"`` default made
-# it), and Slices 1-2 plan it as a single windowed ``Prefetch``.
+# it), and the optimizer plans it as a single windowed ``Prefetch``.
 # ---------------------------------------------------------------------------
 
 # itemsConnection carries ONLY ``first:`` -- a ``filter:`` / ``orderBy:`` sidecar
@@ -1906,7 +1906,7 @@ def test_products_categories_items_connection_fixed_query_count():
     fixed and grow items-per-category, so the equality rules out a per-child N+1
     and the absolute ``== 2`` rules out the item-scaling fallback.
 
-    Under the activated cascade (spec-034 Slice 4) this query runs anonymously,
+    Under the activated cascade (spec-034) this query runs anonymously,
     so the cascade narrows the result to the public categories (the deterministic
     ``% 2`` split, ~half of the seeded providers) and the windowed
     ``itemsConnection`` prefetch child carries ``ItemType``'s cascade too (only
@@ -2068,13 +2068,13 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
     assert payload["errors"][0]["message"] == "Negative indexing is not supported."
 
 
-# Slice 6 (spec-033) deliberately adds NO Meta.connection opt-in on the four
+# The products conversion (spec-033) deliberately adds NO Meta.connection opt-in on the four
 # products types (no totalCount; minimal cookbook-mirror conversion) and NO root
 # node(id:) / nodes(ids:) entry points (those stay TODO-BETA-053-0.1.5).
 
 
 # =============================================================================
-# Live cascade-permission HTTP coverage (spec-034 Slice 4). The four products
+# Live cascade-permission HTTP coverage (spec-034). The four products
 # get_queryset hooks are now active in apps/products/schema.py. Real permission
 # users only - every test's FIRST line is `create_users(1)` (per AGENTS.md / card
 # DoD: never mock info.context.user). Exercises the 2-deep
@@ -2243,7 +2243,7 @@ def test_cascade_query_count_fixed():
     nested ``SELECT``s (Decision 7). Because ``EntryType`` cascades through
     ``item`` to the custom-hooked ``ItemType`` / ``CategoryType``, the optimizer
     downgrades the forward-FK ``select_related`` to a windowed ``Prefetch`` chain
-    (the shipped ``get_queryset`` -> ``Prefetch`` rule; spec-034 Slice 2). The
+    (the shipped ``get_queryset`` -> ``Prefetch`` rule; spec-034). The
     anonymous request issues no auth queries, so the products query count is a
     deterministic 3 (one entry slice + one ``item`` prefetch + one ``category``
     prefetch), independent of how ``seed_data`` randomized row privacy. The
@@ -2597,7 +2597,7 @@ def test_get_query_with_scalar_variables_keeps_upstream_message():
 
 
 # =============================================================================
-# Form-mutation live surface (spec-038 Slice 4 / Decision 12). The products
+# Form-mutation live surface (spec-038 / Decision 12). The products
 # schema exposes `DjangoModelFormMutation` (`createItemViaForm` /
 # `updateItemViaForm` over `ItemModelForm`, `createItemWithFileViaForm` over
 # `ItemFileModelForm`, `createStampedItemViaForm` over `StampedItemModelForm`)
@@ -3161,7 +3161,7 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
     file_map = {"0": ["variables.d.attachment"]}
 
     with override_settings(MEDIA_ROOT=str(tmp_path)):
-        # Raw-multipart exemption (spec-043 Slice 2): the subject is the
+        # Raw-multipart exemption (spec-043): the subject is the
         # hand-built GraphQL-multipart {operations, map, "0"} envelope with an
         # arbitrary file label - the wire shape TestClient's path-keyed files=
         # builder never emits. The files= upload path is covered live in
@@ -3300,7 +3300,7 @@ def test_submit_ping_plain_form_denied_by_default_top_level_error():
 
 
 # ===========================================================================
-# Serializer-mutation live surface (spec-039 Slice 3 / Decision 13)
+# Serializer-mutation live surface (spec-039 / Decision 13)
 # ===========================================================================
 # Every consumer-reachable resolver branch is earned HERE over real `/graphql/`
 # (the README "Coverage rule."); `tests/rest_framework/
@@ -3806,7 +3806,7 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
     file_map = {"0": ["variables.d.attachment"]}
 
     with override_settings(MEDIA_ROOT=str(tmp_path)):
-        # Raw-multipart exemption (spec-043 Slice 2): the subject is the
+        # Raw-multipart exemption (spec-043): the subject is the
         # hand-built GraphQL-multipart {operations, map, "0"} envelope with an
         # arbitrary file label - the wire shape TestClient's path-keyed files=
         # builder never emits. The files= upload path is covered live in

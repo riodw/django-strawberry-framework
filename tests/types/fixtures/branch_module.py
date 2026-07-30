@@ -2,7 +2,7 @@
 
 Paired with ``shelf_module``; both modules are imported at test time so
 ``finalize_django_types()`` exercises the cross-module
-``Meta.filterset_class`` resolution path under spec-021 Slice 3.
+``Meta.filterset_class`` resolution path under spec-021.
 """
 
 from __future__ import annotations

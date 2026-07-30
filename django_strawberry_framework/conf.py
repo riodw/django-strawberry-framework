@@ -24,8 +24,8 @@ empty mapping rather than raising: ``DJANGO_STRAWBERRY_FRAMEWORK =
 None`` (this module, treated as "no settings configured") and
 ``Meta.optimizer_hints = None`` in ``types/base.py`` (treated as "no
 hints configured"). Both behave identically to omitting the value
-entirely. Tightening the ``None`` cases to raise is tracked as
-future-slice work; until then the empty-mapping coercion is the
+entirely. Tightening the ``None`` cases to raise is deferred;
+until then the empty-mapping coercion is the
 documented contract for ``None``. *Other* invalid shapes are no longer
 defensively coerced here: a non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK``
 value raises ``ConfigurationError`` through

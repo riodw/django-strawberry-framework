@@ -1,9 +1,9 @@
-"""Cross-module fixture for the absolute-import-path ``RelatedOrder`` (Slice 4).
+"""Cross-module fixture for the absolute-import-path ``RelatedOrder``.
 
 ``GenreOrder`` lives in its own module so the
 ``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
 declaration in ``orders.py`` exercises Layer-2 absolute-import-path
-resolution per spec-028 Slice 4 Test 5. The single same-module
+resolution per spec-028 test plan. The single same-module
 unqualified-name branch is exercised by every other
 ``RelatedOrder("XOrder")`` declaration in ``orders.py``.
 """

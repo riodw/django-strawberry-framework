@@ -373,7 +373,7 @@ def test_filterset_get_fields_includes_pk_for_all_fields_shorthand():
         class Meta:
             model = Item
             fields = "__all__"
-            # ``Item.attachment`` is a ``FileField`` (spec-038 Slice 4) that
+            # ``Item.attachment`` is a ``FileField`` (spec-038) that
             # ``django-filter`` has no default filter for; the ``"__all__"``
             # sweep would otherwise raise on it. Excluding it keeps this test
             # focused on its intent: the shorthand adds the PK column.
@@ -425,10 +425,9 @@ def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_t
             model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    # The finalizer's owner-binding pass lands in Slice 3; here we just need
-    # `GenreType` to be a subclass of `relay.Node` so `implements_relay_node`
-    # returns `True`. `apply_interfaces` is the existing Slice-4-of-spec-011
-    # helper that injects bases.
+    # The finalizer's owner-binding pass is not exercised here; this test only
+    # needs `GenreType` to be a subclass of `relay.Node` so `implements_relay_node`
+    # returns `True`. `apply_interfaces` (spec-011) is the helper that injects bases.
     apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class GenreFilter(FilterSet):
@@ -4150,14 +4149,12 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 
     FilterSet.__init__ = spy_init
     try:
-        # Slice 2 strips related-branch keys from the form-data dict
+        # Related-branch keys are stripped from the form-data dict
         # before form validation (`shelves` is owned by
         # `_apply_related_constraints`, not the parent's form), so
-        # `apply_sync` now returns normally. The contract this test
-        # pins is unchanged: the constructor's `queryset=` kwarg must
+        # `apply_sync` returns normally. The contract this test
+        # pins: the constructor's `queryset=` kwarg must
         # carry the `<rel>__in=<intersected>` clause already baked in.
-        # See `docs/builder/bld-slice-2-factories.md` for the
-        # carry-forward rationale from Slice 1's spy-test fragility.
         BranchFilter.apply_sync(
             {"shelves": {"code": "active"}},
             library_models.Branch.objects.all(),
@@ -4183,7 +4180,7 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline - filter_queryset tree-form logic (Slice 4a)
+# Apply pipeline - filter_queryset tree-form logic
 #
 # The scalar ``and``/``or`` union/intersection contracts and the nested
 # malformed-subbranch validation contract moved to the live library API suite
@@ -4817,7 +4814,7 @@ def test_derive_related_visibility_querysets_async_raises_for_unregistered_targe
 def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
     """``_iter_visibility_steps`` yields the shared pre-await state both derive methods consume.
 
-    Pins the DRY-0_0_7 consolidation: both
+    Pins the consolidation: both
     ``_derive_related_visibility_querysets_sync`` and
     ``_derive_related_visibility_querysets_async`` route through the
     single ``_iter_visibility_steps`` classmethod, so the helper's
@@ -5114,7 +5111,7 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 
 
 # ---------------------------------------------------------------------
-# DRY consolidation pins (dry-0_0_7): ``FilterSet._iter_input_items``
+# Consolidation pins: ``FilterSet._iter_input_items``
 # ---------------------------------------------------------------------
 #
 # Three sites (``_normalize_input``, ``_operator_bag_items``,
@@ -8316,8 +8313,8 @@ def test_installed_django_filter_is_inside_the_audited_range():
     """CI tripwire: the INSTALLED django-filter must be inside the audited range.
 
     Deliberately couples the lock to the audit. When the dependency moves to a family
-    outside ``_AUDITED_DJANGO_FILTER_RANGE`` this fails, forcing the maintainer to run
-    the SQL-shape and semantic-parity suite against the new release and widen the range
+    outside ``_AUDITED_DJANGO_FILTER_RANGE`` this fails, forcing the SQL-shape and
+    semantic-parity suite to be run against the new release and the range widened
     on purpose -- rather than silently optimizing on unreviewed upstream behavior. (The
     package still INSTALLS and filters correctly on such a release; only the
     optimization is declined, so this failure is an audit prompt, not a breakage.)

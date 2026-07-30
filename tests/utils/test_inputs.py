@@ -147,7 +147,7 @@ def test_graphql_camel_name(value, expected):
 def test_filter_and_order_families_share_one_substrate():
     """Both ``inputs`` modules re-export the SAME shared mechanics by identity.
 
-    This is the DRY contract guard: if a future change re-introduces a
+    This is the single-substrate contract guard: if a future change re-introduces a
     family-local copy of the builder / field-spec / camel-name / subclass
     iterator, these identity assertions fail.
     """

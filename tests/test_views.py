@@ -1,4 +1,4 @@
-"""Package-tier contracts for the package's Django GraphQL views (spec-046 Slices 1-3).
+"""Package-tier contracts for the package's Django GraphQL views (spec-046).
 
 Deliberately narrow: this file holds only what a live request cannot express
 (spec-046 Decision 13, Placement). Every request-shaped S1 proof - project
@@ -12,10 +12,10 @@ What stays here:
   about ABSENCE, which a live request cannot make;
 - the ``as_view`` keyword surface, including the fact that Django's
   class-attribute guard is what admits or rejects a keyword (the constraint
-  Slice 2's cap keyword satisfies with a class attribute on the mixin);
+  the cap keyword satisfies with a class attribute on the mixin);
 - the async twin's coroutine marking, pinned here so it does not depend on the
   live async probe surviving;
-- Slice 2's body-cap knob: the ``max_request_body_bytes`` precedence ladder and
+- the body-cap knob: the ``max_request_body_bytes`` precedence ladder and
   its validation (properties of a pure function, not of a request), plus the
   enforcement branches whose subject is view-internal state a wire response
   cannot show - that an over-limit *declaration* is refused without
@@ -26,7 +26,7 @@ What stays here:
   request-shaped cap row (status codes, the reason on the wire, the parse /
   execution witnesses, the ASGI fragment shapes) is live in
   ``examples/fakeshop/test_query/test_transport_api.py``;
-- Slice 3's strict UTF-8 wire contract, now that the package view owns it
+- the strict UTF-8 wire contract, now that the package view owns it
   (spec-046 Decision 9): the per-encoding ``__cause__`` matrix, which is
   invisible over the wire because all nine rejected shapes carry the identical
   status and message by design.
@@ -77,7 +77,7 @@ from tests._soft_dependency import evicted_modules, simulated_absence
 # Captured at import so the ``channels``-absence test can compare UPSTREAM's own
 # class objects across the simulated absence. Comparing the package view's
 # ``__base__`` would silently stop proving anything the moment the base list
-# changes (which Slice 2's mixin did); upstream's class identity is the thing
+# changes (which the body-cap mixin did); upstream's class identity is the thing
 # the assertion is actually about.
 _UPSTREAM_VIEWS = (GraphQLView, AsyncGraphQLView)
 
@@ -129,7 +129,7 @@ def test_views_module_imports_with_channels_absent():
     standard library.
 
     Upstream's side is pinned by UPSTREAM's own class identity rather than by the
-    package view's ``__base__``: Slice 2 put ``_RequestBodyBoundaryMixin`` first in
+    package view's ``__base__``: ``_RequestBodyBoundaryMixin`` sits first in
     the bases, so a ``__base__`` comparison would now compare the PACKAGE's mixin
     to itself and pass while proving nothing about upstream. Asserting the fresh
     upstream class ``is not`` the captured one AND appears in the fresh package
@@ -251,7 +251,7 @@ def test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_r
 
 
 # ---------------------------------------------------------------------------
-# Slice 2: the body cap's knob. The pure-function precedence + validation
+# The body cap's knob. The pure-function precedence + validation
 # matrices, the keyword's binding through ``as_view``, and the three
 # enforcement branches whose witness is view-internal state.
 # ---------------------------------------------------------------------------
@@ -475,7 +475,7 @@ def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length():
     A hostile ``CONTENT_LENGTH`` on a GET must not turn the IDE or a GET query
     into a ``413``: the declared gate would otherwise fire on a header that
     describes nothing. The ``variables`` / ``extensions`` query-param size is a
-    separate concern (audit S4), already shielded by
+    separate concern, already shielded by
     ``_patched_parse_query_params``.
     """
     view = _capped_view(32)

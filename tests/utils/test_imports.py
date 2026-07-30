@@ -1,4 +1,4 @@
-"""Tests for the shared optional-import helpers (``utils/imports.py``, spec-041 Slice 1).
+"""Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
 
 ``require_optional_module`` is the generic raising primitive soft-dependency
 guards wrap (``routers.py::require_channels()`` / ``rest_framework::require_drf()``);

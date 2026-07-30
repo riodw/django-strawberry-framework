@@ -50,7 +50,7 @@ def test_project_schema_executes_products_categories_list(project_schema):
     """The composed project schema exposes the products app's `all_categories` root field.
 
     Executed in-process (no HTTP request), so the activated cascade hooks
-    (spec-034 Slice 4) resolve no user from `info.context.request` and apply the
+    (spec-034) resolve no user from `info.context.request` and apply the
     anonymous visibility rule: only non-private categories are returned. The
     expected set is therefore the equivalent post-cascade ORM query.
     """
@@ -84,7 +84,7 @@ def test_project_schema_traverses_products_relations(project_schema):
     """Forward + reverse relation traversal works through the products schema.
 
     Executed in-process (no HTTP request), so the activated cascade hooks
-    (spec-034 Slice 4) apply the anonymous visibility rule throughout: the root
+    (spec-034) apply the anonymous visibility rule throughout: the root
     `allItems` returns non-private items under non-private categories, the root
     `allCategories` returns non-private categories, and each category's nested
     `items` list narrows to that category's non-private items. The expected maps

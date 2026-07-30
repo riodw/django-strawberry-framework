@@ -734,7 +734,7 @@ def _optimizer_can_absorb(
 # ``_dst_*`` namespace (NOT upstream's ``_strawberry_*``) keeps a consumer running
 # both django-strawberry-framework and strawberry-graphql-django in one process
 # from colliding (spec-033 "Explicitly do not borrow"). ``_dst_row_number`` /
-# ``_dst_total_count`` are read by the connection-class fast path in Slice 2.
+# ``_dst_total_count`` are read by the connection-class fast path.
 WINDOW_ROW_NUMBER = "_dst_row_number"
 WINDOW_TOTAL_COUNT = "_dst_total_count"
 WINDOW_ROW_NUMBER_REVERSED = "_dst_row_number_reversed"

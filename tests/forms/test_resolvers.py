@@ -1,9 +1,9 @@
-"""Form-mutation resolver-pipeline tests (spec-038 Slice 3).
+"""Form-mutation resolver-pipeline tests (spec-038).
 
 System-under-test is ``forms/resolvers.py`` - the sync + async form pipeline
 (decode -> locate -> authorize -> construct + validate -> write -> re-fetch ->
 payload) driven through a finalized package-test ``@strawberry.type Mutation``
-(the live ``/graphql/`` surface is Slice 4). Fixtures:
+(the live ``/graphql/`` surface is covered in the fakeshop suite). Fixtures:
 
 - the products ``Item`` / ``Category`` (FK + ``unique_item_per_category``) cover
   the FK relation decode, the partial-update reconstruction, the ``"__all__"``
@@ -1275,7 +1275,7 @@ def test_required_extra_field_omitted_on_update_is_coercion_error():
     is a GraphQL coercion error BEFORE the resolver
     (``spec-038-form_mutations-0_0_12`` Finding 2).
 
-    The Slice-1 partial input keeps a required non-model extra field required (it
+    The partial input keeps a required non-model extra field required (it
     is not a model-backed field forced optional). Now that a required generated
     field carries NO class default, an omitted required field is rejected at
     variable coercion rather than silently arriving as ``None`` at the resolver and
@@ -1755,7 +1755,7 @@ def test_sync_create_meeting_async_get_queryset_raises_sync_misuse():
 def test_modelform_refetch_keeps_select_related_and_suppresses_only():
     """The ModelForm re-fetch plan KEEPS ``select_related`` and applies NO ``.only(...)`` (G2).
 
-    Pins the load-bearing property (BUILD.md "Query-shape tests must pin the
+    Pins the load-bearing property (query-shape tests must pin the
     load-bearing property"): a relation-selecting response keeps
     ``select_related``/``prefetch_related``, and ``.only(...)`` is suppressed
     because the op is a MUTATION - the re-fetch rides the SAME ``036``
@@ -1787,7 +1787,7 @@ def test_modelform_refetch_keeps_select_related_and_suppresses_only():
 
 
 # ---------------------------------------------------------------------------
-# ``spec-038-form_mutations-0_0_12`` review fixes
+# ``spec-038-form_mutations-0_0_12`` hardening
 # ---------------------------------------------------------------------------
 
 
@@ -2068,7 +2068,7 @@ def test_visible_related_object_no_primary_uses_default_manager():
     A relation whose related model has no primary ``DjangoType`` carries no
     visibility contract, so existence is checked against the default manager.
     Driven directly (the autouse fixture leaves the registry empty). The helper was
-    promoted to ``utils/querysets.py`` in spec-039 Slice 3 so the form +
+    promoted to ``utils/querysets.py`` in spec-039 so the form +
     serializer relation decoders share one object-returning visibility query.
     """
     genre = library_models.Genre.objects.create(name=_uniq("G"))

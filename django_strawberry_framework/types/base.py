@@ -116,9 +116,9 @@ _RELAY_NODE_GATE_INHERIT_TAIL = "or inherit `relay.Node` directly."
 
 # The valid string-strategy set and the package default are the single source
 # of truth for the GlobalID-encoding strategy vocabulary: ``_validate_meta`` /
-# ``_validate_globalid_strategy`` here, the Slice-2 encoder, and the Slice-3
+# ``_validate_globalid_strategy`` here, the encoder, and the
 # decode-shape enforcement all reference these names rather than re-typing the
-# literals (spec-031 Decisions 4/5/6, build-031 "DRY-first rule"). ``callable``
+# literals (spec-031 Decisions 4/5/6). ``callable``
 # strategies are validated separately (arity + sync-ness), so they are not part
 # of the string set.
 STRING_GLOBALID_STRATEGIES: frozenset[str] = frozenset({"model", "type", "type+model"})
@@ -399,7 +399,7 @@ def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None
     ``inspect.iscoroutinefunction`` alone would miss, letting an async encoder
     survive to request time. A callable that survives both checks is returned to
     the caller untouched; the per-call non-``str`` return guard lives in the
-    Slice-2 install closure.
+    install closure.
     """
     if is_async_callable(value):
         raise ConfigurationError(
@@ -1615,7 +1615,7 @@ def _build_annotations(
     # (``OneToOneField(primary_key=True)``) those differ - ``name="user"``
     # vs. ``attname="user_id"`` - and the comparison below is against
     # ``field.name`` so the NAME is what's needed. Naming it ``pk_attname``
-    # would invite a future maintainer to reuse it in a
+    # would invite a future reader to reuse it in a
     # ``getattr(root, pk_attname)`` context, which would lazy-load the
     # related row for a relation pk.
     pk_name = source_model._meta.pk.name if suppress_pk_annotation else None

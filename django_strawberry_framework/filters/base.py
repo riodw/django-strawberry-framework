@@ -44,8 +44,8 @@ from ..sets_mixins import RelatedSetTargetMixin
 # ``types/relay.py`` module-top imports are stdlib/django/strawberry/``..exceptions``
 # only - it reaches into ``filters`` / ``registry`` solely via in-function imports -
 # so a module-top ``filters/base.py -> types/relay.py`` import does not close a load
-# cycle (spec-031 Slice 2 plan). These are the single source of truth for the
-# strategy->payload-shape mapping shared with the encoder and the Slice-3 decoder.
+# cycle (spec-031). These are the single source of truth for the
+# strategy->payload-shape mapping shared with the encoder and the decoder.
 from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
 from ..utils.querysets import coerce_field_value_or_none
 
@@ -446,7 +446,7 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
        target ``DjangoType`` (spec-027
        #"consult `cls._owner_definition.related_target_for(field_name)`").
 
-    Returns ``None`` when no owner is bound (Slice-1 + Slice-2 unit-test
+    Returns ``None`` when no owner is bound (unit-test
     contexts) or when the lookup cannot resolve a target; the filter then
     decodes the GlobalID without type-name validation (the node-id-only
     fallback, spec-031 Decision 13).

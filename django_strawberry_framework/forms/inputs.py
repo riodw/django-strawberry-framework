@@ -1,14 +1,14 @@
-"""Form-derived ``@strawberry.input`` generation substrate (spec-038 Slice 1).
+"""Form-derived ``@strawberry.input`` generation substrate (spec-038).
 
 Pure, finalizer-free machinery: given a Django ``Form`` / ``ModelForm`` class +
 an operation kind + the effective field set (after ``Meta.fields`` /
 ``Meta.exclude``), it builds the ``<FormClass>Input`` (create) /
 ``<FormClass>PartialInput`` (update) ``@strawberry.input`` classes from the
 form's declared ``base_fields``. No metaclass, no resolver, no finalizer wiring
-lives here - those are Slice 2 (the ``DjangoFormMutation`` /
-``DjangoModelFormMutation`` bases + the phase-2.5 bind) and Slice 3 (the
-resolver pipeline). The generators here are callable and unit-testable in
-isolation; Slice 2 calls them from the bind.
+lives here - the ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases and
+the phase-2.5 bind live in ``sets.py``, the resolver pipeline in
+``resolvers.py``. The generators here are callable and unit-testable in
+isolation; the bind calls them.
 
 Generated input classes MUST become real globals of this module because
 ``strawberry.lazy("django_strawberry_framework.forms.inputs")`` resolves through
@@ -94,7 +94,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.forms.inputs"
 # the shape-identity component a plain ``DjangoFormMutation`` carries in place of
 # a ``"create"`` / ``"update"`` model operation, so a plain form's input cache
 # key ``(form_class, "form", effective set)`` is well-defined (spec-038
-# Decision 7 P2). Slice 2 keys the bind on it; this slice does not branch on it.
+# Decision 7 P2). The bind keys on it; the generators here do not branch on it.
 FORM: str = "form"
 
 # The create-shaped operation kinds (everything that is NOT ``PARTIAL``): a
@@ -110,7 +110,7 @@ CREATE_SHAPED_KINDS: frozenset[str] = frozenset({CREATE, FORM})
 # ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is
 # the ``name -> input_class`` ledger ``materialize_form_input_class`` writes;
-# ``registry.clear()`` (wired in Slice 2) routes through
+# ``registry.clear()`` routes through
 # ``clear_form_input_namespace`` to reset it - a namespace disjoint from
 # ``mutations.inputs`` so the ``036`` ``<Model>Input`` and the form
 # ``<FormClass>Input`` never share a module ``__dict__`` slot. The public
@@ -136,7 +136,7 @@ def materialize_form_input_class(name: str, input_cls: type) -> None:
     sharing a ``__name__``, which can never dedupe because they are distinct
     ``form_class`` identities).
 
-    Defined here; called by Slice 2's phase-2.5 bind.
+    Defined here; called by the phase-2.5 bind.
     """
     _materialize_input(name, input_cls)
 
@@ -158,7 +158,7 @@ def clear_form_input_namespace() -> None:
     Like ``clear_mutation_input_namespace`` (and unlike the set families' clear),
     this resets only the module-level ledger it owns - the form subsystem has no
     arguments-factory cache and no per-set ``_lifecycle`` binding state. Wired
-    into ``registry.clear()`` in Slice 2 (spec-038).
+    into ``registry.clear()`` (spec-038).
     """
     _clear_input_namespace()
 
@@ -184,9 +184,9 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
     Reading it needs no ``form_class()`` call, so a form whose ``__init__``
     requires constructor kwargs (``user``, ``request``, a tenant) still has a
     discoverable, request-independent stable field shape (spec-038 Decision 7
-    P2 - the kwarg-requiring-form fix). Slice 2's overridable
+    P2 - the kwarg-requiring-form fix). The overridable
     ``get_form_fields(cls)`` classmethod on the base delegates here for its
-    default; this slice ships the module-level discovery function only.
+    default; this module ships the module-level discovery function only.
     """
     return dict(form_class.base_fields)
 
@@ -382,12 +382,12 @@ def _field_triple_and_spec(
     ``converter.form_field_required`` decision for BOTH the column-backed and
     column-less paths (so ``NullBooleanField`` is forced optional on either
     basis, and the two paths cannot drift). The returned ``InputFieldSpec``
-    records the reverse map the Slice 3 resolver consults - ``target_name`` is
+    records the reverse map the resolver consults - ``target_name`` is
     always the form's declared name, never the ``<name>_id`` relation attr,
     because a bound Django form is keyed by form-field name. A relation field
     also records ``related_model`` from the SAME basis the generated id type uses
     (the backing column's ``related_model``, else the form field's
-    ``queryset.model``) so the Slice-3 decode never re-derives it from the
+    ``queryset.model``) so the decode never re-derives it from the
     class-level ``base_fields`` field (whose ``queryset`` is ``None`` under the
     request-scoped-choices idiom).
     """
@@ -498,14 +498,14 @@ def build_form_input_class(
     ``operation_kind`` is ``CREATE`` / ``FORM`` (the create-shaped input - each
     field's requiredness from ``field.required``, graphene-django parity) or
     ``PARTIAL`` (the update-shaped input). In the partial input, model-backed
-    fields are forced optional (Slice 3's reconstruction supplies them from the
+    fields are forced optional (the reconstruction supplies them from the
     located row), but a **non-model extra field keeps its declared
     ``field.required``** (spec-038 Decision 7 P2 - so a required ``confirm`` stays
     required on update). Optional fields widen ``annotation | None`` + a
     ``strawberry.UNSET`` default, the ``036`` shape.
 
     Returns ``(input_cls, field_specs)`` - the UNMATERIALIZED
-    ``@strawberry.input`` class and the per-field reverse-map records. Slice 2's
+    ``@strawberry.input`` class and the per-field reverse-map records. The
     phase-2.5 bind calls ``materialize_form_input_class`` to pin the class as a
     module global.
     """
@@ -674,10 +674,10 @@ def build_form_inputs(
     ``guard_required`` is True this raises ``ConfigurationError`` naming the
     dropped required field(s), covering both ``Meta.fields`` and ``Meta.exclude``.
     The waiver (``guard_required=False``) is the ``get_form_kwargs`` /
-    ``get_form`` override escape hatch (Slice 2/3): when the consumer overrides
+    ``get_form`` override escape hatch: when the consumer overrides
     that hook the guard cannot know which fields the override injects, so it
-    trusts the explicit override - surfaced here as an explicit parameter so
-    Slice 2 can pass ``guard_required=False``, never hard-coded always-on.
+    trusts the explicit override - surfaced here as an explicit parameter so the
+    bind can pass ``guard_required=False``, never hard-coded always-on.
     """
     effective = resolve_effective_form_fields(form_class, fields=fields, exclude=exclude)
     if guard_required:

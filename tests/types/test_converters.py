@@ -789,7 +789,7 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 
 
 # ---------------------------------------------------------------------------
-# ArrayField -> list[T] sentinel-guarded recursion (Slice 3)
+# ArrayField -> list[T] sentinel-guarded recursion
 #
 # Synthetic models live under ``app_label = "test_arrayfield"`` so they do
 # not collide with the prior synthetic apps (``test_bigint``,
@@ -1149,7 +1149,7 @@ def test_real_array_field_compatible_with_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# HStoreField -> strawberry.scalars.JSON sentinel-guarded branch (Slice 4)
+# HStoreField -> strawberry.scalars.JSON sentinel-guarded branch
 #
 # Synthetic models live under ``app_label = "test_hstorefield"`` so they do
 # not collide with the prior synthetic apps (``test_bigint``,
@@ -1392,7 +1392,7 @@ def test_real_hstore_field_compatible_with_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - multi-type relation conversion regressions (always-defer)
+# Multi-type relation conversion regressions (always-defer)
 # ---------------------------------------------------------------------------
 
 
@@ -1582,7 +1582,7 @@ def test_relation_resolves_when_target_model_has_one_type_no_primary():
 
 
 def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finalize():
-    """Slice 3 audit fires before unresolved-target when target is multi-type-no-primary."""
+    """The ambiguity audit fires before unresolved-target when target is multi-type-no-primary."""
     from apps.products.models import Category, Item
 
     class ItemType(DjangoType):
@@ -1610,7 +1610,7 @@ def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finali
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 - convert_scalar force_nullable tri-state
+# spec-029 - convert_scalar force_nullable tri-state
 #
 # These are direct ``convert_scalar`` unit tests (the tri-state seam fires at
 # conversion time, unreachable from a live query without the override
@@ -1744,7 +1744,7 @@ def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# File / image read-output mapping (spec-037 Slice 1, Decision 3 / Decision 4)
+# File / image read-output mapping (spec-037, Decision 3 / Decision 4)
 # ---------------------------------------------------------------------------
 
 

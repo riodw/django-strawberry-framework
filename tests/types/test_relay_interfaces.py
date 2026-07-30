@@ -59,7 +59,7 @@ def _meta(**attrs):
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 - validation + storage
+# Validation + storage
 # ---------------------------------------------------------------------------
 
 
@@ -184,8 +184,8 @@ def test_meta_interfaces_stored_on_definition():
 def test_meta_interfaces_end_to_end_accepted_in_validate_meta():
     """End-to-end ``class Meta: interfaces = (relay.Node,)`` flows through ``_validate_meta``.
 
-    Slice 5 promoted ``"interfaces"`` from ``DEFERRED_META_KEYS`` to
-    ``ALLOWED_META_KEYS``, so the deferred-key check no longer
+    ``"interfaces"`` sits in ``ALLOWED_META_KEYS`` rather than
+    ``DEFERRED_META_KEYS``, so the deferred-key check no longer
     short-circuits the validator. This test pins that the full
     ``__init_subclass__`` path accepts the declaration and stores the
     normalized tuple on ``DjangoTypeDefinition``.
@@ -203,10 +203,10 @@ def test_meta_interfaces_end_to_end_accepted_in_validate_meta():
 def test_class_already_inherits_relay_node_directly():
     """``_validate_interfaces`` accepts a Meta whose host class already inherits ``relay.Node``.
 
-    Slice 1's contract is only that the validator accepts the tuple
+    The contract here is only that the validator accepts the tuple
     without raising. The structural no-op (skip bases already in
-    ``cls.__mro__``) is Slice 4's job; this test deliberately does not
-    inspect ``__bases__``.
+    ``cls.__mro__``) is base-class injection's job; this test deliberately
+    does not inspect ``__bases__``.
     """
 
     class _Host(DjangoType, relay.Node):
@@ -215,7 +215,7 @@ def test_class_already_inherits_relay_node_directly():
     meta = _meta(interfaces=(relay.Node,))
     assert _validate_interfaces(meta) == (relay.Node,)
     # Reference _Host so ruff does not flag the host class as unused; the
-    # class existing in the test module is the assertion shape per the plan.
+    # class existing in the test module IS the assertion shape.
     assert relay.Node in _Host.__mro__
 
 
@@ -263,7 +263,7 @@ def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - is_type_of injection
+# is_type_of injection
 # ---------------------------------------------------------------------------
 
 
@@ -328,7 +328,7 @@ def test_consumer_declared_is_type_of_is_preserved():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 - id suppression
+# id suppression
 # ---------------------------------------------------------------------------
 
 
@@ -427,7 +427,7 @@ def test_non_relay_type_keeps_id_int():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - interface base-class injection + Relay resolver defaults
+# Interface base-class injection + Relay resolver defaults
 # ---------------------------------------------------------------------------
 
 
@@ -766,8 +766,8 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     has been awaited. The caller awaits the resolver call to obtain the
     queryset, then iterates with ``async for``. Pins the spec-015
     #"same for ``_resolve_nodes_default``" "node_ids=None" branch of
-    Decision 9 under the corrected awaitable contract the
-    ``spec-015-relay_interfaces-0_0_5`` review recorded under High.
+    Decision 9 under the corrected awaitable contract of
+    ``spec-015-relay_interfaces-0_0_5``.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
     qs = await CategoryNode.resolve_nodes(info=None)
@@ -870,7 +870,7 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
     ``.filter`` blow up on a coroutine, the framework closes the
     unawaited coroutine and raises a named ``ConfigurationError``
     pointing the consumer at the async resolver path or a sync hook
-    rewrite (``spec-015-relay_interfaces-0_0_5`` review, High).
+    rewrite (``spec-015-relay_interfaces-0_0_5``).
     """
 
     class CategoryNode(DjangoType):
@@ -1571,7 +1571,7 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 2 - the encode seam (strategy-parameterized resolve_typename,
+# spec-031 - the encode seam (strategy-parameterized resolve_typename,
 # the four encoders, the override -> custom classification, the
 # model-label-routing audit, the default flip, the re-entrancy guard).
 # ---------------------------------------------------------------------------
@@ -2474,7 +2474,7 @@ def test_clear_and_rebuild_flips_strategy_no_process_global(settings):
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 3 - the decode seam (``decode_global_id`` resolve-then-enforce:
+# spec-031 - the decode seam (``decode_global_id`` resolve-then-enforce:
 # Step-1 model-label / type-name resolution, Step-2 strategy-shape enforcement,
 # encoder/decoder symmetry, the transitional ``type+model`` accept-old-IDs path,
 # the uniform ``ConfigurationError`` for every failure mode).

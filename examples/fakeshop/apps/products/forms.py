@@ -1,4 +1,4 @@
-"""Consumer Django forms for the products live form-mutation surface (spec-038 Slice 4).
+"""Consumer Django forms for the products live form-mutation surface (spec-038).
 
 These are plain Django forms (declared the standard Django way - no package imports
 beyond ``django.forms``); ``apps/products/schema.py`` wraps them in the shipped

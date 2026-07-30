@@ -40,11 +40,11 @@ def test_optimizer_subpackage_reexports_top_level_logger():
 def test_public_api_surface_is_pinned():
     # Pin ``__all__`` so silent surface widening (e.g., accidental
     # re-export of an internal name) shows up at test time. New public
-    # names only land when a future spec adds them; version changes are
-    # maintainer-commanded and do not imply public-surface widening.
+    # names only land when a future spec adds them; a version bump alone
+    # does not imply public-surface widening.
     # The four-symbol mutation surface (spec-036) is complete: ``FieldError``,
     # ``DjangoMutation`` + ``DjangoModelPermission``, and ``DjangoMutationField``.
-    # spec-037 Slice 3 adds the three file/upload symbols: ``Upload`` (the
+    # spec-037 adds the three file/upload symbols: ``Upload`` (the
     # re-exported Strawberry scalar) plus ``DjangoFileType`` / ``DjangoImageType``
     # (the structured read-output objects). spec-038 adds two form-mutation
     # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``). spec-040 (the
@@ -88,7 +88,7 @@ def test_public_api_surface_is_pinned():
 
 
 def test_file_upload_exports_resolve_to_their_source_definitions():
-    # The three spec-037 Slice 3 root exports are re-exports, not new
+    # The three spec-037 root exports are re-exports, not new
     # definitions: ``Upload`` rides through ``.scalars`` (which itself
     # re-exports Strawberry's built-in), and the two output objects are the
     # exact ``types.converters`` classes. Pin the re-export IDENTITY so a stray

@@ -22,7 +22,7 @@ Deliberate properties, each one a hand-run failure mode this encodes away:
   somewhere unintended.
 * **Node ids, not just a count.** "The number of failing rows" is
   scope-sensitive: a wider focused scope inflates it, which silently moves a
-  boundary across the reviewer's mandatory re-run floor. Recording the node ids
+  boundary across the mandatory independent re-run floor. Recording the node ids
   and the scope as run makes two independent measurements comparable by set
   difference instead of by number.
 * **One mutation live at a time**, restored in a ``finally``, with the restore
@@ -139,7 +139,7 @@ PRISTINE_DIRECTORY_NAME = "pristine"
 ACTIVE_MARKER_NAME = "ACTIVE-MUTATION.json"
 RESTORE_FAILED_MARKER_NAME = "RESTORE-FAILED.json"
 # ``--no-cov`` is mandatory: pytest.ini's addopts turn coverage on, and coverage
-# is the maintainer's gate rather than a worker's tool. ``--color=no`` and
+# gating belongs to the full-suite run, not to this tool. ``--color=no`` and
 # ``-p no:cacheprovider`` keep the captured output parseable and keep the run
 # from writing cache state into the repo.
 PYTEST_COMMAND = (

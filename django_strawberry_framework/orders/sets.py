@@ -5,20 +5,18 @@ The metaclass is a verbatim port of
 mixes the cookbook's cycle-safe ``get_fields`` (the Layer-4 expansion)
 over ``ClassBasedTypeNameMixin`` from ``..sets_mixins``.
 
-Slice 1 shipped the class skeleton + ``get_fields()`` Layer-4 expansion
-with the ``"__all__"`` branch raising ``NotImplementedError``. Slice 2
-expands the file to:
+On top of that skeleton the module carries:
 
-- Replace the ``"__all__"`` placeholder with the
+- The ``"__all__"`` expansion via the
   ``_get_concrete_field_names_for_order`` walk per spec-028.
-- Add the resolver-facing classmethod pair ``apply_sync`` /
+- The resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
-- Add the classmethod permission pipeline
+- The classmethod permission pipeline
   (``_run_permission_checks`` / ``_active_permission_targets`` /
   ``_active_permission_field_paths`` / ``_invoke_permission_method`` /
   ``_request_from_info``) that drives active-input-only per-field
   ``check_<field>_permission`` dispatch per Spec Decision 8 step 6.
-- Add the cookbook-style ``get_flat_orders`` classmethod walking the
+- The cookbook-style ``get_flat_orders`` classmethod walking the
   normalized data structure.
 """
 
@@ -126,8 +124,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     """
 
     # Binding seam - populated by ``finalize_django_types`` phase 2.5 in
-    # Slice 3 per spec-028 Decision 6. The slot's existence is the Slice 1
-    # contract; the binding write lands in Slice 3. Same shape as the
+    # per spec-028 Decision 6. The slot's existence is the contract here;
+    # the binding write lands with the field factory. Same shape as the
     # filter side's ``FilterSet._owner_definition``.
     _owner_definition: DjangoTypeDefinition | None = None
 
@@ -135,10 +133,10 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     _expanded_fields = None
     # Recursion guard around ``get_fields`` so a self-referential
     # ``RelatedOrder`` does not blow the stack. The slot stays in place
-    # for future defensive use even though the Slice 2 expansion removes
+    # for future defensive use even though the expansion removes
     # the explicit reentry-branch test from ``_expand_meta_fields`` (per
     # the planning-pass disposition -- the branch was structurally
-    # unreachable through the planned Slice 2 surface).
+    # unreachable through the shipped surface).
     _is_expanding_fields = False
 
     # Family binding-state descriptor: the single source for the lifecycle attr
@@ -169,8 +167,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
           (no unresolved string forward references remain).
 
         ``Meta.fields = "__all__"`` expands via
-        ``_get_concrete_field_names_for_order`` (Slice 2's deliverable
-        per spec-028 Decision 3).
+        ``_get_concrete_field_names_for_order``
+        (spec-028 Decision 3).
         """
 
         def _build() -> OrderedDict:
@@ -241,7 +239,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         return fields
 
     # ------------------------------------------------------------------
-    # Resolver-facing API (Slice 2 / spec-028 Decision 8)
+    # Resolver-facing API (spec-028 Decision 8)
     # ------------------------------------------------------------------
 
     @classmethod
@@ -441,7 +439,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         ``prefix`` exists for cookbook-shape symmetry: callers who pass
         pre-walked normalized data (the output of
         ``normalize_input_value``) get a pass-through that re-applies
-        the prefix per element. Slice 2's apply pipeline calls
+        the prefix per element. The apply pipeline calls
         ``cls._normalize_input(input_value)`` first and then
         ``cls.get_flat_orders(data)`` against the normalized data, so
         ``prefix`` is empty in the common path. Future callers that

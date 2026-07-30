@@ -7,10 +7,9 @@ Covers ``INPUTS_MODULE_PATH``, the ``Ordering`` enum (members +
 (write-to-module-global, idempotent re-write on the same pair,
 ``ConfigurationError`` on collision against a different class).
 
-Slice 2 / Slice 3 land their tests around
-``convert_order_field_to_input_annotation`` / ``normalize_input_value`` /
-``clear_order_input_namespace`` / ``order_input_type``; the TODO
-anchors stay until then.
+The sections below cover ``convert_order_field_to_input_annotation`` /
+``normalize_input_value`` / ``clear_order_input_namespace`` /
+``order_input_type``.
 """
 
 from __future__ import annotations
@@ -177,7 +176,7 @@ def test_materialize_input_class_raises_on_collision(_materialization_cleanup):
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - convert_order_field_to_input_annotation
+# convert_order_field_to_input_annotation
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +202,7 @@ def test_convert_order_field_to_input_annotation_returns_ordering_or_none():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - normalize_input_value
+# normalize_input_value
 # ---------------------------------------------------------------------------
 
 
@@ -351,7 +350,7 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - build_input_class
+# build_input_class
 # ---------------------------------------------------------------------------
 
 
@@ -379,7 +378,7 @@ def test_build_input_class_handles_python_attr_to_graphql_alias_mapping():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - _build_input_fields populates _field_specs
+# _build_input_fields populates _field_specs
 # ---------------------------------------------------------------------------
 
 
@@ -451,7 +450,7 @@ def test_field_specs_populated_by_build_input_fields_for_relatedorder():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - clear_order_input_namespace
+# clear_order_input_namespace
 # ---------------------------------------------------------------------------
 
 
@@ -559,7 +558,7 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(_nam
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - order_input_type consumer helper
+# order_input_type consumer helper
 # ---------------------------------------------------------------------------
 
 
@@ -631,7 +630,7 @@ def test_order_input_type_is_idempotent_under_repeated_calls():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 -- registry.clear() integration
+# registry.clear() integration
 # ---------------------------------------------------------------------------
 
 

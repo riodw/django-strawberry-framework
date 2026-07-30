@@ -1,4 +1,4 @@
-"""The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
+"""The sync + async serializer-mutation resolver pipeline (spec-039).
 
 The DRF-serializer write runtime, the third sibling of ``mutations/resolvers.py``
 (the ``036`` model pipeline) and ``forms/resolvers.py`` (the ``038`` form
@@ -23,7 +23,7 @@ The serializer-specific invariants this module owns:
 - **The decode produces a SERIALIZER-FIELD-keyed ``provided_data``** (Decision 8
   step 1). DRF serializers are keyed by DECLARED field name and read uploads from
   ``data`` like any other value (the deliberate contrast with Django forms, which
-  split ``files=``). The Slice-1 reverse map
+  split ``files=``). The reverse map
   (``mutation_cls._input_field_specs``, a list of
   ``utils/inputs.py::InputFieldSpec``) routes each provided input attr to its
   serializer field name (``spec.target_name``) + decode ``kind`` (``SCALAR`` /
@@ -101,7 +101,7 @@ The serializer-specific invariants this module owns:
   ``run_pipeline_async`` boundary both the model and form flavors already delegate
   to, so the three flavors cannot drift on the boundary contract.
 
-DRY-FIRST: the locate / authorize / id-decode / re-fetch / payload / atomic
+Single-sourced: the locate / authorize / id-decode / re-fetch / payload / atomic
 boundary are the promoted ``036`` skeleton; the flat Django save-time mapper, the
 shared ``field_error`` leaf ctor, the ``NON_FIELD_ERROR_KEY`` sentinel, the
 shared ``036`` integrity mapper, the raw-pk coercion, and the

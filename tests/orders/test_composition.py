@@ -2,7 +2,7 @@
 
 Pins the **package-internal** composition contract for a ``DjangoType`` that
 declares BOTH ``Meta.filterset_class`` AND ``Meta.orderset_class``. The
-Slice 4 live HTTP test ``test_library_books_filter_and_order_compose`` (at
+live HTTP test ``test_library_books_filter_and_order_compose`` (at
 ``examples/fakeshop/test_query/test_library_api.py``) already pins the
 consumer-visible behavior end-to-end through ``/graphql/``; this file pins
 the complementary implementation-contract altitude:
@@ -191,7 +191,7 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
     assert "BookOrderInputType" in _order_materialized_names
 
     # Assertion 3: both factories' class-level ``input_object_types``
-    # dicts carry the materialized classes (Slice 2's factory-cache
+    # dicts carry the materialized classes (the factory-cache
     # contract on both subsystems).
     assert "BookFilterInputType" in FilterArgumentsFactory.input_object_types
     assert "BookOrderInputType" in OrderArgumentsFactory.input_object_types

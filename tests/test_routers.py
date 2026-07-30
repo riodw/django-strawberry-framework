@@ -1079,8 +1079,8 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
 
     Decision 4 renames rather than aliases - "a single parameter that no longer
     affects HTTP would be a name that lies" - and makes the replacement
-    keyword-only. Neither contract has a Test-plan row of its own, and Slice 4
-    reopens this exact signature to add two more keywords, so both are pinned
+    keyword-only. The revalidation keywords reopen this exact signature to add
+    two more keywords, so both halves of the rename are pinned
     here: a compatibility alias or a relaxed positional boundary has to fail
     loudly instead of arriving as a convenience edit.
     """
@@ -1545,7 +1545,7 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
     """All three WebSocket keywords are KEYWORD_ONLY, with their defaults.
 
     The sibling of the row whose subject is the ``url_pattern`` rename: this one
-    extends the keyword-only contract to the two parameters Slice 4 adds, so a
+    extends the keyword-only contract to the two revalidation parameters, so a
     later convenience edit that relaxes one of them into a positional has to fail
     loudly. Read off ``inspect.signature`` rather than probed with a call, so the
     contract is asserted on the signature itself.
@@ -2666,7 +2666,7 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
     thread); the resolver then sees the AUTHENTICATED user, not ``AnonymousUser``
     - what actually earns the "session user on the scope" claim.
     The mint itself now lives at module level (``_make_user_and_session``), where
-    the Slice-4 revalidation rows share it; the assertions are unchanged.
+    the revalidation rows share it; the assertions are unchanged.
     """
     _user, cookie, _session_key = await _make_user_and_session("channels_probe")
     router = _router()

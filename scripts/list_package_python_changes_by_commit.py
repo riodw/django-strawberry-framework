@@ -3,8 +3,8 @@
 
 The report is intentionally narrow: it scans commit history and records only
 ``*.py`` paths under ``django_strawberry_framework/``. It is meant to feed a
-spec-attribution pass where a reviewer maps package source changes back to the
-design spec or card that owned them.
+spec-attribution pass that maps package source changes back to the design spec
+that owned them.
 
 By default the script walks every commit reachable from ``HEAD`` in reverse
 topological order and omits commits that did not touch package Python files.

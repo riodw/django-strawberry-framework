@@ -547,7 +547,7 @@ def _build_range_input_class(
     reject the clash -- it SILENTLY keeps whichever class it registers first and
     drops the other, so a filterset whose ``RangeFilter`` resolves a different
     scalar (a ``date`` range vs an ``int`` range) is advertised with the wrong
-    axis type over the wire. spec-027 (Slice-2 scope) assumed a duplicate-type
+    axis type over the wire. spec-027 assumed a duplicate-type
     error would surface; it does not, so the per-filterset-scoped name (the
     documented forward path) is applied here. ``None`` (direct converter callers
     that build no schema) keeps the unqualified ``<Field>RangeInputType`` name.

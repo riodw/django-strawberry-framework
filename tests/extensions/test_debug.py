@@ -12,7 +12,7 @@ same-thread attribution, concurrent sync instance isolation at the
 non-interference degrade, the cursor-construction capture-interval boundary,
 transaction-boundary scope, and sibling-hook SQL ordering.
 
-Deliberate test rules (spec-044 DRY D4-D5 / Test plan):
+Deliberate test rules (spec-044 D4-D5):
 
 * Wire keys and the 10-second slow threshold are re-spelled as INDEPENDENT
   literals - never imported from the production module and never built

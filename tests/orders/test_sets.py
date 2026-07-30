@@ -1,11 +1,11 @@
 """OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 
-Slice 1 surface (kept intact, append-only edits): metaclass collection /
-override / binding, ``_owner_definition`` slot default, cache slot
-defaults, list-form ``Meta.fields`` expansion, ``related_orders``
-merge, and the cycle-safe cache write gate.
+Declaration surface: metaclass collection / override / binding,
+``_owner_definition`` slot default, cache slot defaults, list-form
+``Meta.fields`` expansion, ``related_orders`` merge, and the cycle-safe
+cache write gate.
 
-Slice 2 surface: the ``"__all__"`` cookbook-parity expansion, the
+Apply surface: the ``"__all__"`` cookbook-parity expansion, the
 resolver-facing ``apply_sync`` / ``apply_async`` classmethods, the
 ``get_flat_orders`` walker, the ``_request_from_info`` context
 resolver, and the per-field / per-branch ``check_*_permission``
@@ -134,7 +134,7 @@ def test_metaclass_none_removal_survives_diamond_inheritance():
 
 
 def test_orderset_owner_definition_default_none():
-    """The binding seam is ``None`` until Slice 3 wires phase 2.5."""
+    """The binding seam is ``None`` until phase 2.5 wires it."""
 
     class FreshOrder(OrderSet):
         pass
@@ -225,7 +225,7 @@ def test_orderset_get_fields_does_not_cache_with_unresolved_string_target():
 
     class BookOrder(OrderSet):
         # Unresolvable absolute target; will not resolve to a real class
-        # until something updates ``_orderset``. The Slice 1 cache gate
+        # until something updates ``_orderset``. The cache gate
         # refuses to write while a string is still on the instance.
         shelf = RelatedOrder("tests.orders.test_sets.MissingOrder", field_name="shelf")
 
@@ -257,7 +257,7 @@ def test_orderset_meta_fields_none_returns_only_related_orders():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - additional cookbook-parity __all__ shapes
+# Additional cookbook-parity __all__ shapes
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model()
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - Slice 2 apply_sync / apply_async / permissions fixtures
+# apply_sync / apply_async / permissions fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -313,7 +313,7 @@ def _book_order_with_factory():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - apply_async
+# apply_async
 # ---------------------------------------------------------------------------
 
 
@@ -352,7 +352,7 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - active-input-only + active-branch double-dispatch + dedup
+# Active-input-only + active-branch double-dispatch + dedup
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +393,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - _request_from_info shapes
+# _request_from_info shapes
 # ---------------------------------------------------------------------------
 
 
@@ -431,7 +431,7 @@ def test_orderset_request_from_info_raises_when_info_context_is_none():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - get_flat_orders walker
+# get_flat_orders walker
 # ---------------------------------------------------------------------------
 
 
@@ -453,7 +453,7 @@ def test_orderset_get_flat_orders_applies_prefix():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - _normalize_input delegate (smoke; full coverage in test_inputs)
+# _normalize_input delegate (smoke; full coverage in test_inputs)
 # ---------------------------------------------------------------------------
 
 

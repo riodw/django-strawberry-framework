@@ -54,8 +54,8 @@ def _validate_djangotype_target(
 ) -> None:
     """Run the four shared DjangoType-target constructor guards for a field factory.
 
-    Shared by ``DjangoListField`` and ``DjangoConnectionField`` (and, later,
-    card 032's ``DjangoNodeField``). ``field`` is the factory's public name
+    Shared by ``DjangoListField`` and ``DjangoConnectionField`` (and any future
+    node field). ``field`` is the factory's public name
     (e.g. ``"DjangoListField"``) interpolated into the ``ConfigurationError``
     messages so each factory's errors name itself. These four constructor-site
     checks fail at the line that wrote ``<field>(...)`` rather than at

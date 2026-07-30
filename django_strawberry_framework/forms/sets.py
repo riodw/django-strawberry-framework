@@ -1,4 +1,4 @@
-"""The ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases + ``Meta`` validation + bind (Slice 2).
+"""The ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases + ``Meta`` validation + bind.
 
 The form-mutation write surface, riding the ``036`` mutation seams
 (``mutations/sets.py``). Two bases (spec-038 Decision 6):
@@ -7,7 +7,7 @@ The form-mutation write surface, riding the ``036`` mutation seams
   seams (``_resolve_model`` -> ``Meta.form_class._meta.model``, ``_validate_meta``
   -> the ``ModelForm`` matrix, ``build_input`` -> the ``forms/inputs.py``
   generator, ``input_type_name`` / ``input_module_path`` -> the form-input
-  namespace, ``resolve_*`` -> the Slice-3 form pipeline). It rides the
+  namespace, ``resolve_*`` -> the form pipeline). It rides the
   ``DjangoMutation`` metaclass + declaration registry + ``bind_mutations()``
   unchanged, so a ``ModelForm`` mutation binds its model-backed ``<Name>Payload``
   (``node`` / ``result`` slot) through the SAME phase-2.5 path as the ``036``
@@ -20,23 +20,23 @@ The form-mutation write surface, riding the ``036`` mutation seams
   (Decision 6 - no object slot).
 
 The two ``_validate_meta`` overrides are disjoint matrices (Decision 6 / Decision
-10 / spec-038 Slice 2): both require ``Meta.form_class``; the plain base checks
+10 / spec-038): both require ``Meta.form_class``; the plain base checks
 ``issubclass(form_class, forms.ModelForm)`` FIRST and rejects it naming
 ``DjangoModelFormMutation`` (the targeted Edge-case message), then requires a
 ``forms.Form``, and rejects ANY ``Meta.operation``; the ``ModelForm`` base
 requires a ``forms.ModelForm`` and ``Meta.operation in {"create", "update"}``
 (``"delete"`` rejected - no form delete pipeline). Field narrowing
 (``Meta.fields`` / ``Meta.exclude`` mutual exclusion + fail-loud) reuses the
-Slice-1 ``forms/inputs.py::resolve_effective_form_fields`` machinery, never a
+``forms/inputs.py::resolve_effective_form_fields`` machinery, never a
 re-spelled copy.
 
-**Slice 3 fills the resolver seams + the form-construction hooks.** The
+**The resolver seams + the form-construction hooks.** The
 ``resolve_sync`` / ``resolve_async`` overrides delegate to the
 ``forms/resolvers.py`` pipeline; both flavors carry the overridable
 ``get_form_kwargs`` / ``get_form`` construction hooks (the plain flavor adds
 ``perform_mutate`` + its own ``check_permission``), the ``get_form_kwargs``
 waiver is wired into ``build_input`` (the create-required guard is skipped when a
-consumer overrides the construction hook), and the Slice-1 reverse-map
+consumer overrides the construction hook), and the reverse-map
 ``field_specs`` are stashed at bind (``_input_field_specs``) for the decode.
 """
 
@@ -90,7 +90,7 @@ from .inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
 
-# The form ``Meta``'s allowed-key sets (spec-038 Slice 2 / Decision 6). Disjoint
+# The form ``Meta``'s allowed-key sets (spec-038 Decision 6). Disjoint
 # from ``036``'s ``_ALLOWED_MUTATION_META_KEYS``: a form ``Meta`` adds
 # ``form_class`` and drops ``model`` / ``input_class`` / ``partial_input_class``.
 # The ``ModelForm`` flavor keeps ``operation`` (create / update); the plain
@@ -139,9 +139,9 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # by shape identity makes identical shapes reuse one class object, so
 # ``materialize_form_input_class`` dedupes idempotently (the same dedupe contract the
 # model flavor's ``_shape_build_cache`` provides). The cache VALUE is the
-# ``(input_cls, field_specs)`` pair (spec-038 Slice 3): the Slice-1 reverse-map
+# ``(input_cls, field_specs)`` pair (spec-038): the reverse-map
 # ``field_specs`` MUST survive the dedupe so the bind can stash them on the mutation
-# (``_input_field_specs``) for the Slice-3 decode - caching only ``input_cls`` would
+# (``_input_field_specs``) for the decode - caching only ``input_cls`` would
 # discard the load-bearing P1 reverse map. Cleared at the start of
 # ``bind_form_mutations()`` and co-cleared from ``registry.clear()`` so a stale class
 # from a prior (failed or re-run) finalize never leaks. Both flavors' ``build_input``
@@ -181,9 +181,9 @@ def _cached_build_form_input(
     discarded). ``PARTIAL`` builds the partial directly (never create-required
     guarded - it widens model-backed fields optional).
 
-    Returns the ``(input_cls, field_specs)`` pair so the Slice-1 reverse-map specs
+    Returns the ``(input_cls, field_specs)`` pair so the reverse-map specs
     survive the per-shape dedupe and reach the bind's ``_input_field_specs`` stash
-    (spec-038 Slice 3 - the P1 decode reverse map).
+    (spec-038 - the P1 decode reverse map).
     """
     effective = _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
 
@@ -243,7 +243,7 @@ def _resolve_effective_form_field_names(
 ) -> tuple[str, ...]:
     """Return the effective form-field names after ``Meta.fields`` / ``Meta.exclude``.
 
-    Routes through the Slice-1 ``resolve_effective_form_fields`` (the narrowing
+    Routes through ``resolve_effective_form_fields`` (the narrowing
     fail-loud machinery: mutual exclusion, bare-string / duplicate rejection,
     unknown-name rejection against ``form_class.base_fields``, empty-set guard) so
     the form ``_validate_meta`` does not re-spell that validation. Returns the
@@ -256,7 +256,7 @@ def _resolve_effective_form_field_names(
 def _form_kwargs_overridden(cls: type, base: type) -> bool:
     """Return whether ``cls`` overrides ``get_form_kwargs`` / ``get_form`` (the waiver detection).
 
-    The ``get_form_kwargs`` / ``get_form`` waiver (spec-038 Decision 7 / Slice 3):
+    The ``get_form_kwargs`` / ``get_form`` waiver (spec-038 Decision 7):
     True when the concrete mutation re-defines EITHER construction hook relative to
     its framework ``base``. When a consumer overrides the form-construction hook to
     inject fields the generated input does not carry (a ``user``, a tenant, a
@@ -349,7 +349,7 @@ def _build_and_stash_form_input(
     per-declaration create-required guard) and the promoted
     ``mutations/sets.py::build_and_stash_input``, which materializes
     the class into ``forms.inputs`` and stashes the reverse-map ``field_specs`` on
-    the mutation (``cls._input_field_specs``) for the Slice-3 decode. The form's
+    the mutation (``cls._input_field_specs``) for the decode. The form's
     per-flavor stash value (``build_and_stash_input``'s ``payload``) IS the
     ``field_specs`` list, so ``specs_of`` is identity. Single-sited (with the
     serializer flavor) so a future change to the materialize-and-stash sequence
@@ -439,7 +439,7 @@ class DjangoModelFormMutation(DjangoMutation):
           (``"delete"`` is rejected - the form flavor has no delete pipeline,
           Decision 10).
         - **``fields`` + ``exclude`` both supplied / bare-string / duplicate /
-          unknown-name** - via the Slice-1 ``resolve_effective_form_fields``.
+          unknown-name** - via ``resolve_effective_form_fields``.
 
         ``permission_classes`` is validated + normalized by the shared
         ``_validate_permission_classes`` (the ``DjangoModelPermission`` default
@@ -479,7 +479,7 @@ class DjangoModelFormMutation(DjangoMutation):
 
         fields = getattr(meta, "fields", None)
         exclude = getattr(meta, "exclude", None)
-        # Validate the narrowing fail-loud via the Slice-1 machinery (mutual
+        # Validate the narrowing fail-loud via the shared machinery (mutual
         # exclusion, bare-string / duplicate / unknown-name, empty-set guard); the
         # snapshot stores the RAW declarations (``build_input`` re-normalizes them).
         _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
@@ -510,8 +510,8 @@ class DjangoModelFormMutation(DjangoMutation):
     # ref resolves the form-derived input, not a model-column input.
     input_module_path: str = FORMS_INPUTS_MODULE_PATH
 
-    # The Slice-1 reverse-map records (``utils/inputs.py::InputFieldSpec`` per input
-    # field), stashed at bind so the Slice-3 decode reaches the form-field-keyed
+    # The reverse-map records (``utils/inputs.py::InputFieldSpec`` per input
+    # field), stashed at bind so the decode reaches the form-field-keyed
     # reverse map. ``None`` until bind (mirrors ``_input_class``).
     _input_field_specs: list | None = None
 
@@ -522,12 +522,12 @@ class DjangoModelFormMutation(DjangoMutation):
         Mirrors the ``036`` ``_materialize_input_for`` one-input-per-operation
         shape: a ``create`` materializes the ``CREATE``-shaped ``<FormClass>Input``,
         an ``update`` materializes the ``PARTIAL``-shaped
-        ``<FormClass>PartialInput``. The input comes from the Slice-1 generator (the
+        ``<FormClass>PartialInput``. The input comes from the form-input generator (the
         form's ``base_fields``, the symmetric model-backed converters), NOT the
         model's editable columns. Materialized into ``forms.inputs`` via
         ``materialize_form_input_class`` so the lazy ``data:`` ref resolves there.
 
-        The **create** path runs the Slice-1 create-required-narrowing guard (a
+        The **create** path runs the create-required-narrowing guard (a
         ``Meta.fields`` / ``Meta.exclude`` dropping a still-declared required form
         field raises - a bound form could never validate without it); the **update**
         path builds the partial directly (no create-required guard - the partial
@@ -536,10 +536,10 @@ class DjangoModelFormMutation(DjangoMutation):
         set reuse one class object and dedupe idempotently at materialize.
 
         ``guard_required`` is waived (``False``) when the concrete mutation
-        overrides ``get_form_kwargs`` / ``get_form`` (spec-038 Slice 3 waiver): the
+        overrides ``get_form_kwargs`` / ``get_form`` (spec-038 waiver): the
         override injects whatever fields a narrowing dropped, so the guard trusts it.
-        The Slice-1 reverse-map ``field_specs`` are stashed on the mutation
-        (``cls._input_field_specs``) so the Slice-3 decode can produce a
+        The reverse-map ``field_specs`` are stashed on the mutation
+        (``cls._input_field_specs``) so the decode can produce a
         form-field-keyed payload (the P1 reverse map).
         """
         del primary_type  # the form input derives from the form, not the model primary.
@@ -564,8 +564,8 @@ class DjangoModelFormMutation(DjangoMutation):
         """
         return _form_input_type_name_for(meta, NON_DELETE_OPERATION_INPUT_KIND[meta.operation])
 
-    # The sync / async ``ModelForm`` resolver seams (delegate to the Slice-3 form
-    # pipeline), via the shared ``resolver_seams`` factory (spec-039 M1b). The
+    # The sync / async ``ModelForm`` resolver seams (delegate to the form
+    # pipeline), via the shared ``resolver_seams`` factory. The
     # generated seams' function-local import of ``forms/resolvers.py`` keeps
     # ``forms/sets.py`` free of a load-time edge to the resolver module.
     resolve_sync, resolve_async = resolver_seams(
@@ -592,7 +592,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     """A model-LESS plain-``forms.Form`` write mutation (spec-038 Decision 6).
 
     The lighter sibling: no model, no ``DjangoType`` object slot. It shares the
-    form converter + the Slice-3 form pipeline but carries its OWN metaclass +
+    form converter + the form pipeline but carries its OWN metaclass +
     declaration registry + ``bind_form_mutations()`` bind. A concrete subclass
     declares ``Meta.form_class`` (a ``forms.Form`` subclass; a ``ModelForm`` is
     rejected naming ``DjangoModelFormMutation``) + optional ``Meta.fields`` /
@@ -602,22 +602,22 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     key.
 
     Its bind materializes the form-derived input + the pinned ``{ ok errors }``
-    payload (no object slot). The resolver pipeline is Slice 3.
+    payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
     # ``None`` on the abstract base (no ``Meta``).
     _mutation_meta: _ValidatedMutationMeta | None = None
 
-    # Bind outputs (forward-compat plumbing for Slice 3). ``_primary_type`` is
+    # Bind outputs. ``_primary_type`` is
     # ALWAYS ``None`` (a model-less mutation returns no ``DjangoType``); the bind
     # stashes the materialized input class + the pinned ``{ ok errors }`` payload
-    # name. ``DjangoMutationField`` (Slice 3) reads them.
+    # name. ``DjangoMutationField`` reads them.
     _primary_type: type | None = None
     _input_class: type | None = None
     _payload_type_name: str | None = None
 
-    # The Slice-1 reverse-map records, stashed at bind for the Slice-3 decode
+    # The reverse-map records, stashed at bind for the decode
     # (mirrors ``DjangoModelFormMutation._input_field_specs``).
     _input_field_specs: list | None = None
 
@@ -650,7 +650,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         - **any ``Meta.operation``** - rejected outright (a model-less mutation has
           no model operation - Decision 10).
         - **``fields`` + ``exclude`` both supplied / bare-string / duplicate /
-          unknown-name** - via the Slice-1 ``resolve_effective_form_fields``.
+          unknown-name** - via ``resolve_effective_form_fields``.
         - **``permission_classes``** - validated + normalized by the shared
           ``_validate_permission_classes`` with ``unset_default=(DenyAll,)``: a
           model-less form cannot inherit the model-permission default, so an unset
@@ -782,8 +782,8 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         (the ``"form"``-sentinel shape identity).
 
         ``guard_required`` is waived when the concrete mutation overrides
-        ``get_form_kwargs`` / ``get_form`` (spec-038 Slice 3 waiver). The Slice-1
-        reverse-map ``field_specs`` are stashed on the mutation for the Slice-3
+        ``get_form_kwargs`` / ``get_form`` (spec-038 waiver). The
+        reverse-map ``field_specs`` are stashed on the mutation for the
         decode (the P1 reverse map).
         """
         return _build_and_stash_form_input(
@@ -824,7 +824,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         The plain ``DjangoFormMutation`` is NOT a ``DjangoMutation`` subclass, so it
         carries its own ``check_permission`` mirroring the ``036`` default: delegate
         to every ``Meta.permission_classes`` entry, denying as soon as one denies.
-        Slice-3's ``forms/resolvers.py`` calls this through the reused
+        ``forms/resolvers.py`` calls this through the reused
         ``authorize_or_raise`` gate (which maps ``False`` to a top-level
         ``GraphQLError``). An ``async def has_permission`` entry returns a truthy
         coroutine, which ``reject_async_in_sync_context`` closes + raises as a
@@ -843,10 +843,10 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         """Return the generated form-input class name (the ``FORM``-sentinel create shape)."""
         return _form_input_type_name_for(meta, FORM)
 
-    # The sync / async plain-form resolver seams (delegate to the Slice-3 form
+    # The sync / async plain-form resolver seams (delegate to the form
     # pipeline), via the shared ``resolver_seams`` factory with ``with_id=False`` -
     # a model-less form has no row to locate, so the seam signature is
-    # ``(info, *, data)`` (spec-039 M1b). The generated seams' function-local import
+    # ``(info, *, data)``. The generated seams' function-local import
     # keeps ``forms/sets.py`` free of a load-time edge to the resolver module.
     resolve_sync, resolve_async = resolver_seams(
         "django_strawberry_framework.forms.resolvers",
@@ -864,7 +864,7 @@ def _bind_form_mutation(mutation_cls: type) -> None:
     ``build_payload_type(object_type=None)`` - the single-sourced payload builder,
     routed through the SAME ``materialize_mutation_input_class`` ledger as the
     model payloads so the distinct-shape collision raise + the
-    ``registry.clear()`` co-clear apply). Stashes the refs for Slice 3's
+    ``registry.clear()`` co-clear apply). Stashes the refs for the
     ``DjangoMutationField`` (``_primary_type`` stays ``None`` - no object to
     return).
     """

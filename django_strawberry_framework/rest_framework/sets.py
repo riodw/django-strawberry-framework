@@ -1,4 +1,4 @@
-"""The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039 Slice 2).
+"""The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039).
 
 The DRF-serializer write surface, riding the ``036`` mutation seams
 (``mutations/sets.py``) exactly as ``038``'s ``DjangoModelFormMutation`` does
@@ -29,7 +29,7 @@ rejected - DRF serializers do not delete, Decision 10). The allowed-key set ADDS
 ``exclude`` / ``permission_classes`` (the ``036`` write-auth seam inherited
 unchanged, Decision 11), and DROPS ``model`` / ``input_class`` /
 ``partial_input_class``; ``Meta.fields`` / ``Meta.exclude`` are mutually
-exclusive. Field narrowing + ``optional_fields`` reuse the Slice-1
+exclusive. Field narrowing + ``optional_fields`` reuse the
 ``rest_framework/inputs.py`` machinery, never a re-spelled copy.
 
 **The whole module is behind the DRF soft-import guard (Decision 12).** It
@@ -37,15 +37,14 @@ exclusive. Field narrowing + ``optional_fields`` reuse the Slice-1
 requires DRF; the root ``__getattr__`` (and ``rest_framework/__init__.py``'s
 ``require_drf()``) gate that import for a DRF-absent consumer.
 
-**Slice 3 landed the resolver seams + the serializer-construction hook bodies.** The
+**The resolver seams + the serializer-construction hook bodies.** The
 ``resolve_sync`` / ``resolve_async`` serializer-pipeline overrides (below) delegate
 to ``rest_framework/resolvers.py::resolve_serializer_sync`` /
-``resolve_serializer_async`` - the D8 carry-forward Slice 2 deferred because the
-resolver module did not exist yet (an inert Slice-2 declaration inherited
-``DjangoMutation``'s callable pair; Slice 3 lands BOTH the overrides here AND the
-resolver bodies, the same slice/resolver-existence pairing the form flavor used in
+``resolve_serializer_async`` - the D8 carry-forward (an inert declaration
+inherits ``DjangoMutation``'s callable pair; both the overrides here AND the
+resolver bodies land, the same pairing the form flavor uses in
 ``forms/sets.py``). The default ``get_serializer_kwargs`` construction hook ships
-here as the constructor-only customization seam; the Slice-3 resolver consumes
+here as the constructor-only customization seam; the resolver consumes
 ``get_serializer_kwargs`` (the hook the spec D8 step 4 names) and OWNS the framework
 merge / ``partial`` injection / ``context["request"]`` / H3 ``ConfigurationError``
 rules on top of its return, so those framework-owned invariants never live in the
@@ -350,13 +349,13 @@ class SerializerMutation(DjangoMutation):
     # ``data:`` ref resolves the serializer-derived input, not a model-column input.
     input_module_path: str = SERIALIZER_INPUTS_MODULE_PATH
 
-    # The Slice-1 reverse-map records (``InputFieldSpec`` per input field), stashed
-    # at bind so the Slice-3 decode reaches the serializer-field-keyed reverse map.
+    # The reverse-map records (``InputFieldSpec`` per input field), stashed
+    # at bind so the decode reaches the serializer-field-keyed reverse map.
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot).
     _input_field_specs: list | None = None
 
     # The schema-time specs for ``Meta.injected_fields``, stashed at
-    # bind so the Slice-3 resolver holds each injected field to the SAME runtime-agreement
+    # bind so the resolver holds each injected field to the SAME runtime-agreement
     # contract (present / writable / source / kind / relation-model) an input field gets - not
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
     _injected_field_specs: list | None = None
@@ -404,7 +403,7 @@ class SerializerMutation(DjangoMutation):
           (``"delete"`` rejected - DRF serializers do not delete, Decision 10) via
           the shared ``non_delete_operation_error``.
         - **``fields`` + ``exclude`` both supplied / bare-string (incl.
-          ``"__all__"``) / duplicate / unknown-name / empty-set** - via the Slice-1
+          ``"__all__"``) / duplicate / unknown-name / empty-set** - via the
           ``resolve_effective_serializer_fields``, which calls the shared
           ``utils/inputs.py::normalize_field_name_sequence(flavor="SerializerMutation")``
           DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this.
@@ -418,7 +417,7 @@ class SerializerMutation(DjangoMutation):
         ``serializer_class`` + the resolved ``model``; ``Meta.fields`` /
         ``Meta.exclude`` are stored RAW (``build_input`` re-resolves them - the form
         flavor's validate-then-store-raw precedent, D1). ``Meta.optional_fields`` is
-        the MUTATION's own key (spec-039 Critical-1 - NOT the serializer's ``Meta``):
+        the MUTATION's own key (spec-039 - NOT the serializer's ``Meta``):
         normalized here (bare-string incl. ``"__all__"`` / duplicate rejected) and
         name-validated against the effective input set, then carried on the snapshot
         (``optional_fields``) so ``build_input`` threads it into the create input
@@ -475,13 +474,13 @@ class SerializerMutation(DjangoMutation):
         fields = getattr(meta, "fields", None)
         exclude = getattr(meta, "exclude", None)
         # Discover the schema-time field set ONCE through the OVERRIDABLE
-        # ``get_serializer_for_schema()`` classmethod hook (spec-039 Critical-2 /
+        # ``get_serializer_for_schema()`` classmethod hook (spec-039
         # Decision 7), so a serializer whose ``.fields`` cannot be materialized no-arg
         # is validated through the consumer's override - not the default discovery.
         # ``cls._mutation_meta`` is not yet assigned at class creation, so the default
         # hook reads ``cls.Meta.serializer_class`` (the same serializer just validated).
         field_map = cls.get_serializer_for_schema()
-        # Validate the narrowing fail-loud via the Slice-1 machinery (mutual
+        # Validate the narrowing fail-loud via the shared machinery (mutual
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
         # empty-set guard), which calls the shared
         # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY
@@ -496,14 +495,14 @@ class SerializerMutation(DjangoMutation):
             exclude=exclude,
             field_map=field_map,
         )
-        # ``Meta.optional_fields`` is the MUTATION's key (spec-039 Critical-1 - the
+        # ``Meta.optional_fields`` is the MUTATION's key (spec-039 - the
         # documented public surface, NOT the serializer's own ``Meta``): normalize its
         # SHAPE here (a bare string incl. ``"__all__"`` / a duplicate fail loud at
         # class creation) and validate its NAMES against the effective input set, then
         # carry the normalized tuple on the snapshot so ``build_input`` threads it into
         # the create input requiredness + the ``SerializerInputShape`` descriptor
         # identity. (The bind re-validates names via ``resolve_optional_fields``; this
-        # is the earliest-feedback class-creation check.)
+        # is the earliest class-creation check.)
         optional_fields = normalize_field_name_sequence(
             getattr(meta, "optional_fields", None),
             label="optional_fields",
@@ -617,13 +616,13 @@ class SerializerMutation(DjangoMutation):
         materialization in the loud-rejection guard). A serializer whose ``.fields``
         cannot be materialized no-arg - a constructor-kwarg-requiring serializer, or a
         ``get_fields()`` that reads ``self.context`` - **overrides this classmethod** to
-        return a stable, request-INDEPENDENT field map (spec-039 Decision 7 /
-        Critical-2). This is the public escape hatch; the runtime
+        return a stable, request-INDEPENDENT field map (spec-039 Decision 7).
+        This is the public escape hatch; the runtime
         ``get_serializer_kwargs`` seam is distinct (it shapes the per-request serializer
         and cannot substitute for schema-time discovery).
 
         Consulted at class-creation validation AND at the phase-2.5 ``build_input`` bind;
-        never on the query path (the Slice-3 decode reads the bind-stashed reverse map).
+        never on the query path (the decode reads the bind-stashed reverse map).
         The default reads the serializer from the mutation's OWN validated snapshot when
         present (the bind window) else from ``cls.Meta.serializer_class`` (class creation,
         before the snapshot is assigned), resolving the SAME serializer in both windows.
@@ -649,14 +648,14 @@ class SerializerMutation(DjangoMutation):
         materializes the ``CREATE``-shaped ``<Serializer>Input``, an ``update``
         materializes the ``PARTIAL``-shaped ``<Serializer>PartialInput``. The schema-time
         field set comes from the OVERRIDABLE ``get_serializer_for_schema()`` classmethod
-        hook (spec-039 Critical-2), consulted ONCE here and threaded into the Slice-1
+        hook (spec-039), consulted ONCE here and threaded into the
         generator so the bind honors a consumer override (a context-requiring serializer)
         rather than re-discovering through the module default. ``Meta.optional_fields``
-        (the mutation's key - Critical-1) is threaded from the snapshot so the create
+        (the mutation's own key) is threaded from the snapshot so the create
         input's requiredness + the descriptor identity reflect it.
 
         The per-shape build cache is keyed on the FULL ``SerializerInputShape``
-        descriptor (spec-039 Critical-2), NOT a pre-build ``(class, op, names)`` tuple:
+        descriptor (spec-039), NOT a pre-build ``(class, op, names)`` tuple:
         two declarations on the same serializer + effective names but different
         hook-returned field specs or ``optional_fields`` produce DISTINCT descriptors, so
         neither reuses the other's stale cached class; identical descriptors reuse ONE
@@ -682,9 +681,9 @@ class SerializerMutation(DjangoMutation):
 
         The create-required-narrowing guard (``guard_create_required_serializer_fields``)
         runs PER declaration, BEFORE descriptor dedupe. ``Meta.injected_fields`` is its only
-        field-level subtraction; constructor-hook overrides never suppress it. The Slice-1
+        field-level subtraction; constructor-hook overrides never suppress it. The
         reverse-map ``field_specs`` are stashed on the mutation
-        (``cls._input_field_specs``) for the Slice-3 decode.
+        (``cls._input_field_specs``) for the decode.
         """
         del (
             primary_type
@@ -748,9 +747,9 @@ class SerializerMutation(DjangoMutation):
         """Return the generated serializer-input class name (the name seam override).
 
         The serializer-flavor name single-sourced with ``build_input``'s name choice:
-        before bind it resolves the Slice-1 descriptor through
+        before bind it resolves the descriptor through
         ``_serializer_input_shape_for``; after bind it reads the materialized name
-        stashed by ``build_input``. The Slice-1 generator owns the name derivation;
+        stashed by ``build_input``. The generator owns the name derivation;
         there is no second name deriver here (the descriptor carries
         ``type_name``), so the bind's materialized name and the field-factory's
         ``data:`` ref cannot drift.
@@ -778,7 +777,7 @@ class SerializerMutation(DjangoMutation):
         data: Any,
         hook_context: Any,
     ) -> dict[str, Any]:
-        """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the Slice-3 resolver consumes this).
+        """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the resolver consumes this).
 
         The graphene ``get_serializer_kwargs`` parity seam (spec-039 Decision 7 step 4 /
         Decision 8), hardened to a CONSTRUCTOR-ONLY hook: a consumer overrides this to add
@@ -851,7 +850,7 @@ class SerializerMutation(DjangoMutation):
         (``serializer.save(notify=True)``) rather than in the constructor or by mutating
         ``data`` - distinct from ``get_serializer_kwargs`` (which shapes CONSTRUCTION /
         context). The default returns ``{}``; a consumer overrides it to inject save-time
-        arguments. The Slice-3 resolver calls it inside the value-preserving ``save()``
+        arguments. The resolver calls it inside the value-preserving ``save()``
         closure (so the transaction / error-mapping / optimizer re-fetch behavior is
         preserved) and REJECTS a save kwarg that shadows ANY top-level
         ``serializer.validated_data`` key - a renamed input, an injected field, a default, or
@@ -866,10 +865,10 @@ class SerializerMutation(DjangoMutation):
         del info, data, hook_context  # the default injects nothing; overrides may consult.
         return {}
 
-    # The sync / async serializer resolver seams (delegate to the Slice-3 serializer
+    # The sync / async serializer resolver seams (delegate to the serializer
     # pipeline: locate -> authorize -> decode -> construct -> validate -> save ->
     # optimizer re-fetch -> payload, riding the promoted shared write skeleton), via
-    # the shared ``resolver_seams`` factory (spec-039 M1b). The generated seams'
+    # the shared ``resolver_seams`` factory. The generated seams'
     # function-local import of ``rest_framework/resolvers.py`` keeps this module free
     # of a load-time edge to the resolver module (the ``forms/sets.py`` precedent).
     resolve_sync, resolve_async = resolver_seams(

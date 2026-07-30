@@ -1,11 +1,11 @@
 """DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
 
-Slice scope:
+Scope:
 
-- Slice 1 - registry behaviour (``register``, ``get``, collision, ``clear``).
-- Slice 2 - Meta validation, scalar field synthesis, default ``get_queryset``,
+- registry behaviour (``register``, ``get``, collision, ``clear``).
+- Meta validation, scalar field synthesis, default ``get_queryset``,
   Strawberry finalization, ``convert_scalar`` direct unit coverage.
-- Slice 3 - relation conversion (forward FK, reverse FK, nullable widening,
+- relation conversion (forward FK, reverse FK, nullable widening,
   finalization-time unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
 
@@ -16,8 +16,8 @@ definition-order independence path is covered in
 ``tests/types/test_definition_order.py`` and
 ``tests/types/test_definition_order_schema.py``.
 
-Where Slice 2 tests originally used ``fields = \"__all__\"`` on ``Category``,
-they now either declare related types up front (so the registry resolves
+Meta-validation tests avoid ``fields = \"__all__\"`` on ``Category``:
+they either declare related types up front (so the registry resolves
 ``items`` / ``properties``) or use an explicit fields list to keep the
 test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
 captures the scalar-only field list used in those updated tests.
@@ -64,7 +64,7 @@ def _isolate_registry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 - registry behaviour
+# Registry behaviour
 # ---------------------------------------------------------------------------
 
 
@@ -103,7 +103,7 @@ def test_registry_clear_drops_types_and_enums():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - Meta validation
+# Meta validation
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ def test_definition_fields_class_slot_is_reserved_but_unpopulated():
 
 
 def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
-    """``Meta.filterset_class`` ships in spec-021 Slice 3 (Decision-7 promotion gate)."""
+    """``Meta.filterset_class`` ships in spec-021 (Decision-7 promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
     assert "filterset_class" in ALLOWED_META_KEYS
@@ -234,7 +234,7 @@ def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
 
 
 def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
-    """``Meta.orderset_class`` ships in spec-028 Slice 3 (Decision-7 promotion gate)."""
+    """``Meta.orderset_class`` ships in spec-028 (Decision-7 promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
     assert "orderset_class" in ALLOWED_META_KEYS
@@ -323,7 +323,7 @@ def test_interfaces_rejects_non_interface_class_named():
     """Re-affirmation pin: a plain ``@strawberry.type`` class takes the generic branch.
 
     No behavior change (spec-011-era rejection); pins the documented message
-    naming the offending class (spec-032 Slice 1).
+    naming the offending class (spec-032).
     """
 
     @strawberry.type
@@ -341,7 +341,7 @@ def test_connection_key_requires_relay_node():
     """Re-affirmation pin: ``Meta.connection`` on a non-Relay-Node type raises.
 
     No behavior change (spec-030 Decision 8 gate); pins the full documented
-    add-``relay.Node``-or-remove-the-key remediation (spec-032 Slice 1).
+    add-``relay.Node``-or-remove-the-key remediation (spec-032).
     """
     with pytest.raises(ConfigurationError) as excinfo:
 
@@ -604,7 +604,7 @@ def test_meta_filterset_class_accepts_filterset_subclass():
 
 
 def test_meta_connection_in_allowed_meta_keys():
-    """``Meta.connection`` ships in spec-030 Slice 1 - a net-new ALLOWED key.
+    """``Meta.connection`` ships in spec-030 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion (spec-030 Decision 8;
     mirrors the filterset/orderset precedent).
@@ -723,12 +723,12 @@ def test_meta_connection_absent_leaves_definition_none():
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 1 - Meta.globalid_strategy + RELAY_GLOBALID_STRATEGY precedence
+# Meta.globalid_strategy + RELAY_GLOBALID_STRATEGY precedence (spec-031)
 # ---------------------------------------------------------------------------
 
 
 def test_meta_globalid_strategy_in_allowed_meta_keys():
-    """``Meta.globalid_strategy`` ships in spec-031 Slice 1 - a net-new ALLOWED key.
+    """``Meta.globalid_strategy`` ships in spec-031 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a ``DEFERRED_META_KEYS`` promotion (spec-031 Decision 6;
     mirrors the connection / filterset / orderset precedent).
@@ -1099,7 +1099,7 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - Meta.primary recognition
+# Meta.primary recognition
 # ---------------------------------------------------------------------------
 
 
@@ -1126,7 +1126,7 @@ def test_meta_primary_false_does_not_register_primary():
 
     assert registry.primary_for(Item) is None
     # Single-type backward-compat: ``get()`` still returns the lone type even
-    # without an explicit primary flag (Slice 1 Decision 4).
+    # without an explicit primary flag (Decision 4).
     assert registry.get(Item) is ItemType
 
 
@@ -1209,7 +1209,7 @@ def test_two_types_same_model_one_primary_both_register_successfully():
     assert registry.types_for(Item) == (ItemType, AdminItemType)
     assert registry.primary_for(Item) is AdminItemType
     # ``get()`` returns the declared primary even though ``ItemType`` registered
-    # first (Slice 1 Decision 4: primary wins over registration order).
+    # first (Decision 4: primary wins over registration order).
     assert registry.get(Item) is AdminItemType
 
 
@@ -1235,7 +1235,7 @@ def test_two_primary_types_same_model_raises():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - scalar synthesis
+# Scalar synthesis
 # ---------------------------------------------------------------------------
 
 
@@ -1291,7 +1291,7 @@ def test_meta_exclude_filters_concrete_fields():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - Strawberry finalization
+# Strawberry finalization
 # ---------------------------------------------------------------------------
 
 
@@ -1331,7 +1331,7 @@ def test_meta_description_threads_through_to_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - default get_queryset is identity
+# Default get_queryset is identity
 # ---------------------------------------------------------------------------
 
 
@@ -1439,7 +1439,7 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - convert_scalar direct unit coverage
+# convert_scalar direct unit coverage
 # ---------------------------------------------------------------------------
 
 
@@ -1452,7 +1452,7 @@ def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 - relation conversion via _build_annotations
+# Relation conversion via _build_annotations
 # ---------------------------------------------------------------------------
 
 
@@ -1609,7 +1609,7 @@ def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 - Meta.nullable_overrides / Meta.required_overrides
+# Meta.nullable_overrides / Meta.required_overrides (spec-029)
 #
 # Synthetic ``managed=False`` models give clean control over per-field
 # ``null`` (and a relation field) for the override-applies and validation
@@ -1823,7 +1823,7 @@ def test_override_redundant_is_no_op():
 
 
 # ---------------------------------------------------------------------------
-# Consumer file/image override (spec-037 Slice 1, Decision 3)
+# Consumer file/image override (spec-037 Decision 3)
 # ---------------------------------------------------------------------------
 
 

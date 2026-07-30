@@ -17,7 +17,7 @@ Storage-backend fault injection and corrupt-image dimension edges stay in the
 package-internal ``tests/types/test_resolvers.py`` (they need a mocked
 non-filesystem backend, unreachable from a live request).
 
-The suite drives through the package's own ``TestClient`` (spec-043 Slice 1):
+The suite drives through the package's own ``TestClient`` (spec-043):
 the JSON posts earn the helper's happy-path lines live, and the two multipart
 mutations earn the owned path-keyed ``files=`` builder - the nested
 input-object shape (``data.attachment`` / ``data.image``) combined with a named

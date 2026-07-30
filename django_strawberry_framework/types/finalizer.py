@@ -877,7 +877,7 @@ def finalize_django_types() -> None:
     # time. Warn (do not raise) and point at the ``type`` opt-out.
     _warn_model_label_secondary_collapse(multi_type_models)
 
-    # Bind ``DjangoMutation`` declarations (spec-036 Slice 2 / Decision 12) in this
+    # Bind ``DjangoMutation`` declarations (spec-036 Decision 12) in this
     # phase-2.5 window, after primary-type state is settled
     # (``_warn_model_label_secondary_collapse`` above) and before Phase 3's
     # ``strawberry.type`` freezes the schema classes - so each mutation's resolved
@@ -934,7 +934,7 @@ def finalize_django_types() -> None:
     if bind_auth is not None:
         bind_auth()
     bind_mutations()
-    # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
+    # Bind plain ``DjangoFormMutation`` declarations (spec-038 Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form
     # ledger is disjoint from the ``DjangoMutation`` ledger ``bind_mutations()``
     # drains; the ``DjangoModelFormMutation`` flavor is a ``DjangoMutation``
@@ -1395,7 +1395,7 @@ def _format_owner_ordersets_mismatch_error(
 
     Sibling of ``_format_owner_mismatch_error`` (filter side); the wording
     names ``OrderSet`` / ``Meta.orderset_class`` so the consumer error
-    surface tells the maintainer which sidecar is broken. Grep-stable
+    surface tells the schema author which sidecar is broken. Grep-stable
     alongside the other ``_format_*`` finalize-error helpers.
     """
     prev_name = prev_target[0].origin.__qualname__ if prev_target is not None else "<unresolved>"

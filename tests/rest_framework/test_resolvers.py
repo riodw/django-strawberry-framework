@@ -1,4 +1,4 @@
-"""Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039 Slice 3).
+"""Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039).
 
 System-under-test is `rest_framework/resolvers.py` - but ONLY the residue the live
 products serializer surface (`examples/fakeshop/test_query/test_products_api.py`)

@@ -88,7 +88,7 @@ def test_inspect_by_registered_name(reload_inspect_schema):
     text = out.getvalue()
     assert "BookType" in text
     # Relay-Node pk (BookType declares ``interfaces = (relay.Node,)`` since
-    # spec-032 Slice 6): the interface-supplied GlobalID!, not a plain Int!.
+    # spec-032): the interface-supplied GlobalID!, not a plain Int!.
     assert "id" in text
     assert "GlobalID!" in text
     assert "relay.Node id" in text
@@ -295,11 +295,10 @@ def test_inspect_relay_node_pk_row(reload_inspect_schema):
 
 
 def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema):
-    """The command reports the post-override nullability for the Slice-3 acceptance type.
+    """The command reports the post-override nullability for the acceptance type.
 
-    Cross-slice (Slice-2 command over the Slice-3 ``NullabilityOverrideBookType``
-    type), deferred from the Slice 2 cycle to here because the type did not yet
-    exist. ``title`` is a ``NOT NULL`` column flipped to ``String`` by
+    The command runs over the ``NullabilityOverrideBookType`` acceptance
+    type. ``title`` is a ``NOT NULL`` column flipped to ``String`` by
     ``nullable_overrides``; ``subtitle`` is a ``null=True`` column flipped to
     ``String!`` by ``required_overrides``. The command reads the resolved
     annotation from ``origin.__annotations__`` (which the override bakes in),

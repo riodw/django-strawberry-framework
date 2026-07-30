@@ -3,25 +3,24 @@
 A four-module subpackage in the spirit of ``mutations/`` (the module names
 mirror it per spec-038 Decision 4):
 
-- ``converter.py`` (Slice 1) - ``convert_form_field(field)``, the
+- ``converter.py`` - ``convert_form_field(field)``, the
   ``forms.Field``-keyed -> Strawberry annotation + required-ness registry for
   the model-less case (the graphene-django ``convert_form_field`` parity shape),
-  plus the decode-kind constants the Slice 3 resolver consults. The
+  plus the decode-kind constants the resolver consults. The
   reverse-map record itself is ``utils/inputs.py::InputFieldSpec``
   (``target_name`` = form field name), built by ``forms/inputs.py``.
-- ``inputs.py`` (Slice 1) - generated ``<FormClass>Input`` /
+- ``inputs.py`` - generated ``<FormClass>Input`` /
   ``<FormClass>PartialInput`` ``@strawberry.input`` classes built from a form's
   declared ``base_fields``, reusing the ``utils/inputs.py`` materialize / build
   core (the same machinery ``mutations/inputs.py`` wraps).
-- ``sets.py`` (Slice 2) - the ``DjangoFormMutation`` / ``DjangoModelFormMutation``
+- ``sets.py`` - the ``DjangoFormMutation`` / ``DjangoModelFormMutation``
   bases, their ``Meta`` validation, and the finalizer phase-2.5 bind.
-- ``resolvers.py`` (Slice 3) - the sync + async instantiate -> ``is_valid()`` ->
+- ``resolvers.py`` - the sync + async instantiate -> ``is_valid()`` ->
   ``form.errors`` -> ``save()`` -> optimizer re-fetch -> payload pipeline.
 
-Slice 2 adds ``sets.py`` (the two bases + ``Meta`` validation + the phase-2.5
-bind) and the public re-exports below; the package-root ``__init__.py`` exports
-``DjangoFormMutation`` / ``DjangoModelFormMutation`` from here. ``resolvers.py``
-remains a Slice 3 concern.
+``sets.py`` (the two bases + ``Meta`` validation + the phase-2.5 bind) backs the
+public re-exports below; the package-root ``__init__.py`` exports
+``DjangoFormMutation`` / ``DjangoModelFormMutation`` from here.
 """
 
 from __future__ import annotations

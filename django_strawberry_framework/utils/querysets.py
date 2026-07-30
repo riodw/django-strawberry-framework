@@ -31,7 +31,7 @@ surface.
 The boundary implements a SEALED-EXECUTION-QUERYSET contract
 (``_seal_or_defect``). An earlier design validated a finite inventory of method
 overrides on the consumer ``QuerySet`` *class* and then returned the consumer
-object; the adversarial probes recorded by
+object; the probes recorded by
 ``docs/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``
 disproved that with
 zero-SQL probes -- an instance-shadowed ``.all()``, a replaced instance-level

@@ -1,4 +1,4 @@
-"""The DRF soft-dependency import guard (spec-039 Decision 12, Slice 2).
+"""The DRF soft-dependency import guard (spec-039 Decision 12).
 
 Covers the ``rest_framework/__init__.py::require_drf()`` guard + the root
 ``django_strawberry_framework.__getattr__`` plumbing:
@@ -35,7 +35,7 @@ import pytest
 import django_strawberry_framework
 from tests._soft_dependency import simulated_absence
 
-# The verified DRF floor (Slice 0); the install hint must name it (place 2 of the
+# The verified DRF floor; the install hint must name it (place 2 of the
 # three-places-that-must-agree). The test matches this substring.
 _HINT_SUBSTRING = "djangorestframework>=3.17.0"
 

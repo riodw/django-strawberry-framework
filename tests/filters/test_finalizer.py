@@ -79,7 +79,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 
     Pre-declares ``GenreFilter`` so ``BookFilter`` can reference it as a
     class object (not a forward-string - that would force resolution
-    against the test function's local scope which Slice 1's resolver
+    against the test function's local scope, which the resolver
     cannot reach). Instruments ``GenreFilter.get_filters`` so each
     invocation records whether ``_owner_definition`` was already set.
     Without the four-subpass discipline an observation would land
@@ -792,7 +792,7 @@ def test_registry_clear_works_without_filters_imported():
 def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     """A ``RelatedFilter("UnknownFilter")`` propagates as ``ConfigurationError``.
 
-    Slice 1's ``LazyRelatedClassMixin.resolve_lazy_class`` raises
+    ``LazyRelatedClassMixin.resolve_lazy_class`` raises
     ``ImportError`` at Layer-2 resolution time. The phase-2.5 binding
     pass re-wraps the ``ImportError`` as ``ConfigurationError`` per
     spec-021 lines 416 + 1030 and the package's "finalize-time errors

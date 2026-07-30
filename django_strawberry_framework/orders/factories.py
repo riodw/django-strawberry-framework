@@ -90,7 +90,7 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
 # ``_dynamic_orderset_cache: dict[tuple, type[OrderSet]]`` and
 # ``get_orderset_class(orderset_class, **meta) -> type[OrderSet]``
 # (mirrors ``filters/factories.py::get_filterset_class`` /
-# ``_dynamic_filterset_cache``). Slice 2 ships only the BFS layer; the
+# ``_dynamic_filterset_cache``). Only the BFS layer ships here; the
 # dynamic factory has no shipped consumer -- the connection-field surface
 # chose the explicit ``Meta.orderset_class`` declaration path, so this
 # remains a standing deferred non-goal until a card revives it.

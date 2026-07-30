@@ -2,315 +2,307 @@
 
 ## Scope and verdict
 
-This review covers the current working-tree implementation of [spec 065][spec-065]:
+This review is against the current working tree for [spec 065][spec-065], not the
+implementation state from the previous feedback pass. I read every dirty file:
 
-- S1: Django-owned HTTP;
-- S2: the request-body cap;
-- S9: the strict UTF-8 wire contract; and
-- the currently present S11 WebSocket consumer/revalidation implementation.
+- the active [spec][spec-065];
+- the concurrent documentation-only edit in [`views.py`][views];
+- the broader DRY inventory in [`drys.md`][drys]; and
+- the broader security inventory in [`vulns.md`][vulns].
 
-The concurrent row-preserving filter changes are outside this review. Slice 5's documentation
-fold-in is also not judged as missing while the active [build plan][build-065] still marks it
-unbuilt.
+I then reread the related production paths, package tests, live fakeshop transport tests,
+the active [build plan][build-065], Django's multipart/CSRF implementation, Channels'
+Origin validator, and Strawberry's two WebSocket protocol handlers. Slice 5 is still
+unbuilt in the plan, so its planned documentation fold-in is not treated as a missing
+implementation. Likewise, unchecked future work in [`vulns.md`][vulns] is not charged to this
+card.
 
-S1 is architecturally strong. The router now delegates HTTP directly to the supplied Django ASGI
-application, the package view is a narrow upstream subclass, the WebSocket route is exact by
-default, and the live tests exercise Django's Host, CSRF, security-header, cache, and URLconf
-boundaries.
+The earlier review's body-allocation, patch-lifecycle, consumer-factory, auth-import,
+real-logout, huge-window, explicit-zero, and database-router findings are now materially
+fixed. The bounded-body helper is a substantial improvement and the router remains a
+good direct handoff to Django for HTTP.
 
-S11's central shape is also good: both WebSocket protocols delegate through small upstream handler
-subclasses, one shared function owns the revalidation decision, invalid sessions fail closed, and
-the router—not an injected consumer—owns the Origin and authentication wrappers.
+The implementation is still not ready to close. The strongest S11 security statement is
+false for an already-running subscription, and the multipart path sits outside both the
+strict UTF-8 boundary and the claimed pre-parse declared-size boundary. Those are
+architectural gaps, not test wording.
 
-The implementation is not ready to close, however. S2 still contains a blocker at the exact
-Django 5.2.0 compatibility floor the card is meant to protect. Three additional boundary problems
-remain around the UTF-8 policy, the consumer factory, and the auth subsystem's import boundary.
+No pytest invocation was run, per [AGENTS.md][agents]. The findings below come from source
+inspection and narrow read-only runtime probes against the installed project environment.
 
-No pytest invocation was run for this review, per [AGENTS.md][agents]. The findings come from
-source inspection plus narrow read-only runtime probes of the public/configuration seams.
+## Blocker 1 — revocation does not stop an already-running subscription
 
-## Blocker 1 — the counted body cap materializes the unbounded body before rejecting it
+[`build_revalidating_consumer_class`][consumers] overrides only the two operation-admission
+methods:
 
-[`_RequestBodyLimitMixin._enforce_request_body_limit`][views] ends its non-multipart path with:
+- `handle_subscribe` for `graphql-transport-ws`; and
+- `handle_start` for legacy `graphql-ws`.
 
-```python
-if len(request.body) > limit:
-    raise HTTPException(413, _BODY_LIMIT_REASON)
-```
+That revalidates before Strawberry starts an operation. It does **not** revalidate an
+operation again.
 
-That comparison obtains the correct length, but only **after** `HttpRequest.body` has read the
-entire stream into one in-memory `bytes` value and cached it as `request._body`.
+The distinction is security-critical for subscriptions. In Strawberry's installed
+[`BaseGraphQLTransportWSHandler.run_operation`][transport-handler], the admission method
+creates one task and that task iterates `async for result in result_source`, sending every
+later result without returning through `handle_subscribe`. The legacy handler does the
+same in [`BaseGraphQLWSHandler.handle_async_results`][legacy-handler]. A subscription may
+remain in either loop for hours.
 
-This is especially important on ASGI:
+Consequently, this sequence is currently possible:
 
-1. `ASGIHandler.read_body` has already drained the network request into a
-   `SpooledTemporaryFile`.
-2. Above `FILE_UPLOAD_MAX_MEMORY_SIZE`, the spool has safely rolled to disk.
-3. The package view then accesses `request.body`.
-4. `HttpRequest.body` calls an unbounded `self.read()` and copies the complete file back into
-   memory.
-5. Only after that attacker-sized allocation does `len(...) > limit` produce the package's
-   `413`.
+1. authenticate and open a socket;
+2. start a multi-yield subscription while the session is valid;
+3. receive its first result;
+4. log out, flush the session, disable the user, or rotate the password through another
+   request; and
+5. continue receiving later results from the already-admitted subscription.
 
-Django 6.0 reduces the exposure only when its own `DATA_UPLOAD_MAX_MEMORY_SIZE` check runs first:
-it seeks a seekable stream to its end before materializing it. The required Django 5.2.0 floor
-does not have that seekable-stream check at all. With no `Content-Length`, an understated
-declaration, or `DATA_UPLOAD_MAX_MEMORY_SIZE=None`, the package therefore performs an unbounded
-allocation before enforcing its smaller GraphQL limit. The async package view performs the same
-synchronous disk read on the event loop, adding event-loop starvation to the memory-amplification
-path.
+This contradicts the production claim in
+[`django_strawberry_framework/consumers.py::GraphQLWebSocketConsumer`][consumers] that “a
+revoked session stops executing” and makes maximum connection/operation lifetime
+security-relevant again. It also means a long-lived subscription can keep evaluating
+resolvers against the connect-time actor after revocation.
 
-The existing ASGI tests prove status, cumulative fragment accounting, and no GraphQL parse or
-schema execution. Their payloads cross the limit by only a few bytes, so they do not prove the
-security property that the rejecting operation itself is bounded. The build notes repeatedly
-describe the package check as the floor's “only application-level bound,” but detection after an
-unbounded allocation is not a memory bound.
-
-### Required root-cause correction
-
-The package must inspect or consume the request stream without first asking Django to materialize
-the whole body:
-
-1. Keep the declared-over-limit early refusal.
-2. When the body has already been cached by earlier middleware, compare `len(request._body)`; the
-   allocation has already happened and cannot be undone, but the package must still refuse it.
-3. For a seekable ASGI spool, inspect its actual size with `seek`/`tell`, restore the original
-   position, and reject before `request.body` is evaluated.
-4. For a genuinely non-seekable stream, read in bounded chunks only up to `limit + 1`. If the body
-   is allowed, preserve those bytes in the request shape Django expects so Strawberry can read
-   them normally; if it is over the limit, stop and reject without concatenating the remainder.
-5. Keep multipart on its deliberately separate streaming/declaration contract.
-
-The implementation must centralize the private-Django interaction in one compatibility helper and
-pin its behavior on both Django 5.2.0/Python 3.10 and the current stack. Do not spread `_stream`,
-`_body`, and `_read_started` manipulation across the view classes.
-
-Required regressions:
-
-- a seekable ASGI stream much larger than the GraphQL cap whose unbounded `read()` raises if
-  called;
-- absent and understated `Content-Length`;
-- an over-limit body proving no allocation/read larger than `limit + 1`;
-- an under-limit control proving Strawberry receives the original bytes unchanged;
-- middleware-prepopulated `request._body`;
-- sync and async package views; and
-- the exact Django 5.2.0/Python 3.10 floor.
-
-## High 2 — a package security policy is disabled by the unrelated upstream-patch kill switch
-
-[`_patched_parse_json`][strawberry-patches] implements two different categories of behavior:
-
-- compatibility fixes for upstream malformed-body bugs; and
-- the package-authored strict UTF-8 wire policy from S9.
-
-Yet both remain governed by `APPLY_UPSTREAM_PATCHES`. Setting that broad switch to `False`, or
-disabling only its `"strawberry"` member, restores UTF-16/32 acceptance. The spec explicitly
-documents that consequence, so this is not an implementation/spec mismatch; it is an
-architectural problem in the contract itself.
-
-The strict wire policy is not an upstream patch and does not share the patch's lifecycle. The
-module correctly says it must survive after the upstream bugs retire, but the runtime ownership
-still says the opposite: a consumer disabling temporary monkeypatches also disables a permanent
-security policy. This creates two predictable regressions:
-
-- an upstream shape change can force a consumer to disable the patch and silently reopen the
-  parser differential; and
-- when the compatibility patches are retired, moving or deleting their gated installer can
-  accidentally retire the policy with them.
+The current acceptance tests cannot detect this.
+[`tests/test_routers.py::Subscription.tick`][test-routers] yields exactly once, and every
+revocation row lets operation 1 finish before it revokes the session and submits operation
+2. Those tests prove **new-operation admission** only.
 
 ### Required root-cause correction
 
-Move strict UTF-8 decoding onto a package-owned HTTP-view parsing boundary, shared by
-`DjangoGraphQLView` and `AsyncDjangoGraphQLView`, and leave `APPLY_UPSTREAM_PATCHES` responsible
-only for upstream bug workarounds. A single private view mixin/helper can keep the policy DRY
-without globally reimplementing Strawberry's parser: decode byte input strictly, then delegate
-to upstream parsing.
+The spec must distinguish operation admission from the lifetime of an admitted operation,
+then implement the stronger contract it currently claims. At minimum, no subscription
+payload may be emitted after its actor becomes invalid, and the active operation must be
+cancelled/completed rather than silently continuing.
 
-Consumers mounting an upstream view directly may retain upstream semantics; consumers choosing
-the package's secure view must not lose a package security contract because they disabled an
-unrelated compatibility patch.
+Do not copy either upstream protocol loop. Find one small package-owned lifecycle seam
+shared by the two protocols—for example, a result-send guard plus operation cancellation,
+or a protocol-neutral revocation monitor attached to active operation tasks. If the
+contract is that resolver work itself must stop rather than merely preventing disclosure
+of the result, a send-time check alone is insufficient: the design needs to cancel before
+the next event is evaluated. This deserves a spec decision before more code because
+`websocket_revalidation_window` must also define its meaning for active subscriptions.
 
-Add a regression that mounts the package view with
-`APPLY_UPSTREAM_PATCHES={"strawberry": False}` and still rejects UTF-16/32 and a UTF-8 BOM. Keep
-separate tests proving that the actual upstream bug workarounds do respect their opt-out.
+Required regression, for **both** protocols:
 
-## High 3 — the consumer factory contract accepts a non-ASGI result
+1. use a controlled multi-yield async subscription;
+2. receive result 1;
+3. revoke through the existing real second HTTP request while the operation remains open;
+4. release result 2's event;
+5. prove result 2 is never delivered and the operation is completed/cancelled; and
+6. include a valid-session control that receives both results.
 
-[`_websocket_application`][routers] validates that a factory candidate is callable, invokes it as
-`factory(schema=schema)`, and returns its result without validation:
+## High 2 — multipart `operations` and `map` bypass the strict UTF-8 wire contract
 
-```python
-elif callable(candidate):
-    return candidate(schema=schema)
-```
+[`django_strawberry_framework/views.py::_RequestBodyBoundaryMixin.parse_json`][views]
+strictly decodes `bytes`, but deliberately passes `str` through untouched. That is correct
+for GET query parameters; it is not sufficient to establish a wire-encoding contract for
+multipart.
 
-A factory returning `None`, an integer, a coroutine object, or any other non-callable value is
-therefore accepted at router construction. The invalid object is installed as a URL route
-callback, and the first matching handshake fails later inside routing rather than producing the
-documented `ConfigurationError`.
+Strawberry obtains multipart `operations` and `map` from `request.POST`. Before the package
+sees either value, Django's [`MultiPartParser._parse`][django-multipart] converts field
+bytes through `force_str(..., encoding, errors="replace")`. The original bytes and any
+decoding failure are therefore gone. The package receives a `str` regardless of whether
+the wire contained UTF-8, Latin-1, or malformed UTF-8.
 
-A narrow probe currently returns `None` successfully from `_websocket_application`, confirming
-that this is a live branch rather than a theoretical typing concern.
+Two live probes against the package view confirmed the bypass:
 
-Validate the factory's return value before mounting it. The resulting `ConfigurationError` should
-name both the factory and the received result type/value, while preserving the original exception
-as `__cause__` if factory invocation itself fails in a way the package chooses to normalize.
+- an `operations` field declared with `charset=iso-8859-1` and carrying a raw Latin-1
+  byte executed successfully with HTTP `200`; and
+- an `operations` field with no charset and a malformed UTF-8 byte (`0x80`) was
+  replacement-decoded by Django and also executed successfully with HTTP `200`.
 
-Required regressions:
+The latter is the clearest contradiction: a byte sequence the package calls invalid UTF-8
+is accepted on one GraphQL-over-HTTP body shape. The statement “request JSON is UTF-8-only”
+is therefore true only for the ordinary JSON body, not for all JSON control documents the
+endpoint parses.
 
-- factory returns `None`;
-- factory returns a non-callable scalar;
-- `async def factory(...)` returns a coroutine instead of an ASGI callable;
-- valid synchronous factory returns an async ASGI callable; and
-- the two Origin/auth wrappers remain outside the validated result.
+### Required root-cause correction
 
-## Medium 4 — the revalidation helper breaks the auth subsystem's opt-in import boundary
+Choose and document one honest multipart contract before implementing it:
 
-[`consumers.py::_refreshed_actor`][consumers] imports:
+- **Strongest practical contract:** require multipart `operations` and `map` to use an
+  ASCII JSON serialization after Django decoding. JSON escapes preserve arbitrary Unicode,
+  so clients can send `caf\u00e9` without loss. Reject non-ASCII control-field text and
+  `U+FFFD`. This is enforceable at the shared sync/async form-data adapter without copying
+  Django's multipart parser, but it is intentionally narrower than “raw UTF-8.”
+- **Full raw UTF-8 contract:** introduce a raw-preserving, streaming validation seam before
+  Django replacement-decodes the fields. Django exposes no narrow strict-field-decoding
+  hook, so this is materially heavier and must not be implemented by copying
+  `MultiPartParser._parse`.
+- **Narrower product contract:** explicitly scope strict UTF-8 to
+  `application/json` and acknowledge that multipart control fields inherit Django's
+  replacement-decoding semantics. This is accurate but weakens the current security
+  promise.
 
-```python
-from .auth.sessions import session_store_class
-```
+Whichever direction is chosen, add real multipart requests for malformed UTF-8 with no
+charset, explicit Latin-1, escaped Unicode, and the chosen treatment of genuine multibyte
+UTF-8. Exercise both package views; a direct `parse_json(str)` unit test cannot prove this
+wire boundary.
 
-Importing a Python submodule first executes its package's `__init__.py`.
-[`django_strawberry_framework.auth.__init__`][auth-init] eagerly imports `auth.mutations` and
-`auth.queries`, which in turn load the generated-mutation, registry, permissions, and Strawberry
-type machinery. Consequently, the first authenticated WebSocket operation in a process that has
-not opted into the GraphQL auth fields imports and registers the entire opt-in auth subsystem on
-the event loop merely to resolve a session-store class.
+## High 3 — the multipart declared cap runs after CSRF has already parsed the body
 
-The current tests mask this cold path by importing
-`django_strawberry_framework.auth.sessions` at test-module collection time. The production module
-docstring's claim that the revalidation reaches only the session-store resolver is therefore not
-true at the Python import boundary.
+The package calls
+[`django_strawberry_framework/views.py::_RequestBodyBoundaryMixin._enforce_request_body_limit`][views]
+from the view's `run`. In a real Django request,
+[`django.middleware.csrf.CsrfViewMiddleware._check_token`][django-csrf] runs earlier in
+`process_view`. For every cookie-bearing POST it first reads
+`request.POST.get("csrfmiddlewaretoken", "")`, even when the request will ultimately use
+the `X-CSRFToken` header.
 
-This is avoidable without duplicating the `SESSION_ENGINE` expression. Move the generic
-session-store-class resolver to a cycle-neutral private module—outside the eager `auth` package—and
-have both `auth/sessions.py` and `consumers.py` import it. Preserve `auth` as structurally opt-in.
+On multipart requests that access invokes Django's multipart parser and upload handlers
+**before the package view can inspect the declared length**. The package may still return
+`413`, but it did not reject before multipart parsing/spooling.
 
-Add a fresh-process or strict module-eviction regression proving that resolving the store for
-WebSocket revalidation does not add `django_strawberry_framework.auth.mutations` or
-`django_strawberry_framework.auth.queries` to `sys.modules`.
+The live test
+[`examples/fakeshop/test_query/test_transport_api.py::test_a_multipart_request_over_the_declared_cap_is_refused`][transport-tests]
+does not expose the ordering. It uses plain `Client()`, whose CSRF checks are disabled, so
+the middleware exits before `_check_token` reads `request.POST`. The test proves only the
+view-local branch.
 
-## Medium 5 — the revocation acceptance row does not reproduce the promised separate-request flow
+This does not mean the new bounded non-multipart helper is wrong. It means the multipart
+claim is too strong for a view-level boundary. ASGI has already received/spooled the raw
+body in either case, but CSRF can additionally parse fields and invoke file upload handlers
+before the package's “declared gate.”
 
-The S11 test plan requires establishing a socket, revoking/flushing/disabling through a
-**separate request**, and proving the next operation is denied without reconnecting.
-[`test_a_revoked_session_is_denied_on_the_next_operation_without_reconnecting`][test-routers]
-does prove the last and most important half, but its “separate request” is represented by direct
-ORM/session-store mutation:
+### Required root-cause correction
 
-- `SessionStore(session_key).flush()`;
-- `user.is_active = False; user.save()`; and
-- `user.set_password(...); user.save()`.
+If “reject before Django parses multipart” remains a requirement, the check must run in a
+narrow package middleware placed before `CsrfViewMiddleware`, with a system check that
+detects missing or incorrect ordering. Its `process_view` can identify package view mounts
+and read the per-mount cap without rebuilding Django's HTTP stack.
 
-Those are useful package-tier controls, but they do not prove that a real second HTTP request's
-session lifecycle invalidates the cookie/session shape held by the already-open socket. In
-particular, a future change in the logout view, cookie handling, session-key rotation, or session
-backend integration could break the real revocation path while these tests remain green.
+If that extra deployment surface is not justified, narrow the contract instead: the view
+cap prevents Strawberry parsing and schema execution, while proxy/server limits, Django's
+upload settings, and upload handlers own multipart resource consumption. Do not keep
+claiming that the package's declared gate itself prevents multipart parsing.
 
-Keep the direct mutators as precise unit controls, and add at least one real secondary HTTP
-logout/session-flush round trip while the communicator remains open. The test does not require a
-fakeshop `asgi.py`: the socket can stay package-tier while an `AsyncClient` or a
-`database_sync_to_async`-wrapped Django client performs the second request against a probe
-URLconf. Assert that it targets the same session key/cookie, then deny operation two on the
-original communicator.
+The regression must use `Client(enforce_csrf_checks=True)`, a valid CSRF cookie and header,
+an over-package-limit multipart body, and an upload-handler or parser sentinel. Status
+`413` alone is not evidence of ordering.
 
-## Lower-severity configuration and reconciliation gaps
+## Medium 4 — `AllowedHostsOriginValidator` does not validate the WebSocket `Host`
 
-### An enormous integer window escapes the typed configuration boundary
+The router and spec repeatedly promise that an injected consumer cannot escape
+“Host/Origin validation.” Channels' `AllowedHostsOriginValidator` name is misleading here:
+it is a factory for `OriginValidator(settings.ALLOWED_HOSTS)`.
+[`channels.security.websocket.OriginValidator.__call__`][channels-security] reads only the
+`Origin` header. It never reads or validates `Host`.
 
-[`resolved_revalidation_window`][consumers] calls `math.isfinite(value)` before converting the
-accepted number to `float`. A sufficiently large Python integer raises `OverflowError` inside
-`math.isfinite`; it does not become the promised `ConfigurationError`. A narrow probe with
-`10**10000` reproduces the raw exception.
+A direct communicator probe with `Origin: http://localhost` and
+`Host: evil.example` connected successfully: `(True, None)`. The current router tests cover
+allowed, rejected, and missing `Origin`; none supplies an allowed Origin with a hostile
+Host.
 
-Perform the conversion in a guarded step, reject `OverflowError` alongside the existing invalid
-domain, then run `math.isfinite` on the converted float. Add the huge-positive-integer row to the
-unusable-value matrix.
+The least surprising correction is to narrow every claim to **Origin validation**. That is
+the upstream wrapper the router intentionally composes, while Django still owns Host
+validation on HTTP. If WebSocket Host validation is an intentional package guarantee, add a
+separate small validator using Django's host utilities and pin the hostile-Host/allowed-
+Origin direction. Do not rely on the upstream class name as evidence of behavior.
 
-### The explicit-zero injection rule remains contradictory
+## Medium 5 — the broken-Strawberry install hint advertises an unsupported floor
 
-The spec's edge-case prose says injecting a consumer class and passing a revalidation window is a
-construction error because the knob is meaningless, and test-plan row 29 says the same. The
-implementation rejects only a **positive** window and deliberately accepts an explicitly passed
-`0.0`.
+The hard dependency and minimum CI node now correctly pin
+`strawberry-graphql>=0.316.0`. However,
+[`django_strawberry_framework/routers.py::_STRAWBERRY_CHANNELS_BROKEN_HINT`][routers] still
+tells a consumer that `>=0.262.0` is sufficient, and [`tests/test_routers.py`][test-routers]
+deliberately pins that stale text.
 
-The implementation's behavior is reasonable—the public default is already `0.0`, so an explicit
-zero has no additional effect—but the spec must say “positive window” everywhere if that is the
-contract. Otherwise the API would need a private omitted-value sentinel to distinguish omission
-from an explicit zero. Reconcile the spec and tests rather than leaving the exception only in a
-source comment.
+This is a user-facing recovery path: following the error's advice can install a version the
+package metadata rejects and that CI no longer supports. Update the hint and its test to
+`0.316.0`, then reconcile the historical 0.262.0 language in [spec 041][spec-041] during
+Slice 5. There is no new Python 3.10 problem here—the current dependency floor and minimum
+CI node already agree on Strawberry 0.316.0.
 
-### The multi-database claim overstates what the implementation pins
+## Low 6 — unusual stream capability failures escape the body boundary as raw errors
 
-The spec says revalidation is pinned to “the operation's own resolved alias.” The implementation
-delegates to the configured session engine and `channels.auth.get_user`; those components perform
-ordinary Django router selection, but no operation alias is captured or passed.
+[`django_strawberry_framework/_request_body.py::_measured_remaining`][request-body] catches
+failures from `tell()`, but it calls `seekable()`, both `seek()` operations, and
+`end - position` unguarded. A middleware- or server-supplied stream whose capability method
+raises can therefore turn a request into an unrelated `500`; a failed restore may also
+leave the body position corrupted.
 
-Delegating to Django's routers is probably the correct architecture, and reimplementing
-`get_user` to force an alias would be worse. The contract should therefore say that session and
-user reads honor their models' normal Django database-router decisions. If a stronger
-same-operation-alias guarantee is intended, the current code and tests do not implement it.
+The production Django streams are well behaved, so this is not a current cap bypass. It is
+still an avoidable fragility at the one private compatibility seam the design explicitly
+centralized. Model the probe outcome explicitly:
 
-## What is satisfactorily closed
+- measurable;
+- safely unmeasurable with the original position intact, so bounded read may run; or
+- position potentially corrupted, so fail closed with the package's controlled rejection.
 
-- HTTP is a direct handoff to the consumer-supplied Django ASGI application; the package does not
-  rebuild Django middleware.
-- `GraphQLHTTPConsumer` has left the router composition.
-- `django_application` is required and the explicit invalid-value error is actionable.
-- HTTP and WebSocket URL ownership are separated, and the default WebSocket regex is exact.
-- The package view keeps the upstream `as_view` surface rather than forking Strawberry's HTTP
-  engine.
-- Host validation, CSRF, security headers, cache variation, IDE/GET controls, and URL routing are
-  exercised through fakeshop's live Django endpoint.
-- Declared-over-limit bodies are refused before body access.
-- Multipart is not accidentally materialized by the package cap.
-- Sync and async views share one cap implementation.
-- UTF-8/BOM behavior is explicitly tested across sync and async transports.
-- Both WebSocket subprotocols revalidate at their actual per-operation hooks.
-- The default revalidation window is secure (`0.0`), positive windows are explicit, invalid
-  sessions fail closed, and a failure does not silently downgrade the socket to anonymous.
-- Injected consumers remain structurally inside `AllowedHostsOriginValidator` and
-  `AuthMiddlewareStack`.
+Add stand-ins whose `seekable`, seek-to-end, subtraction result, and restore each fail.
+Never fall through to a bounded read after a failed restore unless the original position is
+known to be intact.
+
+## What the current pass satisfactorily closed
+
+- Non-multipart over-limit bodies are measured without an unbounded
+  `request.body` allocation, including the Django 5.2/Python 3.10 ASGI spool shape.
+- The strict decode is package-view policy and remains active when upstream patches are
+  disabled; the sync adapter now supplies raw bytes through an upstream extension seam.
+- Factory results are validated before mounting, including coroutine cleanup and safe value
+  rendering.
+- WebSocket session-store resolution no longer imports the opt-in auth subsystem.
+- A real second HTTP logout request now invalidates a still-open socket before a **new**
+  operation.
+- Huge integers fail through `ConfigurationError`; explicit zero and database-router
+  language are reconciled.
+- The router continues to hand HTTP directly to the consumer's Django ASGI application,
+  preserving Django's middleware, URLconf, CSRF, cache, and security-header behavior.
 
 ## Recommended correction order
 
-1. Replace the unbounded `request.body` count with a bounded/size-probed implementation and repeat
-   the Django 5.2.0/Python 3.10 floor gate.
-2. Separate the permanent UTF-8 policy from `APPLY_UPSTREAM_PATCHES`.
-3. Validate the injected factory's returned ASGI application.
-4. Move session-store resolution outside the eager opt-in auth package.
-5. Add the real secondary-request revocation acceptance row.
-6. Close the numeric and spec-reconciliation gaps.
+1. Resolve the active-subscription revocation contract and lifecycle seam.
+2. Choose the multipart control-field encoding contract.
+3. Decide whether the multipart cap is an early-middleware guarantee or a view/schema
+   boundary, then make the claim and acceptance test honest.
+4. Reconcile Origin-versus-Host language (or add the missing validator).
+5. Correct the Strawberry floor and harden the stream probe.
+6. Finish Slice 5's planned prose/integration sweep only after the behavior above is stable.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+
 [agents]: ../AGENTS.md
+[drys]: ../drys.md
+[vulns]: ../vulns.md
 
 <!-- docs/ -->
+
 [spec-065]: spec-065-transport_security-0_0_15.md
 
 <!-- docs/SPECS/ -->
 
+[spec-041]: SPECS/spec-041-channels_router-0_0_14.md
+
 <!-- docs/builder/ -->
+
 [build-065]: builder/build-065-transport_security-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[auth-init]: ../django_strawberry_framework/auth/__init__.py
+
 [consumers]: ../django_strawberry_framework/consumers.py
+[request-body]: ../django_strawberry_framework/_request_body.py
 [routers]: ../django_strawberry_framework/routers.py
-[strawberry-patches]: ../django_strawberry_framework/_strawberry_patches.py
 [views]: ../django_strawberry_framework/views.py
 
 <!-- tests/ -->
+
 [test-routers]: ../tests/test_routers.py
 
 <!-- examples/ -->
 
+[transport-tests]: ../examples/fakeshop/test_query/test_transport_api.py
+
 <!-- scripts/ -->
 
 <!-- .venv/ -->
+
+[channels-security]: ../.venv/lib/python3.14/site-packages/channels/security/websocket.py
+[django-csrf]: ../.venv/lib/python3.14/site-packages/django/middleware/csrf.py
+[django-multipart]: ../.venv/lib/python3.14/site-packages/django/http/multipartparser.py
+[legacy-handler]: ../.venv/lib/python3.14/site-packages/strawberry/subscriptions/protocols/graphql_ws/handlers.py
+[transport-handler]: ../.venv/lib/python3.14/site-packages/strawberry/subscriptions/protocols/graphql_transport_ws/handlers.py
 
 <!-- External -->

@@ -4,7 +4,7 @@ Covers the spec-036 Slice 2 surface (``django_strawberry_framework/mutations/set
 
 - the ``Meta`` validation matrix at class creation (unknown key; no-resolvable-model
   via ``_resolve_model``; bad / missing ``operation``; ``fields`` + ``exclude``
-  both supplied; ``input_class`` not a ``@strawberry.input`` type; the AR-M2
+  both supplied; ``input_class`` not a ``@strawberry.input`` type; the
   diverging-field-name rejection - the Slice-1-deferred half);
 - ``permission_classes`` defaulting to ``[DjangoModelPermission]`` (and an explicit
   override honored);
@@ -14,7 +14,7 @@ Covers the spec-036 Slice 2 surface (``django_strawberry_framework/mutations/set
 - the phase-2.5 bind - the finalize-time materialize trigger Slice 1 deferred:
   generated ``<Model>Input`` / ``<Model>PartialInput`` / ``<Name>Payload`` become
   module globals of ``mutations.inputs``, identical shapes dedupe, distinct shapes
-  colliding on one generated name raise ``ConfigurationError`` (AR-M6), and the
+  colliding on one generated name raise ``ConfigurationError``, and the
   ``registry.clear()`` co-clear resets both the input/payload ledger and the
   declaration registry;
 - the no-registered-primary-type finalize error (zero-type vs ambiguous phrasings);
@@ -91,7 +91,7 @@ def _unique_app_label() -> str:
 
 
 def test_meta_without_model_raises():
-    """A ``Meta`` with no resolvable model raises naming ``Meta.model`` (Medium-5 seam)."""
+    """A ``Meta`` with no resolvable model raises naming ``Meta.model``."""
     with pytest.raises(ConfigurationError, match="no resolvable model"):
 
         class CreateItem(DjangoMutation):
@@ -168,7 +168,7 @@ def test_meta_fields_and_exclude_both_raises():
 
 
 def test_meta_duplicate_fields_raises():
-    """A repeated name in ``Meta.fields`` raises at class creation (feedback - bug 9).
+    """A repeated name in ``Meta.fields`` raises at class creation.
 
     ``("name", "name", "category")`` would otherwise collapse silently when the
     effective field set is taken as a ``frozenset``, masking the malformed
@@ -235,7 +235,7 @@ def test_meta_fields_non_string_entry_raises():
 
 
 def test_meta_delete_with_fields_raises():
-    """``operation="delete"`` with ``Meta.fields`` raises at class creation (feedback - bug 7).
+    """``operation="delete"`` with ``Meta.fields`` raises at class creation.
 
     A delete is id-only and materializes NO input, so it never runs the
     ``editable_input_fields`` walk that would otherwise catch an unknown field
@@ -279,7 +279,7 @@ def test_meta_input_class_not_strawberry_input_raises():
 
 
 def test_meta_input_class_diverging_field_names_raises():
-    """An ``input_class`` with names off the generated scheme raises (AR-M2, deferred half).
+    """An ``input_class`` with names off the generated scheme raises.
 
     The generated scheme: scalars use the model field name, forward FK uses
     ``<field>_id``. A custom input naming a relation field ``category`` (instead of
@@ -416,7 +416,7 @@ def test_permission_classes_explicit_override_honored():
 
 
 def test_permission_classes_tuple_is_normalized_to_list():
-    """A tuple ``permission_classes`` is normalized to a list (feedback P2)."""
+    """A tuple ``permission_classes`` is normalized to a list."""
 
     class AllowAll:
         def has_permission(
@@ -439,7 +439,7 @@ def test_permission_classes_tuple_is_normalized_to_list():
 
 
 def test_permission_classes_bare_class_raises():
-    """A bare class (not wrapped in a sequence) raises at class creation (feedback P2).
+    """A bare class (not wrapped in a sequence) raises at class creation.
 
     The contract is a *sequence* of permission classes; a single class would
     iterate as a ``TypeError`` inside ``check_permission`` at request time, so it is
@@ -478,7 +478,7 @@ def test_permission_classes_bare_string_raises():
 
 
 def test_permission_classes_instance_entry_raises():
-    """An entry that is an INSTANCE (not a class) raises (feedback P2).
+    """An entry that is an INSTANCE (not a class) raises.
 
     ``check_permission`` does ``permission_class().has_permission(...)`` - it
     INSTANTIATES each entry - so an already-instantiated object is invalid and is
@@ -506,7 +506,7 @@ def test_permission_classes_instance_entry_raises():
 
 
 def test_permission_classes_entry_without_has_permission_raises():
-    """A class entry lacking ``has_permission`` raises at class creation (feedback P2)."""
+    """A class entry lacking ``has_permission`` raises at class creation."""
 
     class NotAPermission:
         pass
@@ -521,7 +521,7 @@ def test_permission_classes_entry_without_has_permission_raises():
 
 
 # ---------------------------------------------------------------------------
-# _resolve_model seam (Medium-5)
+# _resolve_model seam
 # ---------------------------------------------------------------------------
 
 
@@ -669,7 +669,7 @@ def test_bind_materializes_input_and_payload_globals():
 
 
 def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
-    """A re-call after a fixable post-bind finalization failure succeeds, not a masked collision (feedback #6).
+    """A re-call after a fixable post-bind finalization failure succeeds, not a masked collision.
 
     ``finalize_django_types()`` documents recover-in-place: fix the offending
     cause and call again, no ``registry.clear()`` required. But phase 2.5 binds
@@ -713,9 +713,9 @@ def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch)
 
 
 def test_bind_merges_consumer_input_class_with_generated_remainder():
-    """A consumer ``input_class`` overriding ONE field is MERGED, not a wholesale replace (CR-2).
+    """A consumer ``input_class`` overriding ONE field is MERGED, not a wholesale replace.
 
-    The spec-010 relation-override contract (DoD line 51 / line 336, AR-M2): the
+    The spec-010 relation-override contract: the
     consumer declares only the field it customizes; the generator fills the rest of
     the editable shape, and the consumer's field is honored, not clobbered. A
     partial consumer input must therefore yield the FULL shape - both the
@@ -750,7 +750,7 @@ def test_bind_merges_consumer_input_class_with_generated_remainder():
 
 
 def test_bind_merges_consumer_partial_input_class_for_update():
-    """A consumer ``partial_input_class`` is likewise merged on the update side (CR-2)."""
+    """A consumer ``partial_input_class`` is likewise merged on the update side."""
     from django_strawberry_framework.mutations.inputs import _materialized_names
 
     _declare_products_primaries()
@@ -775,15 +775,15 @@ def test_bind_merges_consumer_partial_input_class_for_update():
 
 
 def test_bind_rejects_raw_pk_relation_override_for_relay_target():
-    """A raw-pk relation override for a Relay-Node target raises at bind (AR-M2 / Decision 10).
+    """A raw-pk relation override for a Relay-Node target raises at bind (Decision 10).
 
     ``Category`` has a primary Relay-Node type, so the generated ``category_id`` input
-    is a ``relay.GlobalID`` that is type-checked (AR-H4) AND visibility-checked through
-    ``Category``'s ``get_queryset`` (Decision 10 / feedback P1) at decode. A consumer
+    is a ``relay.GlobalID`` that is type-checked AND visibility-checked through
+    ``Category``'s ``get_queryset`` (Decision 10) at decode. A consumer
     ``input_class`` declaring ``category_id: int`` (a raw pk) would, at decode, be seen
     as a non-``GlobalID`` value and passed through as a raw pk - bypassing both checks
     and letting a permitted writer attach a ``Category`` row they could not *see*. The
-    bind rejects it fail-loud (the AR-M2 posture).
+    bind rejects it fail-loud.
 
     Enforced at finalization, not class creation: whether ``Category`` has a primary
     Relay-Node type is a ``registry.get`` lookup only reliably populated at the
@@ -808,7 +808,7 @@ def test_bind_rejects_raw_pk_relation_override_for_relay_target():
 
 
 def test_bind_rejects_raw_pk_relation_override_on_partial_input():
-    """The type-lock applies to ``partial_input_class`` (update) too (AR-M2 / Decision 10)."""
+    """The type-lock applies to ``partial_input_class`` (update) too (Decision 10)."""
     _declare_products_primaries()
 
     @strawberry.input
@@ -826,11 +826,11 @@ def test_bind_rejects_raw_pk_relation_override_on_partial_input():
 
 
 def test_bind_accepts_globalid_relation_override_for_relay_target():
-    """A relation override that keeps the generated ``GlobalID`` id type binds clean (AR-M2).
+    """A relation override that keeps the generated ``GlobalID`` id type binds clean.
 
     The contract-compliant form: the consumer customizes the relation field's
     representation (here a description) while keeping the ``relay.GlobalID`` id type, so
-    the AR-H4 type-check and the Decision-10 visibility contract still ride the merged
+    the id type-check and the Decision-10 visibility contract still ride the merged
     field. The merge honors the consumer's field, and the generator fills the remainder.
     """
     from django_strawberry_framework.mutations.inputs import _materialized_names
@@ -888,7 +888,7 @@ def _declare_book_m2m_primaries():
 
 
 def test_bind_rejects_m2m_relation_override_as_scalar_globalid():
-    """An M2M override declared as a SCALAR ``relay.GlobalID`` raises at bind (feedback - bug 1/2).
+    """An M2M override declared as a SCALAR ``relay.GlobalID`` raises at bind.
 
     ``Book.genres`` generates ``list[relay.GlobalID]``; a consumer ``genres:
     relay.GlobalID`` keeps the GlobalID core but loses the list container, so the
@@ -1020,8 +1020,8 @@ def test_bind_dedupes_full_set_fields_with_bare_create():
     ``("name", "description", "category", "attachment", "is_private")``; a
     ``fields`` list naming exactly that set IS the canonical shape, so it must
     resolve to the same materialized ``ItemInput`` as an un-narrowed create
-    (spec-036 Edge cases line 509) rather than spuriously raising AR-M6 on a
-    same-name collision.
+    (spec-036 Edge cases line 509) rather than spuriously raising a distinct-shape
+    collision on the shared name.
     """
     _declare_products_primaries()
 
@@ -1055,7 +1055,7 @@ def test_bind_dedupes_fields_with_complementary_exclude():
     spellings - ``fields=("name",)`` vs ``exclude`` naming every OTHER editable
     column - resolve to the same shape-derived ``<Model>...Input`` name and must
     dedupe to one materialized type (spec-036 Decision 6 line 334 / Edge cases line
-    509), not raise a spurious AR-M6 collision on the shared name.
+    509), not raise a spurious distinct-shape collision on the shared name.
     """
     _declare_products_primaries()
 
@@ -1085,7 +1085,7 @@ def test_bind_dedupes_fields_with_complementary_exclude():
 
 
 def test_bind_merged_and_generated_same_shape_distinct_representations_raise():
-    """Two representations of one input shape claiming the canonical name raise (AR-M6 / CR-2).
+    """Two representations of one input shape claiming the canonical name raise.
 
     Under the merge contract a consumer ``input_class`` is materialized under the
     canonical SHAPE name (``ItemInput``) - the consumer's Python class name is
@@ -1093,9 +1093,8 @@ def test_bind_merged_and_generated_same_shape_distinct_representations_raise():
     So two ``Item`` create mutations that resolve the same ``ItemInput`` shape to
     two DIFFERENT representations - one consumer-customized, one plain generated -
     claim one name with two distinct class objects, and the input ledger's
-    collision check fires at finalize (the end-to-end AR-M6 input trigger under
-    the merge realization; a consumer class name can no longer dodge or forge a
-    collision).
+    collision check fires at finalize (a consumer class name can neither dodge nor
+    forge a collision).
     """
     _declare_products_primaries()
 
@@ -1119,7 +1118,7 @@ def test_bind_merged_and_generated_same_shape_distinct_representations_raise():
 
 
 def test_bind_duplicate_payload_name_distinct_shapes_raises():
-    """Two mutations generating the same ``<Name>Payload`` for distinct shapes raise (AR-M6).
+    """Two mutations generating the same ``<Name>Payload`` for distinct shapes raise.
 
     Same class name in different "modules" -> same ``<Name>Payload`` name but a
     distinct object slot/type, so the payload ledger collision fires at finalize.
@@ -1314,7 +1313,7 @@ def test_meta_permission_classes_non_iterable_raises():
 def test_bind_skips_relation_lock_for_non_relay_target():
     """The relation-type-lock skips a relation whose target type is NOT Relay-Node.
 
-    The AR-M2 relation-type-lock only guards a Relay-Node relation's ``GlobalID`` core
+    The relation-type-lock only guards a Relay-Node relation's ``GlobalID`` core
     and container shape against a consumer ``input_class`` override. When the FK
     target's ``DjangoType`` is a plain (non-Node) type, the generated ``<field>_id`` is
     a raw pk with no GlobalID visibility contract to defeat, so the lock skips it and

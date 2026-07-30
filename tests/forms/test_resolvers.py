@@ -357,7 +357,7 @@ def _relay_global_id(type_cls: type, pk: object) -> relay.GlobalID:
 
 @pytest.mark.django_db
 def test_decode_split_relation_lands_under_form_key_not_id_attr():
-    """``categoryId`` decodes to ``{"category": pk}`` in ``provided_data`` (the P1 form-key contract)."""
+    """``categoryId`` decodes to ``{"category": pk}`` in ``provided_data`` (the form-key contract)."""
     (
         _schema,
         (
@@ -476,7 +476,7 @@ def test_decode_unwraps_choice_enum_to_raw_value():
 
 
 # ---------------------------------------------------------------------------
-# relation visibility on EVERY branch (Relay x raw-pk, single x multi) - P1
+# relation visibility on EVERY branch (Relay x raw-pk, single x multi)
 # ---------------------------------------------------------------------------
 
 
@@ -518,7 +518,7 @@ def test_relation_visibility_relay_single_hidden_rejected():
 
 @pytest.mark.django_db
 def test_relation_visibility_raw_pk_single_hidden_rejected():
-    """A hidden NON-RELAY raw-pk FK target -> field-keyed error (the raw-pk gap, P1).
+    """A hidden NON-RELAY raw-pk FK target -> field-keyed error (the raw-pk gap).
 
     The related primary is NOT Relay-Node-shaped, so the relation id is a raw pk;
     the form decoder must STILL visibility-check it (the gap ``036``'s
@@ -623,7 +623,7 @@ def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset=None):
 
 @pytest.mark.django_db
 def test_relation_visibility_relay_multi_hidden_rejected():
-    """A hidden Relay-``GlobalID`` M2M member -> field-keyed error (multi branch, P1)."""
+    """A hidden Relay-``GlobalID`` M2M member -> field-keyed error (multi branch)."""
 
     @classmethod
     def hide_all(cls, qs, info):
@@ -654,7 +654,7 @@ def test_relation_visibility_relay_multi_hidden_rejected():
 
 @pytest.mark.django_db
 def test_relation_visibility_raw_pk_multi_hidden_rejected():
-    """A hidden NON-RELAY raw-pk M2M member -> field-keyed error (multi raw-pk gap, P1)."""
+    """A hidden NON-RELAY raw-pk M2M member -> field-keyed error (multi raw-pk gap)."""
 
     @classmethod
     def hide_all(cls, qs, info):
@@ -681,7 +681,7 @@ def test_relation_visibility_raw_pk_multi_hidden_rejected():
 
 @pytest.mark.django_db
 def test_wrong_model_relation_id_yields_field_error():
-    """A well-formed ``GlobalID`` for the WRONG model -> field-keyed error (AR-H4)."""
+    """A well-formed ``GlobalID`` for the WRONG model -> field-keyed error."""
     (
         schema,
         (
@@ -705,7 +705,7 @@ def test_wrong_model_relation_id_yields_field_error():
 
 
 # ---------------------------------------------------------------------------
-# to_field_name (P2 #6)
+# to_field_name
 # ---------------------------------------------------------------------------
 
 
@@ -757,13 +757,13 @@ def test_to_field_name_relation_validates_by_target_field():
 
 
 # ---------------------------------------------------------------------------
-# write-time IntegrityError (P1)
+# write-time IntegrityError
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 def test_modelform_save_integrity_error_maps_to_envelope():
-    """A ``form.save()`` ``IntegrityError`` race maps to the envelope, not a top-level error (P1)."""
+    """A ``form.save()`` ``IntegrityError`` race maps to the envelope, not a top-level error."""
     (
         schema,
         (
@@ -793,7 +793,7 @@ def test_modelform_save_integrity_error_maps_to_envelope():
 
 @pytest.mark.django_db
 def test_plain_form_perform_mutate_integrity_error_maps_to_envelope():
-    """A plain-form ``perform_mutate`` ``IntegrityError`` maps to ``{ ok: false }`` (P1)."""
+    """A plain-form ``perform_mutate`` ``IntegrityError`` maps to ``{ ok: false }``."""
 
     class ContactForm(forms.Form):
         message = forms.CharField()
@@ -865,7 +865,7 @@ def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
 
 
 # ---------------------------------------------------------------------------
-# get_form_kwargs / get_form hooks (P2)
+# get_form_kwargs / get_form hooks
 # ---------------------------------------------------------------------------
 
 
@@ -969,7 +969,7 @@ def test_get_form_kwargs_override_waives_create_required_guard():
 
 
 # ---------------------------------------------------------------------------
-# partial-update reconstruction (P1)
+# partial-update reconstruction
 # ---------------------------------------------------------------------------
 
 
@@ -1205,7 +1205,7 @@ def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
 
 @pytest.mark.django_db
 def test_partial_update_preserves_unprovided_fk_with_to_field_name():
-    """An omitted FK whose form field sets ``to_field_name`` survives a partial update (feedback #5).
+    """An omitted FK whose form field sets ``to_field_name`` survives a partial update.
 
     The single-FK twin of the M2M ``to_field_name`` case. The bound
     ``ModelChoiceField(to_field_name="code")`` validates ``shelf`` via
@@ -1273,7 +1273,7 @@ def test_partial_update_preserves_unprovided_fk_with_to_field_name():
 def test_required_extra_field_omitted_on_update_is_coercion_error():
     """A required non-model extra field stays required in the partial input; omitting it
     is a GraphQL coercion error BEFORE the resolver
-    (P2 / ``spec-038-form_mutations-0_0_12`` Finding 2).
+    (``spec-038-form_mutations-0_0_12`` Finding 2).
 
     The Slice-1 partial input keeps a required non-model extra field required (it
     is not a model-backed field forced optional). Now that a required generated
@@ -1502,7 +1502,7 @@ def test_plain_form_perform_mutate_may_write_inside_the_write_phase():
 
 
 # ---------------------------------------------------------------------------
-# visibility-scoped update locate (P1)
+# visibility-scoped update locate
 # ---------------------------------------------------------------------------
 
 
@@ -2068,7 +2068,7 @@ def test_visible_related_object_no_primary_uses_default_manager():
     A relation whose related model has no primary ``DjangoType`` carries no
     visibility contract, so existence is checked against the default manager.
     Driven directly (the autouse fixture leaves the registry empty). The helper was
-    promoted to ``utils/querysets.py`` in spec-039 Slice 3 (P1.1) so the form +
+    promoted to ``utils/querysets.py`` in spec-039 Slice 3 so the form +
     serializer relation decoders share one object-returning visibility query.
     """
     genre = library_models.Genre.objects.create(name=_uniq("G"))

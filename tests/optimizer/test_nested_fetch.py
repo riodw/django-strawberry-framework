@@ -209,7 +209,7 @@ def test_on_execute_publishes_instance_strategy():
 
 
 def test_unwindowable_child_queryset_reason_matrix():
-    """The strategy-independent safety classifier (feedback2 P0-3).
+    """The strategy-independent safety classifier.
 
     Each unsafe consumer-hook shape maps to a stable reason; a plain
     queryset (with or without projection/ordering) maps to ``None``.

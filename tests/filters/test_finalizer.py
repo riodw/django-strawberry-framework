@@ -3,9 +3,9 @@
 Covers:
 
 - ``Meta.filterset_class`` validation (positive + negative).
-- Four-subpass ordering per H1 of rev8 (every owner bound BEFORE any
+- Four-subpass ordering (every owner bound BEFORE any
   ``get_filters()`` runs across the whole registry).
-- Strict multi-owner reuse per H2 of rev8: divergent
+- Strict multi-owner reuse: divergent
   ``graphql_type_name`` rejected; identical target accepted; idempotent
   re-bind of the same ``(filterset, definition)`` pair accepted.
 - Materialization idempotency under the ``(name, cls)`` contract.
@@ -70,7 +70,7 @@ def _isolate_registry():
 
 
 # ---------------------------------------------------------------------------
-# Subpass ordering - H1 of rev8.
+# Subpass ordering.
 # ---------------------------------------------------------------------------
 
 
@@ -151,14 +151,14 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 
 
 # ---------------------------------------------------------------------------
-# Strict multi-owner reuse - H2 of rev8.
+# Strict multi-owner reuse.
 # ---------------------------------------------------------------------------
 
 
 def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
     """Two REAL owners diverging on own-PK Relay identity are rejected end-to-end.
 
-    Exercises the genuinely owner-dependent axis of the H2-rev8 strict
+    Exercises the genuinely owner-dependent axis of the strict
     multi-owner check: one Relay-shaped owner and one plain owner share a
     single ``FilterSet``, so the shared filterset's own ``id`` filter
     would resolve to a GlobalID under one owner but a scalar under the
@@ -310,7 +310,7 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
 def test_phase_2_5_accepts_multi_owner_with_identical_target():
     """Two distinct owner definitions sharing one ``FilterSet`` succeed when targets match.
 
-    Pins the H2-rev8 strict-equality walk through ``related_filters``
+    Pins the strict-equality walk through ``related_filters``
     (per spec-021 line 1030's companion to
     ``test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity``). The
     pre-existing
@@ -437,7 +437,7 @@ def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
 
 
 # ---------------------------------------------------------------------------
-# Orphan ``filter_input_type`` references - H5 of rev5.
+# Orphan ``filter_input_type`` references.
 # ---------------------------------------------------------------------------
 
 

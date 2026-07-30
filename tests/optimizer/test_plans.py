@@ -426,7 +426,7 @@ class TestFlattenSelectRelated:
         assert _flatten_select_related(False) == set()
 
     def test_true_returns_empty_set_for_wildcard(self):
-        # P2: wildcard ``select_related()`` cannot safely justify
+        # A wildcard ``select_related()`` cannot safely justify
         # dropping explicit optimizer entries because the wildcard only
         # follows non-null FKs.  Treat as no overlap.
         assert _flatten_select_related(True) == set()
@@ -511,7 +511,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan is not plan
         assert delta_plan.select_related == ()
         assert delta_qs is qs
-        # Original plan is untouched - B1 caches it across requests.
+        # Original plan is untouched - the plan cache reuses it across requests.
         assert plan.select_related == ["category"]
 
     def test_drops_chained_select_related(self):
@@ -521,7 +521,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan.select_related == ()
 
     def test_wildcard_select_related_does_not_drop_explicit_entries(self):
-        # P2: ``select_related()`` follows only non-null FKs; the
+        # A wildcard ``select_related()`` follows only non-null FKs; the
         # optimizer may name nullable FKs explicitly.  Treat the
         # wildcard as no overlap and pass entries through unchanged.
         plan = OptimizationPlan(select_related=["item", "property"])
@@ -567,7 +567,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan.cacheable is False
 
     def test_consumer_descendant_string_absorbed_by_optimizer_prefetch(self):
-        # P1 case 1: consumer ``"items__entries"`` carries no info the
+        # The consumer's ``"items__entries"`` carries no info the
         # optimizer's nested ``Prefetch`` lacks.  The plain string is
         # stripped from the queryset and the optimizer entry is kept;
         # this avoids the ``'items' lookup was already seen with a
@@ -583,7 +583,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs._prefetch_related_lookups == ()
 
     def test_consumer_exact_plus_descendant_strings_both_absorbed(self):
-        # P1 follow-up: ``prefetch_related("items", "items__entries")``
+        # The exact-plus-descendant case: ``prefetch_related("items", "items__entries")``
         # combined.  Both plain strings are absorbed by the optimizer's
         # ``Prefetch("items", queryset=...)`` so Django does not see
         # the implicit ``items`` from ``items__entries`` colliding with
@@ -598,7 +598,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs._prefetch_related_lookups == ()
 
     def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self):
-        # P1 follow-up: when the optimizer's own subtree does not cover
+        # When the optimizer's own subtree does not cover
         # every consumer descendant on the same subtree, absorbing
         # would silently drop data. Drop the optimizer entry instead;
         # the consumer's deeper prefetch is preserved.
@@ -640,7 +640,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs._prefetch_related_lookups == (consumer_descendant,)
 
     def test_consumer_plain_string_replaced_by_optimizer_nested_prefetch(self):
-        # P1 case 2: consumer ``prefetch_related("items")`` plain
+        # The consumer's ``prefetch_related("items")`` plain
         # string vs. optimizer ``Prefetch("items", queryset=...)``
         # carrying nested chains.  The plain string carries no info
         # the optimizer's Prefetch lacks, so the optimizer wins and
@@ -669,7 +669,7 @@ class TestDiffPlanForQueryset:
         assert delta_qs._prefetch_related_lookups == (unrelated,)
 
     def test_drops_only_fields_when_consumer_applied_only(self):
-        # M1: Django's ``QuerySet.only(...).only(...)`` replaces (not
+        # Django's ``QuerySet.only(...).only(...)`` replaces (not
         # merges) the deferred-field set. If the consumer already
         # restricted columns via ``.only()`` (e.g., to enforce a
         # column-level permission boundary), the optimizer must drop
@@ -685,7 +685,7 @@ class TestDiffPlanForQueryset:
         fields, is_deferred = delta_qs.query.deferred_loading
         assert fields == {"name"}
         assert is_deferred is False
-        # Original plan untouched (B1 cache invariant).
+        # Original plan untouched (plan-cache invariant).
         assert plan.only_fields == ["id"]
 
     def test_keeps_only_fields_when_consumer_did_not_apply_only(self):
@@ -1244,7 +1244,7 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned.select_related == ()
         assert pruned.planned_resolver_keys == ("unrelated-key",)
         assert "category-key" not in pruned.finalized_planned_resolver_keys
-        # The review's runtime bar: the applied queryset COMPILES (the old
+        # The runtime bar: the applied queryset COMPILES (the old
         # behavior raised FieldError at SQL generation).
         assert 'JOIN "products_category"' not in str(applied.query)
         # The original (cached) plan is untouched.

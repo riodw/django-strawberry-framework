@@ -308,12 +308,11 @@ def test_normalize_input_value_returns_empty_for_none_input():
 def test_normalize_input_value_raw_dict_matches_dataclass_form():
     """A raw-dict order input flattens identically to the dataclass form.
 
-    The 0.0.9 DRY pass routed ``normalize_input_value`` through the shared
-    ``utils/input_values.py::iter_active_fields`` classifier (that pass's
-    Major 1), whose ``iter_input_items`` walk accepts the dict shape as well as
-    the Strawberry input dataclass. This pins the review's required equivalence
-    -- dataclass and raw-dict forms (including a nested ``RelatedOrder`` branch)
-    produce the same flattened ``(field_path, direction)`` tuples.
+    ``normalize_input_value`` routes through the shared
+    ``utils/input_values.py::iter_active_fields`` classifier, whose
+    ``iter_input_items`` walk accepts the dict shape as well as the Strawberry
+    input dataclass. Both forms (including a nested ``RelatedOrder`` branch)
+    must produce the same flattened ``(field_path, direction)`` tuples.
     """
     from apps.library.models import Book, Shelf
 
@@ -498,7 +497,7 @@ def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace
 
 
 def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cleanup):
-    """The materialized class stays on the module dict per spec-028 Revision 4 B2."""
+    """The materialized class stays on the module dict per spec-028."""
     from django_strawberry_framework.orders.inputs import (
         INPUTS_MODULE_PATH,
         clear_order_input_namespace,
@@ -512,7 +511,8 @@ def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cle
     module = sys.modules[INPUTS_MODULE_PATH]
     assert module.FooParkedOrderInputType is FooParked
     clear_order_input_namespace()
-    # Class object stays parked -- parking is load-bearing per B2.
+    # Class object stays parked -- parking is load-bearing for the lazy
+    # Strawberry annotation that still resolves this name.
     assert module.FooParkedOrderInputType is FooParked
 
 
@@ -662,7 +662,7 @@ def test_registry_clear_invokes_clear_order_input_namespace():
     assert OrderArgumentsFactory.input_object_types == {}
     assert OrderArgumentsFactory._type_orderset_registry == {}
 
-    # Module global is left parked (parking is load-bearing per Decision 9 B2).
+    # Module global is left parked (parking is load-bearing per Decision 9).
     module = sys.modules[INPUTS_MODULE_PATH]
     assert hasattr(module, "LedgerStubOrderInputType")
     delattr(module, "LedgerStubOrderInputType")
@@ -723,7 +723,7 @@ def test_registry_clear_works_without_orders_imported():
 
 
 # ---------------------------------------------------------------------------
-# Pass-2 B1 coverage closure -- inputs.py uncovered lines
+# inputs.py edge-case branches
 # ---------------------------------------------------------------------------
 
 

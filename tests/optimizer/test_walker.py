@@ -2020,19 +2020,19 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - H2 root origin-type propagation
+# Slice 4 - root origin-type propagation
 # ---------------------------------------------------------------------------
 
 
 def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
-    """H2: a root resolver returning a secondary plans from the secondary's hints.
+    """A root resolver returning a secondary plans from the secondary's hints.
 
     Register an ``ItemType`` primary with ``OptimizerHint.SKIP`` on
     ``category`` and an ``AdminItemType`` secondary with
     ``OptimizerHint.force_prefetch()`` on ``category``. With
     ``source_type=AdminItemType``, the planner must use the secondary's
-    hint (force_prefetch), not the primary's SKIP. Without the H2
-    threading, ``_resolve_field_map(Item)`` would route through
+    hint (force_prefetch), not the primary's SKIP. Without the
+    origin-type threading, ``_resolve_field_map(Item)`` would route through
     ``registry.get(Item)`` -> ``ItemType``, and the SKIP would suppress
     the relation entirely.
     """
@@ -2075,7 +2075,7 @@ def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
 
 
 def test_scalar_only_secondary_resolver_uses_secondary_field_map():
-    """H2 rev6 M1: a scalar-only selection routes through the root path.
+    """A scalar-only secondary selection routes through the root path.
 
     Register an ``ItemType`` primary with a field_map missing ``name``
     and an ``AdminItemType`` secondary with a field_map including
@@ -2117,7 +2117,7 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
 
 
 def test_optimizer_walker_uses_primary_for_nested_relation_target():
-    """H2 nested contract: nested relation lookup still routes through the primary.
+    """Nested relation lookup still routes through the primary.
 
     Multi-type ``Item`` (``ItemType`` primary, ``AdminItemType``
     secondary) reached via a nested ``CategoryType.items`` relation.
@@ -3656,9 +3656,9 @@ def test_divergent_last_zero_key_falls_back_alone():
     """A reversed ``last: 0`` alias stays per-parent while its sibling plans.
 
     Only the per-parent pipeline reproduces upstream's ``edges[-0:]``
-    whole-list quirk, so that key plans no dead window (feedback2 P0-3
-    follow-through, per key) and records no identity; the plain sibling is
-    unaffected.
+    whole-list quirk, so that key plans no dead window (a reversed ``last: 0``
+    window always comes back empty) and records no identity; the plain sibling
+    is unaffected.
     """
     registry.clear()
     try:
@@ -3728,7 +3728,7 @@ def test_merge_flags_same_key_conflicting_arguments():
 def test_conflicting_same_key_connection_stays_fully_unplanned():
     """A response-key argument conflict is a fully-unplanned fallback.
 
-    The idea-#2 review P0 gate, pinned at the planner: a merged connection
+    Pinned at the planner: a merged connection
     selection carrying the conflict flag plans NO window and records NO
     resolver identities - the per-parent pipeline is the only resolver that
     applies each alias subtree's own arguments to one shared response key.
@@ -3763,7 +3763,7 @@ def test_conflicting_same_key_connection_stays_fully_unplanned():
 def test_nested_same_key_conflict_leaves_only_the_nested_level_unplanned():
     """A nested same-key conflict falls back alone; the outer per-key windows stay.
 
-    The idea-#2 review P0 shape: divergent OUTER aliases whose subtrees both
+    The shape: divergent OUTER aliases whose subtrees both
     select the SAME nested connection key with DIFFERENT arguments. The union
     merge flags the nested ``genresConnection``; its window is not planned
     (each alias's nested page resolves per-parent with its own arguments),
@@ -4402,7 +4402,7 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 # spec-035 Slice 2 - G2 operation-type gating of ``.only()`` (Decision 4)
 # ---------------------------------------------------------------------------
 
-# spec-036 Slice 3 (AR-M7): the package-tier exact-`only_fields` plan-state mirror
+# spec-036 Slice 3: the package-tier exact-`only_fields` plan-state mirror
 # for the DjangoMutation post-write re-fetch. The live `CaptureQueriesContext`
 # bounded-count assertion is Slice 4; this is its exact-state counterpart.
 
@@ -4447,7 +4447,7 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
 
 
 def test_mutation_refetch_plan_drops_only_keeps_relations():
-    """The DjangoMutation post-write re-fetch plan-state mirror (spec-036 AR-M7 / Decision 9).
+    """The DjangoMutation post-write re-fetch plan-state mirror (spec-036 Decision 9).
 
     The package-tier exact-state counterpart to Slice 4's live behavioral
     ``CaptureQueriesContext`` assertion. A mutation re-fetch hands the optimizer the
@@ -5146,7 +5146,7 @@ def test_select_related_paths_carry_their_resolver_keys():
 def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_name, shape, reason):
     """Unsafe consumer ``get_queryset`` shapes never reach a fetch strategy.
 
-    feedback2 P0-3: a sliced child queryset used to crash INSIDE
+    A sliced child queryset used to crash INSIDE
     ``apply_window_pagination`` (Django: "Cannot reorder a query once a
     slice has been taken") before any fallback, and ``select_for_update`` /
     combined querysets cannot be represented by either strategy's SQL. The
@@ -5209,7 +5209,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
 def test_last_zero_connection_left_fully_unplanned():
     """``last: 0`` plans nothing: no window prefetch, no resolver keys.
 
-    feedback2 P0-3: the reversed window for ``last: 0`` always came back
+    The reversed window for ``last: 0`` always came back
     empty and was discarded at resolve time - a dead query per request whose
     recorded resolver keys silenced strictness over the real per-parent
     fallback. The walker now treats the shape like ``UnwindowableConnection``
@@ -5240,7 +5240,7 @@ def test_last_zero_connection_left_fully_unplanned():
 
 
 def test_plan_rejects_to_attr_prefetch_hint_on_generated_relation():
-    """B4 + feedback2 P0-4: ``Prefetch(..., to_attr=...)`` hints fail loud.
+    """B4: ``Prefetch(..., to_attr=...)`` hints fail loud.
 
     Django lands ``to_attr`` rows on that attribute, but the GENERATED
     relation resolver reads ``_prefetched_objects_cache[accessor]`` - the

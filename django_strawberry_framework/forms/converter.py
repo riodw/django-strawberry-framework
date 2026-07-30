@@ -16,7 +16,7 @@ so a ``choices`` form field resolves to the SAME generated enum the read
 ``DjangoType`` synthesizes (the symmetric wire contract). The two key spaces -
 ``forms.Field`` here, ``models.Field`` on the read side - stay strictly separate.
 
-**Fail-loud dispatch (P2).** The registry registers each supported class
+**Fail-loud dispatch.** The registry registers each supported class
 *individually* (so subclasses map via the MRO walk - ``EmailField`` /
 ``SlugField`` / ``URLField`` / ``RegexField`` under ``CharField``), handles a
 bare ``forms.Field`` as an explicit exact-type special case -> ``str``, and the
@@ -28,7 +28,7 @@ graphene-django ``ImproperlyConfigured`` parity, lost). A custom
 ``class CustomField(forms.Field)`` with no supported ancestor therefore hits the
 raising default.
 
-**The reverse map (P1).** The generated input GraphQL names follow the
+**The reverse map.** The generated input GraphQL names follow the
 cross-flavor ``036`` convention (a ``ModelChoiceField`` named ``category`` emits
 ``categoryId`` / python attr ``category_id``), but a bound Django form is keyed
 by FORM-field name (``ItemModelForm(data={"category": pk})``, never
@@ -54,7 +54,7 @@ from ..exceptions import ConfigurationError
 from ..utils.converters import convert_with_mro
 
 # The four decode kinds the reverse-map record carries. Single-sourced in
-# ``utils/inputs.py`` (DRY review A7 - one conceptual enum, not a per-flavor
+# ``utils/inputs.py`` (one conceptual enum, not a per-flavor
 # copy); re-exported here (the ``as`` form marks the explicit re-export) so the
 # Slice 3 resolver, the input builder, and the tests keep addressing them on
 # this module (spec-038 Decision 7 P1).
@@ -77,8 +77,7 @@ class FormFieldConversion(FieldConversionBase):
     related primary ``DjangoType`` are known, so the Relay-``GlobalID``-vs-raw-pk
     id type can be resolved), so those kinds carry ``annotation=None`` here and
     only the ``kind`` is authoritative. The ``(annotation, kind, required)``
-    value-object shape is the shared ``utils/inputs.py::FieldConversionBase``
-    (DRY review A7).
+    value-object shape is the shared ``utils/inputs.py::FieldConversionBase``.
     """
 
     __slots__ = ()
@@ -190,7 +189,7 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
     required = form_field_required(field)
 
     # Delegate the ordered-precheck -> MRO-walk -> raise control flow to the
-    # shared ``utils/converters.py::convert_with_mro`` skeleton (spec-039 P1.4) so
+    # shared ``utils/converters.py::convert_with_mro`` skeleton so
     # the no-silent-catch-all contract is single-sited with the serializer
     # converter. The prechecks below are the relation / file / multi-choice /
     # bare-``Field`` cases that must win BEFORE the scalar registry walk reaches a

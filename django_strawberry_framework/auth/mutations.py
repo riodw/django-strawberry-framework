@@ -121,9 +121,9 @@ _WEBSOCKET_LOGOUT_UNSUPPORTED = (
 # ``RegisterPayload``) through the unchanged machinery.
 _REGISTER_INPUT_NAME = "RegisterInput"
 
-# The register exclusion seam's protected input attrs (spec-040 D6): ``password``
+# The register exclusion seam's protected input attrs: ``password``
 # is captured out of the model construction (never a constructed model attr) with
-# its AR-H2 provided-marker preserved.
+# its provided-marker preserved.
 _REGISTER_EXCLUDED_INPUT_FIELDS = frozenset({"password"})
 
 # Account-control fields Django's stock auth mixins place on user models. A
@@ -200,7 +200,7 @@ def _make_permission_holder(
     so its denial string reads ``"Not authorized to logout Session."``), and
     ``DjangoMutation.check_permission`` bound directly, so the permission
     iteration, the ``GraphQLError`` denial, and the async-hook ``SyncMisuseError``
-    guard are all reused **by call** (D2 / D4). A custom ``has_permission``
+    guard are all reused **by call**. A custom ``has_permission``
     receives the holder itself as its ``mutation`` positional - it carries no
     ``Meta.model`` / ``_resolve_model``, so gates must key on ``info`` /
     ``operation`` / ``data``, never on the mutation object (Decision 5's
@@ -226,8 +226,8 @@ def _make_permission_holder(
 def _declared_auth_surface(surface: str) -> type | None:
     """Return the ledger's declaration for ``surface``, or ``None``.
 
-    The ledger IS the same-args cache and the conflict state (spec-040 Decision 9
-    / Revision 7): the cached holders / rider are looked up through the
+    The ledger IS the same-args cache and the conflict state (spec-040 Decision 9):
+    the cached holders / rider are looked up through the
     declaration records, never a separate module dict a ``registry.clear()``
     would miss, so draining the ledger drains the cache.
     """
@@ -350,7 +350,7 @@ def _make_auth_field(
     """Build one fixed auth field around split sync / async gate-then-session-work bodies.
 
     The ONE auth field-construction helper the three fixed factories share
-    (spec-040 D12 / P1 / P2; auth session-lifecycle hardening Commit 2): the
+    (spec-040 D12 / auth session-lifecycle hardening Commit 2): the
     dispatcher resolves sync-vs-async per call via ``in_async_context()`` (the
     ``DjangoMutationField`` runtime dispatch). The sync path calls ``sync_body``
     directly; the async path calls ``async_body`` - a real coroutine function whose
@@ -914,12 +914,12 @@ def _register_decode_step(
     info: Any,
     instance: Any,
 ) -> Any:
-    """The register ``decode_step``: the shared model decode + the password capture (D6).
+    """The register ``decode_step``: the shared model decode + the password capture.
 
     Rides ``_model_decode_step`` with the ``excluded_input_fields`` seam - the ONE
     shared UNSET-strip walk, never a fork - so ``password`` is captured out of the
     constructed model attrs (the raw value never touches
-    ``model(**scalar_and_fk_attrs)``) while the AR-H2 exclude calculation still
+    ``model(**scalar_and_fk_attrs)``) while the exclude calculation still
     counts it as provided. Returns the extended decoded tuple
     ``(user, m2m_assignments, exclude, raw_password)`` - the raw password travels
     as explicit decoded state, never an implicit closure. ``password`` is a
@@ -942,7 +942,7 @@ def _register_decode_step(
 
 
 def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
-    """The register ``write_step``: validate + hash the password, then the shared tail (D7).
+    """The register ``write_step``: validate + hash the password, then the shared tail.
 
     ``validate_password(raw_password, user)`` runs with the constructed (unsaved)
     instance so ``UserAttributeSimilarityValidator`` compares against the
@@ -1051,7 +1051,7 @@ def _synthesize_register_rider(permission_classes: list[Any]) -> type:
             ``type_name`` re-pinned so the class and its SDL name read
             ``RegisterInput`` instead of the deterministic shape-derived name.
             Materialized onto the standard ``mutations.inputs`` emit ledger so the
-            AR-M6 distinct-shape collision raise still guards a consumer's own
+            the distinct-shape collision raise still guards a consumer's own
             ``RegisterInput``.
             """
             shape = mutation_input_shape(meta.model, CREATE, fields=meta.fields)
@@ -1121,7 +1121,7 @@ def register_mutation(
     )
     # The every-call re-record on BOTH ledgers (identity-deduped): a live ledger
     # is a no-op; a drained one re-appends, so the rider - and its auth-specific
-    # bind validation - survive the complete-reload fixtures (Revision 4 P2).
+    # bind validation - survive the complete-reload fixtures.
     record_mutation_declaration(rider_cls)
     register_auth_mutation(rider_cls)
     return DjangoMutationField(
@@ -1174,7 +1174,7 @@ def bind_auth_mutations() -> None:
     ``current_user``) was declared, so a logout-only schema binds with no user
     type registered at all and a partial schema emits no orphan sibling payloads.
     Payload materialization rides the ONE ``build_payload_type`` builder + the
-    existing ``mutations.inputs`` emit ledger (D5); the ``current_user`` return
+    existing ``mutations.inputs`` emit ledger; the ``current_user`` return
     alias rides the ``auth.queries`` namespace trio (D13). Everything lands
     before ``strawberry.Schema(...)`` resolves the fields' lazy forward-refs.
     """

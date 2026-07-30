@@ -125,7 +125,7 @@ def test_unwrap_container_type_peels_containers_but_not_a_leaf_with_of_type():
     """Only ``StrawberryContainer`` layers peel; a leaf exposing ``of_type`` is NOT descended.
 
     The load-bearing distinction from ``unwrap_graphql_type``'s bare-``hasattr``
-    contract (DRY review B3): an ``Edge`` subclass that happens to carry an
+    contract: an ``Edge`` subclass that happens to carry an
     ``of_type`` attribute must be returned as the leaf, not peeled into.
     """
     from strawberry.types.base import StrawberryList

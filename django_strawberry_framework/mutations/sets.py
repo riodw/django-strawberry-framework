@@ -22,7 +22,7 @@ spec-036 Decision 3 / START.md). This module owns four concerns:
   classes (``create`` / ``update``) and the ``<Name>Payload`` (every operation)
   as module globals of ``mutations.inputs`` before ``strawberry.Schema(...)`` runs
   (spec-036 Decision 12), raising ``ConfigurationError`` on a no-primary target or
-  a duplicate generated GraphQL name (spec-036 AR-M6).
+  a duplicate generated GraphQL name.
 
 Deliberate divergence from ``_bind_sidecar_sets`` (spec-036 Decision 5): a
 ``DjangoMutation`` is NOT a ``DjangoType`` sidecar (it has its own ``Meta.model``,
@@ -92,7 +92,7 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
 # ``<Model>PartialInput`` (``PARTIAL``); ``delete`` is ``id:``-only and needs no
 # input (spec-036 Decision 14). The bind reads this to know which input(s) to
 # materialize per operation. Single-sourced across all three write flavors
-# (spec-039 Mn2): the model reads it via ``.get(...)`` (``delete`` -> ``None``), the
+# (spec-039): the model reads it via ``.get(...)`` (``delete`` -> ``None``), the
 # form + serializer flavors via ``[...]`` (both reject ``delete``, so every key is
 # present). Replaces the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` +
 # ``_modelform_operation_kind`` copies. Also the root of the create/update
@@ -110,8 +110,8 @@ _OPERATION_INPUT_OVERRIDE_ATTR: dict[str, str] = {
     "update": "partial_input_class",
 }
 
-# The create/update-only write operations the form + serializer flavors share
-# (spec-039 P1.2). Derived from ``NON_DELETE_OPERATION_INPUT_KIND``'s keys (the
+# The create/update-only write operations the form + serializer flavors share.
+# Derived from ``NON_DELETE_OPERATION_INPUT_KIND``'s keys (the
 # ops that materialize an input) so the Meta allow-list and the generator-kind
 # map cannot drift. A ``DjangoModelFormMutation`` and a ``SerializerMutation``
 # both reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
@@ -131,7 +131,7 @@ _VALID_OPERATIONS: frozenset[str] = NON_DELETE_WRITE_OPERATIONS | frozenset({"de
 
 
 def non_delete_operation_error(base_label: str, name: str, got: Any) -> ConfigurationError:
-    """Build the shared "operation must be create/update" reject (spec-039 P1.2 / D3).
+    """Build the shared "operation must be create/update" reject.
 
     Single-sites the create/update-only operation reject message both the form and
     serializer ``_validate_meta`` raise for a bad / ``"delete"`` ``Meta.operation``:
@@ -150,7 +150,7 @@ def non_delete_operation_error(base_label: str, name: str, got: Any) -> Configur
 
 
 def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> None:
-    """Raise the ``Meta``-typo guard if ``meta`` declares a key outside ``allowed`` (spec-039 P2.7).
+    """Raise the ``Meta``-typo guard if ``meta`` declares a key outside ``allowed``.
 
     The ``unknown = sorted(declared - allowed)`` typo guard every ``_validate_meta``
     computes inline (model / modelform / plain-form / serializer): promoted so each
@@ -167,7 +167,7 @@ def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> 
 
 
 def _hook_overridden(cls: type, base: type, name: str) -> bool:
-    """Return whether ``cls`` overrides the ``name`` method relative to ``base`` (spec-039 P2.6).
+    """Return whether ``cls`` overrides the ``name`` method relative to ``base``.
 
     The identity check generalizing ``forms/sets.py::_form_kwargs_overridden``: a
     construction-hook waiver (the form ``get_form_kwargs`` / ``get_form``, the
@@ -187,7 +187,7 @@ def cached_build_input(
     guard: Callable[[], None],
     build_fn: Callable[[], tuple[type, Any]],
 ) -> tuple[type, Any]:
-    """Run the per-declaration guard, THEN the per-shape cache lookup (spec-039 P1.7).
+    """Run the per-declaration guard, THEN the per-shape cache lookup.
 
     The promoted guard-before-cache-lookup core the form + serializer ``build_input``
     seams share. The load-bearing ordering (spec-038 Decision 7 P2 / spec-039
@@ -222,7 +222,7 @@ def build_and_stash_input(
     materialize: Callable[[str, type], None],
     specs_of: Callable[[Any], Any],
 ) -> type:
-    """Materialize a built input + stash its reverse map on the mutation (spec-039 P1.7).
+    """Materialize a built input + stash its reverse map on the mutation.
 
     The materialize-then-stash tail the form + serializer ``build_input`` seams
     share: ``build()`` returns ``(input_cls, payload)`` (the per-flavor stash value),
@@ -264,7 +264,7 @@ def require_backing_class(
     base_label: str,
     expected_label: str,
 ) -> Any:
-    """Return ``Meta.<key>`` or raise the shared "declares no backing class" error (spec-039 M5).
+    """Return ``Meta.<key>`` or raise the shared "declares no backing class" error.
 
     The presence check both the form + serializer ``_validate_meta`` prologues share:
     an unset / ``None`` ``Meta.<key>`` (``form_class`` / ``serializer_class``) is a
@@ -287,7 +287,7 @@ def require_backing_class(
 
 
 def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> Any:
-    """Resolve a backing class's ``Meta.model`` via the shared three-getattr chain (spec-039 M5).
+    """Resolve a backing class's ``Meta.model`` via the shared three-getattr chain.
 
     The ``getattr(meta, key) -> getattr(backing, meta_attr) -> getattr(backing_meta,
     "model")`` chain both flavors' ``_resolve_model`` overrides walk, differing only
@@ -310,7 +310,7 @@ def resolve_backed_model_or_raise(
     key: str,
     noun: str,
 ) -> Any:
-    """Return ``cls._resolve_model(meta)`` or raise the shared "resolves no model" error (spec-039 M5).
+    """Return ``cls._resolve_model(meta)`` or raise the shared "resolves no model" error.
 
     The no-model raise both flavors' ``_validate_meta`` share, run AFTER the backing
     class is type-validated (so ``Meta.<key>`` is a real class with a ``.__name__``).
@@ -406,8 +406,8 @@ def resolver_seams(
 # effective shape reuse one class object so the materialize ledger dedupes
 # idempotently instead of seeing two distinct same-named classes.
 #
-# The ``(cache, clear)`` pair rides ``utils/inputs.py::make_shape_build_cache``
-# (spec-039 P1.3), the same factory forms + serializer use, so the three write
+# The ``(cache, clear)`` pair rides ``utils/inputs.py::make_shape_build_cache``,
+# the same factory forms + serializer use, so the three write
 # flavors share one dict-plus-clear shape while staying disjoint. Cleared at the
 # start of ``bind_mutations()`` AND co-cleared from ``registry.clear()`` so a
 # stale class from a prior (failed or re-run) finalize never leaks across a
@@ -559,9 +559,9 @@ def _validate_input_class(
     fields: tuple[str, ...] | None,
     exclude: tuple[str, ...] | None,
 ) -> None:
-    """Validate a consumer ``input_class`` / ``partial_input_class`` (spec-036 AR-M2).
+    """Validate a consumer ``input_class`` / ``partial_input_class``.
 
-    Two checks (spec-036 Decision 5 error-shapes + Decision 6 line 336 / AR-M2):
+    Two checks (spec-036 Decision 5 error-shapes + Decision 6 line 336):
 
     1. It is a ``@strawberry.input``-decorated type - a class carrying
        ``__strawberry_definition__`` with ``is_input`` True. A plain class or a
@@ -601,7 +601,7 @@ def _expected_input_attr_names(
     fields: tuple[str, ...] | None,
     exclude: tuple[str, ...] | None,
 ) -> set[str]:
-    """Return the python-attr set the generator would emit for ``model`` (spec-036 AR-M2).
+    """Return the python-attr set the generator would emit for ``model``.
 
     Single-sourced with ``build_mutation_input`` via ``editable_input_fields`` +
     ``relation_input_annotation`` so a custom ``input_class``'s accepted names
@@ -695,18 +695,18 @@ class _ValidatedMutationMeta:
         # ``build_serializer_input_class`` so it participates in the input shape +
         # descriptor identity. The model + form flavors leave it ``None``.
         self.optional_fields = optional_fields
-        # The serializer-flavor schema-hook fingerprint (spec-039 rev6 #10): a stable digest of
+        # The serializer-flavor schema-hook fingerprint: a stable digest of
         # the ``get_serializer_for_schema()`` field shape captured at class validation, so the
         # phase-2.5 bind can raise on a NONDETERMINISTIC hook that drifted. The model + form
         # flavors leave it ``None`` (net-new state, never read off their paths).
         self.schema_fingerprint = schema_fingerprint
-        # The serializer-flavor ``Meta.injected_fields`` (spec-039 rev6 #2): the auditable,
+        # The serializer-flavor ``Meta.injected_fields``: the auditable,
         # per-field replacement for the blanket ``get_serializer_kwargs``-override waiver -
         # names the required fields a ``get_serializer_kwargs`` override supplies into ``data``,
         # subtracted from the create-required guard AND verified present at runtime. The model +
         # form flavors leave it ``None``.
         self.injected_fields = injected_fields
-        # ``Meta.select_for_update`` (spec-039 rev6 #14, expanded by the 0.0.14 concurrency hardening): the
+        # ``Meta.select_for_update`` (expanded by the 0.0.14 concurrency hardening): the
         # base-manager ``SELECT ... FOR UPDATE`` row lock on the update / delete
         # locate AND every relation-target check, constrained by the visibility pk
         # subquery inside the write transaction. Every model-backed flavor (model /
@@ -715,7 +715,7 @@ class _ValidatedMutationMeta:
         # Only the model-less plain form leaves the constructor default (``False`` -
         # it locates no row).
         self.select_for_update = select_for_update
-        # The serializer-flavor ``Meta.nested_fields`` (spec-039 rev6 #17): the explicit opt-in
+        # The serializer-flavor ``Meta.nested_fields``: the explicit opt-in
         # ``{field_name: NestedSerializerConfig}`` map naming the nested serializer fields the
         # generated input builds RECURSIVELY (an un-named nested field fails loud). ``None`` when
         # no nesting is opted in. The model + form flavors leave it ``None``.
@@ -728,7 +728,7 @@ def _validate_permission_classes(
     *,
     unset_default: tuple[Any, ...] = (DjangoModelPermission,),
 ) -> list[Any]:
-    """Validate + normalize ``Meta.permission_classes`` at class creation (feedback P2).
+    """Validate + normalize ``Meta.permission_classes`` at class creation.
 
     The DoD says an invalid ``permission_classes`` entry is rejected at
     class-creation, not deferred to a request-time ``TypeError`` /
@@ -845,7 +845,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
 
     @classmethod
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
-        """Resolve the mutation's Django model from ``Meta`` (the Medium-5 seam).
+        """Resolve the mutation's Django model from ``Meta`` (the model-resolution seam).
 
         In 0.0.11 the only source is ``Meta.model``. This is the overridable hook
         the 0.0.12 form flavor (``Meta.form_class._meta.model``) and the 0.0.13
@@ -889,10 +889,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
           update; delete accepts neither because it has no input.
         - **bad ``input_class`` / ``partial_input_class``** - not a
           ``@strawberry.input`` type, or field names diverging from the generated
-          scheme (AR-M2).
+          scheme.
 
         ``permission_classes`` is validated + normalized by
-        ``_validate_permission_classes`` (feedback P2): it defaults to
+        ``_validate_permission_classes``: it defaults to
         ``[DjangoModelPermission]`` when unset, must otherwise be a *sequence* of
         classes each exposing a callable ``has_permission``, and a bad entry is
         rejected here at class creation rather than as a request-time ``TypeError``
@@ -926,7 +926,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             )
 
         # The model-flavor field-sequence normalization routes through the shared
-        # ``normalize_field_name_sequence`` DIRECTLY (spec-039 Mn3 - no per-flavor
+        # ``normalize_field_name_sequence`` DIRECTLY (spec-039 - no per-flavor
         # re-binding wrapper, matching the serializer flavor's P2.7 style); the
         # ``DjangoMutation`` flavor label keeps the messages byte-identical.
         fields = normalize_field_name_sequence(
@@ -1053,7 +1053,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         to synthesize the lazy ``data:`` forward-ref. The **model default** reads
         ``mutation_input_shape(...).type_name`` - the SAME descriptor the bind /
         ``build_mutation_input`` path uses for the materialize name and the shape
-        cache key (DRY-1), so the field's lazy ``data:`` ref can never disagree
+        cache key, so the field's lazy ``data:`` ref can never disagree
         with the class the bind pins. The form flavors override it with
         ``forms/inputs.py::form_input_type_name``.
 
@@ -1107,15 +1107,15 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
 
         An ``async def has_permission`` entry returns a coroutine, which is truthy:
         a naive ``if not has_permission(...)`` would never deny it, so an async
-        deny-check would be silently treated as ALLOW - an authorization bypass
-        (feedback). The pipeline is synchronous (Decision 15), so the coroutine can
-        never be awaited here; it is closed and raised as a ``SyncMisuseError``,
-        the same discipline ``apply_type_visibility_sync`` applies to an async
-        ``get_queryset``. (An async ``check_permission`` override is caught by the
-        resolver's ``authorize_or_raise`` one level up.)
+        deny-check would be silently treated as ALLOW - an authorization bypass. The pipeline
+        is synchronous (Decision 15), so the coroutine can never be awaited here; it is closed
+        and raised as a ``SyncMisuseError``, the same discipline
+        ``apply_type_visibility_sync`` applies to an async ``get_queryset``. (An async
+        ``check_permission`` override is caught by the resolver's ``authorize_or_raise`` one
+        level up.)
 
         The walk body is single-sited in
-        ``mutations/permissions.py::run_permission_classes`` (DRY review A5),
+        ``mutations/permissions.py::run_permission_classes``,
         shared with the plain ``DjangoFormMutation`` (which is not a
         ``DjangoMutation`` subclass), so the authorization seam cannot fork.
         """
@@ -1166,7 +1166,7 @@ def _materialize_input_for(
     needs no input (spec-036 Decision 14). A consumer ``input_class`` /
     ``partial_input_class`` is **merged** with the generated input, NOT a wholesale
     replacement (the spec-010 relation-override contract, spec-036 DoD line 51 /
-    line 336 / AR-M2): the consumer declares the field(s) it wants to customize
+    line 336): the consumer declares the field(s) it wants to customize
     (using the generated naming scheme - validated at class creation), the
     generator fills the rest of the editable shape, and the consumer's fields are
     honored, never clobbered. See ``_materialize_merged_input``.
@@ -1180,7 +1180,7 @@ def _materialize_input_for(
     consumer-merged input is materialized under the SAME canonical shape name (it
     customizes representations of existing columns, it does not change the field
     set), so two mutations resolving the same shape to two DIFFERENT representations
-    still raise the AR-M6 collision.
+    still raise the collision.
     """
     operation_kind = NON_DELETE_OPERATION_INPUT_KIND.get(meta.operation)
     if operation_kind is None:
@@ -1196,7 +1196,7 @@ def _materialize_input_for(
             consumer_input,
         )
 
-    # Derive the shape ONCE (DRY-1): ``mutation_input_shape`` single-sources the
+    # Derive the shape ONCE: ``mutation_input_shape`` single-sources the
     # cache key (the EFFECTIVE field set, NOT the raw ``(fields, exclude)``
     # spelling - two narrowings to one effective shape must dedupe, spec-036
     # Edge cases line 509) AND the generated name, so the bind cache key and the
@@ -1230,7 +1230,7 @@ def _materialize_merged_input(
     operation_kind: str,
     consumer_input: type,
 ) -> type:
-    """Merge a consumer ``input_class`` with the generated remainder (spec-010 / AR-M2).
+    """Merge a consumer ``input_class`` with the generated remainder (spec-010).
 
     The consumer-authored ``@strawberry.input`` declares only the field(s) it
     customizes (a custom scalar, validator, alias, description), using the
@@ -1246,15 +1246,15 @@ def _materialize_merged_input(
     guarantees the two field sets are disjoint, there is no duplicate-field clash.
 
     The merged class is named + materialized under the **canonical shape name**
-    (``shape.type_name`` from the shared ``mutation_input_shape`` descriptor, DRY-1
-    - derived from the full selected field set, which still includes the overridden
+    (``shape.type_name`` from the shared ``mutation_input_shape`` descriptor,
+    derived from the full selected field set, which still includes the overridden
     columns, so it is the same ``<Model>Input`` / shape-derived name the
     all-generated path uses): the consumer customizes representations of existing
     columns, it does NOT change the shape identity ``(model, operation kind,
     frozenset(effective names))``. A merged input is therefore NOT cached in
     ``_shape_build_cache`` (it is mutation-specific), and if two mutations resolve
     the same shape to two different representations they collide on that name and
-    raise the AR-M6 ``ConfigurationError`` at ``materialize_mutation_input_class`` -
+    raise the ``ConfigurationError`` at ``materialize_mutation_input_class`` -
     the same fail-loud the all-generated collision uses.
     """
     consumer_attrs = frozenset(
@@ -1293,25 +1293,25 @@ def _validate_relation_override_types(
     *,
     attr_name: str,
 ) -> None:
-    """Type- and shape-lock a consumer relation override to the generated id (AR-M2 / Decision 10).
+    """Type- and shape-lock a consumer relation override to the generated id (Decision 10).
 
     A relation column whose related model HAS a primary Relay-Node type generates a
     ``relay.GlobalID`` (forward FK / OneToOne) or ``list[relay.GlobalID]`` (M2M) input
-    whose decode is **type-checked against the relation target** (spec-036 AR-H4) AND
+    whose decode is **type-checked against the relation target** AND
     **visibility-checked through the related type's ``get_queryset``** (spec-036
-    Decision 10 / feedback P1) - so a permitted writer cannot attach a row they could
+    Decision 10) - so a permitted writer cannot attach a row they could
     not *see*. Both guarantees ride the EXACT generated shape:
     ``resolvers.py::_decode_relation_id_set`` only type/visibility-checks a value that
     ``isinstance(_, relay.GlobalID)`` (the FK path unwraps a one-element list, the M2M
     path iterates a flat list) and passes anything else through as a raw pk.
 
-    The naming half of AR-M2 (``_validate_input_class``) lets a consumer override a
+    The naming half (``_validate_input_class``) lets a consumer override a
     relation field's *representation* under its generated ``<field>_id`` / ``list``
     name, but it name-checks only - so a consumer could declare a divergent TYPE or
-    CONTAINER SHAPE and the CR-2 merge would honor it, defeating the decode:
+    CONTAINER SHAPE and the merge would honor it, defeating the decode:
 
     - ``category_id: int`` (raw pk core) - the value is seen as a non-``GlobalID`` raw
-      pk and passed through, bypassing both the AR-H4 type-check and the visibility
+      pk and passed through, bypassing both the type-check and the visibility
       contract (attach-by-raw-pk to an unseeable row);
     - ``genres: relay.GlobalID`` (M2M overridden as a SCALAR) - the resolver wraps the
       scalar in a one-element list and decodes it as a single membership, or the
@@ -1325,8 +1325,8 @@ def _validate_relation_override_types(
 
     So a relation override MUST keep BOTH the generated ``relay.GlobalID`` core AND its
     container shape (scalar for FK / OneToOne, one-level ``list`` for M2M); any
-    divergence in core type or list depth is a fail-loud ``ConfigurationError`` (the
-    AR-M2 posture), caught at the bind rather than crashing a request.
+    divergence in core type or list depth is a fail-loud ``ConfigurationError``,
+    caught at the bind rather than crashing a request.
 
     Enforced at the phase-2.5 bind, NOT at class creation: whether the related model
     has a primary Relay-Node type is a ``registry.get`` lookup only reliably populated
@@ -1364,7 +1364,7 @@ def _validate_relation_override_types(
                 f"{python_attr!r} with an id type/shape that diverges from the generated input. "
                 f"{field.related_model.__name__} has a primary Relay-Node type, so the {kind} "
                 f"relation input is {expected} - type- and visibility-checked at decode (spec-036 "
-                "AR-H4 / Decision 10). A divergent core type or container shape would be passed "
+                "Decision 10). A divergent core type or container shape would be passed "
                 "through unchecked (bypassing the relation visibility contract) or crash the "
                 f"resolver / ORM. Declare {python_attr!r} as {expected}.",
             )
@@ -1431,7 +1431,7 @@ def _bind_mutation(mutation_cls: type) -> None:
         object_slot=payload_object_slot(primary_type),
     )
     # Payload classes are also module globals of ``mutations.inputs`` and also
-    # need the AR-M6 distinct-shape collision raise, so they route through the
+    # need the distinct-shape collision raise, so they route through the
     # SAME ``materialize_mutation_input_class`` ledger as the input classes (one
     # ledger, one collision check, one ``registry.clear()`` co-clear - the
     # preferred one-ledger choice from the plan's discretion item).
@@ -1455,9 +1455,9 @@ def bind_mutations() -> None:
     top so each input is rebuilt fresh. The cross-pass materialization ledgers
     (``mutations.inputs`` / ``forms.inputs`` - the ``ModelForm`` flavor rides this
     pass but writes the FORM ledger) are reset ONCE by ``finalize_django_types``
-    before the bind sequence so a recover-in-place re-finalize is retry-idempotent
-    (feedback #6); they are NOT reset here, where a per-pass clear would wipe the
-    sibling pass's already-materialized entries.
+    before the bind sequence so a recover-in-place re-finalize is retry-idempotent; they are
+    NOT reset here, where a per-pass clear would wipe the sibling pass's already-materialized
+    entries.
     """
     _shape_build_cache.clear()
     for mutation_cls in iter_mutations():

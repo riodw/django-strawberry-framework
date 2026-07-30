@@ -1,6 +1,6 @@
 """Shared mutation authorization: permission execution, model permissions, and model-less deny-by-default.
 
-The write side's default permission class (spec-036 Decision 15 / AR-H3). It is a
+The write side's default permission class (spec-036 Decision 15). It is a
 **first-class, separate contract from row visibility** (``get_queryset`` +
 ``apply_cascade_permissions``, spec-036 Decision 10): ``get_queryset`` answers "may
 this caller *see* this row", this class answers "may this caller *write* it" -
@@ -48,7 +48,7 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 # returns a coroutine. Write authorization runs synchronously in the same sync
 # pipeline (spec-036 Decision 15), so an async permission hook can never be
 # awaited - and silently treating its truthy coroutine as "allow" is an
-# authorization BYPASS (feedback - async permission bypass). Shared by both
+# authorization BYPASS. Shared by both
 # enforcement seams - the resolver's ``authorize_or_raise`` (``check_permission``)
 # and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
 # wording cannot drift between them.
@@ -91,7 +91,7 @@ def run_permission_classes(
     data: Any,
     instance: Any,
 ) -> bool:
-    """Run every ``Meta.permission_classes`` entry; deny as soon as one denies (DRY review A5).
+    """Run every ``Meta.permission_classes`` entry; deny as soon as one denies.
 
     The single body behind the default ``check_permission`` on BOTH write-flavor
     bases (``DjangoMutation`` and the plain ``DjangoFormMutation``, which is not a

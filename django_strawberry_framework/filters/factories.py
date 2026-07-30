@@ -49,7 +49,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 # to the same generated class. No source path exercises this yet -- see
 # the module docstring; the cache is build-and-test-only at ``0.0.9``.
 #
-# Lifecycle (M-filters-3 review, accepted as-is): this cache has NO clear
+# Lifecycle: this cache has NO clear
 # hook, so after ``registry.clear()`` rebuilds model classes a dynamic
 # FilterSet built against the prior model class remains parked here. That
 # is a test-isolation nicety only -- the keys embed the model identity, so

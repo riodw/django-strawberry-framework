@@ -79,10 +79,10 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
     """
     # Decision-11 consumer-helper body shared with ``orders/__init__.py::
     # order_input_type`` via ``utils/inputs.py::build_lazy_input_annotation``
-    # (the 0.0.9 DRY pass). The ForwardRef-wrapped ``Annotated[<runtime str>,
+    # The ForwardRef-wrapped ``Annotated[<runtime str>,
     # strawberry.lazy(...)]`` form is pinned by
-    # ``test_filter_input_type_returns_forwardref_in_annotation_args`` (spec-027
-    # L7 of rev5) -- the shared helper preserves it.
+    # ``test_filter_input_type_returns_forwardref_in_annotation_args`` -- the
+    # shared helper preserves it.
     return build_lazy_input_annotation(
         filterset_class,
         expected_base=FilterSet,

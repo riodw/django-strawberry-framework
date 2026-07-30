@@ -25,8 +25,7 @@ subscription. Admission alone can never see one again: both protocols park an
 admitted operation in their own ``async for result in result_source`` loop
 (upstream's ``run_operation`` / ``handle_async_results``) and keep sending from
 there without returning through the admission method, so an operation admitted
-one second before a logout kept emitting results for as long as it lived
-(spec-046 review round 2, Blocker 1).
+one second before a logout kept emitting results for as long as it lived.
 
 **The seam, and why it is the right one.** ``AsyncBaseHTTPView.run`` instantiates
 ``self.websocket_adapter_class(self, request, websocket_response)`` **by name**
@@ -128,9 +127,9 @@ The session-store resolver the revalidation reaches is
 (spec-040 Decision 3) and its ``__init__`` eagerly imports ``.mutations`` /
 ``.queries``, so importing that submodule would register the whole GraphQL auth
 subsystem on the event loop the first time an authenticated socket ran an
-operation - for a resolver that only reads ``SESSION_ENGINE`` (spec-046 review,
-the import-boundary finding). Nothing on this module's revalidation path imports
-``django_strawberry_framework.auth``, and a test asserts exactly that.
+operation - for a resolver that only reads ``SESSION_ENGINE``. Nothing on this module's
+revalidation path imports ``django_strawberry_framework.auth``, and a test asserts exactly
+that.
 
 **The Host boundary** (spec-046 Decision 19). ``DjangoWebSocketHostValidator`` is
 the outermost WebSocket wrapper ``routers.py`` composes, and it exists because
@@ -261,14 +260,13 @@ def resolved_revalidation_window(value: object) -> float:
 
     What is deliberately NOT rejected, so that rationale is not read as more than
     it is: a finite but astronomical window. ``10**300`` and ``1e308`` are
-    accepted, and a window that large is operationally "never revalidate again"
-    (spec-046 review W3-4). The package imposes no upper bound, for the same
-    reason ``GraphQLWebSocketConsumer`` imposes no maximum connection lifetime
-    (Decision 12): there is no correct default, any constant would be invented
-    here rather than derived from anything, and a positive window is a deliberate
-    consumer trade-off - one session read per authenticated checkpoint against a
-    named revocation delay - that the deployment can compute and this function
-    has no standing to second-guess. The guard is about values the package cannot
+    accepted, and a window that large is operationally "never revalidate again". The package
+    imposes no upper bound, for the same reason ``GraphQLWebSocketConsumer`` imposes no
+    maximum connection lifetime (Decision 12): there is no correct default, any constant would
+    be invented here rather than derived from anything, and a positive window is a deliberate
+    consumer trade-off - one session read per authenticated checkpoint against a named
+    revocation delay - that the deployment can compute and this function has no standing to
+    second-guess. The guard is about values the package cannot
     *use*, not about values it disapproves of.
 
     The ``float`` conversion is a GUARDED step of its own, and it happens BEFORE
@@ -277,8 +275,7 @@ def resolved_revalidation_window(value: object) -> float:
     has no ``float`` image: ``math.isfinite`` and ``float()`` both raise
     ``OverflowError`` on it. Reading the domain first would therefore have let a
     hostile or fat-fingered configuration escape the typed boundary with a raw
-    ``OverflowError`` instead of the promised ``ConfigurationError`` (spec-046
-    review, the enormous-window finding). Converting first also means the sign and
+    ``OverflowError`` instead of the promised ``ConfigurationError``. Converting first also means the sign and
     finiteness checks below run on a real ``float``, which is the value the
     consumer will actually compare against.
     """
@@ -444,7 +441,7 @@ async def _actor_is_current(consumer: Any) -> bool:
     # refactor did drop the attribute, the default would silently switch the
     # deployment to "revalidate at every checkpoint" (a performance cliff that
     # lives in an expression, where statement coverage cannot see it) instead of
-    # failing loudly (spec-046 review round 2, L4).
+    # failing loudly.
     window = consumer.revalidation_window
     # ``-inf`` reads as "never revalidated, i.e. infinitely long ago", which
     # keeps the expiry test one comparison with no sentinel branch of its own.
@@ -764,7 +761,7 @@ class DjangoWebSocketHostValidator:
     consumer reads this exact spelling in an error message and must be able to grep
     for it. "Private" here therefore means **unsupported to import or subclass** -
     an ``__all__`` and documentation contract, not an import-time one - and an
-    absent underscore is not a promise of stability (spec-046 review round 2, L6).
+    absent underscore is not a promise of stability.
 
     It is applied by the router, so an injected ``websocket_consumer_class`` sits
     inside it by construction - which is what finally makes Decision 11's "an

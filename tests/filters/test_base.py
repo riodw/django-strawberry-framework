@@ -401,7 +401,7 @@ def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everythin
 
 # ---------------------------------------------------------------------------
 # A crafted empty-id GlobalID (well-typed, empty node part) is a REJECTED input,
-# not a silent no-op (High 3). ``to_base64(type, "")`` decodes to ``node_id == ""``
+# not a silent no-op. ``to_base64(type, "")`` decodes to ``node_id == ""``
 # and clears decode + strategy + type-name validation, but an empty identifier is
 # not a valid resource id: the shared ``_decode_and_validate_global_id`` boundary
 # raises ``GLOBALID_INVALID`` (naming the list index when present) so a client can
@@ -470,7 +470,7 @@ def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predica
 
 
 # ---------------------------------------------------------------------------
-# GlobalID relation filtering against a non-pk ``to_field`` (High 3)
+# GlobalID relation filtering against a non-pk ``to_field``
 # ---------------------------------------------------------------------------
 
 
@@ -600,7 +600,7 @@ def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
 
 
 def test_global_id_filter_empty_node_id_rejects():
-    """A scalar well-typed empty-id GlobalID rejects with ``GLOBALID_INVALID`` (High 3).
+    """A scalar well-typed empty-id GlobalID rejects with ``GLOBALID_INVALID``.
 
     ``to_base64(<accepted type>, "")`` decodes to ``node_id == ""``, which clears
     decode + strategy + type-name validation (an unbound owner falls back to
@@ -617,7 +617,7 @@ def test_global_id_filter_empty_node_id_rejects():
 def test_global_id_filter_marked_empty_node_id_rejects_before_query():
     """The marked non-pk-``to_field`` path also rejects an empty id -- never a 500.
 
-    Pre-High-3 a MARKED leaf compiled ``<relation>__pk__exact=""`` (a 500
+    Previously a MARKED leaf compiled ``<relation>__pk__exact=""`` (a 500
     ``ValueError`` on the integer target pk) whenever the empty id slipped past the
     scalar no-op. Because the reject now happens inside
     ``_decode_and_validate_global_id`` -- before the marked/unmarked branch and

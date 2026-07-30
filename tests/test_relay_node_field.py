@@ -140,7 +140,7 @@ def test_bare_node_field_resolves_type_name_id():
 
 
 def _make_multi_type_category_nodes() -> tuple[type, type]:
-    """Two Relay-Node types over ``Category`` - the Round-4 S2 multi-type shape.
+    """Two Relay-Node types over ``Category`` - the multi-type-over-one-model shape.
 
     Both carry ``globalid_strategy = "type"`` so each type is addressable by
     its own GraphQL-type-name gid (under the default model-label strategy a
@@ -169,8 +169,8 @@ def _make_multi_type_category_nodes() -> tuple[type, type]:
 def test_bare_node_field_multi_type_model_typename_follows_gid():
     """``__typename`` matches the type the GlobalID named, not candidate order.
 
-    Round-4 review S2: the bare ``node`` hands graphql-core a raw model
-    instance, and with two registered types over one model both installed
+    The bare ``node`` hands graphql-core a raw model instance, and with two
+    registered types over one model both installed
     ``is_type_of`` hooks answered ``True`` - whichever candidate graphql-core
     tested first won, so a ``CategoryAdminNode`` gid came back
     ``__typename: "CategoryNode"``. The ``_stamp_node_type`` hint carries the
@@ -356,7 +356,7 @@ def test_node_custom_node_id_attr_uncoercible_returns_null():
 
 @pytest.mark.django_db
 def test_decode_model_global_id_resolves_custom_node_id_to_real_pk():
-    """Write-side decode maps a custom NodeID value to the REAL pk, not the attr value (feedback #1).
+    """Write-side decode maps a custom NodeID value to the REAL pk, not the attr value.
 
     ``decode_model_global_id`` feeds every WRITE consumer (update/delete
     ``locate_instance``'s ``get(pk=...)``, the relation ``pk__in`` visibility query,
@@ -387,7 +387,7 @@ def test_decode_model_global_id_resolves_custom_node_id_to_real_pk():
 
 @pytest.mark.django_db
 def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible():
-    """A custom NodeID value matching no row decodes as UNCOERCIBLE_PK, never a phantom pk (feedback #1).
+    """A custom NodeID value matching no row decodes as UNCOERCIBLE_PK, never a phantom pk.
 
     A ``name`` that exists on no row resolves to ``None`` in ``_resolve_real_pk``,
     which the caller maps to the same not-found surface a hidden row yields (no
@@ -412,7 +412,7 @@ def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible():
 
 @pytest.mark.django_db
 def test_decode_model_global_id_passes_raw_value_for_non_field_node_id():
-    """A NodeID over a non-concrete attr has no column to resolve, so the value passes through (feedback #1).
+    """A NodeID over a non-concrete attr has no column to resolve, so the value passes through.
 
     ``_resolve_real_pk`` mirrors ``_coerce_pk_or_none``'s ``FieldDoesNotExist``
     fall-through: with no concrete column to map to a pk, the coerced literal is
@@ -923,7 +923,7 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
     The batch gatherer must treat ``resolve_nodes`` as AwaitableOrValue: the
     framework default returns a coroutine in async context, but a valid sync
     consumer override returns the list directly. Awaiting it unconditionally
-    raised ``TypeError: 'list' object can't be awaited`` (spec-032 feedback P1).
+    raised ``TypeError: 'list' object can't be awaited``.
     """
     await sync_to_async(services.seed_data)(1)
     rows = {str(obj.pk): obj async for obj in Category.objects.order_by("pk")}
@@ -1011,7 +1011,7 @@ def test_nodes_consumer_resolve_nodes_wrong_length_raises():
 
 @pytest.mark.django_db
 def test_nodes_consumer_resolve_nodes_generator_return_accepted():
-    """A consumer ``resolve_nodes`` override may return a generator (Round-4 minor).
+    """A consumer ``resolve_nodes`` override may return a generator.
 
     ``_check_nodes_result`` materializes a no-``__len__`` return before the
     length check, so a correctly-ordered generator resolves rather than dying

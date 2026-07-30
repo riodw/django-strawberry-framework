@@ -282,7 +282,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
-    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -398,7 +398,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
-    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -541,7 +541,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
-    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
+    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
@@ -755,7 +755,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
-    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
+    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).

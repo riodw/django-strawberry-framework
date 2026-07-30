@@ -197,9 +197,9 @@ def test_sync_and_async_resolver_selection():
 async def test_async_resolver_selection_works():
     """The runtime ``in_async_context()`` dispatch resolves the same field on the async surface.
 
-    ``transaction=True`` is load-bearing (spec-036 FV-1): the async create runs its
+    ``transaction=True`` is load-bearing (spec-036): the async create runs its
     ``transaction.atomic()`` write inside one ``sync_to_async(thread_sensitive=
-    True)`` call (AR-M4), committing on asgiref's executor-thread connection, which
+    True)`` call, committing on asgiref's executor-thread connection, which
     plain ``django_db``'s main-thread rollback cannot reach. Under plain
     ``django_db`` the committed row escapes per-test rollback and pollutes a later
     read-side optimizer execution. ``transaction=True`` (the suite-wide async-ORM
@@ -400,7 +400,7 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
     `rest_framework.resolvers`.
 
     `SerializerMutation` is imported BY NAME from the package root (NOT via the root
-    `__all__` / star import, which stays DRF-free while DRF is soft - F1).
+    `__all__` / star import, which stays DRF-free while DRF is soft).
     """
     from rest_framework import serializers
 

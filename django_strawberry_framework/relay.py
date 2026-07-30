@@ -92,7 +92,7 @@ def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
     ``GraphQLError`` with the ``GLOBALID_INVALID`` extensions code - the
     ``FilterSet`` ``FILTER_INVALID`` precedent (Decision 5).
 
-    SCOPE IS NARROW (spec-032 Revision 7 P2): this wraps the decode call
+    SCOPE IS NARROW: this wraps the decode call
     ONLY. The ``resolve_node`` / ``resolve_nodes`` dispatch runs OUTSIDE it,
     because ``SyncMisuseError`` subclasses ``ConfigurationError`` and a
     sync/async-``get_queryset`` misconfiguration must surface as itself,
@@ -116,13 +116,12 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     ``ValueError: Field 'id' expected a number``. A coercion failure is treated
     as "identifies no row" -> ``null`` (single) / positional ``null`` hole
     (batch), with no query issued, so the no-existence-oracle property is
-    unaffected (Decision 5, Revision 7 P2). The coercion mechanics
+    unaffected (Decision 5). The coercion mechanics
     (``to_python`` then ``run_validators``, out-of-range literals rejected
     before any query so neither the node lookup nor the relation ``pk__in``
-    visibility query can raise a backend ``OverflowError`` - feedback relation
-    huge-pk crash) are the shared ``utils/querysets.py::coerce_field_value_or_none``
-    primitive; this function's only job is picking WHICH field to coerce
-    against.
+    visibility query can raise a backend ``OverflowError``) are the shared
+    ``utils/querysets.py::coerce_field_value_or_none`` primitive; this function's only job is
+    picking WHICH field to coerce against.
 
     The coercion field is the SAME one the resolution filters on -
     ``resolved_type.resolve_id_attr()`` (the value
@@ -168,7 +167,7 @@ def _check_typed_match(target_type: type | None, resolved: type) -> None:
 
 
 class GlobalIDDecode(Enum):
-    """The outcome code of a typed ``GlobalID`` decode (spec-036 DRY-2).
+    """The outcome code of a typed ``GlobalID`` decode.
 
     A non-raising classification the caller maps to its own error surface
     (``FieldError`` on ``id`` / relation ``FieldError`` / ``GraphQLError``), so the
@@ -183,12 +182,12 @@ class GlobalIDDecode(Enum):
 
 
 class DecodeResult(NamedTuple):
-    """The structured result of ``decode_model_global_id`` (spec-036 DRY-2).
+    """The structured result of ``decode_model_global_id``.
 
     ``pk`` is the resolved real primary-key value ONLY when ``status is
     GlobalIDDecode.OK`` (``None`` otherwise) - the actual ``model._meta.pk`` value,
-    mapped from the decoded NodeID attr where those diverge (``_resolve_real_pk``,
-    feedback #1); ``resolved_type`` is the decoded ``DjangoType`` when decode itself
+    mapped from the decoded NodeID attr where those diverge
+    (``_resolve_real_pk``); ``resolved_type`` is the decoded ``DjangoType`` when decode itself
     succeeded (``None`` when ``DECODE_FAILED``).
     """
 
@@ -198,7 +197,7 @@ class DecodeResult(NamedTuple):
 
 
 def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
-    """Map a coerced NodeID-attr value to the model's real primary key (feedback #1).
+    """Map a coerced NodeID-attr value to the model's real primary key.
 
     ``_coerce_pk_or_none`` coerces ``node_id`` against ``resolve_id_attr()`` - which
     is ``"pk"`` for the default and a non-pk column for a consumer ``id:
@@ -210,7 +209,7 @@ def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
     <fk>_id, pk)`` / ``instance.<m2m>.set(pks)``). Handing those the NodeID-attr
     value (e.g. a ``slug``) looks up / assigns the wrong column - it usually fails
     as not-found, and in the worst case targets a different row whose pk
-    representation coincides with the NodeID value (feedback #1).
+    representation coincides with the NodeID value.
 
     So for a non-pk ``id_attr`` this resolves the value to the row's real ``pk``
     through the model's **default manager**: a value matching no row returns
@@ -238,7 +237,7 @@ def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
 
 
 def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
-    """Decode a typed ``GlobalID`` against ``expected_model``, non-raising (spec-036 DRY-2).
+    """Decode a typed ``GlobalID`` against ``expected_model``, non-raising.
 
     The single source of the mutation typed-id contract the root ``id:`` decode
     (``coerce_lookup_id``) and the relation ``<field>_id`` decode
@@ -246,9 +245,9 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     ``decode_global_id`` (shape-only), verify the resolved type's model **is**
     ``expected_model``, and coerce ``node_id`` through the resolved type's id field
     via ``_coerce_pk_or_none`` (the SAME coercer the node field uses, so an
-    uncoercible literal never reaches the ORM as a raw ``ValueError`` - feedback
-    CR-1). The coerced value is then mapped to the model's real primary key via
-    ``_resolve_real_pk`` (feedback #1): unlike the READ node field - which filters
+    uncoercible literal never reaches the ORM as a raw ``ValueError``). The
+    coerced value is then mapped to the model's real primary key via
+    ``_resolve_real_pk``: unlike the READ node field - which filters
     ``{id_attr: value}`` and never needs the pk - every WRITE consumer here uses the
     result as an actual pk (``get(pk=...)`` / ``pk__in`` / FK-M2M assignment), so a
     consumer ``id: relay.NodeID[...]`` over a non-pk column must be resolved to the
@@ -276,8 +275,8 @@ def _validate_node_target(target_type: type, *, field: str) -> None:
     """Run the four shared target guards plus the Relay-Node-shaped fifth guard.
 
     Thin wrapper over ``list_field.py::_validate_relay_djangotype_target`` -- the
-    Relay-shaped target guard shared with ``connection.py::DjangoConnectionField``
-    per the 0.0.9 DRY pass. A refetch field has no ``resolver=`` seam, so ``None``
+    Relay-shaped target guard shared with ``connection.py::DjangoConnectionField``.
+    A refetch field has no ``resolver=`` seam, so ``None``
     is passed; ``field`` is interpolated into the messages so each factory
     (``DjangoNodeField`` / ``DjangoNodesField``) names itself.
     """
@@ -352,7 +351,7 @@ def _stamp_node_type(resolved_type: type, node: Any) -> Any:
     model with two registered Relay types, plain
     ``isinstance(obj, (type_cls, model))`` answers ``True`` on BOTH
     candidates and iteration order picks the ``__typename`` - regardless
-    of which type the GlobalID named (Round-4 review S2). The stamp
+    of which type the GlobalID named. The stamp
     carries the decode-routing decision through to type resolution;
     ``install_is_type_of``'s closure honors it before the isinstance
     fallback.
@@ -401,7 +400,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # shadow is deliberate. ``strawberry.ID`` (the raw string), never
         # ``relay.GlobalID``: a GlobalID-annotated argument is parsed by
         # Strawberry's ``convert_argument`` BEFORE the resolver runs, so
-        # malformed ids would never reach the package (Revision 7 P1).
+        # malformed ids would never reach the package.
         id: strawberry.ID,  # noqa: A002
     ) -> Any:
         resolved, node_id = _decode_or_graphql_error(id)
@@ -410,7 +409,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         _check_typed_match(target_type, resolved)
         pk = _coerce_pk_or_none(resolved, node_id)
         if pk is None:
-            # Uncoercible literal -> null with no query issued (Revision 7 P2).
+            # Uncoercible literal -> null with no query issued.
             return None
         # In async context ``resolve_node`` returns a coroutine Strawberry's
         # executor awaits as a plain-field return (Edge cases "Async
@@ -466,7 +465,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         root: Any,  # noqa: ARG001
         info: Info,
         # Raw strings for the same reason as ``DjangoNodeField``'s ``id``
-        # argument (Revision 7 P1).
+        # argument.
         ids: list[strawberry.ID],
     ) -> Any:
         if not ids:
@@ -505,7 +504,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
                     # default returns a coroutine in async context, but a valid
                     # synchronous consumer override returns the list directly -
                     # await only when the result is actually awaitable, never
-                    # unconditionally (spec-032 feedback P1).
+                    # unconditionally.
                     result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
                     if inspect.isawaitable(result):
                         result = await result

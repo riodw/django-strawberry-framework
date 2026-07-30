@@ -1,4 +1,4 @@
-"""Benchmark the optimizer's cross-request plan cache (B1).
+"""Benchmark the optimizer's cross-request plan cache.
 
 The plan cache is the package's single clearest performance advantage over
 ``strawberry-graphql-django``: that package rebuilds the entire selection-tree

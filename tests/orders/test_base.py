@@ -2,9 +2,8 @@
 
 Covers the ``RelatedOrder`` primitive: class / absolute-import / unqualified
 target resolution through the shared ``LazyRelatedClassMixin``, the
-``bind_orderset`` idempotency contract, and the spec-028 Revision 4 H1
-rule that the mixin's home is the neutral ``sets_mixins`` module (NOT
-``filters/base.py``).
+``bind_orderset`` idempotency contract, and the spec-028 rule that the
+mixin's home is the neutral ``sets_mixins`` module (NOT ``filters/base.py``).
 """
 
 from __future__ import annotations
@@ -88,7 +87,7 @@ def test_related_order_bind_orderset_is_idempotent():
 
 
 def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base():
-    """The mixin in ``RelatedOrder.__mro__`` is the neutral one (spec-028 H1).
+    """The mixin in ``RelatedOrder.__mro__`` is the neutral one (spec-028).
 
     Re-coupling to ``filters.base`` would force the order subsystem to
     drag the entire filter module into its import graph; the neutral
@@ -164,7 +163,7 @@ def test_validate_orderset_class_rejects_non_order_set():
 
 
 def test_validate_orderset_class_uses_local_import():
-    """The ``OrderSet`` import lives inside the function body (spec-028 N3 of rev1)."""
+    """The ``OrderSet`` import lives inside the function body (spec-028)."""
     import inspect
 
     import django_strawberry_framework.types.base as base_mod
@@ -178,7 +177,7 @@ def test_validate_orderset_class_uses_local_import():
 
 
 # ---------------------------------------------------------------------------
-# Pass-2 B1 coverage closure -- RelatedOrder.orderset setter
+# RelatedOrder.orderset setter
 # ---------------------------------------------------------------------------
 
 

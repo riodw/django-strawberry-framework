@@ -264,10 +264,10 @@ def test_filter_arguments_factory_idempotent_repeated_arguments():
 def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_target():
     """A Relay-shaped M2M target -> input annotation forwards to the target's input class.
 
-    Pins the H1-of-rev3 contract: the input shape is downstream of the
-    resolved filter instance (`GlobalIDMultipleChoiceFilter` for the M2M
-    cardinality), and the factory produces an `Annotated[...]` lazy
-    reference to the target filterset's input class.
+    The input shape is downstream of the resolved filter instance
+    (`GlobalIDMultipleChoiceFilter` for the M2M cardinality), and the factory
+    produces an `Annotated[...]` lazy reference to the target filterset's
+    input class.
     """
 
     class GenreType(DjangoType):

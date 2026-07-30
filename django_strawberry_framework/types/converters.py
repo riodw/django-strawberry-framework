@@ -532,7 +532,7 @@ def build_enum_from_choices(
     (``convert_choices_to_enum``, keyed + cached per ``(model, field_name)``) and the
     serializer-only ``ChoiceField`` / ``MultipleChoiceField`` path
     (``rest_framework/serializer_converter.py``, keyed by the descriptor-derived name -
-    spec-039 rev6 #6). Both build a GraphQL-safe enum from the SAME rules, so the
+    spec-039). Both build a GraphQL-safe enum from the SAME rules, so the
     grouped-form rejection, the value-not-label sanitization, and the sanitize-collision
     guard cannot drift between the two flavors:
 
@@ -611,7 +611,7 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     the enum's GraphQL name; sibling types pointing at the same column
     receive the cached enum unchanged. The build rules are single-sited in
     ``build_enum_from_choices`` so the serializer-only ``ChoiceField`` path
-    (spec-039 rev6 #6) applies the identical grouped-form / sanitization / collision
+    applies the identical grouped-form / sanitization / collision
     contract.
 
     Raises:

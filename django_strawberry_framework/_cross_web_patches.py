@@ -30,7 +30,7 @@ that decode with undecoded bytes whatever this setting says. That second
 half is not redundant with this patch; it is what made the claim true. With
 this half opted out and only the decode view-owned, upstream's property
 decoded first and the mounted sync view answered ``500`` instead of the
-contract's ``400`` (spec-046 review W3-2). See
+contract's ``400``. See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -261,10 +261,10 @@ def _patched_body(self: Any) -> bytes:
     wire contract out of this getter is what makes those two answers
     independent, which is exactly the point of the split.
 
-    **Why the patch survives the S1 protocol split, and matters more.**
+    **Why the patch survives the protocol split, and matters more.**
     It patches ``cross_web.DjangoHTTPRequestAdapter``, the **Django
-    view's** sync request adapter - precisely the path S1 made
-    authoritative - not anything Channels-owned. Before S1 a
+    view's** sync request adapter - precisely the path the split made
+    authoritative - not anything Channels-owned. Before the split a
     Channels-routed deployment never reached that adapter at all, so if
     anything the split raises this patch's importance.
     """

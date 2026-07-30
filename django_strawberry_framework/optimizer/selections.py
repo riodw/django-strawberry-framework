@@ -10,13 +10,12 @@ directive handling, response-key preservation, and ``edges { node { ... } }``
 unwrapping. The plan cache and nested-connection windows depend on those rules
 being aligned across the two shapes; a directive or fragment fix landing on one
 traversal but not the other produces wrong cached plans, missed nested
-prefetches, false strictness warnings, or extra ``COUNT`` work (the 0.0.9
-DRY pass).
+prefetches, false strictness warnings, or extra ``COUNT`` work.
 
 This module is the single home for both, deliberately split into two explicit
-adapters rather than one over-generic polymorphic walker (per the review:
-"Keep the adapters explicit, but share the recursion and directive/fragment
-policies so the contracts cannot drift"):
+adapters rather than one over-generic polymorphic walker: the adapters stay
+explicit, while the recursion and directive/fragment policies are shared so the
+contracts cannot drift:
 
 - **AST adapter** (``ast_child_selections`` / ``resolve_unvisited_fragment`` /
   ``directive_variable_names``) - operates on graphql-core AST nodes for

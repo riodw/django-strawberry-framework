@@ -156,7 +156,7 @@ def _assert_parity(
     else:
         # ``expect_lateral=False`` means the shape must NOT have paid a
         # lateral (or any window) query before falling back - absence is
-        # asserted, not merely unchecked (feedback2 P0-3 note).
+        # asserted, not merely unchecked.
         assert "CROSS JOIN LATERAL" not in executed_sql
     if count_free:
         assert "_dst_total_count" not in executed_sql
@@ -407,8 +407,8 @@ def test_last_zero_quirk_stays_parity_via_the_shared_fallback():
 def test_stray_executor_thread_connections_are_tracked_for_session_close():
     """The root-conftest tracker registers handles main-thread teardown misses.
 
-    The xdist ``DROP DATABASE ... is being accessed by other users`` fix
-    (feedback2 P0-6): a connection opened on a non-main thread (asgiref's
+    The xdist ``DROP DATABASE ... is being accessed by other users`` fix:
+    a connection opened on a non-main thread (asgiref's
     thread-sensitive executor in production async tests; a plain worker
     thread here) is invisible to pytest-django's main-thread
     ``close_all()``. The Postgres backend wrapper must register it so the

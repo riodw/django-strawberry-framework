@@ -6,8 +6,7 @@ keep class-level factory caches, detect duplicate generated input names, and
 reset stale binding state during ``registry.clear()``. spec-027 and spec-028
 grew those mechanics as parallel copies; this module single-sites the NEUTRAL
 machinery so a fix to the materialization ledger, the BFS collision check, or
-the namespace-clear lifecycle lands once instead of being hand-mirrored (the
-0.0.9 DRY pass).
+the namespace-clear lifecycle lands once instead of being hand-mirrored.
 
 What lives here is mechanics only. Domain semantics stay at the call sites:
 ``filters/inputs.py`` keeps ``convert_filter_to_input_annotation`` /
@@ -34,7 +33,7 @@ import strawberry
 from ..exceptions import ConfigurationError
 from .imports import import_attr_if_importable
 
-# ``utils/strings.py`` is the owner of ``graphql_camel_name`` (feedback P2.1);
+# ``utils/strings.py`` is the owner of ``graphql_camel_name``;
 # re-imported here (the ``as`` form marks the explicit re-export) so existing
 # ``from ..utils.inputs import graphql_camel_name`` consumers keep their import
 # path.
@@ -58,7 +57,7 @@ class GeneratedInputFieldSpec:
 
 
 def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]:
-    """Return the optional default plus any non-identity GraphQL alias (DRY review A4).
+    """Return the optional default plus any non-identity GraphQL alias.
 
     Every generated filter / order input field is optional-with-``None``: an
     omitted ``default`` means REQUIRED under ``build_strawberry_input_class``'s
@@ -80,7 +79,7 @@ def optional_input_field(
     graphql_name: str,
     widen: bool,
 ) -> tuple[Any, dict[str, Any]]:
-    """Apply the write-input optional-widening tail to one field (DRY review A10).
+    """Apply the write-input optional-widening tail to one field.
 
     The per-field tail the form and serializer input builders share, seated
     beside ``build_strawberry_input_class`` whose required-vs-optional contract
@@ -116,7 +115,7 @@ def emit_set_input_field_triples(
     module_path: str,
     field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
 ) -> list[tuple[str, Any, dict[str, Any]]]:
-    """Emit the per-field input triples + ``FieldSpec`` rows for one set class (DRY review A4).
+    """Emit the per-field input triples + ``FieldSpec`` rows for one set class.
 
     The triple-emission scaffold the filter and order ``_build_input_fields``
     grew separately: for each ``(top_name, entry)`` pair derive the python attr
@@ -205,7 +204,7 @@ def emit_set_input_field_triples(
 
 
 # The decode-kind vocabulary the write-flavor converters + resolvers share
-# (DRY review A7): one conceptual enum, previously declared per-flavor in
+#: one conceptual enum, previously declared per-flavor in
 # ``forms/converter.py`` and ``rest_framework/serializer_converter.py``.
 # Single-sourced here next to ``InputFieldSpec`` (their type-level consumer);
 # the serializer flavor extends with its ``NESTED_SINGLE`` / ``NESTED_MULTI``
@@ -218,7 +217,7 @@ FILE: str = "file"
 
 
 class FieldConversionBase:
-    """The annotation + decode kind + required-ness value object (DRY review A7).
+    """The annotation + decode kind + required-ness value object.
 
     The shared shape behind ``forms/converter.py::FormFieldConversion`` and
     ``rest_framework/serializer_converter.py::SerializerFieldConversion``:
@@ -227,7 +226,7 @@ class FieldConversionBase:
     / file (/ nested) field carries ``annotation=None`` here - the annotation is
     finalized at the flavor's build site, so only the ``kind`` is authoritative.
     ``kind`` defaults to ``SCALAR`` so a consumer-registered converter
-    (spec-039 rev6 #11) can return a conversion without importing the kind
+    can return a conversion without importing the kind
     constant; the internal relation / file constructions pass ``kind``
     explicitly.
     """
@@ -248,7 +247,7 @@ class FieldConversionBase:
 
 @dataclass(frozen=True)
 class InputFieldSpec:
-    """Unified per-generated-input-field reverse-map record (spec-039 P2.1).
+    """Unified per-generated-input-field reverse-map record.
 
     One reverse-map record for every write flavor that decodes a generated GraphQL
     input back to a framework write target. ``target_name`` is the neutral
@@ -274,10 +273,10 @@ class InputFieldSpec:
     - ``related_model`` - the Django target model a relation field decodes its
       id(s) against (``Category`` for a ``category`` / ``category_pk`` relation),
       recorded at BUILD/BIND time so the Slice-3 decode never re-discovers the
-      related model per request (spec-039 H4). ``None`` for a non-relation
+      related model per request. ``None`` for a non-relation
       (``scalar`` / ``file``) field.
-    - ``nested_specs`` - the serializer-only nested-serializer axis (spec-039 rev6
-      #17): the ordered reverse-map ``InputFieldSpec`` tuple of the NESTED input's
+    - ``nested_specs`` - the serializer-only nested-serializer axis: the
+      ordered reverse-map ``InputFieldSpec`` tuple of the NESTED input's
       OWN fields, recorded for a ``nested_single`` / ``nested_multi`` field so the
       Slice-3 decode recurses into the nested input dataclass with the SAME
       per-field machinery (scalar / relation / file / deeper-nested) the top level
@@ -303,7 +302,7 @@ def make_input_namespace(
     """Return the ``(ledger, materialize_fn, clear_fn)`` trio for a generated-input namespace.
 
     The promoted ONE-LEDGER lifecycle the mutation + form + serializer input
-    modules share (spec-039 P2.2). Before spec-039 ``mutations/inputs.py`` and
+    modules share. Before spec-039 ``mutations/inputs.py`` and
     ``forms/inputs.py`` hand-mirrored the same four-part shape (a module-level
     ``_materialized_names`` dict, a ``materialize_*`` wrapper over
     ``materialize_generated_input_class``, a ``clear_*`` that calls
@@ -350,7 +349,7 @@ def make_input_namespace(
 
 
 def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
-    """Return the ``(cache, clear_fn)`` pair for a per-shape build cache (spec-039 P1.3).
+    """Return the ``(cache, clear_fn)`` pair for a per-shape build cache.
 
     The promoted plumbing the mutation + form + serializer bind caches share:
     each consuming slice calls this factory for a fresh ``(cache, clear_fn)``
@@ -434,7 +433,7 @@ def generated_input_type_name(
     is_full_shape: bool,
     token: str,
 ) -> str:
-    """Return a generated input-class name from its shape components (spec-039 M6).
+    """Return a generated input-class name from its shape components.
 
     The load-bearing skeleton the three flavors' input-name derivers share
     (``mutations/inputs.py::mutation_input_type_name`` /
@@ -466,7 +465,7 @@ def normalize_field_name_sequence(
     (``mutations/sets.py::DjangoMutation._validate_meta``), the form
     (``forms/inputs.py::resolve_effective_form_fields``), and the serializer
     (``rest_framework/inputs.py::resolve_effective_serializer_fields``) - passing
-    their own ``flavor`` label (spec-038 integration Finding I1; spec-039 Mn3 inlined
+    their own ``flavor`` label (spec-038 integration; spec-039 inlined
     the former per-flavor ``_normalize_field_sequence`` / ``normalize_form_field_sequence``
     re-binding wrappers). Each site normalizes a declared field sequence the same
     way; they differ only in the human flavor label interpolated into the two
@@ -521,7 +520,7 @@ def resolve_effective_fields(
     unknown_noun: str,
     empty_message: str,
 ) -> dict[str, Any]:
-    """Return the effective ``{name: field}`` dict after ``fields`` / ``exclude`` narrowing (spec-039 M4).
+    """Return the effective ``{name: field}`` dict after ``fields`` / ``exclude`` narrowing.
 
     The narrowing spine both ``forms/inputs.py::resolve_effective_form_fields`` and
     ``rest_framework/inputs.py::resolve_effective_serializer_fields`` share: normalize
@@ -549,9 +548,9 @@ def resolve_effective_fields(
         )
 
     def _reject_unknown(seq: Any, key: str) -> None:
-        # The identical unknown-name check both branches spelled separately
-        # (DRY review C2); the pinned message stays byte-identical via the
-        # threaded ``fields`` / ``exclude`` key.
+        # The identical unknown-name check both branches spelled separately; the
+        # pinned message stays byte-identical via the threaded ``fields`` /
+        # ``exclude`` key.
         unknown = [name for name in seq if name not in basis]
         if unknown:
             raise ConfigurationError(
@@ -596,7 +595,7 @@ def guard_dropped_required(
 
 
 def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
-    """Yield ``(python_name, value, field)`` for each PROVIDED field of a bound input (spec-039 M2).
+    """Yield ``(python_name, value, field)`` for each PROVIDED field of a bound input.
 
     The ``UNSET``-strip walk every write-flavor decoder opens with - the model
     ``mutations/resolvers.py::_decode_relations``, the form
@@ -761,7 +760,7 @@ def duplicate_name_message(
     family_label: str,
     rename_noun: str,
 ) -> str:
-    """Build the "two distinct X claim one name" collision sentence (DRY review A3 / C3).
+    """Build the "two distinct X claim one name" collision sentence.
 
     The one skeleton behind every generated-input name collision: ``{name!r} is
     {verb} by two distinct {family_label} classes: A vs B. Rename one
@@ -793,7 +792,7 @@ def iter_input_field_collisions(
     check_input_attrs: bool = True,
     check_graphql_names: bool = True,
 ) -> Iterator[str]:
-    """Yield every input-field collision message for one generated write input (DRY review A3).
+    """Yield every input-field collision message for one generated write input.
 
     The seen-dict walk + the collision arms behind the form and serializer
     input-attr guards, single-sited: two specs colliding on the generated
@@ -811,7 +810,7 @@ def iter_input_field_collisions(
     ``source_of`` enables the serializer-only third arm (two WRITABLE fields
     sharing one one-segment ``source`` would double-write one model attr); forms
     have no ``source`` axis and leave it ``None``. The form guard raises on the
-    FIRST yielded message; the serializer aggregates them all (rev6 #5) - the
+    FIRST yielded message; the serializer aggregates them all - the
     consumption policy stays at each call site.
 
     ``check_input_attrs`` / ``check_graphql_names`` let a caller audit the two
@@ -869,7 +868,7 @@ def build_lazy_input_annotation(
 
     The Decision-11 consumer-helper body shared by
     ``filters/__init__.py::filter_input_type`` and
-    ``orders/__init__.py::order_input_type`` (the 0.0.9 DRY pass). Validates
+    ``orders/__init__.py::order_input_type``. Validates
     ``set_class`` is an ``expected_base`` subclass -- raising ``TypeError`` with
     the family's wording (``family_name`` + ``expected_label``, e.g.
     ``"filter_input_type() requires a FilterSet subclass; got ..."``) so consumers
@@ -952,8 +951,7 @@ def clear_generated_input_namespace(
       family collision registry named by ``collision_registry_attr``).
     - every set subclass's phase-2.5 binding state. The reset attrs come from the
       resolved set base's ``_lifecycle`` descriptor (``SetLifecycleAttrs``) rather
-      than a re-spelled tuple, so the family names them in ONE place (the 0.0.9
-      DRY pass).
+      than a re-spelled tuple, so the family names them in ONE place.
 
     **Materialized class objects are intentionally left parked** in the family
     ``inputs`` module ``__dict__``: the materialization helper overwrites the

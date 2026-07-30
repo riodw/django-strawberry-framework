@@ -3,28 +3,28 @@
 Scope (per spec Goals item 3 + Test plan ``### examples/fakeshop/test_query/test_multi_db.py``):
 three live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
 
-- Test 1 - seeding rows on ``shard_b`` and reading them through ``/graphql/``
-  via a ``.using("shard_b")`` root resolver returns the seeded rows.
-- Test 2 - cross-shard isolation: a chain seeded on ``default`` is NOT
-  visible through a ``using("shard_b")`` resolver.
-- Test 3 - a debug-enabled probe captures SQL from ``shard_b`` with the
-  correct database alias and restores every connection's debug-cursor state.
+- Seeding rows on ``shard_b`` and reading them through ``/graphql/`` via a
+  ``.using("shard_b")`` root resolver returns the seeded rows.
+- Cross-shard isolation: a chain seeded on ``default`` is NOT visible through a
+  ``using("shard_b")`` resolver.
+- A debug-enabled probe captures SQL from ``shard_b`` with the correct database
+  alias and restores every connection's debug-cursor state.
 
 Critical contract pins (do not violate without an explicit spec revision):
 
 - Module-level ``pytest.skip(allow_module_level=True)`` gate per Decision 6
   (NOT ``pytest.mark.skipif`` - the env var changes ``config.settings.DATABASES``
   at module import time; mark evaluation happens after import).
-- ``@pytest.mark.django_db(databases=["default", "shard_b"])`` per rev2 H8
-  on each test (pytest-django blocks non-default-DB access otherwise).
+- ``@pytest.mark.django_db(databases=["default", "shard_b"])`` on each test
+  (pytest-django blocks non-default-DB access otherwise).
 - Full ``Branch -> Shelf -> Book`` chain per alias via ``_seed_book_chain``
-  per rev2 H9 (``Book.shelf`` and ``Shelf.branch`` are non-null FKs).
-- Live ``/graphql/`` HTTP exclusively via ``django.test.Client.post(...)``
-  per rev2 H7 - NO in-process ``execute_sync(...)`` alternative.
+  (``Book.shelf`` and ``Shelf.branch`` are non-null FKs).
+- Live ``/graphql/`` HTTP exclusively via ``django.test.Client.post(...)`` - NO
+  in-process ``execute_sync(...)`` alternative.
 - Schema built inside a per-test fixture that depends on the shared module
   reload - the holder pattern below defers schema construction until after
   the registry clear so the test sees freshly-reloaded ``BookType``.
-- ``override_settings(ROOT_URLCONF=__name__)`` per rev3 R5 with
+- ``override_settings(ROOT_URLCONF=__name__)`` with
   ``clear_url_caches()`` on enter AND in teardown.
 """
 
@@ -69,7 +69,7 @@ mutation($id: ID!, $d: AliasValidatedBookSerializerPartialInput!) {
 """
 
 # ---------------------------------------------------------------------------
-# Holder-pattern URLConf (per Decision 6 + rev3 R4 + rev3 R5)
+# Holder-pattern URLConf (per Decision 6)
 # ---------------------------------------------------------------------------
 #
 # The temp URLConf binds at module load, but the schema is built per-test
@@ -91,7 +91,7 @@ urlpatterns = [path("graphql/", _graphql_view)]
 
 
 # ---------------------------------------------------------------------------
-# Per-test schema fixture (runs AFTER the autouse reload - rev3 R4)
+# Per-test schema fixture (runs AFTER the autouse reload)
 # ---------------------------------------------------------------------------
 
 
@@ -156,7 +156,7 @@ def _build_loan_filter_test_schema(_reload_project_schema_for_acceptance_tests):
     """Build a per-test schema exposing a ``.using('shard_b')`` Loan LIST field with ``LoanFilter``.
 
     The shard-alias twin of ``_build_test_schema`` for the row-preserving
-    relational-leaf predicate proof (feedback High 4 / spec-054 Part 1): the
+    relational-leaf predicate proof (spec-054 Part 1): the
     resolver applies the PRODUCTION ``LoanFilter`` (whose deep
     ``book__loans__patron__email`` leaf compiles to a correlated ``EXISTS``) over a
     queryset pinned to ``shard_b``, so the predicate primitive's ``.using(queryset.db)``
@@ -193,7 +193,7 @@ def _build_loan_filter_test_schema(_reload_project_schema_for_acceptance_tests):
 
 
 # ---------------------------------------------------------------------------
-# Seed helper - full Branch -> Shelf -> Book chain per alias (rev2 H9)
+# Seed helper - full Branch -> Shelf -> Book chain per alias
 # ---------------------------------------------------------------------------
 
 

@@ -16,7 +16,7 @@ so a ``choices`` column resolves to the SAME generated enum the read
 DRF ``serializers.Field`` here, ``models.Field`` on the read side - stay strictly
 separate.
 
-**Fail-loud dispatch (spec-039 Decision 4 / P1.4).** Dispatch rides the shared
+**Fail-loud dispatch (spec-039 Decision 4).** Dispatch rides the shared
 ``utils/converters.py::convert_with_mro`` skeleton: ordered ``isinstance``
 prechecks (relation / file / list / multi-choice kinds that must win before the
 scalar registry MRO walk reaches a parent class), then the scalar registry MRO
@@ -26,19 +26,19 @@ shadow the raise so every custom field silently became ``String`` (the
 ``ImproperlyConfigured`` parity, lost). An unmapped ``serializers.Field`` subclass
 raises ``ConfigurationError`` naming the field + class.
 
-**The public converter registry (spec-039 rev6 #11).** The scalar registry the MRO
+**The public converter registry.** The scalar registry the MRO
 walk consults is a ``serializers.Field`` class -> converter-callable dict (each returns
-a ``SerializerFieldConversion``), seeded with the built-in scalars + the expanded rev6
-#7 capability matrix (``DictField`` / ``HStoreField`` -> ``JSON``; ``IPAddressField`` /
+a ``SerializerFieldConversion``), seeded with the built-in scalars + the expanded
+capability matrix (``DictField`` / ``HStoreField`` -> ``JSON``; ``IPAddressField`` /
 ``FilePathField`` / ``DurationField`` -> ``str``; ``ModelField`` through its wrapped
 column). ``register_serializer_field_converter(FieldClass, converter, *, override=False)``
 is the SANCTIONED extension so a consumer supports their OWN DRF field without patching
 the framework - the MRO walk then resolves it, while an UNregistered custom field still
 hits the raising fallthrough (no silent ``String``). Mirrors the read-side
 ``types/converters.py::SCALAR_MAP`` mutable-module-dict hook. A serializer-only
-``ChoiceField`` is upgraded to a generated GraphQL enum at the build site (rev6 #6);
+``ChoiceField`` is upgraded to a generated GraphQL enum at the build site;
 a consumer-declared serializer field whose scalar disagrees with its backing model
-column's scalar fails loud rather than silently picking the column (rev6 #8).
+column's scalar fails loud rather than silently picking the column.
 
 **The reverse map + the ``source`` axis (spec-039 Decision 7).** The generated
 input GraphQL name comes from the DECLARED serializer field name via the id-like
@@ -75,11 +75,11 @@ from ..types.relay import implements_relay_node
 from ..utils.converters import convert_with_mro
 
 # The decode kinds the reverse-map record carries. The four base kinds are
-# single-sourced in ``utils/inputs.py`` (DRY review A7 - one conceptual enum,
+# single-sourced in ``utils/inputs.py`` (one conceptual enum,
 # not a per-flavor copy); re-exported here (the ``as`` form marks the explicit
 # re-export) so the Slice 3 resolver + the tests keep addressing them on this
 # module. ``NESTED_SINGLE`` / ``NESTED_MULTI`` are the serializer-only
-# nested-serializer kinds (spec-039 rev6 #17): an EXPLICITLY-opted-in nested
+# nested-serializer kinds: an EXPLICITLY-opted-in nested
 # ``Serializer`` (single) / ``ListSerializer`` (many), whose recursion is owned
 # by ``rest_framework/inputs.py`` (this converter module has no knowledge of
 # the recursion; it only names the kinds + detects a nested field).
@@ -107,8 +107,8 @@ class SerializerFieldConversion(FieldConversionBase):
     resolved), so those kinds carry ``annotation=None`` here and only the ``kind``
     is authoritative. The ``(annotation, kind, required)`` value-object shape -
     including the ``kind=SCALAR`` default a consumer-registered converter
-    (spec-039 rev6 #11) relies on - is the shared
-    ``utils/inputs.py::FieldConversionBase`` (DRY review A7).
+    relies on - is the shared
+    ``utils/inputs.py::FieldConversionBase``.
     """
 
     __slots__ = ()
@@ -137,7 +137,7 @@ def _scalar_converter(annotation: Any) -> SerializerFieldConverter:
 
 
 def _model_field_converter(field: serializers.Field) -> SerializerFieldConversion:
-    """Map ``serializers.ModelField`` through its wrapped Django ``model_field`` (spec-039 rev6 #7).
+    """Map ``serializers.ModelField`` through its wrapped Django ``model_field``.
 
     A ``ModelField`` proxies a concrete Django model field for (de)serialization; its
     GraphQL scalar is that wrapped field's scalar, resolved through the shared read-side
@@ -160,7 +160,7 @@ def _model_field_converter(field: serializers.Field) -> SerializerFieldConversio
 
 
 # The built-in converters seeded into the live registry. Every entry is EXPLICIT (the
-# no-catch-all contract, ``GOAL.md``): the expanded rev6 #7 rows (``DictField`` /
+# no-catch-all contract, ``GOAL.md``): the expanded rows (``DictField`` /
 # ``IPAddressField`` / ``FilePathField`` / ``DurationField`` / ``ModelField``) are each a
 # deliberate mapping, never an accidental fallthrough. ``DurationField`` -> ``str`` is a
 # DELIBERATE scalar (DRF renders a duration as an ISO-8601-ish string on the wire + parses
@@ -168,7 +168,7 @@ def _model_field_converter(field: serializers.Field) -> SerializerFieldConversio
 # ``HStoreField`` (a ``DictField`` subclass) through the MRO walk; ``IPAddressField`` and
 # ``FilePathField`` are ``CharField`` / ``ChoiceField`` subclasses whose explicit entries
 # keep them ``str`` (``FilePathField``'s explicit ``str`` also keeps its dynamic
-# filesystem-path choices OUT of the serializer-only choice-enum path - rev6 #6).
+# filesystem-path choices OUT of the serializer-only choice-enum path).
 _BUILTIN_SCALAR_CONVERTERS: dict[type[serializers.Field], SerializerFieldConverter] = {
     serializers.CharField: _scalar_converter(str),
     serializers.ChoiceField: _scalar_converter(str),
@@ -204,7 +204,7 @@ def register_serializer_field_converter(
     *,
     override: bool = False,
 ) -> None:
-    """Register a converter for a consumer DRF ``serializers.Field`` subclass (spec-039 rev6 #11).
+    """Register a converter for a consumer DRF ``serializers.Field`` subclass.
 
     The sanctioned extension so a consumer supports their OWN DRF field WITHOUT patching
     the framework, keeping the fail-loud no-catch-all guarantee: after registration the
@@ -238,7 +238,7 @@ def register_serializer_field_converter(
     _SERIALIZER_FIELD_CONVERTERS[field_class] = converter
 
 
-# Serializer-only ``ChoiceField`` generated enums (spec-039 rev6 #6), keyed by the
+# Serializer-only ``ChoiceField`` generated enums, keyed by the
 # descriptor-derived enum name so two inputs referencing the SAME serializer-only choice
 # field share ONE enum object (Strawberry rejects two distinct types under one GraphQL
 # name). Reset by ``registry.clear()`` via the registered subsystem clear so a fresh
@@ -257,7 +257,7 @@ register_subsystem_clear(clear_serializer_choice_enums, owner="rest_framework.ch
 
 
 def is_nested_serializer_field(field: serializers.Field) -> bool:
-    """Return whether ``field`` is a nested ``Serializer`` / ``ListSerializer`` (spec-039 rev6 #17).
+    """Return whether ``field`` is a nested ``Serializer`` / ``ListSerializer``.
 
     A nested ``Serializer`` / ``ModelSerializer`` field (single) or a
     ``ListSerializer`` (a ``many=True`` nested serializer) - both are
@@ -272,7 +272,7 @@ def is_nested_serializer_field(field: serializers.Field) -> bool:
 def nested_serializer_child(
     field: serializers.Field,
 ) -> tuple[serializers.BaseSerializer, bool]:
-    """Return ``(child_serializer_instance, many)`` for a nested serializer field (spec-039 rev6 #17).
+    """Return ``(child_serializer_instance, many)`` for a nested serializer field.
 
     A ``ListSerializer`` (``many=True``) carries the item serializer on ``.child`` and is
     ``many=True``; a plain nested ``Serializer`` / ``ModelSerializer`` IS the item serializer and
@@ -286,9 +286,9 @@ def nested_serializer_child(
 
 
 def _reject_nested_serializer(field: serializers.Field) -> None:
-    """Raise if ``field`` is a nested ``Serializer`` / ``ListSerializer`` NOT explicitly opted in (rev6 #17).
+    """Raise if ``field`` is a nested ``Serializer`` / ``ListSerializer`` NOT explicitly opted in.
 
-    Nested serializer writes are OPT-IN ONLY (spec-039 rev6 #17): a ``Serializer`` /
+    Nested serializer writes are OPT-IN ONLY: a ``Serializer`` /
     ``ModelSerializer`` field or a ``ListSerializer`` (a ``many=True`` nested serializer) has no
     flat scalar / id input shape, so - UNLESS the mutation EXPLICITLY declares it in
     ``Meta.nested_fields`` (handled in ``rest_framework/inputs.py`` before this converter is
@@ -307,7 +307,7 @@ def _reject_nested_serializer(field: serializers.Field) -> None:
 
 
 def _reject_unsupported_relation_field(field: serializers.Field) -> None:
-    """Raise unless ``field`` is a PK relation (spec-039 Decision 7 / H5).
+    """Raise unless ``field`` is a PK relation (spec-039 Decision 7).
 
     The package types every relation input as a ``GlobalID`` / raw-pk that decodes
     to a PRIMARY KEY, so only ``serializers.PrimaryKeyRelatedField`` (single) and a
@@ -393,8 +393,8 @@ def convert_serializer_field(
     would gate-fail ``fail_under=100``). It is threaded so a future read-side
     caller does not have to widen the signature.
 
-    Dispatch rides the shared ``utils/converters.py::convert_with_mro`` skeleton
-    (spec-039 P1.4): the relation / file / list / multi-choice prechecks run
+    Dispatch rides the shared ``utils/converters.py::convert_with_mro`` skeleton:
+    the relation / file / list / multi-choice prechecks run
     first (they subclass scalar fields the registry would otherwise match), then
     the scalar registry MRO walk, then a RAISING fallthrough - never a
     ``serializers.Field -> str`` catch-all.
@@ -414,12 +414,12 @@ def convert_serializer_field(
     - then the scalar registry MRO walk;
     - else the fallthrough RAISES ``ConfigurationError`` naming the field + class.
 
-    **Nullability (M2):** the annotation nullability the build site applies
+    **Nullability:** the annotation nullability the build site applies
     follows ``field.allow_null`` (orthogonal to requiredness); this converter
     returns the BASE (non-nullable) scalar annotation and the build site widens.
     ``allow_blank`` is not encoded.
     """
-    del is_input  # graphene-parity, accepted-and-ignored (spec-039 SR-3).
+    del is_input  # graphene-parity, accepted-and-ignored.
     required = field.required
 
     def _relation_multi(field_: serializers.Field) -> SerializerFieldConversion:
@@ -469,7 +469,7 @@ def convert_serializer_field(
     if isinstance(result, SerializerFieldConversion):
         return result
     # The MRO walk returned a CONVERTER callable from the registry (a built-in scalar,
-    # an expanded rev6 #7 row, or a consumer-registered converter); call it with the
+    # an expanded row, or a consumer-registered converter); call it with the
     # field to produce the conversion. Every registry entry is a converter (never a bare
     # annotation), so this one ``result(field)`` handles all three uniformly -
     # ``EmailField`` / ``SlugField`` / ``URLField`` / ``RegexField`` / ``IPAddressField``
@@ -524,7 +524,7 @@ def serializer_field_graphql_name(field_name: str, kind: str) -> tuple[str, str]
 
 
 def serializer_field_description(field: serializers.Field) -> str | None:
-    """Return a GraphQL input-field description from a DRF field's metadata, or ``None`` (spec-039 rev6 #9).
+    """Return a GraphQL input-field description from a DRF field's metadata, or ``None``.
 
     Threads DRF validation metadata into the SDL as DOCUMENTATION (never a second
     validator - runtime validation stays in DRF): ``field.help_text`` becomes the
@@ -571,7 +571,7 @@ def require_one_segment_source(
     attribute, so every schema-time path that needs one segment (model-column
     resolve and opted-in nested writes) routes through this helper - the one
     detection of the fail-loud one-segment source policy (spec-039 Decision 7 /
-    rev6 #17). ``field_label`` / ``must_map_to`` keep the diagnostic nouns at
+    ). ``field_label`` / ``must_map_to`` keep the diagnostic nouns at
     each call site (column vs nested write) without a second predicate copy.
     """
     source_attrs = getattr(field, "source_attrs", None)
@@ -619,7 +619,7 @@ def backing_model_field(model: type[models.Model] | None, field: serializers.Fie
 
 
 def _require_relation_primary(field_name: str, related_model: type[models.Model]) -> type:
-    """Return the related model's primary ``DjangoType``, raising if none is registered (M3).
+    """Return the related model's primary ``DjangoType``, raising if none is registered.
 
     The serializer flavor is STRICTER than the form / model fallback (spec-039
     Decision 7 / M3): where ``relation_input_annotation`` falls back to the raw pk
@@ -646,7 +646,7 @@ def serializer_only_relation_annotation(
     field: serializers.Field,
     kind: str,
 ) -> tuple[str, Any, type[models.Model]]:
-    """Map a column-LESS serializer relation field to ``(python_attr, annotation, related_model)`` (F4).
+    """Map a column-LESS serializer relation field to ``(python_attr, annotation, related_model)``.
 
     The serializer-flavor analog of
     ``forms/inputs.py::_model_less_relation_annotation``: a relation field with no
@@ -695,7 +695,7 @@ def _is_consumer_declared(field: serializers.Field) -> bool:
     instance), so its declared-ness is ``field.field_name in
     type(field.parent)._declared_fields``. An unbound field (no ``parent``) is treated as
     not-declared (the auto-generated default). This is the signal the type-override conflict
-    policy (spec-039 rev6 #8) uses to tell a consumer's EXPLICIT serializer contract from a
+    policy uses to tell a consumer's EXPLICIT serializer contract from a
     model-backed auto-generated field.
     """
     parent = getattr(field, "parent", None)
@@ -705,7 +705,7 @@ def _is_consumer_declared(field: serializers.Field) -> bool:
 
 
 def _scalar_name(scalar: Any) -> str:
-    """Return a readable name for a scalar annotation (for the rev6 #8 conflict diagnostic)."""
+    """Return a readable name for a scalar annotation (for the conflict diagnostic)."""
     return getattr(scalar, "__name__", None) or repr(scalar)
 
 
@@ -714,12 +714,12 @@ def _model_backed_scalar_annotation(
     column: models.Field,
     type_name: str,
 ) -> Any:
-    """Resolve a model-backed serializer SCALAR under the type-override conflict policy (spec-039 rev6 #8).
+    """Resolve a model-backed serializer SCALAR under the type-override conflict policy.
 
     An AUTO-generated ``ModelSerializer`` field routes through the read-side
     ``convert_scalar`` (so a ``choices`` column resolves to the SAME enum the read
     ``DjangoType`` synthesizes - the symmetric wire contract, and the model-backed
-    enum-reuse rev6 #6 keeps).
+    enum-reuse keeps).
 
     A CONSUMER-DECLARED field is an EXPLICIT serializer contract, so its declared scalar
     must AGREE with the model column's scalar; a disagreement (``count =
@@ -732,7 +732,7 @@ def _model_backed_scalar_annotation(
     serializer converter is not a plain scalar defers to the model converter (its own guards
     apply).
 
-    **Declared choices are a schema-affecting override (rev6 rev2 P2).** A CONSUMER-DECLARED
+    **Declared choices are a schema-affecting override.** A CONSUMER-DECLARED
     ``ChoiceField`` / ``MultipleChoiceField`` (even ``source``-mapped to a plain model column)
     emits the GENERATED serializer-only enum from its DECLARED choices, rather than collapsing
     back to the column's scalar (``String``) - the declared choices are part of the public
@@ -762,7 +762,7 @@ def _model_backed_scalar_annotation(
 
 
 def _is_enumerable_serializer_choice(field: serializers.Field) -> bool:
-    """Return whether a serializer-only ``ChoiceField`` should generate a GraphQL enum (spec-039 rev6 #6).
+    """Return whether a serializer-only ``ChoiceField`` should generate a GraphQL enum.
 
     A serializer-only ``ChoiceField`` / ``MultipleChoiceField`` with static choices maps to
     a generated enum (schema precision over the graphene-django ``str``). A ``FilePathField``
@@ -783,7 +783,7 @@ def _enum_member_map(enum_cls: type) -> dict[str, Any]:
 
 
 def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
-    """Build (or dedupe) the generated enum for a serializer-only ``ChoiceField`` (spec-039 rev6 #6).
+    """Build (or dedupe) the generated enum for a serializer-only ``ChoiceField``.
 
     Reuses the shared ``types/converters.py::build_enum_from_choices`` core (the SAME
     grouped-form / value-sanitization / sanitize-collision rules the read-side model enum
@@ -815,7 +815,7 @@ def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
 
 
 def _serializer_choice_annotation(field: serializers.Field, type_name: str) -> Any:
-    """Return the generated enum annotation for an enumerable ``ChoiceField`` (spec-039 rev6 #6 / rev2 P2).
+    """Return the generated enum annotation for an enumerable ``ChoiceField``.
 
     A ``ChoiceField`` -> a single generated enum; a ``MultipleChoiceField`` (a ``ChoiceField``
     subclass) -> ``list[<enum>]``. Shared by the column-less path
@@ -834,7 +834,7 @@ def _serializer_only_scalar_annotation(
     conversion: SerializerFieldConversion,
     type_name: str,
 ) -> Any:
-    """Resolve a column-less serializer SCALAR annotation, upgrading choices to enums (spec-039 rev6 #6).
+    """Resolve a column-less serializer SCALAR annotation, upgrading choices to enums.
 
     A serializer-only ``ChoiceField`` becomes a generated enum; a ``MultipleChoiceField``
     (a ``ChoiceField`` subclass, so its base conversion is ``list[str]``) becomes
@@ -858,13 +858,13 @@ def resolve_serializer_field(
     (keyed on the resolved ``models.Field``): a relation column ->
     ``relation_input_annotation`` (``<name>_id`` / the Relay-vs-raw-pk id type); a
     file/image column -> ``Upload``; else ``convert_scalar`` (the symmetric enum
-    for ``choices``) - with the type-override conflict policy (spec-039 rev6 #8): a
+    for ``choices``) - with the type-override conflict policy: a
     CONSUMER-DECLARED model-backed scalar whose declared type disagrees with the
     column's fails loud rather than silently picking the column. A column-less field
     uses ``convert_serializer_field`` (the model-less table) for the kind, and the
     relation / file annotations are finalized here (where ``Upload`` and the
     serializer-only relation id-type are known); a column-less ``ChoiceField`` /
-    ``MultipleChoiceField`` is upgraded to a generated GraphQL enum (spec-039 rev6 #6).
+    ``MultipleChoiceField`` is upgraded to a generated GraphQL enum.
 
     The GraphQL name is ALWAYS derived from the DECLARED serializer field name via
     the id-like-suffix rule (never ``source``). Returns the BASE (non-nullable)
@@ -874,7 +874,7 @@ def resolve_serializer_field(
     field name (the ``validated_data`` key), ``source`` the resolved one-segment
     source.
     """
-    # rev6 #17: reject a nested serializer field FIRST, before the backing-column lookup - a
+    # reject a nested serializer field FIRST, before the backing-column lookup - a
     # nested serializer over a reverse-relation column (``BranchSerializer.shelves``) would
     # otherwise be misrouted through the model-backed relation branch (silently typed as a
     # relation-id input) instead of failing loud. An EXPLICITLY-opted-in nested field never
@@ -888,7 +888,7 @@ def resolve_serializer_field(
     source = field.source if (field.source and field.source != field_name) else None
     # The relation target model recorded on the spec (``None`` for a non-relation),
     # so the Slice-3 decode reads it off the bind-stashed reverse map instead of
-    # re-discovering the serializer field set per request (spec-039 H4).
+    # re-discovering the serializer field set per request.
     related_model: type[models.Model] | None = None
 
     if column is not None and getattr(column, "is_relation", False):

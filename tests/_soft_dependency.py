@@ -14,8 +14,9 @@ the relative import that reaches the guard - which is why it replaces the older
 
 Pure absence uses ``simulated_absence``. Broken-install cases (top-level present, one
 submodule unimportable) compose inline on ``evicted_modules`` with a submodule sentinel -
-see ``tests/test_routers.py`` (Test 17) and ``tests/middleware/test_debug_toolbar.py``
-(Test 11a). Third-party absence only: framework-own-module eviction (registry co-clear
+see the degraded-partial-install row in ``tests/test_routers.py`` and the
+broken-install row in ``tests/middleware/test_debug_toolbar.py``.
+Third-party absence only: framework-own-module eviction (registry co-clear
 tolerance) is a different concern and stays in its own tests.
 """
 

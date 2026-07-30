@@ -299,11 +299,10 @@ def test_relation_field_class_attribute_shadowing_raises():
 def test_assigned_scalar_field_override_keeps_consumer_resolver():
     """A ``strawberry.field(resolver=...)`` assigned to a scalar column wins.
 
-    Pins the Medium fix from ``rev-types__base.md``: previously
-    ``_consumer_assigned_relation_fields`` only collected relation
-    names, so a consumer assigning a ``StrawberryField`` to a scalar
-    column (e.g. ``name``) was silently overwritten by the auto-
-    synthesized ``str`` annotation. The widened guard collects scalar
+    Were ``_consumer_assigned_relation_fields`` to collect relation names
+    only, a consumer assigning a ``StrawberryField`` to a scalar column
+    (e.g. ``name``) would be silently overwritten by the
+    auto-synthesized ``str`` annotation. The guard collects scalar
     assignments too and ``_build_annotations`` skips them.
     """
 
@@ -400,7 +399,7 @@ def test_empty_field_surface_raises():
 # Four core override tests pin the new annotation-only scalar override
 # path; four converter-bypass tests pin Decision 7a's "consumer is
 # authoritative" contract; eleven Relay-collision tests pin Decision 7's
-# H1 guard (five reject + six accept).
+# collision guard (five reject + six accept).
 # ---------------------------------------------------------------------------
 
 
@@ -930,7 +929,7 @@ def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is
             fields = ("id", "name", "items")
             interfaces = (relay.Node,)
 
-    # Class creation succeeded - the rev6 H1 fail-soft fix accepts the
+    # Class creation succeeded - the fail-soft annotation walk accepts the
     # directly-resolved NodeID-marked id even when another annotation on
     # the same class fails to resolve.
     assert CategoryNode is not None

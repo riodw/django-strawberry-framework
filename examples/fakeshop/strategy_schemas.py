@@ -6,7 +6,7 @@ uses), so the two-strategy schema construction the pg parity suite
 (``tests/test_lateral_pg_parity.py``) and the nested-fetch benchmark
 (``scripts/bench_nested_fetch.py``) compare against is ONE implementation -
 a change to how a strategy is mounted on an extension then touches one
-builder, not a test copy and a bench copy (the 0.0.13 fetch-strategy DRY pass, T3).
+builder, not a test copy and a bench copy.
 
 Imports are function-local: the module must be importable before
 ``django.setup()`` (the bench bootstraps Django itself after importing).

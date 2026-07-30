@@ -53,7 +53,7 @@ consumer-overridable hook. The serializer flavor deliberately has **no** coarse
 ``get_serializer`` constructor hook (unlike the form flavor's ``get_form``): its H3
 invariants - ``partial`` and the authorized-actor ``context["request"]`` - cannot be
 entrusted to a consumer-overridable constructor, so construction is framework-owned
-through ``_merged_serializer_kwargs`` (spec-039 Medium-7).
+through ``_merged_serializer_kwargs`` (spec-039).
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
 )
 
 # ``operation`` -> input-generator kind: the shared
-# ``mutations/sets.py::NON_DELETE_OPERATION_INPUT_KIND`` map (spec-039 Mn2), which
+# ``mutations/sets.py::NON_DELETE_OPERATION_INPUT_KIND`` map (spec-039), which
 # replaced the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` /
 # ``_modelform_operation_kind`` copies. ``create`` -> the required-aware
 # ``<Serializer>Input`` (``CREATE``); ``update`` -> the all-optional
@@ -136,7 +136,7 @@ def _checked_schema_field_map(
     cls: type,
     meta: _ValidatedMutationMeta,
 ) -> dict[str, serializers.Field]:
-    """Read ``get_serializer_for_schema()`` through the ONE guarded path (spec-039 #10 / rev2 P2).
+    """Read ``get_serializer_for_schema()`` through the ONE guarded path.
 
     The single authoritative read of the schema hook for the bind window: calls the overridable
     ``get_serializer_for_schema()`` and, when the class-validation fingerprint is present on the
@@ -146,9 +146,9 @@ def _checked_schema_field_map(
     unguarded field map behind the fingerprint's back.
 
     The fingerprint is over the EFFECTIVE (writable + narrowed) field set - the SAME set the
-    input build uses (rev6 #17 review P1) - so a read-only / narrowed-away nested serializer is
+    input build uses - so a read-only / narrowed-away nested serializer is
     never descended into; the RAW ``field_map`` is still returned for the build to re-narrow. The
-    recursion is gated on ``meta.nested_fields`` (the opt-in tree, rev6 #17 review P2), the SAME map
+    recursion is gated on ``meta.nested_fields`` (the opt-in tree), the SAME map
     passed at class validation, so both windows fingerprint the identical opt-in structure and an
     unopted nested field is never descended into.
     """
@@ -180,7 +180,7 @@ def _serializer_input_shape_for(
     operation_kind: str,
     field_map: dict[str, serializers.Field],
 ) -> tuple[type, Any]:
-    """Return the serializer input class + descriptor through the shared shape cache (Mn5)."""
+    """Return the serializer input class + descriptor through the shared shape cache."""
     input_cls, shape = build_serializer_input_class(
         meta.serializer_class,
         operation_kind=operation_kind,
@@ -188,7 +188,7 @@ def _serializer_input_shape_for(
         exclude=meta.exclude,
         optional_fields=meta.optional_fields,
         field_map=field_map,
-        # rev6 #17: opt-in nested serializer inputs, built recursively during the walk.
+        # Opt-in nested serializer inputs, built recursively during the walk.
         nested_configs=meta.nested_fields,
     )
     cached = _serializer_shape_build_cache.get(shape.cache_key)
@@ -199,7 +199,7 @@ def _serializer_input_shape_for(
 
 
 # ``operation`` -> the DRF serializer write method whose OVERRIDE ``Meta.nested_fields`` requires
-# (spec-039 rev6 #17): a create routes nested data through ``create()``, an update through
+#: a create routes nested data through ``create()``, an update through
 # ``update()``. DRF's ``ModelSerializer.create`` / ``.update`` ``assert`` (via
 # ``raise_errors_on_nested_writes``) that no nested writable data is present unless the method is
 # overridden - a raw ``AssertionError`` that would escape the error envelope - so the framework
@@ -218,7 +218,7 @@ def _validate_serializer_nested_fields(
     field_map: dict[str, serializers.Field],
     nested_fields: Any,
 ) -> dict[str, NestedSerializerConfig] | None:
-    """Validate + normalize ``Meta.nested_fields`` at class creation (spec-039 rev6 #17).
+    """Validate + normalize ``Meta.nested_fields`` at class creation.
 
     ``Meta.nested_fields`` is the explicit opt-in for nested serializer writes: a
     ``{field_name: NestedSerializerConfig}`` map. Validated all at class creation:
@@ -355,7 +355,7 @@ class SerializerMutation(DjangoMutation):
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot).
     _input_field_specs: list | None = None
 
-    # The schema-time specs for ``Meta.injected_fields`` (spec-039 rev6 rev2 P1), stashed at
+    # The schema-time specs for ``Meta.injected_fields``, stashed at
     # bind so the Slice-3 resolver holds each injected field to the SAME runtime-agreement
     # contract (present / writable / source / kind / relation-model) an input field gets - not
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
@@ -407,9 +407,9 @@ class SerializerMutation(DjangoMutation):
           ``"__all__"``) / duplicate / unknown-name / empty-set** - via the Slice-1
           ``resolve_effective_serializer_fields``, which calls the shared
           ``utils/inputs.py::normalize_field_name_sequence(flavor="SerializerMutation")``
-          DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this
-          (P2.7). All three flavors now call that shared helper directly (spec-039 Mn3
-          inlined the former model / form re-binding wrappers), so there is no
+          DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this.
+          All three flavors now call that shared helper directly (the former model /
+          form re-binding wrappers are gone), so there is no
           per-flavor wrapper on any side.
 
         ``permission_classes`` is validated + normalized by the shared
@@ -432,7 +432,7 @@ class SerializerMutation(DjangoMutation):
             _ALLOWED_SERIALIZER_META_KEYS,
         )
 
-        # The presence clause is the shared ``require_backing_class`` (spec-039 M5);
+        # The presence clause is the shared ``require_backing_class``;
         # the two serializer-specific type-gates (Serializer, then ModelSerializer)
         # stay here - their messages genuinely diverge from the form flavor's.
         serializer_class = require_backing_class(
@@ -457,8 +457,8 @@ class SerializerMutation(DjangoMutation):
                 "serializers.Serializer has no backing model + no DjangoType to return.",
             )
 
-        # The "resolves no model" raise is the shared ``resolve_backed_model_or_raise``
-        # (spec-039 M5), run after the type-gates so ``Meta.serializer_class`` is a
+        # The "resolves no model" raise is the shared ``resolve_backed_model_or_raise``,
+        # run after the type-gates so ``Meta.serializer_class`` is a
         # real class with a ``.__name__``.
         model = resolve_backed_model_or_raise(
             cls,
@@ -486,7 +486,7 @@ class SerializerMutation(DjangoMutation):
         # empty-set guard), which calls the shared
         # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY
         # (P2.7 promotes the typo-guard / field-sequence MECHANICS). All three flavors
-        # call that shared helper directly (spec-039 Mn3 inlined the former model /
+        # call that shared helper directly (spec-039 inlined the former model /
         # form re-binding wrappers), so there is no per-flavor wrapper on any side. The
         # snapshot stores the RAW declarations; ``build_input`` re-resolves them (D1 -
         # the form flavor's validate-then-store-raw precedent).
@@ -510,7 +510,7 @@ class SerializerMutation(DjangoMutation):
             flavor="SerializerMutation",
         )
         resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
-        # ``Meta.injected_fields`` (rev6 #2): the auditable, per-field server-data contract.
+        # ``Meta.injected_fields``: the auditable, per-field server-data contract.
         # Normalized here (bare-string / duplicate rejected via the shared helper);
         # ``build_input`` subtracts these from the create-required guard and the resolver
         # verifies they reach the serializer's data.
@@ -519,7 +519,7 @@ class SerializerMutation(DjangoMutation):
             label="injected_fields",
             flavor="SerializerMutation",
         )
-        # rev6 rev2 P1: an injected field must be a real WRITABLE SCHEMA-TIME field (a required
+        # An injected field must be a real WRITABLE SCHEMA-TIME field (a required
         # field the input narrowed away), validated at class creation so a typo or non-writable
         # declaration fails loud here. The runtime resolver then re-checks it against
         # serializer.fields.
@@ -545,13 +545,13 @@ class SerializerMutation(DjangoMutation):
                     "(Meta.fields / Meta.exclude). Remove it from the input or from "
                     "Meta.injected_fields.",
                 )
-        # ``Meta.select_for_update`` (rev6 #14, expanded by the 0.0.14 concurrency hardening):
+        # ``Meta.select_for_update`` (expanded by the 0.0.14 concurrency hardening):
         # validated by the shared model-backed-flavor validator - default TRUE (locked writes are the
         # safe posture; an explicit ``False`` opts into weaker concurrency), applied as
         # a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery on the
         # locate and every relation-target check.
         select_for_update = validate_select_for_update("SerializerMutation", name, meta)
-        # ``Meta.nested_fields`` (rev6 #17): the explicit opt-in for nested serializer writes.
+        # ``Meta.nested_fields``: the explicit opt-in for nested serializer writes.
         # Validated at class creation - each key must name a nested serializer field the schema
         # map exposes, and the serializer MUST override the operation's write method (create /
         # update), because the framework never auto-saves the nested relation.
@@ -593,12 +593,12 @@ class SerializerMutation(DjangoMutation):
             injected_fields=injected_fields,
             select_for_update=select_for_update,
             nested_fields=nested_fields,
-            # rev6 #10: capture a stable fingerprint of the schema-hook field shape NOW (class
+            # Capture a stable fingerprint of the schema-hook field shape NOW (class
             # validation) so the phase-2.5 bind can detect a nondeterministic hook that drifted.
-            # rev6 #17 review P1: fingerprint the EFFECTIVE (writable + narrowed) set - the SAME
-            # set the input build uses - so a read-only / narrowed-away nested serializer (whose
-            # ``.fields`` need not even materialize no-arg) is never descended into. review P2:
-            # gate the recursion on ``nested_fields`` so an UNOPTED nested field is not descended
+            # Fingerprint the EFFECTIVE (writable + narrowed) set - the SAME set the
+            # input build uses - so a read-only / narrowed-away nested serializer (whose
+            # ``.fields`` need not even materialize no-arg) is never descended into. Gate
+            # the recursion on ``nested_fields`` so an UNOPTED nested field is not descended
             # into either (the field walk raises the canonical opt-in error instead).
             schema_fingerprint=serializer_schema_fingerprint(
                 effective,
@@ -691,9 +691,9 @@ class SerializerMutation(DjangoMutation):
         )  # the serializer input derives from the serializer, not the model primary.
         operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
         serializer_class = meta.serializer_class
-        # rev6 #10 / rev2 P2: read the schema hook through the ONE guarded path, so the
+        # Read the schema hook through the ONE guarded path, so the
         # determinism fingerprint is checked HERE and in ``input_type_name`` alike (no unguarded
-        # second read). Then stash the schema-time specs for ``Meta.injected_fields`` (rev2 P1)
+        # second read). Then stash the schema-time specs for ``Meta.injected_fields``
         # so the resolver can hold each injected field to the runtime-agreement contract.
         field_map = _checked_schema_field_map(cls, meta)
         cls._injected_field_specs = resolve_injected_field_specs(
@@ -709,7 +709,7 @@ class SerializerMutation(DjangoMutation):
                 field_map=field_map,
             ),
         )
-        # The create-required guard (spec-039 rev6 #2, hardened): ``Meta.injected_fields`` is
+        # The create-required guard (hardened): ``Meta.injected_fields`` is
         # the ONLY sanctioned path for narrowing away a required create field. The guard ALWAYS
         # runs, subtracting only the declared injected fields (a dropped required field NOT
         # declared injected raises), and the resolver builds the injection itself from
@@ -756,7 +756,7 @@ class SerializerMutation(DjangoMutation):
         ``data:`` ref cannot drift.
         """
         operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
-        # rev2 P2: the SAME guarded hook read as ``build_input`` (fingerprint-checked), so
+        # The SAME guarded hook read as ``build_input`` (fingerprint-checked), so
         # the type-name derivation never reads an unguarded field map. Run this even
         # when the bound name is already stashed; explicit calls to this seam still
         # enforce the determinism contract.
@@ -845,7 +845,7 @@ class SerializerMutation(DjangoMutation):
         data: Any,
         hook_context: Any,
     ) -> dict[str, Any]:
-        """Return extra kwargs for ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
+        """Return extra kwargs for ``serializer.save(**kwargs)``.
 
         The DRF-native customization point for request-derived data DRF expects at SAVE time
         (``serializer.save(notify=True)``) rather than in the constructor or by mutating

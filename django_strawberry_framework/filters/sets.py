@@ -1,7 +1,7 @@
 """``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
 
 Layers 3 and 4 of the spec-027 six-layer pipeline plus the
-Decision-8 / M1-of-rev5 named-helper decomposition of `apply_sync` /
+Decision-8 named-helper decomposition of `apply_sync` /
 `apply_async` / `apply`. The metaclass is a verbatim port of
 `django_graphene_filters/filterset.py::FilterSetMetaclass`; `FilterSet`
 mixes the cookbook's cycle-safe `get_filters` into a
@@ -132,13 +132,13 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
 
 # ``python_attr -> django-filter wire key`` for the logical operators, built once
 # at import: ``_LOGIC_KEYS`` is a frozen module constant, so ``_normalize_input``
-# re-derived an identical dict every call before this hoist (feedback L2).
+# re-derived an identical dict every call before this hoist.
 _LOGIC_WIRE_BY_PYTHON_ATTR: dict[str, str] = dict(_LOGIC_KEYS)
 
 # The filter-normalize traversal config is request-independent (it references the
 # same module-level ``_field_specs`` map by reference, which ``inputs.py`` mutates
 # in place at bind), so it is a module singleton rather than rebuilt per
-# ``_normalize_input`` call (feedback L2).
+# ``_normalize_input`` call.
 _NORMALIZE_TRAVERSAL: SetInputTraversal = SetInputTraversal(
     field_specs=_field_specs,
     related_attr="related_filters",
@@ -222,7 +222,7 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in extra.items() if key not in _MODEL_CHOICE_ONLY_EXTRAS}
 
 
-# Blocker 1 + High 3 (``row-preserving-predicates-part1-plan``): package ownership must NOT be
+# Package ownership must NOT be
 # derived from whatever happens to sit in django-filter's LIVE, mutable, process-shared
 # ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at import time. Snapshotting (even
 # freezing) that global does not establish who AUTHORED its contents: any consumer,
@@ -232,7 +232,7 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
 # realistic (installing the app imports the package root, which does NOT import
 # ``filters.sets``), so the snapshot cannot be the ownership anchor.
 #
-# The durable architecture separates THREE concepts (the review demands this):
+# The durable architecture separates THREE concepts:
 #
 #   1. ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` -- a package-AUTHORED plain-``dict``
 #      generation-policy table that mirrors django-filter 25.2's
@@ -243,7 +243,7 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
 #      plain, deepcopyable ``dict`` restores django-filter's inherited consumer
 #      customization seam (``copy.deepcopy(cls.FILTER_DEFAULTS)`` /
 #      ``dict(cls.FILTER_DEFAULTS)`` / ``[cls][key] = ...``), which the previous
-#      nested-``MappingProxyType`` install broke on every Python version (High 3).
+#      nested-``MappingProxyType`` install broke on every Python version.
 #      django-filter reads ``FILTER_DEFAULTS`` only through
 #      ``dict(cls.FILTER_DEFAULTS)`` (a fresh shallow copy) plus entry ``.get`` and
 #      never mutates it (verified in the installed
@@ -264,8 +264,8 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
 #   3. Selection provenance -- the ownership oracle
 #      (``FilterSet._generation_origin_for_field``) compares the EFFECTIVE selection
 #      (``FILTER_DEFAULTS`` merged with ``Meta.filter_overrides``) to the baseline by
-#      normalized VALUE, not by object identity. With High 3 the public dict and the
-#      private baseline are now DISTINCT object graphs, so object identity between a
+#      normalized VALUE, not by object identity. The public dict and the
+#      private baseline are DISTINCT object graphs, so object identity between a
 #      selected raw entry and a baseline record can never hold; the anchor is a
 #      normalized value comparison. This is import-order-immune (the baseline derives
 #      from OUR table, never the global), catches ``filter_class`` AND
@@ -313,7 +313,7 @@ def _reverse_rel_extra(field: Any) -> dict[str, Any]:
     return {"queryset": filterset.remote_queryset(field)}
 
 
-# The package-AUTHORED public generation-policy table (Blocker 1 + High 3). Mirrors
+# The package-AUTHORED public generation-policy table. Mirrors
 # django-filter 25.2 ``FILTER_FOR_DBFIELD_DEFAULTS`` exactly, but as OUR OWN plain
 # ``dict`` of plain ``dict`` entries referencing stable importable filter classes and
 # the package-owned ``extra`` providers above -- NOT a snapshot of the mutable global.
@@ -385,7 +385,7 @@ def _normalize_policy_entry(entry: Any) -> _NormalizedPolicyEntry | None:
     return _NormalizedPolicyEntry(entry.get("filter_class"), entry.get("extra"))
 
 
-# The PRIVATE, immutable, normalized ownership anchor (Blocker 1). Built from the
+# The PRIVATE, immutable, normalized ownership anchor. Built from the
 # package's OWN public table, never from the mutable global, so import order can never
 # taint it. Never installed as a class attr and never exposed to consumers, so the
 # ``MappingProxyType`` is correct here (unlike the public table, this is never
@@ -400,8 +400,7 @@ _PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = Mapping
 
 
 # ======================================================================
-# Audited ``django-filter`` release range for the OPTIMIZER
-# (``row-preserving-predicates-part1-plan`` High 2).
+# Audited ``django-filter`` release range for the OPTIMIZER.
 #
 # This gates the row-preserving correlated-``EXISTS`` OPTIMIZATION only -- never
 # whether filtering works. The package dependency stays deliberately UNBOUNDED
@@ -594,7 +593,7 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 
 # ======================================================================
 # Executable behavior-profile registry -- the SINGLE source of truth for the
-# supported generated django-filter families (``row-preserving-predicates-part1-plan`` High 4).
+# supported generated django-filter families.
 #
 # A framework-generated many-side leaf is routable through the correlated
 # ``EXISTS`` adapter ONLY if its filter class belongs to a family this package has
@@ -609,8 +608,7 @@ _FRAMEWORK_GENERATED_ORIGINS: frozenset[FilterOrigin] = frozenset(
 # therefore never routable, and falls back to django-filter's original outer
 # invocation until it is audited and added here.
 #
-# Family recognition is EXACT-CLASS (``row-preserving-predicates-part1-plan``
-# Blocker 2): a profile is minted from a known generation decision, never
+# Family recognition is EXACT-CLASS: a profile is minted from a known generation decision, never
 # rediscovered from arbitrary ancestry. An unregistered subclass of an audited
 # base is a CONSUMER-owned class whose behavior this package has not reviewed, so
 # it receives NO profile -- it stays fully supported and simply runs on the outer
@@ -735,8 +733,7 @@ _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
 # allowlist, so any body member that adds state or behavior -- dunder-named (``__evil_state__``,
 # an overridden ``__getattribute__`` / ``__init_subclass__``, ``__slots__``) OR not
 # (``reverse``, ``filter``) -- surfaces as an extra own name and fails the check closed
-# (``row-preserving-predicates-part1-plan`` Sixth-review bug hunt: a dunder-named
-# member must not slip through).
+# (a dunder-named member must not slip through).
 class _EmptyBodyDynamicCsvReference(Filter):
     pass
 
@@ -752,9 +749,8 @@ def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
     -- a NEW class object each call, so it can never be a ``_FILTER_FAMILY_REGISTRY`` key,
     yet it is genuine framework machinery and must still route. Rather than trust every
     descendant of ``BaseInFilter`` / ``BaseRangeFilter`` (the retired MRO walk -- an open
-    ancestry allowlist, ``row-preserving-predicates-part1-plan`` Blocker 2), this
-    validates the EXACT MRO and class body, so anything a future django-filter
-    release or a consumer adds fails closed:
+    ancestry allowlist), this validates the EXACT MRO and class body, so anything a
+    future django-filter release or a consumer adds fails closed:
 
     - ``klass.__bases__`` is exactly a 2-tuple whose FIRST element IS ``BaseInFilter`` or
       ``BaseRangeFilter`` (a genuine dynamic class has exactly ``(BaseInFilter, <scalar>)``);
@@ -792,8 +788,7 @@ def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
 def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
     """Return the behavior profile of ``filter_instance``'s supported filter family.
 
-    Resolution is fail-closed and never rediscovered from arbitrary ancestry
-    (``row-preserving-predicates-part1-plan`` Blocker 2):
+    Resolution is fail-closed and never rediscovered from arbitrary ancestry:
 
     1. EXACT match first -- ``_FILTER_FAMILY_REGISTRY[type(filter_instance)]``. No MRO
        walk, so an unregistered subclass of an audited base is NOT accepted through its
@@ -851,8 +846,8 @@ class CandidateFilterMetadata:
       (``path_plan.first_many_index is not None``), the leaf carries no
       consumer ``method``, AND its filter class resolves to an audited supported
       family (``_family_profile_for`` is not ``None``). The last conjunct is the
-      executable fail-closed boundary (``row-preserving-predicates-part1-plan``
-      High 4): an unaudited family placed behind a framework origin -- e.g. a
+      executable fail-closed boundary: an unaudited family placed behind a
+      framework origin -- e.g. a
       consumer subclass, or a class introduced by a future ``django-filter`` release
       -- has no profile and is ineligible, so it is never routed until it is audited
       and registered in ``_FILTER_FAMILY_REGISTRY``. No consumer-origin ``distinct``
@@ -883,8 +878,7 @@ class CandidateFilterMetadata:
 
     Deliberately NOT modelled: post-build mutation of a live per-request filter
     instance, or of ``django-filter``'s own classes. Process-wide monkeypatching is
-    out of contract (``row-preserving-predicates-part1-plan`` Seventh review):
-    code able to replace ``CharFilter.filter`` can equally replace this package's
+    out of contract: code able to replace ``CharFilter.filter`` can equally replace this package's
     own methods, so no in-process signature could make it a trust boundary. This
     package protects the DOCUMENTED extension points above.
     """
@@ -965,7 +959,7 @@ def _candidate_metadata_for(model: type, filter_instance: Any) -> CandidateFilte
     unaudited / ambiguous family resolves to no profile and is ineligible -- so a
     consumer subclass, or a future ``django-filter`` release that places a novel class
     behind a framework origin, fails CLOSED to the outer invocation until it is
-    registered (``row-preserving-predicates-part1-plan`` High 4).
+    registered.
 
     This function computes only the leaf-INTRINSIC half. The owning class's
     generation capability and the audited-release check are applied by
@@ -1026,7 +1020,7 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedFilter`` declarations and bind each to the new
-        # class via the shared set-family collector (the 0.0.9 DRY pass).
+        # class via the shared set-family collector.
         # ``declared_filters`` supplies the django-filter-ordered candidate
         # stream; the shared collector reconciles it against the unmodified class
         # body and direct-base precedence so a tombstone cannot be lost in a
@@ -1060,7 +1054,7 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         # these instances never route through ``filter_for_field`` (django-filter's
         # ``get_filters`` copies them in verbatim), and the metaclass runs once per
         # class. The authoritative boundary is declaration OWNERSHIP, not the mere
-        # presence of a provenance record (Blocker 1):
+        # presence of a provenance record:
         #
         # * An OWN declaration -- a ``django_filters.Filter`` (``RelatedFilter`` is
         #   a ``Filter`` subclass) assigned directly in THIS class body -- makes
@@ -1144,22 +1138,21 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     Subclasses `django_filters.filterset.BaseFilterSet` directly per
     spec-027 Decision 5; the cookbook's lazy-resolution Layers 3 and 4
     are folded in via `FilterSetMetaclass` and `get_filters`. The
-    Decision-8 / M1-of-rev5 named helpers decompose `apply_sync` and
+    Decision-8 named helpers decompose `apply_sync` and
     `apply_async` so each step can be exercised in isolation; `apply`
     stays as a thin dispatcher that translates the typed
     `SyncMisuseError` from `apply_type_visibility_sync` into a
     `RuntimeError` consumers can match on.
 
     `_owner_definition` is the binding seam populated by
-    `finalize_django_types` phase 2.5 per H4 of rev4; the slot declared
+    `finalize_django_types` phase 2.5; the slot declared
     `None` and the fallback branch in `filter_for_field` /
     `filter_for_lookup` that consults `registry.primary_for(...)` keeps
     package-internal tests able to exercise the Relay-vs-scalar
     conditional before owner binding lands.
     """
 
-    # The package-AUTHORED public generation-policy table (Blocker 1 + High 3,
-    # ``row-preserving-predicates-part1-plan``). Installed in place of django-filter's
+    # The package-AUTHORED public generation-policy table. Installed in place of django-filter's
     # mutable, process-shared ``BaseFilterSet.FILTER_DEFAULTS`` -- but as our OWN
     # plain, deepcopyable ``dict`` (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``), NOT a
     # snapshot of the global -- so package ownership derives from a table this module
@@ -1193,7 +1186,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names `get_filters` (via `expanded_once`) and `registry.clear()` (via
     # `clear_filter_input_namespace`'s `binding_attrs`) reference, instead of
-    # re-spelling the tuple (the 0.0.9 DRY pass).
+    # re-spelling the tuple.
     _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
         owner="_owner_definition",
         cache="_expanded_filters",
@@ -1358,7 +1351,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
             # The two-condition cache-write gate (own `related_filters` +
             # no unresolved string lazy targets) is single-sited in
-            # `sets_mixins.should_cache_expansion` (DRY review A8). Publish the
+            # `sets_mixins.should_cache_expansion`. Publish the
             # filters AND the candidate metadata as ONE immutable snapshot,
             # atomically, only after the whole build succeeded: a failure above
             # (e.g. a strict-classification defect) publishes nothing, so stale
@@ -1427,7 +1420,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           is the cookbook / ``graphene-django``
           ``filter_fields = {"field": "__all__"}`` parity.
         - **Top-level ``"__all__"`` sweep narrowing** (when ``fields`` is the
-          STRING ``"__all__"`` itself; M3-of-rev4): ``django-filter`` treats the
+          STRING ``"__all__"`` itself): ``django-filter`` treats the
           PK as a non-filterable column and includes M2M in the ``"__all__"``
           sweep; the package's preferred shape is the opposite (PK is a
           canonical filter; M2M needs an explicit `RelatedFilter`).
@@ -1454,7 +1447,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                         # Ordering and pattern lookups (``range`` / ``gt`` /
                         # ``contains`` / ...) have no GlobalID semantics and are
                         # dropped from the generated surface rather than emitted
-                        # as corrupt ``String`` inputs (spec-027 H1).
+                        # as corrupt ``String`` inputs.
                         lookups = [lk for lk in lookups if lk in ("exact", "in", "isnull")]
                     fields[field_name] = lookups
 
@@ -1538,7 +1531,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``_expand_related_filter``. A leaf generated by a non-capable child
         # then stays fail-closed even when a capable parent expands it.
         generation_capable = cls._is_generation_capable()
-        # The ONE ownership verdict (round-4 Blocker 2), computed once and reused by
+        # The ONE ownership verdict, computed once and reused by
         # the Relay-relation branch below so ownership is never independently
         # rediscovered after the conversion decision in ``filter_for_lookup``.
         default_origin = cls._generation_origin_for_field(field, lookup_expr)
@@ -1566,7 +1559,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # Without this split ``id: {in: [...]}`` collapsed to a single
             # ``GlobalIDFilter`` and silently dropped to a scalar input.
             # ``isnull`` is a Boolean predicate, not a GlobalID, so pass the
-            # upstream filter through unchanged (spec-027 H1).
+            # upstream filter through unchanged.
             if default.lookup_expr == "isnull":
                 return default
             own_pk_filter_class = (
@@ -1593,7 +1586,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if target_type is None or not implements_relay_node(target_type):
             return default
         # Honor a consumer-selected relation override BEFORE any Relay conversion
-        # (round-4 Blocker 2). ``default_origin`` is the shared ownership verdict; a
+        # ``default_origin`` is the shared ownership verdict; a
         # non-``framework_default`` origin means the consumer selected this filter
         # class through ``Meta.filter_overrides`` or a shadowed ``FILTER_DEFAULTS``,
         # so ``filter_for_lookup`` already declined to convert it and ``default`` IS
@@ -1614,7 +1607,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # inside the pk-correlated inner root, row-preservingly).
             return default
         # Preserve the lookup-aware class ``filter_for_lookup`` already chose rather
-        # than independently reselecting by cardinality (High 3 root cause).
+        # than independently reselecting by cardinality.
         # ``super().filter_for_field`` builds ``default`` from the class OUR
         # ``filter_for_lookup`` returned for this (field, lookup) pair, and control
         # only reaches here once ``field`` is confirmed a Relay-node relation, so
@@ -1677,7 +1670,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            ``_PACKAGE_POLICY_BASELINE`` selection: the PRIVATE, immutable, package-owned
            baseline derived from ``_PUBLIC_PACKAGE_FILTER_DEFAULTS``, NOT django-filter's
            mutable, shared ``BaseFilterSet.FILTER_DEFAULTS`` and NOT the public table's
-           object identity (Blocker 1 + High 3). With High 3 the public table and the
+           object identity. The public table and the
            private baseline are DISTINCT object graphs, so object identity could never
            hold between a selected raw entry and a baseline record; the ownership anchor
            is a normalized VALUE comparison of the ownership-bearing members
@@ -1692,13 +1685,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
            ``to_field_name``, requiredness), not just a ``filter_class`` change. This is
            import-order-immune: the baseline derives from OUR table, so a consumer
            mutation of django-filter's global before this module was imported cannot
-           taint it (Blocker 1).
+           taint it.
 
         This is the SINGLE ownership oracle both ``filter_for_lookup`` (which
         decides whether to convert a Relay-node relation to a package GlobalID
         primitive) and ``filter_for_field`` (which reads the resulting stamp) route
         through, so a consumer-selected relation override is never independently
-        rediscovered or silently reclassified (round-4 Blocker 2). Resolving on the
+        rediscovered or silently reclassified. Resolving on the
         output field (not the unresolved model field) also handles ``isnull``: a
         leaf whose model field is e.g. a ``TextField`` is selected by a
         ``BooleanField`` override upstream, and this oracle agrees.
@@ -1730,7 +1723,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         #     selection class (upstream would select it), the merged walk returns that
         #     override entry; its normalized (filter_class, extra) pair differs from the
         #     baseline record -> ``override_generated``.
-        #   * a class-level ``FILTER_DEFAULTS`` shadow (round-5 Blocker 1) -- a subclass
+        #   * a class-level ``FILTER_DEFAULTS`` shadow -- a subclass
         #     that reassigns ``FILTER_DEFAULTS`` changes the whole generation policy; its
         #     REPLACED entry normalizes to a different value -> ``override_generated``,
         #     while an untouched shallow ``{**FilterSet.FILTER_DEFAULTS, Field: {...}}``
@@ -1740,7 +1733,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # The baseline is derived from the package's OWN ``_PUBLIC_PACKAGE_FILTER_DEFAULTS``
         # table (never from django-filter's mutable global), and the comparison is by
         # VALUE, so import order cannot taint it and the public table and baseline being
-        # distinct object graphs (High 3) does not matter: a pristine selection re-derives
+        # distinct object graphs does not matter: a pristine selection re-derives
         # the baseline's (filter_class, provider) pair. The compared members are the
         # single ownership-bearing values django-filter selects (its ``filter_class`` AND
         # its ``extra`` provider -- a restricted relation queryset, a ``to_field_name``,
@@ -1782,8 +1775,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         * ``FILTER_DEFAULTS`` override -- the class-level generation hook: a
           consumer shadowing ``FILTER_DEFAULTS`` changes which filter classes the
           default path selects; an unmodified subclass inherits the package-authored
-          public ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` table by identity (Blocker 1 +
-          High 3), so any class that reassigned ``FILTER_DEFAULTS`` is non-capable and
+          public ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` table by identity, so any class
+          that reassigned ``FILTER_DEFAULTS`` is non-capable and
           nothing it generates is routable. Comparing against the package-authored
           public table (not django-filter's mutable ``BaseFilterSet.FILTER_DEFAULTS``,
           and not a snapshot of it) means capability tracks whether the class still
@@ -1792,7 +1785,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
           ``_generation_origin_for_field`` against the private normalized baseline;
           this identity check is the coarse whole-table-replacement gate.
         * ``__init__`` override -- the standard place a consumer replaces or mutates
-          ``self.filters`` per request (round-4 Blocker 1). A subclass that defines
+          ``self.filters`` per request. A subclass that defines
           its own ``__init__`` can swap a generated leaf for its own filter object
           AFTER the per-request deepcopy. Since routing is decided at BUILD time, this
           seam is closed HERE and only here: such a class is non-capable, so none of
@@ -1842,7 +1835,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         lookup outside ``{exact, in, isnull}`` on a framework-owned Relay
         relation is a corrupt wire shape rejected here at build time -- never
         a resolver-time Django ``FieldError`` -- mirroring the own-PK branch
-        above (feedback Blocker 1). Raising in this classmethod also covers
+        above. Raising in this classmethod also covers
         ``filter_for_field``: ``super().filter_for_field`` calls
         ``cls.filter_for_lookup``, so the raise propagates before any leaf is
         built.
@@ -1861,7 +1854,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # ``get_fields`` ``"__all__"`` narrowing). An explicit
             # ``Meta.fields`` list that names an unsupported lookup is rejected
             # here so it cannot silently generate a corrupt GlobalID-shaped
-            # input (spec-027 H1).
+            # input.
             if lookup_type == "in":
                 return GlobalIDMultipleChoiceFilter, params
             if lookup_type == "isnull":
@@ -1880,7 +1873,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 # it drops out-of-range members (an out-of-range value overflows the
                 # backend at bind) and matches NOTHING when a non-empty list fully
                 # drops, instead of django-filter's empty-value skip that would widen
-                # a restrictive ``in`` to no constraint (feedback). Own-PK Relay ``in``
+                # a restrictive ``in`` to no constraint. Own-PK Relay ``in``
                 # is handled above (GlobalIDMultipleChoiceFilter); a non-integer column
                 # carries no binding-range limit so it keeps the upstream filter.
                 return IntegerInFilter, params
@@ -1897,7 +1890,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
         if target_type is None or not implements_relay_node(target_type):
             return default_class, params
-        # Resolve OWNERSHIP before any Relay transformation (round-4 Blocker 2). A
+        # Resolve OWNERSHIP before any Relay transformation. A
         # consumer that selected its OWN relation filter -- via ``Meta.filter_overrides``
         # or a shadowed class-level ``FILTER_DEFAULTS`` -- owns the wire shape under
         # the plan's byte-for-byte rule; the framework must NOT silently replace that
@@ -1915,14 +1908,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # ``BooleanField`` default for ``isnull``; converting it to a GlobalID would
             # emit a nonsensical GlobalID-shaped input for a null test (a LIST input on
             # the multi-valued side) that raises ``ValueError`` at bind. Mirror the
-            # own-PK ``isnull`` pass-through (spec-027 H1); the branches below convert
+            # own-PK ``isnull`` pass-through; the branches below convert
             # only the equality (``exact``) and membership (``in``) wire shapes.
             return default_class, params
         if lookup_type == "in":
             # A relay-relation ``in`` lookup consumes a LIST of GlobalIDs, so it must
             # keep the multi-choice primitive regardless of relation cardinality -- a
             # forward, single-valued FK ``in`` is still list-shaped over the wire
-            # (High 3). This mirrors the own-PK ``in`` branch above; a
+            # This mirrors the own-PK ``in`` branch above; a
             # cardinality-only reselection dropped a forward-FK ``in`` back to the
             # scalar ``GlobalIDFilter`` and rejected the list at decode time. Relation
             # cardinality still decides every non-``in`` (exact) shape below.
@@ -1932,7 +1925,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # GlobalID, cardinality-selected (``GlobalIDFilter`` for a forward
             # FK / O2O, ``GlobalIDMultipleChoiceFilter`` for a many-side relation).
             return cls._relay_filter_class_for_field(field), _strip_model_choice_extras(params)
-        # Exhaustive classification (feedback Blocker 1): a PROVEN framework-default
+        # Exhaustive classification: a PROVEN framework-default
         # Relay relation supports ONLY ``exact`` / ``in`` / ``isnull`` (handled above).
         # Any other lookup -- pattern (``icontains``), ordering (``gt`` / ``lt``),
         # range -- has no GlobalID semantics, so converting it to a GlobalID wire
@@ -2035,7 +2028,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return registry.primary_for(related_model) or registry.get(related_model)
 
     # ------------------------------------------------------------------
-    # Decision-8 / M1-of-rev5 apply pipeline.
+    # Decision-8 apply pipeline.
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -2043,7 +2036,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
 
         Thin delegate to ``utils/permissions.py::iter_input_items`` (single-sited
-        with the order side per the 0.0.9 DRY pass). Returns ``None`` for an
+        with the order side). Returns ``None`` for an
         input that is neither a dict nor a Strawberry-input dataclass, ``[]`` for
         a walkable-but-empty input.
         """
@@ -2161,7 +2154,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
         # the ``_field_specs`` lookup, and the leaf / related / logic
         # classification are the shared traversal mechanics owned by
-        # ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass). Each
+        # ``utils/input_values.py::iter_active_fields``. Each
         # yielded ``ActiveField`` is dispatched here by ``kind``: ``LOGIC`` copies
         # the raw sub-tree under its ``django-filter`` wire key, ``RELATED`` is
         # stripped (owned by ``_apply_related_constraints``, since the parent form
@@ -2324,7 +2317,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
     @classmethod
     def _request_from_info(cls, info: Any) -> Any:
-        """Resolve the Django request from `info.context` (M8 of rev5).
+        """Resolve the Django request from `info.context`.
 
         Canonical Strawberry-Django shape: `info.context.request`. The
         wrapper-less alternative `isinstance(info.context, HttpRequest)`
@@ -2332,7 +2325,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         Django test client default) work without bespoke wiring. Any
         other shape raises `ConfigurationError`. Thin delegate to
         ``utils/permissions.py::request_from_info`` (single-sited with the
-        order side per the 0.0.9 DRY pass).
+        order side).
         """
         return request_from_info(info, family_label="FilterSet")
 
@@ -2343,7 +2336,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> list[tuple[str, RelatedFilter, Any]]:
         """List `(field_name, related_filter, child_input)` for present branches.
 
-        Active-branch scoping (M4 of rev3) - a `RelatedFilter` is "active"
+        Active-branch scoping - a `RelatedFilter` is "active"
         when its key is present in the input, regardless of the inner
         value's emptiness. Inactive branches are skipped end-to-end
         (visibility derivation, constraint application, permission
@@ -2355,7 +2348,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         supplied" via ``_extract_branch_value``; only the consumer-
         supplied branches reach the caller. Thin delegate to
         ``utils/permissions.py::active_related_branches`` (single-sited with
-        the order side per the 0.0.9 DRY pass); the filter side has no
+        the order side); the filter side has no
         top-level list shape, so ``handle_top_level_list`` stays ``False``.
         """
         return active_related_branches(
@@ -2672,7 +2665,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> None:
         """Fire `check_<field>_permission(request)` for fields in the input.
 
-        Active-input-only per M2 of rev5 - a declared `check_*` gate that
+        Active-input-only - a declared `check_*` gate that
         is not exercised by this call leaves the queryset untouched.
         Recurses into the child filterset for each active `RelatedFilter`
         branch so the cookbook's nested-permission contract holds, and
@@ -2809,7 +2802,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         (``and_`` / ``or_`` / ``not_``) and ``RelatedFilter`` branches are
         excluded (walked by the logical-branch recursion / related-branch loop
         respectively); ``UNSET`` / ``None`` values are skipped (active-input-only
-        contract, M2 of rev5). Thin delegate to
+        contract). Thin delegate to
         ``_active_permission_targets``'s ``LEAF`` half; the filter side excludes
         the logical operator attrs and falls back to the form-key map for fields
         with no field-spec entry.
@@ -2823,7 +2816,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> tuple[list[str], list[tuple[str, RelatedFilter, Any]]]:
         """Single-pass ``(leaf source paths, active related branches)`` for one level.
 
-        The fused traversal ``_run_permission_checks`` consumes (feedback H3):
+        The fused traversal ``_run_permission_checks`` consumes:
         one ``iter_active_fields`` walk yields both the per-field gate paths and
         the active ``RelatedFilter`` branches, instead of two full walks. Thin
         delegate to ``utils/permissions.py::active_permission_targets`` with the
@@ -2863,7 +2856,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _validate_form_or_raise(cls, filterset_instance: FilterSet) -> None:
         """Raise `GraphQLError` with the canonical extensions payload.
 
-        Decision 8 step 6 plus M10 of rev5 - `BaseFilterSet.qs` silently
+        Decision 8 step 6 - `BaseFilterSet.qs` silently
         falls through to `filter_queryset` when the form has errors, so
         the explicit `is_valid()` call here is what turns a malformed
         input into a structured GraphQL response.
@@ -2947,8 +2940,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``FILTER_DEFAULTS``, an overridden generation hook, an ``__init__`` that
         replaces or mutates ``self.filters`` -- is refused at BUILD time, so it never
         reaches this loop as routable. Process-wide monkeypatching of django-filter's
-        own classes is OUT OF CONTRACT (``row-preserving-predicates-part1-plan``
-        Seventh review): code able to replace ``CharFilter.filter`` can equally
+        own classes is OUT OF CONTRACT: code able to replace ``CharFilter.filter`` can equally
         replace this package's methods, so an in-process signature check cannot
         be a trust boundary, and maintaining one bought complexity without a
         defensible guarantee.
@@ -3053,8 +3045,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         against a sibling ``cls(data=child_data, queryset=queryset)``
         instantiation. The sibling reuses the parent's already
         visibility-scoped and ``RelatedFilter``-constrained queryset, so
-        the visibility-before-filter ordering pinned by H3 of rev8
-        carries through to every recursive level by construction.
+        the visibility-before-filter ordering carries through to every recursive
+        level by construction.
         """
         # Framework-owned flat-leaf applicator. Replaces the wholesale
         # ``super().filter_queryset(queryset)`` delegation with a loop mirroring
@@ -3079,7 +3071,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``apply_sync`` / ``apply_async``) it is unset and the counter
         # starts at 0. ``_apply_info`` is stashed the same way so nested
         # branches can re-derive their ``RelatedFilter`` visibility +
-        # constraints (B1 of the pre-merge review); it is ``None`` for
+        # constraints; it is ``None`` for
         # instances built outside the apply pipeline, which carry no
         # related branches to re-derive. ``_nested_qs_by_branch_id`` is
         # populated only under ``apply_async``; when present, every nested
@@ -3221,8 +3213,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         form cannot validate the nested-dict shape), so without deriving
         and applying them here a related branch nested inside a logical
         clause -- ``or: [{shelves: {code: {iContains: "X"}}}]`` -- would
-        silently widen to the whole parent queryset (B1 of the pre-merge
-        review). Under ``apply_async`` the nested visibility map is
+        silently widen to the whole parent queryset. Under ``apply_async`` the nested visibility map is
         pre-derived via ``_collect_nested_visibility_querysets_async`` and
         threaded through ``_nested_qs_by_branch_id`` keyed by
         ``id(child_input)``; that stash is consumed by ``.get(id(...))``
@@ -3244,7 +3235,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``filter_queryset`` -> ``_evaluate_logic_tree``) can keep
         consulting the pre-derived map.
 
-        Perf note (M-filters-6 review, accepted as-is): constructing the
+        Perf note: constructing the
         sibling ``cls(...)`` per branch triggers django-filter's
         ``BaseFilterSet.__init__`` deepcopy of ``base_filters``, so cost
         scales with branches x filters. This is correctness-neutral and
@@ -3297,7 +3288,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> models.QuerySet:
         """Constrain `parent_qs` by each active branch's intersected child qs.
 
-        M4-of-rev3 + H3-of-rev8 - the explicit `RelatedFilter(queryset=...)`
+        The explicit `RelatedFilter(queryset=...)`
         constraint AND-intersects with the visibility-scoped child qs
         from step 3, then a ``pk__in=<parent-pk subquery>`` restriction
         built from ``<rel>__in=<intersected>`` runs ONCE for every active
@@ -3445,9 +3436,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         run_permissions: bool = True,
         _depth: int = 0,
     ) -> models.QuerySet:
-        """Sync resolver entry point (Decision 8 / H3 of rev8).
+        """Sync resolver entry point (Decision 8).
 
-        Steps run in the order pinned by H3 of rev8: derive visibility
+        Steps run in the pinned order: derive visibility
         querysets, resolve the request, apply related constraints
         BEFORE constructing the filterset (so the constraints land in
         `self.queryset` and propagate through to `.qs`), then permission
@@ -3566,7 +3557,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> models.QuerySet:
         """Thin dispatcher - picks `apply_sync` and translates sync-misuse.
 
-        Decision 8 / M5 of rev6 - catches the typed ``SyncMisuseError``
+        Decision 8 - catches the typed ``SyncMisuseError``
         raised by ``apply_type_visibility_sync`` and rethrows as
         ``RuntimeError`` with the actionable "use apply_async instead"
         message consumers can match on. Class-based dispatch closes the

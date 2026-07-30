@@ -1154,10 +1154,10 @@ def plan_connection_relation(
         # so each alias subtree's per-parent resolution applies its OWN
         # arguments and the access stays strictness-visible, like the sidecar
         # shapes. A silent first-payload-wins window here served the sibling
-        # alias a wrong page (idea-#2 review P0).
+        # alias a wrong page.
         return NestedConnectionPlanResult(plan=plan)
     # Divergent aliased arguments select the PER-KEY scheme (one window per
-    # response key, idea #2); its arguments-derived gates - the sidecar check
+    # response key); its arguments-derived gates - the sidecar check
     # included - run per key inside ``_divergent_key_windows``, so the merged
     # primary-payload sidecar gate below applies only to the single-window
     # scheme (where every alias shares one payload by definition).
@@ -1202,7 +1202,7 @@ def plan_connection_relation(
     # scheme yields one ``(response_key, window, seek)`` per plannable alias
     # (each gets its own per-key ``to_attr``); the single-window scheme yields
     # one ``(None, window, seek)`` entry (the legacy shared ``to_attr``,
-    # byte-identical to the pre-idea-#2 path by construction). ``seek`` is the
+    # byte-identical to the pre-nested-window path by construction). ``seek`` is the
     # decoded keyset value seek, ``None`` under the offset vocabulary and for
     # keyset first pages alike.
     keyed_windows: list[tuple[str | None, tuple[int, int | None, bool], Any]]
@@ -1295,7 +1295,7 @@ def plan_connection_relation(
             # which is the WHOLE list - only the per-parent pipeline reproduces
             # that quirk, so a planned reversed window would always come back
             # empty and be discarded by ``_resolve_from_window``'s fallback
-            # return. Plan nothing (feedback2 P0-3 follow-through): no dead
+            # return. Plan nothing: no dead
             # window query riding every request, and no resolver keys - the
             # per-parent fallback stays strictness-visible like the other
             # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own

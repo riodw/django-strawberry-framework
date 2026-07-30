@@ -12,7 +12,7 @@ correctness-sensitive call sites -- the filter normalizer
 ``active_related_branches``). A drift between any two copies in the active-input
 decision is a real bug class -- a filter applied without its permission gate, a
 related visibility hook skipped, work done on inactive input -- so the neutral
-mechanics are single-sited here (the 0.0.9 DRY pass).
+mechanics are single-sited here.
 
 This module owns the *traversal mechanics* only; the family-specific *leaf
 semantics* stay at the call sites:
@@ -71,7 +71,7 @@ def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
 
 
 def input_field_value(input_value: Any, name: str) -> Any:
-    """Read ONE field off a dict-or-dataclass input; ``None`` when absent (DRY review C6).
+    """Read ONE field off a dict-or-dataclass input; ``None`` when absent.
 
     The single-field sibling of ``iter_input_items``: the dict-vs-dataclass
     sniff (``.get`` vs ``getattr``) lives in exactly one module - this one,

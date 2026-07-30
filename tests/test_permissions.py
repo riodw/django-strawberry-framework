@@ -830,7 +830,7 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     # the queryset the hook receives carries the load-bearing alias. Observing that
     # REAL RHS - rather than reconstructing a fresh ``.using(result.db)`` queryset in
     # the assertion, which would still pass against a broken default-alias build - is
-    # what actually pins Decision 8 (feedback2 M1).
+    # what actually pins Decision 8.
     received_dbs = []
 
     def _record_alias_hook(cls, qs, info):
@@ -1841,7 +1841,7 @@ def test_fields_bare_string_raises():
 
 
 def test_fields_non_iterable_raises_configuration_error():
-    """``fields=1`` (a non-iterable) raises ConfigurationError, not a raw TypeError (feedback M2).
+    """``fields=1`` (a non-iterable) raises ConfigurationError, not a raw TypeError.
 
     ``set(1)`` would escape as ``TypeError: 'int' object is not iterable`` - harder
     for a consumer to catch consistently and silent about the field-name-iterable
@@ -1858,7 +1858,7 @@ def test_fields_non_iterable_raises_configuration_error():
 
 
 def test_fields_unhashable_entry_raises_configuration_error():
-    """``fields=[["item"]]`` (unhashable entry) raises ConfigurationError, not a raw TypeError (feedback M2).
+    """``fields=[["item"]]`` (unhashable entry) raises ConfigurationError, not a raw TypeError.
 
     A nested list iterates fine but is not a field-name string; the ``list``-first
     validation catches it on the string check before any ``set(...)`` hashing, so
@@ -1875,7 +1875,7 @@ def test_fields_unhashable_entry_raises_configuration_error():
 
 
 def test_fields_non_string_entry_raises_configuration_error():
-    """``fields=[1]`` raises a clear "must be field-name strings" error, not a confusing name diff (feedback M2).
+    """``fields=[1]`` raises a clear "must be field-name strings" error, not a confusing name diff.
 
     Before the string check, ``set([1]) - cascadable`` surfaced "[1] ... are not
     cascadable" - implying ``1`` is a (misspelled) field name. The dedicated string
@@ -1927,7 +1927,7 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
     the suite's ``filterwarnings = error`` policy (pytest.ini) would turn any such
     warning into a hard error, so a leaked coroutine fails this test by construction.
 
-    The message carries the *cascade-specific* recourse (feedback M1): make the
+    The message carries the *cascade-specific* recourse: make the
     target hook sync, or scope ``fields=`` to skip the async-hooked edge. It must
     NOT reach for the Relay-surface wording, because ``aapply_cascade_permissions``
     wraps this same sync walk and cannot await an async hook either - pointing a
@@ -2501,7 +2501,7 @@ class _StaffOnlyItemFilter(FilterSet):
 
     Lets the gate-denial test run over an ``Item`` queryset the cascade genuinely
     narrows (through the non-null ``category`` edge), rather than the chain-top
-    ``Category`` whose direct cascade is a no-op (feedback2 M2).
+    ``Category`` whose direct cascade is a no-op.
     """
 
     class Meta:
@@ -2613,7 +2613,7 @@ def test_gate_denial_no_existence_leak():
     private categories, so an ``Item`` under a private category is dropped by the
     cascade itself. (The earlier shape cascaded over ``Category`` - the chain top,
     whose direct cascade is a no-op - so the denial assertion passed without any
-    narrowing ever happening; feedback2 M2.)
+    narrowing ever happening.)
     """
     _make_type("LeakCategoryType", Category, get_queryset=_exclude_private)
     item_type = _make_type("LeakItemType", Item)

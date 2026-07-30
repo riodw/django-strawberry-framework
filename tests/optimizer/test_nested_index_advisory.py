@@ -157,8 +157,7 @@ class _IdxChildPartial(models.Model):
 
     PostgreSQL uses a partial index only for queries whose predicate implies its
     condition; the general nested window does not, so its exact-column shape must
-    NOT be read as covering (the P2-3 false-coverage defect) - it leaves absence
-    UNPROVEN instead.
+    NOT be read as covering - it leaves absence UNPROVEN instead.
     """
 
     parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="partial")
@@ -182,8 +181,7 @@ class _IdxChildUniqueConstraint(models.Model):
 
     A unique constraint materializes a usable ascending btree, so an exact-column
     one must be recognized as covering - a consumer that already declared it must
-    NOT be told to create the same physical index again (the P2-3 false-absence
-    defect).
+    NOT be told to create the same physical index again.
     """
 
     parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uniqc")
@@ -518,7 +516,7 @@ class TestEveryBackendSupportsIndexColumnOrdering:
 class TestConcreteOrderTerms:
     """``_concrete_order_terms`` is tri-state: full terms, or ``None`` when any is not local.
 
-    The P2 fix moves the fail-soft tri-state upstream to ORDER parsing: any term
+    The fail-soft tri-state lives in ORDER parsing: any term
     that is not a local concrete ``(attname, direction)`` (a related span, an
     expression, an alias, an unresolvable name) makes the SQL order only
     partially understood, so the helper returns ``None`` and the advisory stays
@@ -559,7 +557,7 @@ class TestConcreteOrderTerms:
     def test_nulls_first_placement_is_unknown(self) -> None:
         """An ``OrderBy`` with explicit ``nulls_first`` is not index-provable -> ``None``.
 
-        The P2 fix: ``title ASC NULLS FIRST`` cannot be proven served by a plain
+        ``title ASC NULLS FIRST`` cannot be proven served by a plain
         ``Meta.indexes`` term (default backend NULL placement), so the whole order
         is UNKNOWN rather than collapsing to a bare ``("title", False)``.
         """
@@ -630,7 +628,7 @@ class TestIndexCoverage:
     def test_partial_index_is_not_universally_covered(self) -> None:
         """A PARTIAL exact-column index leaves absence UNPROVEN -> unknown, never covered.
 
-        The P2-3 fix: a partial index (carrying a ``condition``) is uninspectable,
+        A partial index (carrying a ``condition``) is uninspectable,
         so the model that has ONLY a partial index on the right columns is
         ``unknown`` rather than ``covered`` - the general page cannot rely on it.
         """
@@ -642,8 +640,8 @@ class TestIndexCoverage:
     def test_unconditional_unique_constraint_covers(self) -> None:
         """An exact-column unconditional ``UniqueConstraint`` covers the window shape.
 
-        The P2-3 fix: a consumer who already declared the composite unique
-        constraint must NOT be warned to create the same physical index again.
+        A consumer who already declared the composite unique constraint must
+        NOT be warned to create the same physical index again.
         """
         assert (
             _index_coverage(
@@ -668,7 +666,7 @@ class TestIndexCoverage:
     def test_opclass_unique_constraint_is_unknown(self) -> None:
         """A unique constraint with non-default opclasses is uninspectable -> unknown.
 
-        The ``UniqueConstraint.opclasses`` escape (P2): an exact-column unique
+        The ``UniqueConstraint.opclasses`` escape: an exact-column unique
         constraint whose opclasses are non-default would otherwise be read as an
         ordinary ascending B-tree and falsely suppress the advisory - the same
         capability gate ``_index_leading_terms`` applies to ``Index.opclasses``.
@@ -821,7 +819,7 @@ class TestAdviseCompositeIndex:
     def test_expression_only_index_suppresses_warning(self, caplog) -> None:
         """An uninspectable expression index leaves absence UNPROVEN -> no warning.
 
-        The P2 fail-soft contract: ``_index_coverage`` returns ``unknown`` for
+        The fail-soft contract: ``_index_coverage`` returns ``unknown`` for
         the expression-only model, so the advisory - tested end to end here, not
         at the intermediate helper - must stay silent rather than emit a loud
         false positive.
@@ -893,7 +891,7 @@ class TestAdviseCompositeIndex:
     def test_expression_order_is_silent(self, caplog) -> None:
         """An expression order term (``Lower("title")``) keeps the advisory SILENT.
 
-        The P2 fix: the effective order ``(Lower("title"), "id")`` is only
+        The effective order ``(Lower("title"), "id")`` is only
         partially understood, so ``_concrete_order_terms`` returns ``None`` and
         the advisory must neither warn nor claim coverage from the ``id`` suffix.
         Before the fix the expression was dropped and ``(parent_id, id)`` was
@@ -907,7 +905,7 @@ class TestAdviseCompositeIndex:
     def test_related_span_order_is_silent(self, caplog) -> None:
         """A related-span order term (``parent__title``) keeps the advisory SILENT.
 
-        Same P2 fail-soft as the expression case: a ``__``-spanning term is not a
+        Same fail-soft as the expression case: a ``__``-spanning term is not a
         local concrete column, so the SQL order is only partially understood and
         no coverage claim (nor a suffix-only ``(parent_id, id)`` recommendation)
         may be made for this plan shape.
@@ -918,7 +916,7 @@ class TestAdviseCompositeIndex:
 
     @override_settings(DEBUG=True)
     def test_nulls_placement_order_is_silent(self, caplog) -> None:
-        """An explicit ``NULLS FIRST`` order term keeps the advisory SILENT (P2-2).
+        """An explicit ``NULLS FIRST`` order term keeps the advisory SILENT.
 
         ``title ASC NULLS FIRST`` is not index-provable, so the order is UNKNOWN
         and the advisory neither warns nor declares ``(parent_id, title, id)``
@@ -934,7 +932,7 @@ class TestAdviseCompositeIndex:
 
     @override_settings(DEBUG=True)
     def test_equality_column_in_order_head_is_stripped_and_covered(self, caplog) -> None:
-        """An order LED by the equality column is served by ``(parent_id, title, id)`` (P2-3).
+        """An order LED by the equality column is served by ``(parent_id, title, id)``.
 
         The window makes ``parent_id`` constant per partition, so ordering by
         ``parent_id, title, id`` is effectively ``title, id`` within a partition.
@@ -963,7 +961,7 @@ class TestAdviseCompositeIndex:
 
     @override_settings(DEBUG=True)
     def test_unique_constraint_cover_is_silent(self, caplog) -> None:
-        """An exact composite ``UniqueConstraint`` covers the window -> no duplicate warning (P2-3)."""
+        """An exact composite ``UniqueConstraint`` covers the window -> no duplicate warning."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(
             _IdxChildUniqueConstraint,
@@ -981,14 +979,14 @@ class TestAdviseCompositeIndex:
 
     @override_settings(DEBUG=True)
     def test_partial_index_only_is_silent(self, caplog) -> None:
-        """A model whose only exact-column index is PARTIAL leaves absence unproven -> silent (P2-3)."""
+        """A model whose only exact-column index is PARTIAL leaves absence unproven -> silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildPartial, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
     def test_repeated_plan_shape_warns_once(self, caplog) -> None:
-        """The SAME plan shape rebuilt every request warns at most once (P3 dedup).
+        """The SAME plan shape rebuilt every request warns at most once.
 
         A request-scoped plan (custom ``get_queryset``) is excluded from the
         cross-request plan cache, so ``plan_connection_relation`` re-runs the
@@ -1044,7 +1042,7 @@ class TestAdviseCompositeIndex:
 
 @pytest.mark.django_db
 class TestAdvisoryDeferredUntilWindowAccepted:
-    """P3-2: the field-static advisory fires only after a strategy ACCEPTS a window.
+    """The field-static advisory fires only after a strategy ACCEPTS a window.
 
     A public consumer strategy may refuse every window (the connection then falls
     back per-parent); advising a composite WINDOW index for a backend that never
@@ -1140,7 +1138,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         caplog.set_level("WARNING", logger=optimizer_logger.name)
 
         # Refuses every window -> no window planned -> per-parent fallback, and NO
-        # advisory (the P3-2 deferral): the page still resolves correctly.
+        # advisory (it is deferred until acceptance): the page still resolves correctly.
         self._reset_type_caches()
         refused = self._shelf_books_schema(self._RefuseEveryWindow()).execute_sync(self._QUERY)
         assert refused.errors is None, refused.errors

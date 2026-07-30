@@ -10,7 +10,7 @@ shape before it was single-sited here:
 
 New optional-import handling (a partially-installed extra, a sidecar
 package absent from a build) belongs here, not inline at a fourth call
-site. ``import_attr`` (DRY review B2) is the STRICT sibling for internal
+site. ``import_attr`` is the STRICT sibling for internal
 deferred-import seams where a failure must propagate.
 """
 
@@ -57,7 +57,7 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
 
 
 def import_attr(module_path: str, attr_name: str) -> Any:
-    """Import ``module_path`` (STRICT) and return its ``attr_name`` (DRY review B2).
+    """Import ``module_path`` (STRICT) and return its ``attr_name``.
 
     The strict member of the family: a broken import propagates (unlike the
     best-effort ``import_attr_if_importable``, which would MASK a broken

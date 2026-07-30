@@ -61,10 +61,10 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 # below, so it is never a real module global; ruff's F822 (undefined name in
 # ``__all__``) is a false positive here. Listing it is deliberate: ``from
 # ...routers import *`` should opt into the router and thus the channels guard
-# (spec-041 finding P2.6).
+# (spec-041).
 __all__ = ("DjangoGraphQLProtocolRouter",)  # noqa: F822 - PEP 562 lazy export
 
-# The single channels-ABSENT install hint (spec-041 Decision 5 / Helper-reuse D2):
+# The single channels-ABSENT install hint (spec-041 Decision 5):
 # names the verified floor (place 2 of the three-places-that-must-agree; place 1
 # is the ``channels[daphne]>=4.3.2`` dev-group row, place 3 is the spec's Risks
 # note). One floor covers the package's whole advertised Django range through 6.0.
@@ -74,7 +74,7 @@ _CHANNELS_INSTALL_HINT = (
 )
 
 # Present-but-incompatible builder failures get their OWN actionable messages
-# (spec-041 finding P1.3), split by which half of the import boundary broke so a
+# (spec-041), split by which half of the import boundary broke so a
 # broken Strawberry install is never misreported as a missing-channels problem.
 _CHANNELS_BROKEN_HINT = (
     "DjangoGraphQLProtocolRouter could not import its Channels composition pieces even "
@@ -123,7 +123,7 @@ _UNUSABLE_WEBSOCKET_CONSUMER_HINT = (
 # The factory half of that seam, spelled once and shared by BOTH of its
 # construction-time rejections (the calling convention and the returned object) -
 # a consumer who got one of them wrong needs the same whole contract restated
-# either way (spec-046 Decision 11; review High 3).
+# either way (spec-046 Decision 11).
 _FACTORY_CONTRACT_HINT = (
     "A websocket_consumer_class factory is invoked ONCE, at router construction, as "
     "`factory(schema=schema)`, and must return the ASGI application the WebSocket route "
@@ -200,8 +200,8 @@ def _factory_application(factory: Any, *, schema: BaseSchema) -> Any:
     The factory shape's whole contract is enforced here, at CONSTRUCTION, because
     the alternative is a value that is not an ASGI application being installed as
     a URL route callback and failing on the first matching handshake, deep inside
-    Channels' routing, with no mention of the seam that produced it (review High
-    3). Two rejections, both ``ConfigurationError``:
+    Channels' routing, with no mention of the seam that produced it. Two rejections, both
+    ``ConfigurationError``:
 
     1. **The calling convention.** Bound with ``inspect.signature(...).bind``
        BEFORE the call rather than by catching ``TypeError`` around it: a

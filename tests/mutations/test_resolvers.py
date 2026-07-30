@@ -6,10 +6,10 @@ Mutation`` over a finalized schema (per the Slice-3 boundary: the live products
 write surface + the ``CaptureQueriesContext`` assertion are Slice 4). Fixtures:
 
 - the realistic products ``Item`` / ``Category`` (FK + ``unique_item_per_category``)
-  cover the validation-envelope, ``"__all__"`` sentinel, AR-H2 partial-constraint,
+  cover the validation-envelope, ``"__all__"`` sentinel, partial-constraint,
   wrong-type ``GlobalID``, hidden-row, re-fetch-skips-visibility, and the
   sync/async/transaction cases - all over real DB tables;
-- the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M) cover AR-M1 M2M
+- the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M) cover the M2M
   replace / clear / omit, which products cannot (no M2M model).
 
 Each test seeds rows inline (library acceptance idiom) or with the products
@@ -124,11 +124,11 @@ def _build_item_schema(
 
     ``item_get_queryset`` injects a visibility hook on the ``Item`` primary type;
     ``category_get_queryset`` does the same on the ``Category`` primary type so the FK
-    relation-visibility check (feedback P1) can be driven. Optional ``input_cls`` /
+    relation-visibility check can be driven. Optional ``input_cls`` /
     ``partial_input_cls`` thread a consumer ``Meta.input_class`` /
-    ``Meta.partial_input_class`` onto the create / update mutation so the CR-2 merge is
-    exercised end-to-end; omitted, the generated inputs are used. One builder for all
-    products-mutation resolver tests (DRY-4).
+    ``Meta.partial_input_class`` onto the create / update mutation so the consumer-input
+    merge is exercised end-to-end; omitted, the generated inputs are used. One builder
+    for all products-mutation resolver tests.
     """
 
     category_body: dict = {
@@ -263,7 +263,7 @@ def test_delete_happy_path_returns_snapshot_and_removes_row():
     assert res.errors is None, res.errors
     node = res.data["deleteItem"]["node"]
     assert node["name"] == "Doomed"
-    # The deleted node id is preserved for cache eviction (feedback P1): it decodes
+    # The deleted node id is preserved for cache eviction: it decodes
     # to the ORIGINAL pk even though the row is gone. The deletion runs against the
     # located instance, so Django's delete()-nulls-pk never touches this snapshot.
     assert relay.GlobalID.from_id(node["id"]).node_id == str(item.pk)
@@ -272,7 +272,7 @@ def test_delete_happy_path_returns_snapshot_and_removes_row():
 
 @pytest.mark.django_db
 def test_delete_snapshot_materializes_relation_before_delete():
-    """The delete snapshot carries the selected relation, loaded before ``delete()`` (AR-M5/Medium-2)."""
+    """The delete snapshot carries the selected relation, loaded before ``delete()``."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     item = product_models.Item.objects.create(name="Doomed", category=cat)
@@ -284,7 +284,7 @@ def test_delete_snapshot_materializes_relation_before_delete():
 
 
 # ---------------------------------------------------------------------------
-# Custom ``relay.NodeID`` write-side (feedback #1)
+# Custom ``relay.NodeID`` write-side
 #
 # When a primary type encodes a NON-pk column as its Relay id
 # (``name: relay.NodeID[str]``), the GlobalID a client holds carries that column's
@@ -349,7 +349,7 @@ def _build_category_node_schema():
 
 @pytest.mark.django_db
 def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
-    """A write through a custom ``relay.NodeID[str]`` updates the NAME-matched row, not the pk-coincident one (feedback #1).
+    """A write through a custom ``relay.NodeID[str]`` updates the NAME-matched row, not the pk-coincident one.
 
     ``CategoryNode`` encodes the non-pk ``name`` column as its Relay id, so the
     GlobalID a client holds carries the ``name`` string. The decoy is seeded so its
@@ -383,7 +383,7 @@ def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
 
 @pytest.mark.django_db
 def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
-    """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row, not the pk-coincident one (feedback #1).
+    """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row, not the pk-coincident one.
 
     The delete twin of the update case: the located instance comes from the resolved
     real pk, so deleting via a GlobalID whose payload is the target's ``name`` removes
@@ -437,7 +437,7 @@ def test_unique_constraint_caught_by_validate_constraints_keys_all_sentinel():
 
 @pytest.mark.django_db
 def test_partial_update_constraint_collision_keeps_unprovided_co_member(monkeypatch):
-    """Updating only ``name`` to a taken value under the same category fails (AR-H2)."""
+    """Updating only ``name`` to a taken value under the same category fails."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     product_models.Item.objects.create(name="Taken", category=cat)
@@ -453,7 +453,7 @@ def test_partial_update_constraint_collision_keeps_unprovided_co_member(monkeypa
 
 
 def test_unprovided_exclude_keeps_constrained_co_member_drops_unrelated():
-    """``_unprovided_exclude`` pins the AR-H2 carve-out directly on ``Item``.
+    """``_unprovided_exclude`` pins the constrained-co-member carve-out on ``Item``.
 
     A ``name``-only provided set keeps ``category`` OUT of the exclude set (the two
     co-participate in ``unique_item_per_category``) while ``description`` /
@@ -481,8 +481,8 @@ def test_coerce_lookup_id_rejects_non_globalid():
     server-side-decode contract). A raw pk string carries no type slot to check
     against the target model, and a malformed string cannot decode at all, so both
     are rejected as a ``FieldError`` on ``id`` BEFORE any pk lookup - never coerced
-    to a bare pk that would skip the AR-H4 type guard or raise a Django coercion
-    error at ``.get(pk=...)`` (feedback #1). ``coerce_lookup_id`` is always called
+    to a bare pk that would skip the relation type guard or raise a Django coercion
+    error at ``.get(pk=...)``. ``coerce_lookup_id`` is always called
     with the mutation's resolved primary type, so this unit pin passes a real bound
     ``ItemT`` (the shared ``decode_model_global_id`` reads ``target_type``'s model
     up front); decode fails on the malformed input with no pk lookup or DB read.
@@ -502,7 +502,7 @@ def test_coerce_lookup_id_rejects_non_globalid():
 
 @pytest.mark.django_db
 def test_integrity_error_race_fallback_via_mocked_save():
-    """A save-time ``IntegrityError`` race maps to the envelope, not a 500 (Major-2)."""
+    """A save-time ``IntegrityError`` race maps to the envelope, not a 500."""
     schema, (CategoryT, _ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     with mock.patch.object(
@@ -521,18 +521,18 @@ def test_integrity_error_race_fallback_via_mocked_save():
     assert payload["node"] is None
     assert payload["errors"][0]["field"] == NON_FIELD_ERROR_KEY
     # The catch is broad (``except IntegrityError``), so the message is the honest
-    # superset, not an over-claimed "uniqueness" (feedback CR-3).
+    # superset, not an over-claimed "uniqueness".
     assert payload["errors"][0]["messages"] == ["A database constraint was violated."]
 
 
 @pytest.mark.django_db
 def test_wrong_type_globalid_yields_field_error_no_cross_model_lookup():
-    """An ``Item`` GlobalID passed to ``categoryId`` -> ``FieldError`` on ``categoryId`` (AR-H4)."""
+    """An ``Item`` GlobalID passed to ``categoryId`` -> ``FieldError`` on ``categoryId``."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     item = product_models.Item.objects.create(name="Existing", category=cat)
     # An Item GlobalID with the SAME numeric pk as a real Category would silently
-    # succeed under a naive pk strip; AR-H4 requires the type check to reject it.
+    # succeed under a naive pk strip; the type check must reject it.
     wrong_gid = global_id_for(ItemT, item.pk)
     res = schema.execute_sync(
         _CREATE,
@@ -546,7 +546,7 @@ def test_wrong_type_globalid_yields_field_error_no_cross_model_lookup():
 
 @pytest.mark.django_db
 def test_relation_unresolvable_type_global_id_yields_field_error():
-    """A well-formed relation ``GlobalID`` naming an unregistered type -> ``FieldError`` (AR-H4 / feedback #7).
+    """A well-formed relation ``GlobalID`` naming an unregistered type -> ``FieldError``.
 
     Distinct from the wrong-MODEL case (which decodes successfully then mismatches):
     here ``decode_global_id`` itself raises (the ``type_name`` resolves to no
@@ -567,10 +567,10 @@ def test_relation_unresolvable_type_global_id_yields_field_error():
 
 @pytest.mark.django_db
 def test_update_uncoercible_pk_in_wellformed_id_is_not_found_no_crash():
-    """A well-formed ``id:`` whose ``node_id`` is not a valid pk literal -> not-found, no crash (CR-1).
+    """A well-formed ``id:`` whose ``node_id`` is not a valid pk literal -> not-found, no crash.
 
     ``decode_global_id`` validates payload SHAPE only, so a right-type ``ItemT``
-    GlobalID can still carry ``node_id="abc"`` for an integer pk. Before CR-1 that
+    GlobalID can still carry ``node_id="abc"`` for an integer pk. Unguarded, that
     bare ``"abc"`` reached ``.get(pk="abc")`` and Django raised a top-level
     ``ValueError`` (``"Field 'id' expected a number..."``) leaking the pk column
     type. Now it is coerced through the pk field and treated as not-found - a
@@ -580,16 +580,16 @@ def test_update_uncoercible_pk_in_wellformed_id_is_not_found_no_crash():
     schema, (_CategoryT, ItemT) = _build_item_schema()
     bad_id = global_id_for(ItemT, "abc")  # well-formed ItemT id, non-numeric node_id
     res = schema.execute_sync(_UPDATE, variable_values={"id": bad_id, "d": {"name": "X"}})
-    # NOT a top-level GraphQLError (CR-1) - an in-band not-found FieldError on ``id``.
+    # NOT a top-level GraphQLError - an in-band not-found FieldError on ``id``.
     assert_mutation_field_error(res, "updateItem", "id")
 
 
 @pytest.mark.django_db
 def test_create_relation_uncoercible_pk_is_field_error_no_crash():
-    """A right-type relation ``GlobalID`` with an uncoercible ``node_id`` -> ``FieldError`` (CR-1).
+    """A right-type relation ``GlobalID`` with an uncoercible ``node_id`` -> ``FieldError``.
 
-    A ``CategoryT`` GlobalID carrying ``node_id="abc"`` passes the AR-H4 type check
-    (it IS a Category id) but ``"abc"`` is not a valid integer pk. Before CR-1 it
+    A ``CategoryT`` GlobalID carrying ``node_id="abc"`` passes the relation type
+    check (it IS a Category id) but ``"abc"`` is not a valid integer pk. Unguarded it
     reached ``filter(pk__in=["abc"])`` and raised a top-level ``ValueError``; now it
     is coerced and mapped to the uniform relation ``FieldError`` on ``categoryId``
     (identifies no row - "not found"), never a crash. No row is written.
@@ -600,18 +600,18 @@ def test_create_relation_uncoercible_pk_is_field_error_no_crash():
         _CREATE,
         variable_values={"d": {"name": "X", "categoryId": bad_cat}},
     )
-    # NOT a top-level GraphQLError (CR-1) - an in-band relation FieldError.
+    # NOT a top-level GraphQLError - an in-band relation FieldError.
     assert_mutation_field_error(res, "createItem", "categoryId")
     assert product_models.Item.objects.filter(name="X").count() == 0
 
 
 @pytest.mark.django_db
 def test_globalid_relation_override_flows_through_visibility_contract():
-    """A ``GlobalID`` relation override is still relation-visibility-checked (AR-M2 / Decision 10).
+    """A ``GlobalID`` relation override is still relation-visibility-checked (Decision 10).
 
     The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
     relation override to keep the generated ``relay.GlobalID`` id type precisely so the
-    override CANNOT bypass the AR-H4 type-check / Decision-10 visibility contract a
+    override CANNOT bypass the id type-check / Decision-10 visibility contract a
     raw-pk override would have skipped. This pins the end-to-end guarantee: a
     ``createItem`` whose ``categoryId`` names a ``Category`` hidden by
     ``Category.get_queryset`` is a ``FieldError`` on ``categoryId`` (hidden
@@ -667,7 +667,7 @@ def test_hidden_row_update_is_not_found_no_existence_leak():
 
 @pytest.mark.django_db
 def test_refetch_skips_visibility_filter_after_authorized_write():
-    """A create of an ``is_private``-shaped row still returns its object (Medium-1).
+    """A create of an ``is_private``-shaped row still returns its object.
 
     The post-write re-fetch is by pk WITHOUT the visibility filter, so an
     authorized write of a row the ``get_queryset`` would hide still round-trips the
@@ -729,7 +729,7 @@ def test_refetch_skips_visibility_filter_after_authorized_write():
 
 @pytest.mark.django_db(transaction=True)
 def test_transaction_rolls_back_when_post_save_step_fails():
-    """A failure after ``save()`` inside the transaction rolls the write back (AR-M4)."""
+    """A failure after ``save()`` inside the transaction rolls the write back."""
     schema, (CategoryT, _ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     # Force the post-save snapshot step to blow up so the atomic block aborts.
@@ -808,7 +808,7 @@ async def test_async_pipeline_create_happy_path():
 
     ``transaction=True`` is load-bearing, not cosmetic. The async pipeline runs
     its whole ORM body - the ``transaction.atomic()`` write included - inside one
-    ``sync_to_async(thread_sensitive=True)`` call (AR-M4), so the ``save()``
+    ``sync_to_async(thread_sensitive=True)`` call, so the ``save()``
     commits on asgiref's executor-thread connection, NOT the main-thread
     connection the plain ``django_db`` marker wraps in a rollback transaction.
     Under plain ``django_db`` that committed write escapes the per-test rollback
@@ -843,14 +843,14 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
     The durable regression pin for FV-1. ROOT CAUSE (bisected, not the
     ContextVar-lifecycle hypothesis): the async pipeline runs its whole ORM body -
     the ``transaction.atomic()`` write included - inside one
-    ``sync_to_async(thread_sensitive=True)`` call (AR-M4), so the ``save()``
+    ``sync_to_async(thread_sensitive=True)`` call, so the ``save()``
     commits on asgiref's executor-thread connection, NOT the main-thread
     connection that the plain ``django_db`` marker wraps in a rollback
     transaction. Under plain ``django_db`` that committed row escapes per-test
     rollback and persists into the NEXT test's database. The read-side optimizer
     suite (``test_extension.py``) then plans a relation whose visibility-narrowed
     child queryset does not match the leaked row's category, and the forward-FK
-    resolver re-raises ``RelatedObjectDoesNotExist`` - the FV-1 symptom. The
+    resolver re-raises ``RelatedObjectDoesNotExist``. The
     optimizer's per-execution ContextVars are NOT leaked (``on_execute`` resets
     cleanly across the ``sync_to_async`` hop - verified); the corruption is leaked
     ROWS, a test-isolation defect cured by the suite-wide ``transaction=True``
@@ -981,7 +981,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
 
 
 # ---------------------------------------------------------------------------
-# Library Book/Genre M2M fixtures (AR-M1 replace/clear/omit)
+# Library Book/Genre M2M fixtures (replace/clear/omit)
 # ---------------------------------------------------------------------------
 
 
@@ -989,7 +989,7 @@ def _build_book_schema(*, genre_get_queryset=None):
     """Declare Book/Genre/Shelf primaries + create/update mutations over the Book M2M.
 
     ``genre_get_queryset`` optionally installs a visibility hook on the ``Genre``
-    primary type so the M2M relation-visibility check (feedback P1) can be driven.
+    primary type so the M2M relation-visibility check can be driven.
     """
 
     genre_body: dict = {
@@ -1044,7 +1044,7 @@ def _make_branch_shelf():
 
 @pytest.mark.django_db
 def test_m2m_replace_on_provide():
-    """A provided genre list replaces the M2M set on create (AR-M1)."""
+    """A provided genre list replaces the M2M set on create."""
     schema, (GenreT, ShelfT, _BookT) = _build_book_schema()
     shelf = _make_branch_shelf()
     g1 = library_models.Genre.objects.create(name="Sci-Fi")
@@ -1068,7 +1068,7 @@ def test_m2m_replace_on_provide():
 
 @pytest.mark.django_db
 def test_m2m_clear_on_empty_and_unchanged_on_omit():
-    """A provided empty list clears the M2M; an omitted M2M leaves it unchanged (AR-M1)."""
+    """A provided empty list clears the M2M; an omitted M2M leaves it unchanged."""
     schema, (_GenreT, _ShelfT, BookT) = _build_book_schema()
     shelf = _make_branch_shelf()
     g1 = library_models.Genre.objects.create(name="Sci-Fi")
@@ -1104,7 +1104,7 @@ _CREATE_BOOK = (
 
 @pytest.mark.django_db
 def test_m2m_hidden_related_id_is_field_error():
-    """An M2M id for a row the related type hides -> ``FieldError`` on the M2M field (feedback P1).
+    """An M2M id for a row the related type hides -> ``FieldError`` on the M2M field.
 
     ``GenreT.get_queryset`` hides the ``"Secret"`` genre, so a ``createBook`` whose
     ``genres`` list includes the hidden genre's id is a ``FieldError`` on ``genres``
@@ -1137,7 +1137,7 @@ def test_m2m_hidden_related_id_is_field_error():
 
 @pytest.mark.django_db
 def test_m2m_explicit_null_is_field_error():
-    """An explicit ``null`` M2M value -> ``FieldError`` on the M2M field, not a resolver crash (feedback P2).
+    """An explicit ``null`` M2M value -> ``FieldError`` on the M2M field, not a resolver crash.
 
     The generated optional M2M field is ``list[<id>] | None``, so a client can send
     ``genres: null``. ``null`` is not a valid replace-set (the contract is
@@ -1158,7 +1158,7 @@ def test_m2m_explicit_null_is_field_error():
 
 @pytest.mark.django_db
 def test_m2m_wrong_type_id_is_field_error():
-    """A wrong-type ``GlobalID`` anywhere in the M2M list -> ``FieldError`` on the M2M field (AR-H4).
+    """A wrong-type ``GlobalID`` anywhere in the M2M list -> ``FieldError`` on the M2M field.
 
     A ``Shelf`` id passed where a ``Genre`` id is expected is type-checked against
     the M2M target (``Genre``) and rejected as a ``FieldError`` on ``genres``,
@@ -1182,7 +1182,7 @@ def test_m2m_wrong_type_id_is_field_error():
 
 @pytest.mark.django_db
 def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
-    """A right-type M2M id with an uncoercible ``node_id`` -> ``FieldError`` on the M2M field (CR-1).
+    """A right-type M2M id with an uncoercible ``node_id`` -> ``FieldError`` on the M2M field.
 
     A ``GenreT`` GlobalID carrying ``node_id="abc"`` is a valid Genre id by type but
     ``"abc"`` is not a valid integer pk. The whole-set visibility query coerces each
@@ -1202,7 +1202,7 @@ def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
             },
         },
     )
-    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
+    assert res.errors is None, res.errors  # NOT a top-level GraphQLError
     payload = res.data["createBook"]
     assert payload["node"] is None
     assert [e["field"] for e in payload["errors"]] == ["genres"]
@@ -1210,7 +1210,7 @@ def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
 
 
 # ---------------------------------------------------------------------------
-# Choice-enum inputs reach Django as the raw choice value (feedback - bug 4)
+# Choice-enum inputs reach Django as the raw choice value
 #
 # A ``choices`` column resolves to a generated Strawberry ``Enum`` on BOTH the
 # read type and the write input (the symmetric wire contract), so the client's
@@ -1326,7 +1326,7 @@ def test_choice_enum_update_saves_raw_choice_value():
 
 
 # ---------------------------------------------------------------------------
-# Raw-pk (non-Relay target) M2M existence check (feedback - bug 5)
+# Raw-pk (non-Relay target) M2M existence check
 #
 # An M2M to a NON-Relay-Node target generates a raw-pk ``list[Int]`` input with no
 # GlobalID visibility contract. ``instance.<m2m>.set(pks)`` writes a through-table
@@ -1486,7 +1486,7 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
 
 
 # ---------------------------------------------------------------------------
-# Raw-pk (non-Relay target) relation VISIBILITY (feedback Finding 2)
+# Raw-pk (non-Relay target) relation VISIBILITY
 #
 # A relation to a NON-Relay-Node target generates a raw-pk input (no GlobalID). The
 # original decode visibility-checked only the GlobalID branch, so a raw-pk relation
@@ -1501,8 +1501,8 @@ def _build_book_raw_visibility_schema(*, genre_get_queryset=None, shelf_get_quer
     """Declare NON-Relay Genre + Shelf primaries so Book.genres (M2M) and Book.shelf (FK) are raw-pk.
 
     Optional ``genre_get_queryset`` / ``shelf_get_queryset`` install a visibility
-    hook on the related primary so the raw-pk visibility gap (feedback Finding 2)
-    can be driven end to end: a related row the hook hides must be a field-keyed
+    hook on the related primary so the raw-pk visibility gap can be driven end to
+    end: a related row the hook hides must be a field-keyed
     ``FieldError``, never silently attached.
     """
     type(
@@ -1733,8 +1733,8 @@ def test_raw_pk_relations_with_no_registered_primary_use_default_manager_existen
 
 
 # ---------------------------------------------------------------------------
-# Create-validation parity with Model.objects.create (feedback - empty-value
-# defaults #11) and naive-datetime tz-coercion (feedback #15).
+# Create-validation parity with Model.objects.create over empty-value defaults,
+# plus naive-datetime tz-coercion.
 #
 # ``ScalarSpecimen`` (scalars app) has ``payload = JSONField(default=dict)``
 # (``blank=False``) and ``occurred_at = DateTimeField()``. Neither is reachable
@@ -1779,7 +1779,7 @@ def _build_scalar_specimen_schema():
 
 @pytest.mark.django_db
 def test_create_omitting_empty_value_default_field_succeeds():
-    """Omitting a ``JSONField(default=dict)`` (blank=False) on create succeeds (feedback #11).
+    """Omitting a ``JSONField(default=dict)`` (blank=False) on create succeeds.
 
     The field is optional in the input (it has a default), so a client may omit it.
     Before the fix, ``full_clean`` validated the model's own empty default (``{}`` is
@@ -1810,7 +1810,7 @@ def test_create_omitting_empty_value_default_field_succeeds():
 
 @pytest.mark.django_db
 def test_create_naive_datetime_input_is_made_timezone_aware():
-    """A naive datetime input is coerced to an aware datetime on create (feedback #15).
+    """A naive datetime input is coerced to an aware datetime on create.
 
     Under ``USE_TZ=True`` a naive datetime would trigger Django's naive-datetime
     ``RuntimeWarning`` at save - which this suite's ``-W error`` config escalates to a
@@ -1839,13 +1839,13 @@ def test_create_naive_datetime_input_is_made_timezone_aware():
 
 
 # ---------------------------------------------------------------------------
-# Consumer input_class MERGE (spec-010 relation-override / AR-M2 / CR-2)
+# Consumer input_class MERGE (spec-010 relation-override)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 def test_create_through_merged_input_class_accepts_generated_remainder():
-    """A partial consumer ``input_class`` still accepts the generated ``categoryId`` and writes (CR-2).
+    """A partial consumer ``input_class`` still accepts the generated ``categoryId`` and writes.
 
     The merge fills the generated remainder, so a create supplying BOTH the
     consumer-customized ``name`` and the generated ``categoryId`` succeeds. Under
@@ -1872,7 +1872,7 @@ def test_create_through_merged_input_class_accepts_generated_remainder():
 
 @pytest.mark.django_db
 def test_update_through_merged_partial_input_class_accepts_generated_remainder():
-    """A partial consumer ``partial_input_class`` still accepts the generated fields and updates (CR-2)."""
+    """A partial consumer ``partial_input_class`` still accepts the generated fields and updates."""
 
     @strawberry.input
     class CustomItemPartial:
@@ -1892,13 +1892,13 @@ def test_update_through_merged_partial_input_class_accepts_generated_remainder()
 
 
 # ---------------------------------------------------------------------------
-# Scalar field named ``<x>_id`` regression (spec-036 M3-1 / L3-1)
+# Scalar field named ``<x>_id`` regression (spec-036)
 #
 # ``library.TaggedItem`` has a *scalar* ``object_id`` (a ``PositiveIntegerField``,
 # emitted by the input generator) AND a ``GenericForeignKey`` ``content_object``.
 # The decode index / provided-name mapping must NOT reverse ``object_id`` to a
-# relation field by a blind ``_id`` suffix strip (M3-1), and must NOT index the
-# GFK as a decode-able FK (L3-1). Both are reasoned from the relation field index,
+# relation field by a blind ``_id`` suffix strip, and must NOT index the
+# GFK as a decode-able FK. Both are reasoned from the relation field index,
 # not a string heuristic.
 # ---------------------------------------------------------------------------
 
@@ -1928,7 +1928,7 @@ def _build_tagged_item_schema():
 
 @pytest.mark.django_db
 def test_partial_update_validates_scalar_field_named_id_suffix():
-    """A scalar field literally named ``<x>_id`` IS validated on partial update (spec-036 M3-1).
+    """A scalar field literally named ``<x>_id`` IS validated on partial update (spec-036).
 
     ``TaggedItem.object_id`` is a scalar ``PositiveIntegerField``. A partial update
     providing an invalid value (``-5``) must surface as a field-keyed ``FieldError``
@@ -1970,7 +1970,7 @@ def test_partial_update_validates_scalar_field_named_id_suffix():
 
 
 def test_provided_attr_names_keeps_scalar_id_suffix_field():
-    """``_provided_attr_names`` keeps a scalar ``<x>_id`` field under its real name (spec-036 M3-1).
+    """``_provided_attr_names`` keeps a scalar ``<x>_id`` field under its real name (spec-036).
 
     The FK reversal is index-driven: ``content_type_id`` (a real FK attr) maps to
     ``content_type``, while ``object_id`` (a scalar) stays ``object_id`` - never
@@ -1985,7 +1985,7 @@ def test_provided_attr_names_keeps_scalar_id_suffix_field():
 
 
 def test_relation_field_index_excludes_generic_foreign_key():
-    """``_relation_field_index`` does not index a ``GenericForeignKey`` as a FK (spec-036 L3-1).
+    """``_relation_field_index`` does not index a ``GenericForeignKey`` as a FK (spec-036).
 
     A GFK reports ``is_relation=True`` but ``column=None`` / ``related_model=None``,
     so it must never enter ``fk_by_attr`` (where ``_decode_relation_id_set`` would
@@ -2341,12 +2341,12 @@ def test_validation_error_to_field_errors_non_dict_uses_all_key():
 
 
 # ---------------------------------------------------------------------------
-# Structured error codes + paths on the Django flat mapper (spec-039 rev6 #4 / #13)
+# Structured error codes + paths on the Django flat mapper (spec-039)
 # ---------------------------------------------------------------------------
 
 
 def test_validation_error_to_field_errors_preserves_django_codes_and_path():
-    """A Django ``ValidationError``'s ``.code``s -> ``codes``; field name -> ``path`` (#4 / #13)."""
+    """A Django ``ValidationError``'s ``.code``s -> ``codes``; field name -> ``path``."""
     from django.core.exceptions import ValidationError as DjangoValidationError
 
     from django_strawberry_framework.mutations.resolvers import validation_error_to_field_errors
@@ -2376,7 +2376,7 @@ def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
 
 
 # ---------------------------------------------------------------------------
-# Row locking on the update/delete locate (spec-039 rev6 #14, expanded in 0.0.14)
+# Row locking on the update/delete locate (spec-039, expanded in 0.0.14)
 # ---------------------------------------------------------------------------
 
 
@@ -2457,7 +2457,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch):
     ``router.db_for_write``) and published through the managed-transaction
     context; the pipeline's own atomic block - and its rollback - must ride the
     SAME alias, or a multi-db router write commits on the routed alias while
-    the rollback stays on ``default`` (spec-039 H6 gap).
+    the rollback stays on ``default``.
     """
     from unittest.mock import MagicMock, patch
 

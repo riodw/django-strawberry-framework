@@ -1,7 +1,7 @@
 """Pending relation records for definition-order-independent ``DjangoType`` finalization.
 
 This module owns the two scaffolding objects that close the import-order trap
-addressed by spec-014 H1: ``PendingRelation`` (a frozen dataclass capturing a
+addressed by spec-014: ``PendingRelation`` (a frozen dataclass capturing a
 relation field whose target ``DjangoType`` was not yet registered at collection
 time) and ``PendingRelationAnnotation`` (the sentinel installed in
 ``cls.__annotations__`` until the target type registers). The producer is

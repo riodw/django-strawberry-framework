@@ -46,7 +46,7 @@ def unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
     ``UnicodeEncodeError``. That is a ``ValueError`` the resolver does NOT map (it is
     neither the ``ValidationError`` ``full_clean`` raises nor the ``IntegrityError``
     ``save`` raises), so it escapes as a top-level GraphQL error with ``data: null``
-    instead of the field-keyed envelope (feedback - surrogate text leak). Reject it
+    instead of the field-keyed envelope. Reject it
     HERE, at decode, before any DB-bound work, as a ``FieldError`` naming the
     offending input field - the same in-band envelope every other input failure
     returns - so neither the unique-field ``validate_unique`` path nor the plain
@@ -101,7 +101,7 @@ def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
     INTEGER``). An uncoercible / out-of-range pk is treated as "identifies no
     row" - excluded from the existence query and so absent from the visible set,
     which makes it the same not-found ``relation_field_error`` as a genuinely
-    missing pk, never a backend crash (feedback - relation huge-pk crash).
+    missing pk, never a backend crash.
     """
     return coerce_field_value_or_none(related_model._meta.pk, pk)
 
@@ -112,7 +112,7 @@ def type_check_relation_id(
     graphql_name: str,
     related_model: type,
 ) -> tuple[Any, FieldError | None]:
-    """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch (spec-039 M3).
+    """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch.
 
     The "GlobalID -> ``decode_model_global_id`` (non-``OK`` -> uniform relation
     error) | raw pk -> ``coerce_relation_pk_or_none`` (``None`` -> uniform relation
@@ -150,7 +150,7 @@ def type_check_relation_id(
 
 
 def decode_scalar_leaf(graphql_name: str, value: Any) -> tuple[Any, FieldError | None]:
-    """Run the shared scalar leaf decode: text preflight, then choice unwrap (DRY review A6).
+    """Run the shared scalar leaf decode: text preflight, then choice unwrap.
 
     The two-step compose every write flavor runs on a provided scalar value -
     ``unencodable_text_error`` (an unstorable lone surrogate is a field-keyed
@@ -178,7 +178,7 @@ def decode_visible_relation(
     skip: Callable[[Any], bool],
     project: Callable[[Any], Any],
 ) -> tuple[Any, FieldError | None]:
-    """Decode ONE relation id to its visible, flavor-projected value (DRY review A1).
+    """Decode ONE relation id to its visible, flavor-projected value.
 
     The single-relation decode spine the form and serializer flavors share - and
     the owner of the **cross-flavor security invariant** that a writer must never
@@ -224,7 +224,7 @@ def decode_provided_fields(
     handlers: dict[str, Callable[[Any, Any], FieldError | None]],
     scalar_handler: Callable[[Any, Any], FieldError | None],
 ) -> FieldError | None:
-    """Route each provided input field by ``spec.kind`` through a handler map (DRY review A2).
+    """Route each provided input field by ``spec.kind`` through a handler map.
 
     The kind-dispatch decode loop the form and serializer flavors share: build
     the ``{spec.input_attr: spec}`` reverse map, walk the PROVIDED input fields
@@ -239,7 +239,7 @@ def decode_provided_fields(
 
     The model flavor's ``mutations/resolvers.py::_decode_relations`` is a
     near-parallel with a genuinely different key space (model attrs, the batched
-    id-set contract) and stays put (DRY review F5).
+    id-set contract) and stays put.
     """
     spec_by_attr = {spec.input_attr: spec for spec in specs}
     for python_name, value, _field in iter_provided_input_fields(data):

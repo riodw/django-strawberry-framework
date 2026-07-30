@@ -261,7 +261,7 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
     brackets. A non-iterable value (``fields=1``) or a non-string entry
     (``fields=[1]`` / ``fields=[["item"]]``) likewise raises ``ConfigurationError``
     naming the field-name-iterable contract rather than escaping as a raw
-    ``TypeError`` from ``set(...)`` (feedback M2).
+    ``TypeError`` from ``set(...)``.
     Otherwise every supplied name must be a cascadable edge. A name matching an
     *unsupported* forward relation (``GenericForeignKey`` / composite) raises
     the dedicated no-cascade-semantics error; other unknown or
@@ -282,7 +282,7 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
         # ``list`` (not ``set``) first: a non-iterable (``fields=1``) raises here,
         # while an iterable with unhashable entries (``fields=[["item"]]``) iterates
         # fine and is caught by the string check below -- so a malformed shape never
-        # escapes as a raw ``TypeError`` from ``set(...)`` (feedback M2).
+        # escapes as a raw ``TypeError`` from ``set(...)``.
         requested = list(fields)
     except TypeError as exc:
         raise ConfigurationError(

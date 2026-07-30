@@ -473,7 +473,7 @@ def test_orderset_normalize_input_delegates_to_module_helper():
 
 
 # ---------------------------------------------------------------------------
-# Pass-2 B1 coverage closure -- sets.py uncovered lines
+# sets.py edge-case branches
 # ---------------------------------------------------------------------------
 
 
@@ -635,13 +635,12 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 
 
 # =============================================================================
-# Row-preserving to-many ordering - aggregate, not fan-out JOIN (P1-B,
-# ``spec-030-connection_field-0_0_9`` review round)
+# Row-preserving to-many ordering - aggregate, not fan-out JOIN
 # =============================================================================
 
 
 def test_path_traverses_to_many_detects_multiplying_relations():
-    """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one (P1-B)."""
+    """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one."""
     from django_strawberry_framework.orders.sets import _path_traverses_to_many
 
     assert _path_traverses_to_many(Branch, "shelves__code") is True  # reverse FK
@@ -669,7 +668,7 @@ def test_path_traverses_to_many_is_cached():
 
 
 def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
-    """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly (P1-B)."""
+    """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly."""
     from django.db.models import Min
 
     class _MultBranchOrder(OrderSet):
@@ -709,7 +708,7 @@ def test_resolve_order_expressions_uses_max_for_descending_to_many():
 
 
 def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
-    """``_path_traverses_to_many`` returns False for unresolvable / generic / all-to-one paths (P1-B).
+    """``_path_traverses_to_many`` returns False for unresolvable / generic / all-to-one paths.
 
     Covers the three non-multiplying exits: an unresolvable segment
     (``FieldDoesNotExist``), a relation field with no concrete ``related_model``
@@ -729,7 +728,7 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
 
 @pytest.mark.django_db
 def test_orderset_apply_async_annotates_to_many_order():
-    """``apply_async`` builds the ``Min`` aggregate annotation for a to-many order (P1-B, async path).
+    """``apply_async`` builds the ``Min`` aggregate annotation for a to-many order (async path).
 
     The sync path's annotate step is covered by the live connection test; this
     pins the ``apply_async`` twin -- a reverse-FK (``shelves``) order flattens to
@@ -765,7 +764,7 @@ def test_orderset_apply_async_annotates_to_many_order():
 
 @pytest.mark.django_db
 def test_modelless_orderset_uses_queryset_model_for_to_many_order():
-    """A direct model-less orderset application still keeps the P1-B aggregate."""
+    """A direct model-less orderset application still keeps the row-preserving aggregate."""
     from django.db.models import Min
 
     class ShelfOrderML(OrderSet):

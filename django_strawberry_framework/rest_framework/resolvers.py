@@ -46,7 +46,7 @@ The serializer-specific invariants this module owns:
   the client sent, e.g. ``categoryId``). The generated input field exposes exactly
   ONE strategy-dependent shape (Decision 7 - a ``GlobalID`` for a Relay target,
   else the raw-pk scalar); the shared decode helper accepts BOTH only because
-  package tests drive the raw-pk / non-Relay branch by direct call (M1).
+  package tests drive the raw-pk / non-Relay branch by direct call.
 
 - **A relation ``GlobalID`` is decoded against the target type's RECORDED
   ``effective_globalid_strategy``** via ``decode_model_global_id`` (which takes the
@@ -56,7 +56,7 @@ The serializer-specific invariants this module owns:
   request).
 
 - **The serializer is constructed via the CONSTRUCTOR-ONLY ``get_serializer_kwargs``
-  hook + the framework merge** (Decision 8 step 4 / H3, hardened). The framework
+  hook + the framework merge** (Decision 8 step 4 / hardened). The framework
   builds the authoritative serializer ``data`` ITSELF - decoded client data plus the
   ``get_serializer_injected_data`` injection (whose keys must EXACTLY match
   ``Meta.injected_fields``) - then calls ``get_serializer_kwargs(info, data=<copy>,
@@ -83,7 +83,7 @@ The serializer-specific invariants this module owns:
   ``saved = serializer.save()`` via ``nonlocal`` - called EXACTLY ONCE). A save
   failure rolls the savepoint back BEFORE the exception converts into the
   envelope, so a custom ``save()`` that wrote rows then raised leaves NO partial
-  write. Routing is by exception CLASS (F2 / H2), all caught OUTSIDE the atomic
+  write. Routing is by exception CLASS, all caught OUTSIDE the atomic
   block: a DRF ``serializers.ValidationError``'s ``.detail`` -> the recursive
   flattener; a Django ``ValidationError`` -> the flat ``036`` mapper
   (``error_dict`` / ``messages``, NEVER ``.detail``); an ``IntegrityError`` ->
@@ -215,7 +215,7 @@ def _decode_relation_single(
     """Decode ONE relation id to its visible pk (mirrors the ``038`` form single decoder).
 
     The serializer coloring of the shared
-    ``utils/write_values.py::decode_visible_relation`` spine (DRY review A1):
+    ``utils/write_values.py::decode_visible_relation`` spine:
     type-check + pk coercion -> visible object (a hidden / missing / wrong-model
     / uncoercible id is the uniform field-keyed ``FieldError``, no existence
     leak) -> the pk projection (what DRF's ``PrimaryKeyRelatedField`` expects).
@@ -226,7 +226,7 @@ def _decode_relation_single(
     one clears). The generated GraphQL input field exposes only the one
     strategy-dependent shape (Decision 7); this helper accepts BOTH a ``GlobalID``
     and a raw pk because package tests drive the raw-pk / non-Relay branch by direct
-    call (M1).
+    call.
     """
     return decode_visible_relation(
         value,
@@ -246,7 +246,7 @@ def _decode_relation_multi(
     related_model: type,
     info: Any,
 ) -> tuple[Any, FieldError | None]:
-    """Decode an M2M ``list[<id>]`` to visible pks in ONE batched visibility query (spec-039 rev6 #3).
+    """Decode an M2M ``list[<id>]`` to visible pks in ONE batched visibility query.
 
     Type-checks + coerces every element FIRST (no per-element DB fetch, short-circuiting on the
     first structurally-bad id), then confirms the whole set's visibility in ONE ``pk__in`` query
@@ -285,7 +285,7 @@ def _decode_serializer_data(
 
     The top entry: decodes ``data`` against the bind-stashed top-level reverse map
     (``mutation_cls._input_field_specs``) via the recursive ``_decode_input_object`` (which
-    handles nested inputs, rev6 #17). A decode ``FieldError`` short-circuits.
+    handles nested inputs). A decode ``FieldError`` short-circuits.
     """
     return _decode_input_object(mutation_cls._input_field_specs, data, info)
 
@@ -297,7 +297,7 @@ def _decode_input_object(
     *,
     path_prefix: str = "",
 ) -> tuple[dict[str, Any], FieldError | None]:
-    """Decode ONE strawberry input dataclass into a serializer-field-keyed dict (spec-039 rev6 #17).
+    """Decode ONE strawberry input dataclass into a serializer-field-keyed dict.
 
     Walks the provided input fields (``UNSET`` stripped) and, using the per-field reverse map
     (``specs``, keyed by input attr), routes each value by ``kind`` to
@@ -308,8 +308,8 @@ def _decode_input_object(
       ``038`` invalid-Unicode preflight + choice-enum unwrap).
     - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked relation pk(s),
       type-checked against the relation's target model.
-    - ``NESTED_SINGLE`` / ``NESTED_MULTI`` -> a RECURSIVELY-decoded nested dict / list of dicts
-      (rev6 #17), using the nested reverse map ``spec.nested_specs`` - so a nested relation is
+    - ``NESTED_SINGLE`` / ``NESTED_MULTI`` -> a RECURSIVELY-decoded nested dict / list of
+      dicts, using the nested reverse map ``spec.nested_specs`` - so a nested relation is
       visibility-checked and a nested scalar Unicode-preflighted exactly like a top-level one.
     - ``FILE`` -> the ``Upload`` value, routed into ``data`` like any other value (the
       deliberate DRF contrast with the form flavor's ``files=`` split).
@@ -320,7 +320,7 @@ def _decode_input_object(
     A decode ``FieldError`` short-circuits (the shared skeleton maps it to a null payload).
 
     The reverse-map build + the ``UNSET``-strip walk + the kind dispatch are single-sited in
-    ``utils/write_values.py::decode_provided_fields`` (DRY review A2); the handlers below carry
+    ``utils/write_values.py::decode_provided_fields``; the handlers below carry
     the SERIALIZER destination policy (everything into ``data``, incl. the ``NESTED_*``
     recursion and the full-path error keying).
     """
@@ -392,7 +392,7 @@ def _decode_nested(
     *,
     path_prefix: str,
 ) -> tuple[Any, FieldError | None]:
-    """Recursively decode a nested input value into nested serializer-keyed data (spec-039 rev6 #17).
+    """Recursively decode a nested input value into nested serializer-keyed data.
 
     A single nested input dataclass -> one decoded dict (via ``_decode_input_object`` over
     ``spec.nested_specs``); a ``NESTED_MULTI`` list -> a list of decoded dicts, each keyed under
@@ -439,14 +439,14 @@ def serializer_errors_to_field_errors(
 
     The recursive analog of the flat ``036``
     ``mutations/resolvers.py::validation_error_to_field_errors`` - both terminate in
-    the SAME ``field_error`` leaf ctor (spec-039 P2.4), so the ``"__all__"`` sentinel
+    the SAME ``field_error`` leaf ctor, so the ``"__all__"`` sentinel
     + the message coercion cannot drift. DRF's ``serializer.errors`` (and a DRF
     ``ValidationError.detail``) is a nested structure of dicts (per-field), lists
     (indexed children / a field's message list), and leaf strings / ``ErrorDetail``s.
     This walks it depth-first, emitting one ``FieldError`` per leaf:
 
     - a **dict** recurses each key, joining the dotted path (``items.0.name``); each key is
-      RE-KEYED to its GraphQL name AS IT DESCENDS (not only the root - rev6 #17 review P2),
+      RE-KEYED to its GraphQL name AS IT DESCENDS (not only the root),
       using the RECURSIVE ``reverse_map``, so a nested child field / alias / relation suffix
       reports its GraphQL name (``shelves.0.altBranches``, not ``shelves.0.alt_branches``).
       DRF's ``non_field_errors`` key (``NON_FIELD_ERRORS_KEY`` = ``api_settings.NON_FIELD_ERRORS_KEY``,
@@ -528,7 +528,7 @@ def _error_node_children(
     """Expand one error node into ``(child, child_map, child_prefix)`` entries, or ``None`` for a leaf.
 
     The single expansion rule the iterative flattener walks: a **dict** re-keys each key to its
-    GraphQL name AS IT DESCENDS (not only the root - rev6 #17 review P2) via ``_rekey_segment``
+    GraphQL name AS IT DESCENDS (not only the root) via ``_rekey_segment``
     with the level's own reverse map; a **list containing dicts / lists** indexes each child
     under its numeric position, carrying the SAME level map (the items are the same nested
     serializer; a mixed list never occurs in DRF's shape, but the guard keeps a stray leaf from
@@ -554,8 +554,8 @@ def _error_leaf(errors: Any, prefix: str) -> FieldError:
 
     A leaf is a list of messages, a bare string, or an ``ErrorDetail``; ``prefix`` is already
     fully re-keyed during descent, so the shared ``field_error`` ctor gets the dotted GraphQL
-    path directly - preserving each DRF ``ErrorDetail.code`` alongside the message (rev6 #4)
-    and the structured path (rev6 #13, derived inside ``field_error`` from the dotted key).
+    path directly - preserving each DRF ``ErrorDetail.code`` alongside the message
+    and the structured path (derived inside ``field_error`` from the dotted key).
     """
     return field_error(
         prefix,
@@ -565,7 +565,7 @@ def _error_leaf(errors: Any, prefix: str) -> FieldError:
 
 
 def _error_detail_codes(errors: Any) -> list[str]:
-    """Extract DRF ``ErrorDetail.code``s from a ``serializer.errors`` leaf (spec-039 rev6 #4).
+    """Extract DRF ``ErrorDetail.code``s from a ``serializer.errors`` leaf.
 
     A DRF leaf is a list of ``ErrorDetail`` (a ``str`` subclass carrying ``.code``), or a
     bare ``ErrorDetail`` / plain string; the codes are read off each element's ``.code`` (a
@@ -583,7 +583,7 @@ def _rekey_segment(
     key: str,
     reverse_map: dict[str, tuple[str, dict | None]],
 ) -> tuple[str, dict[str, tuple[str, dict | None]]]:
-    """Re-key ONE dict segment to its GraphQL name + return the CHILD level's reverse map (review P2).
+    """Re-key ONE dict segment to its GraphQL name + return the CHILD level's reverse map.
 
     The DRF non-field bucket normalizes to the ``"__all__"`` sentinel (with no child map); a
     reverse-mapped serializer field returns its GraphQL name + its nested child map (``{}`` when
@@ -601,7 +601,7 @@ def _rekey_segment(
 
 
 def _build_reverse_map(specs: list) -> dict[str, tuple[str, dict | None]]:
-    """Build the RECURSIVE reverse map from the bind-stashed input specs (rev6 #17 review P2).
+    """Build the RECURSIVE reverse map from the bind-stashed input specs.
 
     ``{serializer field name (spec.target_name): (GraphQL input name (spec.graphql_name),
     child_map | None)}`` - a nested field's ``child_map`` is the recursive reverse map of its
@@ -847,7 +847,7 @@ def _merged_serializer_kwargs(
     alias: str,
     hook_context: SerializerHookContext,
 ) -> dict[str, Any]:
-    """Construct the serializer kwargs through ``get_serializer_kwargs`` + the framework merge (H3).
+    """Construct the serializer kwargs through ``get_serializer_kwargs`` + the framework merge.
 
     Calls the overridable CONSTRUCTOR-ONLY hook ``get_serializer_kwargs(info,
     data=<frozen view>, hook_context=<frozen context>)`` (the spec D8 step-4
@@ -960,7 +960,7 @@ def _relation_model_of(field: Any) -> Any:
 
 
 def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> None:
-    """Raise ``ConfigurationError`` if runtime disagrees with the schema write surface (rev6 #1 / #2).
+    """Raise ``ConfigurationError`` if runtime disagrees with the schema write surface.
 
     The schema-time field map (the ``get_serializer_for_schema()`` hook) drives the generated
     GraphQL input + the bind-stashed reverse map (``mutation_cls._input_field_specs``); the
@@ -1040,7 +1040,7 @@ def _assert_runtime_write_source_ownership(
 
 
 def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> None:
-    """Assert ONE schema-time field spec agrees with the runtime serializer (rev6 #1 / rev2 P1).
+    """Assert ONE schema-time field spec agrees with the runtime serializer.
 
     The per-field body of ``_assert_schema_runtime_agreement`` (which walks the one
     ``_write_surface_specs`` list covering GraphQL input + ``Meta.injected_fields``): the
@@ -1107,11 +1107,11 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
 
 
 def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
-    """Confirm a runtime relation field matches the schema-time relation spec (rev6 #1 helper).
+    """Confirm a runtime relation field matches the schema-time relation spec (helper).
 
     A ``RELATION_SINGLE`` spec requires a runtime ``PrimaryKeyRelatedField``; a
     ``RELATION_MULTI`` spec requires a ``ManyRelatedField`` wrapping a ``PrimaryKeyRelatedField``
-    (the only pk-decoding shapes - spec-039 H5). Either way the runtime relation must point at
+    (the only pk-decoding shapes). Either way the runtime relation must point at
     the SAME ``related_model`` the schema-time ``InputFieldSpec`` recorded, so the id decoded
     against the schema target is the id the runtime field validates against.
     """
@@ -1141,7 +1141,7 @@ def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> N
 
 
 def _assert_nested_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
-    """Confirm a runtime nested serializer field matches the schema-time nested spec (spec-039 rev6 #17).
+    """Confirm a runtime nested serializer field matches the schema-time nested spec.
 
     A ``NESTED_MULTI`` spec requires a runtime ``ListSerializer`` (a ``many=True`` nested
     serializer); a ``NESTED_SINGLE`` spec requires a plain nested ``Serializer`` (a
@@ -1175,14 +1175,14 @@ def _scope_relation_querysets_to_visibility(
     serializer: Any,
     info: Any,
 ) -> None:
-    """Intersect each runtime relation field's queryset WITH the visibility queryset (spec-039 rev6 #3).
+    """Intersect each runtime relation field's queryset WITH the visibility queryset.
 
     For every relation the schema recorded (``_input_field_specs`` AND the
     ``Meta.injected_fields`` specs, ``_injected_field_specs``), narrow the runtime
     serializer field's ``queryset`` (``PrimaryKeyRelatedField``) / ``child_relation.queryset``
     (``ManyRelatedField``) to ``original.filter(pk__in=<visibility queryset>)`` - the author's
     OWN queryset restriction AND-ed with the related primary ``DjangoType``'s visibility-scoped
-    ``get_queryset``. Visibility is an ADDITIONAL constraint, never a replacement (rev6 rev2 P1):
+    ``get_queryset``. Visibility is an ADDITIONAL constraint, never a replacement:
     the earlier version REASSIGNED the field queryset, which erased a serializer author's
     intentional ``PrimaryKeyRelatedField(queryset=Branch.objects.filter(city="allowed"))`` and
     could admit a visible-but-serializer-disallowed row. Composing preserves the author's
@@ -1199,7 +1199,7 @@ def _scope_relation_querysets_to_visibility(
     ``tests/rest_framework/test_resolvers.py::test_relation_queryset_scope_is_isolated_between_concurrent_serializer_instances``
     pins that DRF instance-isolation contract with requests carrying different visibility scopes.
 
-    **Nested recursion (rev6 #17).** A nested serializer field's OWN relation fields are scoped
+    **Nested recursion.** A nested serializer field's OWN relation fields are scoped
     too, by recursing into the runtime nested serializer's ``.fields`` with the nested reverse
     map (``spec.nested_specs``) - so DRF's nested ``is_valid()`` lookup is the visibility lookup
     at every depth, the same defense-in-depth the top level gets.
@@ -1263,7 +1263,7 @@ def _pin_validator_querysets(serializer: Any, alias: str, *, path: str = "") -> 
 
 
 def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> None:
-    """Scope one serializer's relation-field querysets to visibility, recursing into nested (rev6 #3 / #17).
+    """Scope one serializer's relation-field querysets to visibility, recursing into nested.
 
     The per-serializer body of ``_scope_relation_querysets_to_visibility``, factored out so it
     serves both the top-level input specs and each nested serializer's specs. A relation field's
@@ -1334,7 +1334,7 @@ def _assert_save_kwargs_no_shadow(
     serializer: Any,
     save_kwargs: dict[str, Any],
 ) -> None:
-    """Raise if a ``get_serializer_save_kwargs`` key shadows a validated-data key (rev6 #12).
+    """Raise if a ``get_serializer_save_kwargs`` key shadows a validated-data key.
 
     DRF merges save kwargs over ``serializer.validated_data``, so a colliding save kwarg
     silently replaces the VALIDATED value. The collision check runs against the ACTUAL
@@ -2030,7 +2030,7 @@ def _serializer_write_step(
     failure - with the savepoint rolled back first, so a failed save leaves no
     partial write.
 
-    A save-time failure routes by exception CLASS (F2 / H2) in THREE separate
+    A save-time failure routes by exception CLASS in THREE separate
     ``except`` branches (DRF first), all caught OUTSIDE the atomic block: a DRF
     ``serializers.ValidationError``'s ``.detail`` -> the recursive flattener; a
     Django ``ValidationError`` -> the flat ``036`` mapper (``error_dict`` /
@@ -2126,7 +2126,7 @@ def _guarded_serializer_write(
     )
     serializer = serializer_class(**kwargs)
 
-    # rev6 #1 / #2: PROVE the schema-time write surface (GraphQL input + Meta.injected_fields)
+    # PROVE the schema-time write surface (GraphQL input + Meta.injected_fields)
     # and the runtime serializer AGREE before ``is_valid()`` runs, so a schema hook that
     # exposed a field the runtime serializer does not actually declare (or declares with a
     # different source / relation target / kind) - or a declared-but-unaccepted injected
@@ -2139,7 +2139,7 @@ def _guarded_serializer_write(
         final_data,
         _write_surface_specs(mutation_cls),
     )
-    # rev6 #3: adapt each relation field's queryset to the SAME visibility-scoped queryset the
+    # adapt each relation field's queryset to the SAME visibility-scoped queryset the
     # decode used - pinned to the write alias and locked when the operation locks - so DRF's
     # own ``is_valid()`` lookup is the VISIBILITY lookup inside the transaction rather than an
     # unscoped second fetch (defense in depth - DRF can never re-fetch a row the decode's
@@ -2167,7 +2167,7 @@ def _guarded_serializer_write(
     saved: Any = None
 
     def _do_save() -> None:
-        # rev6 #12: the DRF-native ``serializer.save(**kwargs)`` customization point
+        # the DRF-native ``serializer.save(**kwargs)`` customization point
         # (request-derived save-time data, e.g. ``owner=request.user``), distinct from the
         # constructor ``get_serializer_kwargs``. Rejected if a save kwarg would shadow ANY
         # validated_data key (it would silently override the validated value) or name ANY

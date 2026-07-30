@@ -107,7 +107,7 @@ def pascal_case(name: str) -> str:
 
 
 def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -> str:
-    """``pascal_case`` with the shared no-word-token guard (feedback P2.2).
+    """``pascal_case`` with the shared no-word-token guard.
 
     Single-sites the no-token check both consumers wrap:
     ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and
@@ -148,7 +148,7 @@ def graphql_camel_name(name: str) -> str:
 
 
 def flatten_lookup_path(name: str) -> str:
-    """Flatten a Django ``LOOKUP_SEP`` path into a single identifier token (DRY review A9).
+    """Flatten a Django ``LOOKUP_SEP`` path into a single identifier token.
 
     ``category__name`` -> ``category_name``: the one owner of the
     ``.replace("__", "_")`` transform behind (a) python-attr derivation for the

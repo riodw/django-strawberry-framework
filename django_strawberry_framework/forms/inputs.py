@@ -215,10 +215,10 @@ def resolve_effective_form_fields(
     ``exclude`` cases; honors the caller's order for ``fields``.
 
     The narrowing spine + the pinned error wording are single-sited in
-    ``utils/inputs.py::resolve_effective_fields`` (spec-039 M4), shared with the
+    ``utils/inputs.py::resolve_effective_fields``, shared with the
     serializer flavor; this thin wrapper supplies the form basis (``base_fields``)
     and the form-flavor message knobs (the old ``normalize_form_field_sequence``
-    re-binding wrapper folds into the ``seq_flavor`` arg - spec-039 Mn3).
+    re-binding wrapper folds into the ``seq_flavor`` arg - spec-039).
     """
     return resolve_effective_fields(
         get_form_fields(form_class),
@@ -255,7 +255,7 @@ def form_input_type_name(
     ``mutations/inputs.py`` - spec-039 Md5) so the bare concatenation of sorted
     field tokens is uniquely decomposable - two distinct field sets never collide on
     one generated name. The suffix rule + the full-vs-narrowed branching are
-    single-sited in ``utils/inputs.py::generated_input_type_name`` (spec-039 M6).
+    single-sited in ``utils/inputs.py::generated_input_type_name``.
 
     Identity is ``(form_class, operation_kind, frozenset(effective_field_names))``;
     ``operation_kind`` picks the ``Input`` / ``PartialInput`` suffix (a ``FORM``
@@ -472,7 +472,7 @@ def _guard_input_attr_collisions(
       ``types/finalizer.py::_audit_field_surface``.
 
     The seen-dict walk + the two collision arms are single-sited in
-    ``utils/inputs.py::iter_input_field_collisions`` (DRY review A3); the form
+    ``utils/inputs.py::iter_input_field_collisions``; the form
     flavor raises on the FIRST collision (the serializer aggregates instead),
     with byte-stable wording via the threaded form nouns.
     """
@@ -534,9 +534,9 @@ def build_form_input_class(
 
         # Requiredness: the create input honors the converter/form required flag;
         # the partial input forces a model-backed field optional but a column-less
-        # extra field keeps its converted ``required`` (P2). The widening tail
+        # extra field keeps its converted ``required``. The widening tail
         # (``T | None`` + ``UNSET`` default + ``name=`` alias) is single-sited
-        # in ``utils/inputs.py::optional_input_field`` (DRY review A10).
+        # in ``utils/inputs.py::optional_input_field``.
         required = False if (is_partial and column is not None) else field_required
         annotation, field_kwargs = optional_input_field(
             annotation,
@@ -571,7 +571,7 @@ def guard_create_required_fields(
     form_class: type[forms.BaseForm],
     effective_field_names: Any,
 ) -> None:
-    """Raise if a create-shaped narrowing drops a still-declared required form field (P2).
+    """Raise if a create-shaped narrowing drops a still-declared required form field.
 
     A bound form fails required-validation for any ``field.required`` field absent
     from its bound ``data=``, so a create whose effective field set (after
@@ -610,7 +610,7 @@ def guard_partial_required_column_less_fields(
     form_class: type[forms.BaseForm],
     effective_field_names: Any,
 ) -> None:
-    """Raise if a partial (update) narrowing drops a required COLUMN-LESS form field (feedback #4).
+    """Raise if a partial (update) narrowing drops a required COLUMN-LESS form field.
 
     The partial counterpart to ``guard_create_required_fields``, but scoped to
     column-less fields ONLY. On update the input maps to ``PARTIAL``: a model-backed

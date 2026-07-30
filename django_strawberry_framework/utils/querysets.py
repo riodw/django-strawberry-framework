@@ -4,19 +4,19 @@ The neutral query-source mechanics every resolver surface shares: coerce a
 ``Manager`` to a ``QuerySet`` exactly once, decide whether a value is a
 queryset, run the ``DjangoType.get_queryset`` visibility hook through the sync
 or async path, and combine those into the list-field consumer-resolver shape.
-Extracted here (the 0.0.9 DRY pass) so list fields, connection fields, the
+Extracted here so list fields, connection fields, the
 optimizer middleware, the Relay node defaults, and the filter
 related-visibility derive all reach ONE implementation of the contract --
 ``get_queryset`` is the visibility hook, and a visibility-hook mistake is a
 data-leak bug, so the routing must not be re-decided per surface.
 
-``coerce_field_value_or_none`` (0.0.13 DRY pass) is the sibling neutral
+``coerce_field_value_or_none`` is the sibling neutral
 primitive for the "raw literal -> Django field value, or nothing" safety
 wrapper the Relay id decode, the raw relation-pk decode, and the ``__in``
 filter member decode each need against a DIFFERENT field - single-sourcing the
 coercion mechanics while leaving the field selection to each caller.
 
-``run_in_one_sync_boundary`` (0.0.13 DRY pass) is the sibling neutral
+``run_in_one_sync_boundary`` is the sibling neutral
 primitive for "run a sync callable in exactly one
 ``sync_to_async(thread_sensitive=True)`` worker" - shared by filters /
 orders / cascade permissions / mutation-form pipelines / session auth so
@@ -300,7 +300,7 @@ def sync_pipeline_recourse(flavor_noun: str) -> str:
 async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Run ``fn(*args, **kwargs)`` in ONE ``sync_to_async(thread_sensitive=True)`` worker.
 
-    The generic one-boundary primitive (spec-040 D17 / P3): every async surface
+    The generic one-boundary primitive (spec-040 D17): every async surface
     that must keep a consumer-overridable sync hook (permission check, form
     filter body, cascade walk, mutation/form write pipeline, session auth) off
     the event loop shares this call, so the boundary discipline (one worker per
@@ -385,14 +385,13 @@ def _type_is_genuinely_django(node_type: type) -> bool:
     trusted (spec-045 Decision 2). An earlier check trusted
     ``type(node).__module__.startswith("django.")`` -- but ``__module__`` is a plain
     writable string, so a consumer class declaring ``__module__ = "django.evil"``
-    spoofed it (an adversarial review reproduced this). Provenance is therefore
-    proven by OBJECT IDENTITY: the type must be the exact object Django itself
-    exposes at ``sys.modules[module].<qualname>``. A consumer subclass, or a spoofed
-    ``__module__`` / ``__qualname__`` pointing at a genuine name, cannot make
-    ``getattr(genuine_django_module, name)`` return the consumer type, so it fails
-    closed. A dotted (nested) qualname, or a module absent from ``sys.modules``, also
-    fails closed. Exact genuine Django types only -- consumer-defined expressions /
-    lookups are NOT supported across the visibility boundary.
+    spoofed it. Provenance is therefore proven by OBJECT IDENTITY: the type must be the exact
+    object Django itself exposes at ``sys.modules[module].<qualname>``. A consumer subclass,
+    or a spoofed ``__module__`` / ``__qualname__`` pointing at a genuine name, cannot make
+    ``getattr(genuine_django_module, name)`` return the consumer type, so it fails closed. A
+    dotted (nested) qualname, or a module absent from ``sys.modules``, also fails closed.
+    Exact genuine Django types only -- consumer-defined expressions / lookups are NOT
+    supported across the visibility boundary.
 
     ``__module__`` and ``__qualname__`` are read through ``type.__getattribute__`` so a
     consumer METACLASS that overrides ``__getattribute__`` / ``__getattr__`` cannot run
@@ -758,11 +757,11 @@ def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
     ``child.clone()`` on every child, so a consumer ``WhereNode`` subclass -- OR an
     EXACT ``WhereNode`` whose instance ``__dict__`` shadows ``clone`` -- would run
     during sealing and strip the visibility predicate (spec-045 Decision 2, and
-    the exact-``WhereNode`` shadow vector an adversarial review reproduced: the
-    shadowed ``clone`` fired mid-seal and the sealed SQL lost its ``WHERE``). Every
+    the exact-``WhereNode`` shadow vector: a shadowed ``clone`` fires mid-seal and
+    the sealed SQL loses its ``WHERE``). Every
     internal node must be EXACTLY ``WhereNode`` and unshadowed; every leaf and every
     leaf operand recurses through ``_expr_graph_defect`` so a consumer expression in
-    lookup-RHS position (Finding H) or a shadowed ``as_sql`` on an exact Django leaf
+    lookup-RHS position or a shadowed ``as_sql`` on an exact Django leaf
     also fails closed.
     """
     if type(node) is not WhereNode:
@@ -815,8 +814,8 @@ def _select_related_defect(select_related: Any) -> tuple[str, str] | None:
 
 # Query containers ``sql.Query.clone`` calls ``.copy()`` on (dicts / sets) or
 # ``deepcopy``s. Each must be EXACTLY the builtin Django uses so ``clone`` dispatches
-# only builtin methods, never a consumer ``dict`` / ``set`` SUBCLASS ``.copy()`` (an
-# adversarial review reproduced a custom ``alias_refcount.copy()`` firing mid-clone).
+# only builtin methods, never a consumer ``dict`` / ``set`` SUBCLASS ``.copy()`` (a
+# custom ``alias_refcount.copy()`` would otherwise fire mid-clone).
 _EXACT_DICT_QUERY_ATTRS: tuple[str, ...] = (
     "alias_refcount",
     "alias_map",
@@ -1056,8 +1055,8 @@ def _combined_query_table_defect(
 # these as its ``_iterable_class``: ``ModelIterable`` yields model instances,
 # the four ``Values*`` classes yield the dict / tuple / namedtuple / flat shapes
 # of ``.values()`` / ``.values_list()``. Anything else is a consumer-supplied
-# row synthesizer (the ``.first()`` / ``.__aiter__()`` synthetic-row vector the
-# review reproduced) and cannot be sealed.
+# row synthesizer (the ``.first()`` / ``.__aiter__()`` synthetic-row vector) and
+# cannot be sealed.
 _DJANGO_ITERABLE_CLASSES: frozenset[type] = frozenset(
     {
         ModelIterable,
@@ -1482,16 +1481,16 @@ def _seal_or_defect(
       effective alias, including when that alias is ``None`` -- an unrouted parent
       forces an unrouted child, so one resolution never spans two connections.
 
-    An instance-shadowed clone / evaluation method (the review's ``.all()``,
-    ``Query.chain``, ``.filter()``, ``_values``, ``.first()``, ``.__aiter__()``
-    probes) is neutralized WITHOUT rejection: the seal never dispatches through the
-    consumer object, it rebuilds a plain queryset from the extracted query and clones
-    that query through the unbound ``sql.Query.clone``. Clone-safety is not assumed
-    from the outer exact-type alone: ``sql.Query.clone`` dispatches ``where.clone()``,
-    container ``.copy()`` methods, and (at compile) ``as_sql`` on the graph, so the
-    seal first proves via ``_combined_query_table_defect`` that EVERY compiler-reachable
-    node is a genuine, unshadowed Django implementation and every cloned container an
-    exact builtin -- only then does the clone provably dispatch trusted code alone.
+    An instance-shadowed clone / evaluation method (``.all()``, ``Query.chain``,
+    ``.filter()``, ``_values``, ``.first()``, ``.__aiter__()`` probes) is neutralized WITHOUT
+    rejection: the seal never dispatches through the consumer object, it rebuilds a plain
+    queryset from the extracted query and clones that query through the unbound
+    ``sql.Query.clone``. Clone-safety is not assumed from the outer exact-type alone:
+    ``sql.Query.clone`` dispatches ``where.clone()``, container ``.copy()`` methods, and (at
+    compile) ``as_sql`` on the graph, so the seal first proves via
+    ``_combined_query_table_defect`` that EVERY compiler-reachable node is a genuine,
+    unshadowed Django implementation and every cloned container an exact builtin -- only then
+    does the clone provably dispatch trusted code alone.
     """
     if not isinstance(candidate, models.QuerySet):
         return None, ("type", type(candidate).__name__)
@@ -1525,9 +1524,9 @@ def _seal_or_defect(
     # ``annotations.copy()`` / ... on the containers, and (at compile time) ``as_sql``
     # on every embedded node -- so a consumer WhereNode / expression / container
     # SUBCLASS, or an instance-dict method shadow on an EXACT Django node, would run
-    # mid-clone and strip the visibility predicate (an adversarial review reproduced
-    # this against an exact WhereNode whose shadowed ``clone()`` fired and left the
-    # sealed SQL with no WHERE). ``_combined_query_table_defect`` now proves every
+    # mid-clone and strip the visibility predicate (an exact WhereNode whose
+    # shadowed ``clone()`` fires leaves the sealed SQL with no WHERE).
+    # ``_combined_query_table_defect`` proves every
     # compiler-reachable node is a genuine, unshadowed Django implementation and every
     # cloned container an exact builtin, so the clone below dispatches only trusted code.
     pre_clone_defect = _combined_query_table_defect(query, concrete)
@@ -1918,7 +1917,7 @@ def apply_type_visibility_sync(
     recourse differs pass their own (the cascade, for instance, has no
     async-native walk -- its twin wraps this same sync walk -- so it tells
     the consumer to make the target hook sync or scope ``fields=`` rather
-    than reach for an async resolver that cannot help, feedback M1).
+    than reach for an async resolver that cannot help).
     ``render_error`` is the result-normalization error seam
     (``_visibility_result_error``): the cascade supplies its path-rich
     per-edge prose; other surfaces take the shared defaults.
@@ -2024,7 +2023,7 @@ def related_visibility_queryset_or_default(
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> models.QuerySet:
-    """The visibility-scoped queryset, falling back to the default manager (DRY review C4).
+    """The visibility-scoped queryset, falling back to the default manager.
 
     The "no primary ``DjangoType`` => default-manager, no visibility contract"
     fallback ``visible_related_object`` and ``visible_related_objects`` both
@@ -2041,7 +2040,7 @@ def related_visibility_queryset_or_default(
 
 
 def _stringified(pks: Any) -> set[str]:
-    """Stringify a pk collection into the type-agnostic comparison basis (DRY review C5).
+    """Stringify a pk collection into the type-agnostic comparison basis.
 
     The ``{str(pk) for pk in ...}`` coercion both membership helpers share, so
     the comparison basis (an int pk and its ``"3"`` string form compare equal -
@@ -2101,7 +2100,7 @@ def visible_related_object(
     """Resolve the VISIBLE related object by pk through the related primary's ``get_queryset``.
 
     The object-returning visibility-on-every-branch query, promoted from
-    ``forms/resolvers.py::_visible_related_object`` (spec-039 P1.1) so the form AND
+    ``forms/resolvers.py::_visible_related_object`` so the form AND
     serializer relation decoders share ONE implementation rather than forking a
     second object-returning decoder. Resolves the related model's primary
     ``DjangoType`` via the registry and runs the SAME visibility hook every read
@@ -2127,7 +2126,7 @@ def visible_related_object(
     raw pk and a GlobalID (the input exposes one strategy-dependent shape).
     """
     # The visibility-or-default-manager base is single-sited in
-    # ``related_visibility_queryset_or_default`` (DRY review C4). Inside an
+    # ``related_visibility_queryset_or_default``. Inside an
     # active write pipeline the read is pinned to the write alias (fail-closed on
     # a hook alias switch) and - when the operation locks - acquired as a
     # base-manager ``FOR UPDATE`` constrained by the visibility pk subquery, the
@@ -2147,7 +2146,7 @@ def visible_related_objects(
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> set:
-    """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query (spec-039 rev6 #3).
+    """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query.
 
     The BATCHED counterpart to ``visible_related_object``: instead of one visibility query per
     id (the per-element multi-relation decode), decode/type-check all ids first, then confirm
@@ -2161,7 +2160,7 @@ def visible_related_objects(
     was generated for it; a raw-pk relation resolves its primary the same way (``registry.get``).
     """
     # The visibility-or-default-manager base is single-sited in
-    # ``related_visibility_queryset_or_default`` (DRY review C4).
+    # ``related_visibility_queryset_or_default``.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
     return stringified_pks_present(queryset, pks)
 

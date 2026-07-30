@@ -88,8 +88,8 @@ _DEBUG_TOOLBAR_APP_HINT: str = (
 def require_debug_toolbar() -> Any:
     """Import + return the top-level ``debug_toolbar`` package, or raise the install hint.
 
-    A thin wrapper over ``utils/imports.py::require_optional_module`` (spec-042
-    Helper-reuse D1 - never a fourth hand-rolled import pattern): present, the
+    A thin wrapper over ``utils/imports.py::require_optional_module`` (spec-042 --
+    never a fourth hand-rolled import pattern): present, the
     imported ``debug_toolbar`` module is returned; absent, the ``ImportError``
     is re-raised carrying the single ``_DEBUG_TOOLBAR_INSTALL_HINT`` string with
     the original chained (``__cause__``). Only the TOP-LEVEL package is guarded:

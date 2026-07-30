@@ -62,7 +62,7 @@ def _login_with_perm(username: str, *codenames: str) -> Client:
     """Log in a seeded ``create_users(1)`` user after granting explicit products perms.
 
     The faithful exercise of the default ``DjangoModelPermission`` (spec-036
-    Decision 15 / AR-H3): no ``create_users`` user holds ``add`` / ``change`` /
+    Decision 15): no ``create_users`` user holds ``add`` / ``change`` /
     ``delete`` by default and ``staff_1`` is ``is_staff=True`` but NOT a superuser,
     so a permitted caller must obtain the model perm in-test. Granting the explicit
     ``Permission`` (the ``services.create_users`` ``Permission.objects.get(
@@ -137,7 +137,7 @@ _CREATE_ITEM_VIA_RENAMED_SERIALIZER = (
 def test_create_item_happy_path():
     """``createItem`` with a permitted caller returns the optimizer-refetched node, no errors.
 
-    AR-H3 permitted-caller success on the codename path: ``view_item_1`` is granted
+    Permitted-caller success on the codename path: ``view_item_1`` is granted
     the explicit ``products.add_item`` (NOT a superuser). The payload ``node`` is
     the optimizer re-fetch with the nested ``category { name }`` resolvable, and the
     row persists in the DB after the request.
@@ -174,8 +174,8 @@ def test_update_item_non_colliding_partial_update():
     are left unchanged in the DB (DRF ``partial=True`` parity). Driven as
     ``staff_1`` (full visibility, so the located row is the private-flagged one)
     granted the explicit ``change_item`` codename - ``staff_1`` is ``is_staff`` but
-    NOT a superuser, so the ``DjangoModelPermission`` codename check still runs
-    (AR-H3); visibility and write-authorization stay distinct contracts.
+    NOT a superuser, so the ``DjangoModelPermission`` codename check still
+    runs; visibility and write-authorization stay distinct contracts.
     """
     create_users(1)
     seed_data(1)
@@ -208,7 +208,7 @@ def test_update_item_non_colliding_partial_update():
 def test_delete_item_happy_path():
     """``deleteItem`` returns the pre-deletion snapshot (id + relation) and removes the row.
 
-    The delete payload selects ``node { id name category { name } }`` - the AR-M5
+    The delete payload selects ``node { id name category { name } }`` - the
     snapshot-before-delete shape, fully materialized (the relation populated on the
     detached instance) before ``delete()``. The id is preserved for client cache
     eviction; the row is gone from the DB after the request.
@@ -225,7 +225,7 @@ def test_delete_item_happy_path():
     assert result["errors"] == []
     assert result["node"]["name"] == "Doomed"
     assert result["node"]["category"] == {"name": category.name}
-    # The id is preserved for cache eviction (feedback P1): it decodes to the
+    # The id is preserved for cache eviction: it decodes to the
     # ORIGINAL pk even though the row is gone - the deletion runs against the
     # located instance, so Django's delete()-nulls-pk never touches this snapshot.
     assert relay.GlobalID.from_id(result["node"]["id"]).node_id == str(item.pk)
@@ -321,7 +321,7 @@ def test_create_category_surrogate_in_nonunique_description_is_field_error_no_cr
 
 @pytest.mark.django_db(transaction=True)
 def test_create_category_explicit_null_on_nonnullable_description_is_field_error():
-    """An explicit ``null`` on the non-nullable ``description`` -> ``FieldError``, not a vague ``__all__`` (feedback #12).
+    """An explicit ``null`` on the non-nullable ``description`` -> ``FieldError``, not a vague ``__all__``.
 
     ``Category.description`` is ``blank=True, null=False``. An explicit ``null`` slips
     past ``full_clean`` (Django skips a blank-allowed field whose value is an empty
@@ -355,7 +355,7 @@ def test_create_item_unique_constraint_envelope_uses_all_sentinel():
     The multi-field ``unique_item_per_category`` constraint is caught by
     ``full_clean()``'s ``validate_constraints()`` BEFORE ``save()`` as a
     ``ValidationError`` mapping ``NON_FIELD_ERRORS`` -> the ``"__all__"`` sentinel
-    (AR-M3). ``node`` is null, ``errors`` carries the one entry - NOT a top-level
+    ``node`` is null, ``errors`` carries the one entry - NOT a top-level
     GraphQL error and never an ``IntegrityError`` / 500.
     """
     create_users(1)
@@ -387,7 +387,7 @@ def test_create_item_unique_constraint_envelope_uses_all_sentinel():
 
 @pytest.mark.django_db(transaction=True)
 def test_update_item_partial_collision_on_unique_constraint_changing_only_name():
-    """AR-H2: a ``name``-only update colliding on ``unique_item_per_category`` -> ``"__all__"``.
+    """A ``name``-only update colliding on ``unique_item_per_category`` -> ``"__all__"``.
 
     Two ``Item``s ``A`` / ``B`` under the SAME category; ``updateItem`` on ``A``
     changing only ``name`` -> ``B``. The unchanged (unprovided) ``category``
@@ -421,7 +421,7 @@ def test_update_item_partial_collision_on_unique_constraint_changing_only_name()
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_anonymous_is_denied_top_level_error_no_write():
-    """AR-H3: an anonymous ``createItem`` is denied with a top-level error and no write.
+    """An anonymous ``createItem`` is denied with a top-level error and no write.
 
     The default ``DjangoModelPermission`` denies a caller with no authenticated
     ``request.user`` (``is_authenticated == False``). The denial RAISES a top-level
@@ -456,7 +456,7 @@ def test_create_item_anonymous_is_denied_top_level_error_no_write():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_missing_model_perm_is_denied_no_write():
-    """AR-H3: a caller lacking ``add_item`` is denied with a top-level error, no write.
+    """A caller lacking ``add_item`` is denied with a top-level error, no write.
 
     ``view_item_1`` holds only ``products.view_item`` (``create_users`` grants each
     ``view_*`` user only the matching ``view_*`` perm) and LACKS ``add_item``, so
@@ -625,7 +625,7 @@ def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
-    """AR-H4: a wrong-type ``GlobalID`` on ``categoryId`` -> ``FieldError`` on ``categoryId``.
+    """A wrong-type ``GlobalID`` on ``categoryId`` -> ``FieldError`` on ``categoryId``.
 
     ``categoryId`` is fed a well-formed ``Item`` GlobalID (the wrong target model).
     The decode type-checks it against the relation's Django target (``Category``)
@@ -735,7 +735,7 @@ def test_delete_item_wrong_type_global_id_on_id_is_field_error():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_relation_id_for_hidden_category_is_field_error():
-    """feedback P1: a permitted writer cannot attach a `Category` they cannot SEE.
+    """A permitted writer cannot attach a `Category` they cannot SEE.
 
     `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user
     (granted `add_item`) cannot see it (`CategoryType.get_queryset` hides private
@@ -825,7 +825,7 @@ def test_update_item_explicit_null_category_id_is_field_error():
 
 @pytest.mark.django_db(transaction=True)
 def test_update_item_malformed_id_is_field_error_no_coercion_crash():
-    """feedback #1: a malformed / raw-pk ``id:`` on `updateItem` -> `FieldError` on `id`, no crash.
+    """A malformed / raw-pk ``id:`` on `updateItem` -> `FieldError` on `id`, no crash.
 
     The ``id:`` is `ID!` and decoded server-side; a string that is not a well-formed
     GlobalID - a raw pk, or garbage - is a `FieldError` on ``id`` decided BEFORE any
@@ -856,13 +856,13 @@ def test_update_item_malformed_id_is_field_error_no_coercion_crash():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_malformed_category_id_is_top_level_coercion_error():
-    """feedback #7: a MALFORMED `categoryId` is a top-level coercion error, not a `FieldError`.
+    """A MALFORMED `categoryId` is a top-level coercion error, not a `FieldError`.
 
     Relation ids are typed `GlobalID` (not `ID!`), so Strawberry rejects a malformed
     value during argument coercion BEFORE the resolver runs - a top-level GraphQL
     error, `data` null. The in-band `FieldError` envelope is reserved for a
     well-formed-but-invalid / wrong-type / hidden relation id (the decode-time
-    AR-H4 + visibility checks). This pins the boundary the spec documents.
+    type-check + visibility checks). This pins the boundary the spec documents.
     """
     create_users(1)
     seed_data(1)
@@ -883,10 +883,10 @@ def test_create_item_malformed_category_id_is_top_level_coercion_error():
 
 @pytest.mark.django_db(transaction=True)
 def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
-    """CR-1: a well-formed ``Item`` ``id:`` carrying an uncoercible ``node_id`` -> not-found, no 500.
+    """A well-formed ``Item`` ``id:`` carrying an uncoercible ``node_id`` -> not-found, no 500.
 
     Distinct from the malformed case above: this ``id`` IS a well-formed
-    ``products.item`` GlobalID, so it passes decode and the AR-H4 type-check - but
+    ``products.item`` GlobalID, so it passes decode and the type-check - but
     its ``node_id`` (``"abc"``) is not a valid integer-pk literal. The ``id`` is
     coerced through the model's pk field and, failing, treated as not-found - a
     ``FieldError`` on ``id`` (indistinguishable from a missing row), NEVER reaching
@@ -919,12 +919,12 @@ def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_wellformed_relation_id_uncoercible_node_id_is_field_error_no_crash():
-    """CR-1: a well-formed ``Category`` ``categoryId`` with an uncoercible ``node_id`` -> ``FieldError``.
+    """A well-formed ``Category`` ``categoryId`` with an uncoercible ``node_id`` -> ``FieldError``.
 
     The relation analogue of the case above. ``categoryId`` is typed ``GlobalID``,
     and a well-formed ``products.category`` GlobalID carrying ``node_id="abc"``
     passes both Strawberry argument coercion (it IS a valid GlobalID, unlike the
-    top-level-error malformed case) and the AR-H4 type-check (it IS a Category id) -
+    top-level-error malformed case) and the type-check (it IS a Category id) -
     but ``"abc"`` is not a valid integer pk. It is coerced and mapped to the uniform
     relation ``FieldError`` on ``categoryId``, never reaching ``filter(pk__in=["abc"])``
     where Django would raise a top-level ``ValueError`` (500). No row is written.
@@ -962,7 +962,7 @@ def test_create_item_relation_id_absurd_huge_pk_is_field_error_no_overflow():
     """An out-of-range ``Category`` relation pk -> ``FieldError`` on ``categoryId``, never an OverflowError 500.
 
     A well-formed ``products.category`` GlobalID whose ``node_id`` is an absurd
-    integer (``"9" * 400``) passes decode and the AR-H4 type-check. ``to_python``
+    integer (``"9" * 400``) passes decode and the type-check. ``to_python``
     casts it to a Python int without range-checking, so before the fix it reached
     the relation visibility ``filter(pk__in=[...])``, where SQLite raises a top-level
     ``OverflowError`` (500). The shared pk coercer now runs the pk field's backend
@@ -1024,7 +1024,7 @@ def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow():
 
 @pytest.mark.django_db(transaction=True)
 def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
-    """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.
+    """G2 behavioral tier: a mutation response selecting a relation has no N+1, no lazy query.
 
     Discharges the ``spec-035`` G2 live-test handoff at the BEHAVIORAL tier: a
     ``createItem`` response selecting ``node { name category { name } }`` is wrapped
@@ -1039,7 +1039,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     auth machinery; each query is annotated below (the per-query breakdown is
     pinned in the inline comment beside the count assertion). The exact
     ``only_fields`` / ``deferred_loading`` plan state is
-    the package mirror's job (``tests/optimizer/test_walker.py``, AR-M7) - this
+    the package mirror's job (``tests/optimizer/test_walker.py``) - this
     live tier pins only the load-bearing behavior, NOT a column-exact SQL snapshot.
     """
     create_users(1)
@@ -1074,7 +1074,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     #                                                         atomic, now nested)
     #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
     #                                                         machinery)
-    #   relation-id visibility decode: products_category  = 1 (feedback P1: the
+    #   relation-id visibility decode: products_category  = 1 (the
     #                                                         categoryId is resolved
     #                                                         through CategoryType.
     #                                                         get_queryset before write)
@@ -1098,7 +1098,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     # One re-fetch SELECT for the item, plus the validate_constraints SELECT-1.
     assert len([s for s in item_selects if "select 1" not in s.lower()]) == 1, sql
     # TWO real category SELECTs (plus the validate_constraints SELECT-1): the
-    # relation-id visibility decode (feedback P1) and the post-write re-fetch
+    # relation-id visibility decode and the post-write re-fetch
     # relation - neither is an N+1 / lazy refetch.
     assert len([s for s in category_selects if "select 1" not in s.lower()]) == 2, sql
 
@@ -2135,8 +2135,8 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
 def test_cascade_view_item_user_respects_category_visibility():
     """A ``view_item`` user only sees Items under a visible Category; nested ``category`` never errors.
 
-    The ``view_item`` branch cascades after its ``is_private=False`` filter
-    (feedback H1), so it is coherent with the relation it exposes: a non-staff
+    The ``view_item`` branch cascades after its ``is_private=False`` filter,
+    so it is coherent with the relation it exposes: a non-staff
     viewer cannot see an Item whose non-null ``category`` target their own hooks
     hide. ``item_under_private`` (public Item under the PRIVATE category) is
     therefore DROPPED for this user, while ``item_under_public`` survives. Because
@@ -2155,7 +2155,7 @@ def test_cascade_view_item_user_respects_category_visibility():
     )
     assert response.status_code == 200
     payload = response.json()
-    # No RelatedObjectDoesNotExist on the non-null `category` selection (feedback H1).
+    # No RelatedObjectDoesNotExist on the non-null `category` selection.
     assert "errors" not in payload, payload
     nodes = [edge["node"] for edge in payload["data"]["allItems"]["edges"]]
     item_names = {node["name"] for node in nodes}
@@ -2178,8 +2178,8 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     dropped from the root rather than surfaced with an unresolvable non-null FK.
     ``entry_under_private`` (item + property both under the PRIVATE category) is
     dropped; the fully-public ``entry_under_public`` survives and its nested
-    ``item { category { name } }`` resolves cleanly. Pins the feedback-H1 contract:
-    hidden-target rows are dropped, not returned as ``RelatedObjectDoesNotExist``.
+    ``item { category { name } }`` resolves cleanly. The contract: hidden-target
+    rows are dropped, not returned as ``RelatedObjectDoesNotExist``.
     """
     create_users(1)
     chain = seed_cascade_split()
@@ -2191,7 +2191,7 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     )
     assert response.status_code == 200
     payload = response.json()
-    # The whole point of H1: the nested non-null FK selection does not error.
+    # The nested non-null FK selection does not error.
     assert "errors" not in payload, payload
     nodes = [edge["node"] for edge in payload["data"]["allEntries"]["edges"]]
     values = {node["value"] for node in nodes}
@@ -2703,7 +2703,7 @@ def test_create_item_via_form_category_id_writes_through_form_category_field():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_crash():
-    """An unpaired surrogate in `createItemViaForm` `name` -> `FieldError` on `name`, no 500 (feedback #2).
+    """An unpaired surrogate in `createItemViaForm` `name` -> `FieldError` on `name`, no 500.
 
     The form-path twin of `test_create_category_surrogate_in_unique_name_is_field_error_no_crash`:
     the bound `ItemModelForm` would otherwise carry the unstorable `name` into the
@@ -2740,7 +2740,7 @@ def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_cra
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash():
-    """An unpaired surrogate in `createItemViaForm` `description` -> `FieldError`, no 500 (feedback #2).
+    """An unpaired surrogate in `createItemViaForm` `description` -> `FieldError`, no 500.
 
     The non-constraint save vector: a clean `name` passes constraint validation, so the
     unstorable `description` would otherwise blow up at `form.save()`'s INSERT. The
@@ -3303,13 +3303,13 @@ def test_submit_ping_plain_form_denied_by_default_top_level_error():
 # Serializer-mutation live surface (spec-039 Slice 3 / Decision 13)
 # ===========================================================================
 # Every consumer-reachable resolver branch is earned HERE over real `/graphql/`
-# (the README "Coverage rule." live-first mandate); `tests/rest_framework/
+# (the README "Coverage rule."); `tests/rest_framework/
 # test_resolvers.py` holds ONLY the genuinely-unreachable residue. Each test's
 # first line is `create_users(N)` / `seed_data(N)` (AGENTS.md). The serializer
 # wire envelope is `{ node { ... } errors { field messages } }` (the same
 # `<Name>Payload` shape the model + form flavors return); the request-context
 # proof is the serializer's object `validate()` reading
-# `self.context["request"].user` (F9 - NOT a HiddenField).
+# `self.context["request"].user` - NOT a HiddenField.
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3463,7 +3463,7 @@ def test_create_item_via_serializer_object_validate_all_sentinel_and_request_con
 
     The serializer's object `validate()` reads `self.context["request"].user` and
     rejects a `name == user.username`. This proves BOTH the `"__all__"` cross-field
-    envelope AND that the framework-injected `context["request"]` lands (F9 - the
+    envelope AND that the framework-injected `context["request"]` lands (the
     request-context proof is a `validate()` branch, not a HiddenField). Driven as a
     user whose username is a legal `Item.name`.
     """
@@ -3502,7 +3502,7 @@ def test_create_item_via_serializer_unique_together_error_uses_all_sentinel():
     bucket (DRF's model-wide bucket, not keyed to either constituent field), which
     the recursive flattener normalizes to the package's `"__all__"` sentinel at the
     top level - byte-identical to the model / form flavors' multi-field-constraint
-    envelope. (The relation-error-keys-to-`categoryId` reverse-map proof, F5, is the
+    envelope. (The relation-error-keys-to-`categoryId` reverse-map proof is the
     hidden-category relation-decode test below, where DRF DOES key to the field.)
     """
     create_users(1)
@@ -3937,7 +3937,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
 
 
 # ---------------------------------------------------------------------------
-# Renamed-field reverse map (spec-039 Decision-13 / Medium-8): a renamed scalar +
+# Renamed-field reverse map (spec-039 Decision-13): a renamed scalar +
 # a renamed relation, errors keyed to the GraphQL WIRE name through the envelope.
 # ---------------------------------------------------------------------------
 
@@ -3976,7 +3976,7 @@ def test_create_item_via_renamed_serializer_happy_path():
 
 @pytest.mark.django_db(transaction=True)
 def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
-    """A wrong-type id on the RENAMED `categoryPk` -> `FieldError` keyed to `categoryPk` (Medium-8).
+    """A wrong-type id on the RENAMED `categoryPk` -> `FieldError` keyed to `categoryPk`.
 
     `categoryPk` (serializer field `category_pk`, source `category`) is fed a wrong-type
     `Item` GlobalID. The relation decode type-checks against the target `Category` and
@@ -4007,7 +4007,7 @@ def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
 
 @pytest.mark.django_db(transaction=True)
 def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
-    """A `validate_display_name` rejection on the RENAMED `displayName` -> error keyed to `displayName` (Medium-8).
+    """A `validate_display_name` rejection on the RENAMED `displayName` -> error keyed to `displayName`.
 
     A `validate_<field>` error DRF keys to the serializer field `display_name` must
     surface under the GraphQL WIRE name `displayName` (the recursive flattener re-keys

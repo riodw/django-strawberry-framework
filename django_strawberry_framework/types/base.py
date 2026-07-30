@@ -303,8 +303,7 @@ def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dic
             )
         # ``isinstance`` first so an unhashable value (e.g. ``{"items":
         # ["both"]}``) raises the configured ConfigurationError rather than
-        # leaking ``TypeError: unhashable type`` from the set membership
-        # (spec-032 feedback P3).
+        # leaking ``TypeError: unhashable type`` from the set membership.
         if not isinstance(shape, str) or shape not in RELATION_SHAPE_VALUES:
             raise ConfigurationError(
                 f"{meta.model.__name__}.Meta.relation_shapes[{key!r}] got unknown shape "
@@ -394,7 +393,7 @@ def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None
     ``inspect.signature`` must bind the three positional ``_GLOBALID_CALLABLE_PARAMS``
     and the encoder must be sync (spec-031 Decision 6).
     The sync-ness test (``utils/typing.py::is_async_callable``, shared with the
-    field factories per the 0.0.9 DRY pass) sees through callable instances with
+    field factories) sees through callable instances with
     an ``async def __call__`` and ``functools.partial`` wrappers around either an
     ``async def`` function or such an instance -- all of which
     ``inspect.iscoroutinefunction`` alone would miss, letting an async encoder
@@ -488,7 +487,7 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
 def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     """Return True when ``cls`` or any entry in ``interfaces`` is a Relay-Node-shaped type.
 
-    Single source of truth for the predicate that drives both the H1
+    Single source of truth for the predicate that drives both the
     Relay ``id`` collision guard at ``DjangoType.__init_subclass__`` and
     the synthesized-``id``-annotation suppression branch in
     ``_build_annotations``. Both call sites compute the same boolean
@@ -1253,8 +1252,8 @@ def _selected_meta_targets(
     """Run the shared unknown/excluded Meta-target guards; return ``(selected_by_name, sorted)``.
 
     The first half shared by ``_validate_nullability_override_targets`` and
-    ``_validate_relation_shape_targets`` (spec-029 / spec-032 Decision 7-8, the
-    0.0.9 DRY pass): reject names unknown to the model (via the shared
+    ``_validate_relation_shape_targets`` (spec-029 / spec-032 Decision 7-8):
+    reject names unknown to the model (via the shared
     ``_format_unknown_fields_error`` keyed on ``attr`` so the consumer-visible
     shape matches the ``Meta.fields`` / ``Meta.exclude`` typo guards), then
     reject names not in the selected set (via the caller's family-specific
@@ -1641,7 +1640,7 @@ def _build_annotations(
             # The earlier eager-bind branch froze the relation against
             # whichever type was already registered at ``__init_subclass__``
             # time, which mis-bound when a secondary was registered before
-            # the primary (the import-order trap closed by spec-014 H1).
+            # the primary (the import-order trap closed by spec-014).
             pending.append(
                 PendingRelation(
                     source_type=cls,

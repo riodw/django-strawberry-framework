@@ -29,11 +29,10 @@ from .utils.typing import is_async_callable
 __all__ = ("DjangoListField",)
 
 
-# Consumer-resolver post-processing helpers (rev6 H2: module-scope placement,
-# rev6 H3: ``_consumer`` suffix). The field-wrapper Manager -> QuerySet coercion
-# + visibility-hook contract is single-sited in
-# ``utils/querysets.py::post_process_queryset_result_sync`` / ``_async`` (the
-# 0.0.9 DRY pass); these stay as the named consumer-wrapper entry points the
+# Consumer-resolver post-processing helpers. The field-wrapper Manager -> QuerySet
+# coercion + visibility-hook contract is single-sited in
+# ``utils/querysets.py::post_process_queryset_result_sync`` / ``_async``;
+# these stay as the named consumer-wrapper entry points the
 # ``_wrap`` resolvers call. The default-resolver path bypasses them because
 # ``qs`` is already known to be a ``QuerySet`` from ``initial_queryset(...)`` -
 # no normalization is needed there.
@@ -107,7 +106,7 @@ def _validate_relay_djangotype_target(
 
     The Relay-shaped target guard shared by ``DjangoConnectionField`` and
     ``relay.py::_validate_node_target`` (which backs ``DjangoNodeField`` /
-    ``DjangoNodesField``) -- single-sited per the 0.0.9 DRY pass. Delegates the
+    ``DjangoNodesField``) -- single-sited. Delegates the
     four base checks to ``_validate_djangotype_target`` (with the call site's
     ``resolver`` seam), then rejects a non-Relay-Node-shaped target.
     ``_is_relay_shaped`` reads the declared ``Meta.interfaces`` (a
@@ -148,7 +147,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # constructor checks (see ``_validate_djangotype_target`` for the
     # load-bearing ordering and the own-class registration invariant).
     _validate_djangotype_target(target_type, resolver, field="DjangoListField")
-    # Async-detection asymmetry (rev5 H2; see spec Decision 2,
+    # Async-detection asymmetry (see spec Decision 2,
     # "Async-detection asymmetry - intentional, not a harmonization candidate"):
     # ``_default`` uses runtime ``in_async_context()`` per-call so the same
     # factory output dispatches correctly under both ``schema.execute_sync``
@@ -163,7 +162,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         def _default(root: Any, info: Info) -> Any:  # noqa: ARG001
             qs = initial_queryset(target_type)
             if in_async_context():
-                # rev6 H1: return the coroutine from ``apply_type_visibility_async``
+                # Return the coroutine from ``apply_type_visibility_async``
                 # directly; Strawberry's AwaitableOrValue dispatch awaits it.
                 # An inner ``async def`` wrapper would add a redundant coroutine
                 # layer with no semantic gain.
@@ -176,7 +175,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         if is_async_callable(user_resolver):
 
             async def _wrap(root: Any, info: Info) -> Any:
-                # rev4 H2: ``await`` the consumer coroutine BEFORE handing
+                # ``await`` the consumer coroutine BEFORE handing
                 # the result to ``_post_process_consumer_async`` so the
                 # isinstance-QuerySet branch sees the awaited value, not the
                 # coroutine itself.

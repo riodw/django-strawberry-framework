@@ -212,7 +212,7 @@ def _form_encoding_is_utf8(request: HttpRequest) -> bool:
 
     Two INDEPENDENT conditions, joined with ``and``. They are deliberately not a
     fallback chain: Django applies no such order, and reading them as one was a
-    bypass (spec-046 review round 2, M1). What Django actually does, read out of
+    bypass. What Django actually does, read out of
     ``django/http/request.py`` and ``django/http/multipartparser.py`` and
     confirmed by execution at both supported versions:
 
@@ -277,8 +277,7 @@ def _is_multipart_form_post(request: HttpRequest) -> bool:
     ``parse_file_upload``. So a stray multipart ``Content-Type`` on a GET - a
     client reusing a previous request's headers - is not a multipart form at all:
     Django decodes no field, the view reads no body, and refusing it would be the
-    package inventing a rejection for bytes nobody parses (spec-046 review round
-    2, L1).
+    package inventing a rejection for bytes nobody parses.
 
     Naming the discrimination once is also what keeps the two guards below from
     disagreeing about what "multipart" means. Upstream answers ``405`` to every
@@ -321,10 +320,9 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
     stops decoding eagerly. This class is the package view's own body source, and
     it is what makes the wire contract hold on a package mount in **every** patch
     state - including the broad ``APPLY_UPSTREAM_PATCHES = False``, where the sync
-    transport used to answer ``500`` for a BOM'd UTF-16 / UTF-32 body (spec-046
-    review W3-2). Ownership follows lifecycle here exactly as it does for the
-    decode itself: permanent package policy must not be reachable only through a
-    switchable workaround.
+    transport used to answer ``500`` for a BOM'd UTF-16 / UTF-32 body. Ownership follows
+    lifecycle here exactly as it does for the decode itself: permanent package policy must not
+    be reachable only through a switchable workaround.
 
     Subclassing rather than copying keeps every other adapter member upstream's,
     and means the patch state cannot matter to a package view even by install
@@ -412,7 +410,7 @@ class _RequestBodyBoundaryMixin:
     materialized for a multipart request - reading it would pull the whole
     payload into memory and defeat Django's streaming upload handlers, breaking
     the ``Upload``-scalar path this package ships. Per-file count, per-file
-    size, and aggregate size are NOT bounded here (audit S4); Django's
+    size, and aggregate size are NOT bounded here; Django's
     ``DATA_UPLOAD_MAX_MEMORY_SIZE``, ``DATA_UPLOAD_MAX_NUMBER_FIELDS``,
     ``DATA_UPLOAD_MAX_NUMBER_FILES`` and ``FILE_UPLOAD_MAX_MEMORY_SIZE`` own them,
     and they are a CO-REQUIREMENT of this cap on any mount that enables uploads.
@@ -524,10 +522,9 @@ class _RequestBodyBoundaryMixin:
     def _enforce_multipart_form_encoding(self, request: HttpRequest) -> None:
         """Refuse a multipart request whose form fields will not be decoded as UTF-8.
 
-        Half of the multipart wire contract (spec-046 Decision 9, review High 2),
-        and the half that can be answered from headers alone - so it runs in
-        ``run``, before the form is parsed at all, and an unhonourable
-        declaration costs nothing to refuse.
+        Half of the multipart wire contract (spec-046 Decision 9), and the half that can be
+        answered from headers alone - so it runs in ``run``, before the form is parsed at all,
+        and an unhonourable declaration costs nothing to refuse.
 
         Scoped by :func:`_is_multipart_form_post` rather than by the content type
         alone, so it applies to exactly the requests whose fields Django decodes:
@@ -662,8 +659,8 @@ def _run_after_csrf_check(
 ) -> Any:
     """Call ``delegate`` - and be the function ``csrf_protect`` wraps.
 
-    The whole ordering fix for the multipart declared cap (spec-046 Decision 7,
-    review High 3) is which side of this function the CSRF check falls on.
+    The whole ordering fix for the multipart declared cap (spec-046 Decision 7)
+    is which side of this function the CSRF check falls on.
 
     Django's ``CsrfViewMiddleware.process_view`` reads
     ``request.POST.get("csrfmiddlewaretoken", "")`` for every cookie-bearing POST,

@@ -114,7 +114,7 @@ def test_lookup_name_map_full_table_matches_spec():
 
 
 def test_build_logic_fields_uses_inside_list_annotated_for_and_or():
-    """H2-of-rev4: `Annotated[...]` lives INSIDE the `list[...]`, not outside."""
+    """`Annotated[...]` lives INSIDE the `list[...]`, not outside."""
     triples = _build_logic_fields("DemoFilterInputType")
     by_attr = {python_attr: (annotation, kwargs) for python_attr, annotation, kwargs in triples}
 
@@ -225,7 +225,7 @@ def test_build_input_fields_populates_field_specs_table():
 
 @pytest.mark.django_db
 def test_field_spec_maps_galaxy_name_flat_field_to_django_source_path():
-    """M5 of rev8: a flat ``galaxy__name`` field carries the source path verbatim."""
+    """A flat ``galaxy__name`` field carries the source path verbatim."""
 
     class ShelfFilter(FilterSet):
         class Meta:
@@ -412,7 +412,7 @@ def test_convert_filter_to_input_annotation_does_not_wrap_required():
 def test_normalize_input_value_encodes_globalid_object_to_wire_form():
     """``relay.GlobalID`` OBJECT -> base64 wire string (``type_name`` preserved).
 
-    The object keeps its type through normalization (M1 fix) so the bound
+    The object keeps its type through normalization so the bound
     ``GlobalIDFilter.filter`` can validate it before decoding; the value
     round-trips back to the original ``(type_name, node_id)``.
     """
@@ -444,7 +444,7 @@ def test_normalize_input_value_unwraps_enum_member():
 
 
 def test_normalize_input_value_unwraps_enum_member_with_none_value():
-    """An enum member whose ``.value`` is ``None`` unwraps to ``None`` (feedback2 #4).
+    """An enum member whose ``.value`` is ``None`` unwraps to ``None``.
 
     The structural ``isinstance(value, enum.Enum)`` check unwraps it; the prior
     value-truthiness guard returned the member object un-unwrapped instead.
@@ -525,8 +525,8 @@ def test_normalize_input_value_global_id_list():
     """GlobalID OBJECTS keep their ``type_name`` (wire form), not bare node_ids.
 
     Pre-decoding to a bare ``node_id`` here stripped the type *before*
-    the bound filter could validate it (M1 of the implementation review),
-    so a wrong-type GlobalID object passed silently. The normalizer now
+    the bound filter could validate it, so a wrong-type GlobalID object
+    passed silently. The normalizer now
     re-encodes objects to the base64 wire string so
     ``GlobalIDMultipleChoiceFilter.filter`` runs the type-name check;
     the value still round-trips to the original ``(type_name, node_id)``.
@@ -611,7 +611,7 @@ def test_filter_input_type_returns_annotated_with_lazy_module_path():
 
 
 def test_filter_input_type_returns_forwardref_in_annotation_args():
-    """M4 of rev5: `Annotated[<str_variable>, ...]` wraps the string as a `ForwardRef`."""
+    """`Annotated[<str_variable>, ...]` wraps the string as a `ForwardRef`."""
 
     class MyFilter(FilterSet):
         class Meta:
@@ -635,7 +635,7 @@ def test_filter_input_type_records_filterset_into_helper_referenced_set():
 
 
 def test_filter_input_type_is_idempotent_under_repeated_calls():
-    """M6 of rev5: repeated calls converge on one entry and equivalent ForwardRef args."""
+    """Repeated calls converge on one entry and equivalent ForwardRef args."""
 
     class MyFilter(FilterSet):
         class Meta:
@@ -681,7 +681,7 @@ def test_filter_input_type_rejects_non_filterset():
     ],
 )
 def test_pascal_case_raises_for_no_word_character_input(bad):
-    """`_pascal_case` raises rather than silently returning `""` (round-4 fix)."""
+    """`_pascal_case` raises rather than silently returning `""`."""
     with pytest.raises(ConfigurationError) as excinfo:
         _pascal_case(bad)
     assert repr(bad) in str(excinfo.value)
@@ -1166,7 +1166,7 @@ def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_
     """A flat ``<rel>__<field>`` whose root is NOT a declared ``RelatedFilter`` survives.
 
     The guard only trims expansions of declared ``RelatedFilter`` relations; an explicit
-    ``Meta.fields`` traversal with no nested alternative (spec-021 L1's intentional flat
+    ``Meta.fields`` traversal with no nested alternative (spec-021's intentional flat
     shape) stays visible even when ``HIDE_FLAT_FILTERS=True``.
     """
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
@@ -1331,7 +1331,7 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
 
 
 # ---------------------------------------------------------------------------
-# Relay-RELATION ``isnull`` -> Boolean input (feedback Medium 6 / Blocker 1)
+# Relay-RELATION ``isnull`` -> Boolean input
 # ---------------------------------------------------------------------------
 
 
@@ -1339,12 +1339,12 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
 def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
     """A framework-owned Relay-RELATION ``isnull`` lookup generates a Boolean input.
 
-    Behavior (B) / feedback Blocker 1: an ``isnull`` lookup on a relation whose
-    target is a Relay node (``Book.genres`` -> the Relay ``GenreType``) must stay
-    an upstream ``BooleanFilter`` -- a null test is never a GlobalID -- while the
-    SAME relation's ``exact`` still converts to the GlobalID list wire shape.
+    An ``isnull`` lookup on a relation whose target is a Relay node
+    (``Book.genres`` -> the Relay ``GenreType``) must stay an upstream
+    ``BooleanFilter`` -- a null test is never a GlobalID -- while the SAME
+    relation's ``exact`` still converts to the GlobalID list wire shape.
 
-    Justified in-process fallback (Medium 6): NO live fakeshop ``/graphql/``
+    Justified in-process fallback: NO live fakeshop ``/graphql/``
     surface exposes a DIRECT Relay-relation ``isnull``. Every fakeshop relation is
     declared as a ``RelatedFilter`` (a separate traversal mechanism, not a
     ``Meta.fields`` relation lookup), and the only ``Meta.fields`` ``isnull`` is

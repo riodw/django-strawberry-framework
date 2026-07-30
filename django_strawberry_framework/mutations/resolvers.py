@@ -9,29 +9,29 @@ and the load-bearing invariants this module owns:
 
 - **One ``transaction.atomic()`` boundary** wraps authorize -> snapshot, and the
   **async path runs the whole sync ORM pipeline in a single**
-  ``sync_to_async(thread_sensitive=True)`` **call** (spec-036 AR-M4): the write,
+  ``sync_to_async(thread_sensitive=True)`` **call**: the write,
   its M2M ``.set(...)`` calls, and the payload snapshot are atomic and never
   interleave ORM work with ``await``s.
 - **Relation ``GlobalID`` decode is type-checked against the relation's Django
-  target model** (spec-036 AR-H4): a well-formed id for the wrong model is a
+  target model**: a well-formed id for the wrong model is a
   ``FieldError`` on that relation field, never coerced cross-model and never a
   raw ``DoesNotExist``. The type-checked id is then **resolved through the
   related model's primary ``DjangoType`` visibility ``get_queryset``** (spec-036
-  Decision 10 / feedback P1): a row the caller cannot see is the SAME field-keyed
+  Decision 10): a row the caller cannot see is the SAME field-keyed
   ``FieldError`` (hidden and missing indistinguishable, no existence leak), never
   silently attached. Applies to FK, OneToOne, and each M2M id (the M2M set is
   checked in one query). A well-formed id whose ``node_id`` is not a valid pk
   literal for the related column is coerced to "not found" (the same
   ``FieldError``) by the shared ``decode_model_global_id`` primitive before the
-  query, never a raw Django ``ValueError`` (feedback CR-1 / DRY-2).
+  query, never a raw Django ``ValueError``.
 - **``update`` / ``delete`` locate runs through the target type's
   ``get_queryset`` for visibility only** (spec-036 Decision 10): a hidden row is
   not-found, indistinguishable from a genuinely missing row (no existence leak).
   The top-level ``id:`` is itself decoded + type-checked against the mutation's
   target model BEFORE the lookup (a malformed / unresolvable / wrong-model id is
-  a ``FieldError`` on ``id``, never coerced to a bare pk - feedback finding-#1),
+  a ``FieldError`` on ``id``, never coerced to a bare pk),
   and its ``node_id`` is coerced through the target pk field so an uncoercible
-  literal is not-found, never a raw Django ``ValueError`` (feedback CR-1).
+  literal is not-found, never a raw Django ``ValueError``.
 - **Write authorization is a separate seam** (spec-036 Decision 15): the pipeline
   calls the mutation's ``check_permission`` (which delegates to
   ``Meta.permission_classes``) and maps a ``False`` return to a top-level
@@ -41,19 +41,19 @@ and the load-bearing invariants this module owns:
   Decision 8 step 4): a ``ValidationError`` returns a null-object payload, never
   an exception at the GraphQL boundary; on update, ``exclude`` is the unprovided
   field set MINUS any unprovided field co-participating in a constraint with a
-  provided field (spec-036 AR-H2). ``full_clean()`` runs ``validate_constraints``,
+  provided field. ``full_clean()`` runs ``validate_constraints``,
   so a ``UniqueConstraint`` duplicate is caught here as a ``ValidationError``
-  before ``save()`` (Major-2); a multi-field constraint keys to the ``"__all__"``
-  sentinel (spec-036 AR-M3). A concurrent-race ``IntegrityError`` at ``save()``
+  before ``save()``; a multi-field constraint keys to the ``"__all__"``
+  sentinel. A concurrent-race ``IntegrityError`` at ``save()``
   maps to the same envelope as a documented best-effort fallback.
-- **The post-write re-fetch is by pk WITHOUT the visibility filter** (spec-036
-  Medium-1) and routes through ``apply_connection_optimization`` so the
+- **The post-write re-fetch is by pk WITHOUT the visibility filter** (spec-036)
+  and routes through ``apply_connection_optimization`` so the
   ``spec-035`` G2 gate keeps ``select_related`` / ``prefetch_related`` and applies
   NO ``.only(...)`` deferral under the mutation operation (Decision 9 comes for
   free). ``delete`` materializes the snapshot fully (relations loaded) BEFORE
-  the row is deleted (spec-036 AR-M5 / Medium-2); the deletion runs against the
+  the row is deleted; the deletion runs against the
   located instance, NOT the returned snapshot, so the snapshot keeps its ``pk`` /
-  ``id`` for the delete payload's cache-eviction contract (feedback P1).
+  ``id`` for the delete payload's cache-eviction contract.
 - **``SyncMisuseError`` discipline** is inherited from
   ``apply_type_visibility_sync``: a sync mutation meeting an ``async def
   get_queryset`` closes the coroutine and raises (spec-036 Decision 8).
@@ -86,7 +86,7 @@ from ..optimizer.extension import (
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
 
-# Moved to utils/errors.py (docs DRY review P1.2); re-exported for compatibility.
+# Moved to utils/errors.py; re-exported for compatibility.
 from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
 from ..utils.inputs import iter_provided_input_fields
 from ..utils.permissions import auth_aliases_for_permission_classes
@@ -120,8 +120,7 @@ from ..utils.write_transaction import (
     write_pipeline,
 )
 
-# Moved to utils/write_values.py (docs DRY review P1.2 / P1.4); re-exported for
-# compatibility.
+# Moved to utils/write_values.py; re-exported for compatibility.
 from ..utils.write_values import (
     coerce_relation_pk_or_none,
     decode_scalar_leaf,
@@ -137,7 +136,7 @@ _coerce_relation_pk_or_none = coerce_relation_pk_or_none
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) ORM pipeline. The whole
 # pipeline runs synchronously even on the async surface (it executes inside one
-# ``sync_to_async`` worker thread - spec-036 AR-M4), so an ``async def
+# ``sync_to_async`` worker thread - spec-036), so an ``async def
 # get_queryset`` can never be awaited here regardless of operation context; the
 # recourse is to make the target hook sync. The sentence is single-sourced across
 # the three write flavors via ``sync_pipeline_recourse`` (spec-039 Md2).
@@ -153,14 +152,14 @@ def run_write_pipeline_sync(
     decode_step: Any,
     write_step: Any,
 ) -> Any:
-    """The shared model-backed create / update write orchestration (spec-039 P1.5).
+    """The shared model-backed create / update write orchestration.
 
     The single-sited skeleton the model (``_run_create`` / ``_run_update``), the
     ``ModelForm`` (``forms/resolvers.py::_run_modelform_pipeline_sync``), and the
     serializer (``rest_framework/resolvers.py``) write flavors all ride, so the
     ``transaction.atomic()`` boundary + the **authorize-before-decode security
     ordering** is owned in ONE place rather than hand-copied a third time. Scoped to
-    **model-backed create / update only** (F6): the ``delete`` snapshot-before-delete
+    **model-backed create / update only**: the ``delete`` snapshot-before-delete
     body (``_run_delete``) and the model-less plain-form body
     (``_run_plain_form_pipeline_sync``) keep their own orchestration (no instance /
     no re-fetch / no object slot).
@@ -191,7 +190,7 @@ def run_write_pipeline_sync(
     ``get_form`` -> ``is_valid`` -> ``form.save`` step; the serializer passes a
     serializer-field-keyed decode step and a ``serializer.is_valid`` -> ``save`` step.
     A step returning a ``list[FieldError]`` short-circuits to a null-object payload AND
-    marks the ``transaction.atomic()`` block for rollback (spec-039 H6) - so a
+    marks the ``transaction.atomic()`` block for rollback - so a
     ``write_step`` that made a partial write and THEN raised a validation error (a
     custom ``serializer.save()`` that inserts a row, then raises) never commits the
     partial write; the error envelope is the no-effect outcome.
@@ -314,7 +313,7 @@ def run_write_pipeline_sync(
 def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
     """Build the roll-back-then-envelope closure every model-backed error path returns through.
 
-    The single error-envelope constructor (spec-039 H6, centralized for mutation atomicity, shipped 0.0.14):
+    The single error-envelope constructor (centralized for mutation atomicity, shipped 0.0.14):
     a ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
     wrote may persist. A flavor ``write_step`` whose write made a partial change
     and THEN raised a validation error - the custom ``serializer.save()`` that
@@ -351,11 +350,11 @@ def _decode_relations(
     forward FK / OneToOne ``<field>_id`` whose value is a ``relay.GlobalID``,
     ``_decode_relation_id_set`` (via the shared ``decode_model_global_id``
     primitive) resolves + **type-checks the decoded model against the relation's
-    Django target model** (spec-036 AR-H4): a wrong-type id returns a ``FieldError``
+    Django target model**: a wrong-type id returns a ``FieldError``
     on that relation field, never a cross-model pk lookup and never a raw
     ``DoesNotExist``. The type-checked id is then **resolved through the related
-    model's primary type visibility ``get_queryset``** (spec-036 Decision 10 /
-    feedback P1): a row the caller cannot see is the same field-keyed
+    model's primary type visibility ``get_queryset``** (spec-036 Decision 10):
+    a row the caller cannot see is the same field-keyed
     ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is not
     decoded, but is STILL visibility-checked when the related model has a registered
     (even non-Relay) primary type with a ``get_queryset`` - the model-path
@@ -369,15 +368,15 @@ def _decode_relations(
     routing, so its raw value never reaches ``model(**scalar_and_fk_attrs)`` -
     while the walk itself (the UNSET-vs-null-vs-value tri-state) stays the ONE
     shared ``iter_provided_input_fields`` pass, never a forked copy. The caller
-    (``_model_decode_step``) folds the captured names back into the AR-H2
-    provided-marker calculation, so exclusion never silently drops the column
+    (``_model_decode_step``) folds the captured names back into the provided-marker
+    calculation, so exclusion never silently drops the column
     from ``full_clean`` validation.
 
     Returns ``(scalar_and_fk_attrs, m2m_assignments, excluded_values, error)``
     where ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for
     ``setattr`` / ``Model(**...)`` (FK as ``<field>_id`` -> pk),
     ``m2m_assignments`` is a list of ``(m2m_field_name, [pk, ...])`` deferred to
-    the post-save write step (AR-M1), ``excluded_values`` is the captured
+    the post-save write step, ``excluded_values`` is the captured
     ``{excluded_attr: raw value}`` map (empty for the default no-exclusion walk),
     and ``error`` is the first decode ``FieldError`` or ``None``.
     """
@@ -386,11 +385,11 @@ def _decode_relations(
     m2m_assignments: list[Any] = []
     excluded_values: dict[str, Any] = {}
 
-    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
-    # (spec-039 M2); the per-field kind routing below stays flavor-specific.
+    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``;
+    # the per-field kind routing below stays flavor-specific.
     for python_name, value, field in iter_provided_input_fields(data):
         if python_name in excluded_input_fields:
-            # The exclusion seam (spec-040 D6): capture the raw provided value and
+            # The exclusion seam: capture the raw provided value and
             # skip every decode branch - the value must never become a model attr.
             excluded_values[python_name] = value
             continue
@@ -420,7 +419,7 @@ def _decode_relations(
         if null_error is not None:
             return {}, [], {}, null_error
         # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
-        # ``decode_scalar_leaf`` - DRY review A6), composed between the model-only
+        # ``decode_scalar_leaf``), composed between the model-only
         # explicit-null rejection above and the naive-datetime coercion below.
         decoded, text_error = decode_scalar_leaf(graphql_name, value)
         if text_error is not None:
@@ -436,7 +435,7 @@ def _explicit_null_error(
     field_name: str,
     value: Any,
 ) -> FieldError | None:
-    """Reject an explicit ``null`` on a non-nullable scalar column (feedback - explicit null).
+    """Reject an explicit ``null`` on a non-nullable scalar column.
 
     A provided ``None`` (``UNSET`` is already stripped) on a ``null=False`` column is
     a problem ``full_clean`` does NOT reliably catch: Django's ``clean_fields`` SKIPS a
@@ -458,7 +457,7 @@ def _explicit_null_error(
 
 
 def _make_aware_if_naive(value: Any) -> Any:
-    """Make a naive ``datetime`` input timezone-aware under ``USE_TZ`` (feedback - naive datetime).
+    """Make a naive ``datetime`` input timezone-aware under ``USE_TZ``.
 
     Strawberry's ``DateTime`` scalar parses a naive ISO string into a naive
     ``datetime``. Under ``USE_TZ=True`` Django emits a naive-datetime
@@ -527,7 +526,7 @@ def _decode_relation_id_set(
     relation_field: Any,
     info: Any,
 ) -> tuple[list[Any], FieldError | None]:
-    """Decode a list of relation ids to pks: type-check + coerce each, then visibility once (DRY-2).
+    """Decode a list of relation ids to pks: type-check + coerce each, then visibility once.
 
     The single list-oriented relation decoder both the FK / OneToOne wrapper
     (``_decode_single_relation_id``, a one-element list) and the M2M wrapper
@@ -538,13 +537,13 @@ def _decode_relation_id_set(
     Each element: a ``relay.GlobalID`` is run through ``decode_model_global_id``
     against the relation's Django target model - a decode failure, a wrong-model
     id, or an uncoercible ``node_id`` (any non-``OK`` status) is the uniform
-    ``relation_field_error`` on ``field_name`` (AR-H4 + feedback CR-1: a wrong-type id
-    is never a cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
+    ``relation_field_error`` on ``field_name`` (a wrong-type id is never a
+    cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
     A raw pk scalar (a non-Relay-Node target, which has no ``GlobalID`` shape)
     passes through the decode unchanged (there is no ``GlobalID`` to decode), then
     takes the raw-pk relation check below rather than the ``GlobalID`` visibility
     query. The decoded ``GlobalID`` set is visibility-checked in one query (Decision
-    10 / feedback P1): a hidden / missing member is the same ``relation_field_error``,
+    10): a hidden / missing member is the same ``relation_field_error``,
     indistinguishable (no existence leak). A list is homogeneously typed (all
     ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
     is all-or-nothing and the whole set is checked together.
@@ -589,7 +588,7 @@ def _decode_single_relation_id(
     relation_field: Any,
     info: Any,
 ) -> tuple[Any, FieldError | None]:
-    """Decode one FK / OneToOne id via the shared set decoder (DRY-2).
+    """Decode one FK / OneToOne id via the shared set decoder.
 
     Wraps the single value in a one-element list, delegates to
     ``_decode_relation_id_set`` (type-check + coerce + visibility), and unwraps the
@@ -621,13 +620,13 @@ def _decode_relation_id_list(
     relation_field: Any,
     info: Any,
 ) -> tuple[list[Any], FieldError | None]:
-    """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder (DRY-2).
+    """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder.
 
-    The list is the replace-set the post-save step assigns (AR-M1). An explicit
+    The list is the replace-set the post-save step assigns. An explicit
     ``null`` (reachable because the generated optional M2M field is
     ``list[<id>] | None``) is NOT a valid replace-set - it returns a ``FieldError``
     on ``field_name`` (the valid "clear" signal is an empty list ``[]``), rather
-    than iterating ``None`` into a resolver exception (feedback P2). A non-null list
+    than iterating ``None`` into a resolver exception. A non-null list
     delegates to ``_decode_relation_id_set`` (the same type-check + coerce +
     one-query visibility contract the FK path uses).
     """
@@ -637,11 +636,11 @@ def _decode_relation_id_list(
 
 
 def _relation_null_error(field_name: str) -> FieldError:
-    """Build the explicit-``null`` M2M ``FieldError`` for ``field_name`` (feedback P2).
+    """Build the explicit-``null`` M2M ``FieldError`` for ``field_name``.
 
     A generated optional M2M field is ``list[<id>] | None``, so a client can send
     an explicit ``null``. ``null`` is not a valid replace-set (the M2M contract is
-    replace-on-provide / clear-on-empty / unchanged-on-omit - AR-M1), so it is
+    replace-on-provide / clear-on-empty / unchanged-on-omit), so it is
     rejected as a field-keyed error naming the clear signal, rather than iterating
     ``None`` into a resolver exception.
     """
@@ -693,9 +692,9 @@ def _relation_visibility_error(
     related_model: type,
     info: Any,
 ) -> FieldError | None:
-    """Confirm every relation pk is visible through the related type's ``get_queryset`` (feedback P1).
+    """Confirm every relation pk is visible through the related type's ``get_queryset``.
 
-    After the AR-H4 type-check, a relation id must also pass the related model's
+    After the type-check, a relation id must also pass the related model's
     **primary** ``DjangoType`` visibility hook - the SAME ``get_queryset`` every
     read surface applies (``apply_type_visibility_sync(initial_queryset(...))``) -
     so a permitted writer cannot attach a row they could not *see* (a private
@@ -716,9 +715,9 @@ def _relation_visibility_error(
     discipline as the locate path).
 
     The ``pks`` arrive **already coerced** through the resolved type's pk field by
-    ``decode_model_global_id`` (the shared DRY-2 primitive), so an uncoercible
+    ``decode_model_global_id`` (the shared primitive), so an uncoercible
     ``node_id`` was already mapped to ``relation_field_error`` upstream and never reaches
-    the ``pk__in`` query as a raw Django ``ValueError`` (feedback CR-1). This step
+    the ``pk__in`` query as a raw Django ``ValueError``. This step
     only confirms visibility.
     """
     related_type = registry.get(related_model)
@@ -879,7 +878,7 @@ def _provided_attr_names(
     scalar_and_fk_attrs: dict[str, Any],
     m2m_assignments: list[Any],
 ) -> set[str]:
-    """Return the model field names a partial input provided (for the AR-H2 exclude carve-out).
+    """Return the model field names a partial input provided (for the exclude carve-out).
 
     Maps each decoded ``<field>_id`` FK attr back to its model field name
     (``category_id`` -> ``category``) so ``_unprovided_exclude`` reasons over
@@ -907,7 +906,7 @@ def _provided_attr_names(
 
 
 def _unprovided_exclude(model: type, provided_attrs: set[str]) -> list[str]:
-    """Compute the ``full_clean(exclude=...)`` set for a partial update (spec-036 AR-H2).
+    """Compute the ``full_clean(exclude=...)`` set for a partial update.
 
     The set of model fields the ``PartialInput`` did NOT provide, **minus any
     unprovided field co-participating in a ``UniqueConstraint`` /
@@ -937,12 +936,12 @@ def _unprovided_exclude(model: type, provided_attrs: set[str]) -> list[str]:
 
 
 def _unique_constraint_groups(model: type) -> list[set[str]]:
-    """Return every uniqueness group's field-name set (spec-036 AR-H2 input).
+    """Return every uniqueness group's field-name set (spec-036).
 
     A group is the set of fields that participate in one uniqueness check: each
     ``UniqueConstraint`` in ``Meta.constraints``, each ``Meta.unique_together``
     tuple, and each single-field ``field.unique`` column (a 1-element group). The
-    AR-H2 carve-out keeps any unprovided member of a group whose other members
+    exclude carve-out keeps any unprovided member of a group whose other members
     were provided.
     """
     groups: list[set[str]] = []
@@ -960,29 +959,29 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
 
 
 def _integrity_error_field_errors() -> list[FieldError]:
-    """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope (spec-036 Major-2).
+    """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope.
 
     The normal ``UniqueConstraint`` path is caught earlier by ``full_clean()``'s
-    ``validate_constraints()`` as a ``ValidationError`` with a clean field mapping
-    (Major-2). What reaches HERE is the residual: a constraint violation that beat
+    ``validate_constraints()`` as a ``ValidationError`` with a clean field mapping.
+    What reaches HERE is the residual: a constraint violation that beat
     ``validate_constraints()`` - a ``UniqueConstraint`` race, but also a ``NOT
     NULL`` / FK / ``CHECK`` ``IntegrityError`` that ``full_clean`` did not catch on
     the normal path. The catch is ``except IntegrityError`` (broad), so the message
     is the **honest superset** "A database constraint was violated." rather than
     over-claiming "uniqueness" for a violation that may not be a uniqueness one
-    (feedback CR-3). As a documented best-effort fallback (covered by a
+    As a documented best-effort fallback (covered by a
     mocked-``save()`` test, not a real race), it keys to the ``"__all__"`` sentinel
     - the same model-level bucket ``validate_constraints()`` uses for a multi-field
     constraint. The decoded field set is intentionally not consulted: ``save()``'s
     ``IntegrityError`` carries no reliable cross-backend field mapping, so a
-    per-field attribution would be guesswork (feedback CR-3 - dropped the unused
-    ``model`` / ``provided_attrs`` params rather than feign a refinement).
+    per-field attribution would be guesswork, so no ``model`` / ``provided_attrs``
+    params are taken.
     """
     return [field_error("", "A database constraint was violated.", codes="constraint")]
 
 
 def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
-    """Assign provided M2M relations on a saved instance (spec-036 AR-M1).
+    """Assign provided M2M relations on a saved instance.
 
     For each provided ``(m2m_field_name, [pk, ...])``: ``instance.<m2m>.set([
     ...])`` replaces the entire relation set (a provided empty list clears it);
@@ -1002,17 +1001,17 @@ def refetch_optimized(
     alias: str,
     force_load: bool,
 ) -> Any | None:
-    """Re-fetch the written row by pk + optimizer plan (spec-036 Decision 9 / Medium-1).
+    """Re-fetch the written row by pk + optimizer plan (spec-036 Decision 9).
 
     ``qs = initial_queryset(target_type).filter(pk=pk)`` - **by pk, WITHOUT the
-    visibility ``get_queryset`` filter** (Medium-1, the deliberate GOAL crit-4
+    visibility ``get_queryset`` filter** (the deliberate GOAL crit-4
     exception: the actor just wrote the row, so round-tripping their own write is
     not an existence leak). Routes through ``apply_connection_optimization`` so
     the active optimizer plans the response selection; because the operation is a
     ``MUTATION``, the spec-035 G2 gate keeps ``select_related`` /
     ``prefetch_related`` and applies NO ``.only(...)`` - Decision 9 comes for free.
 
-    ``force_load=True`` (the delete path, AR-M5 / Medium-2) materializes the
+    ``force_load=True`` (the delete path) materializes the
     snapshot fully BEFORE the row is deleted: evaluating the queryset loads
     ``select_related`` joins and populates ``_prefetched_objects_cache`` for
     ``prefetch_related`` children, so the detached instance's relations survive
@@ -1069,7 +1068,7 @@ def _run_pipeline_sync(
     """Run the synchronous decode -> ... -> payload pipeline inside one ``transaction.atomic()``.
 
     The single sync body the async path wraps in ``sync_to_async(...,
-    thread_sensitive=True)`` (spec-036 AR-M4). Dispatches on ``meta.operation``: the
+    thread_sensitive=True)``. Dispatches on ``meta.operation``: the
     model-backed create / update branches ride the promoted shared
     ``run_write_pipeline_sync`` skeleton (spec-039 P1.5 - the ``transaction.atomic()``
     boundary + authorize-before-decode ordering single-sited across the model, form,
@@ -1115,14 +1114,14 @@ def _model_decode_step(
     instance: Any,
     excluded_input_fields: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | list[FieldError]:
-    """The model ``decode_step``: relation-decode + construct / ``setattr`` (spec-039 P1.5).
+    """The model ``decode_step``: relation-decode + construct / ``setattr``.
 
     Decodes the input relations (the ``036`` ``_decode_relations`` contract:
     type-check + visibility on every branch), then either CONSTRUCTS a fresh
     ``model(**attrs)`` (create, ``instance is None``) or sets the provided attrs on
     the located row (update). Returns ``(constructed_instance, m2m_assignments,
     exclude)`` for the write step, or a ``list[FieldError]`` on a decode failure
-    (the skeleton maps it to a null-object payload). ``exclude`` is the AR-H2-aware
+    (the skeleton maps it to a null-object payload). ``exclude`` is the exclude-aware
     unprovided-field list for BOTH create and update - create excludes unprovided
     fields so their model defaults are not validated (mirroring
     ``Model.objects.create()``), update excludes unprovided fields so an unsent
@@ -1133,7 +1132,7 @@ def _model_decode_step(
     flavor's ``password``): the named provided attrs are captured OUT of the model
     construction by ``_decode_relations`` (the raw value never becomes a model
     attr) **with their provided-marker preserved** - the captured names are folded
-    back into the AR-H2 ``provided`` set below, so the excluded column still
+    back into the ``provided`` set below, so the excluded column still
     participates in ``full_clean`` validation (naively popping it pre-walk would
     mark it unprovided and silently drop it from the exclude calculation - the
     spec-040 Revision-7 marker fix). A NON-EMPTY exclusion returns the extended
@@ -1158,8 +1157,8 @@ def _model_decode_step(
             setattr(target, attr, value)
 
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
-    # The exclusion seam preserves the provided-marker (spec-040 D6): an excluded
-    # input WAS provided, so it still counts for the AR-H2 exclude calculation.
+    # The exclusion seam preserves the provided-marker: an excluded
+    # input WAS provided, so it still counts for the exclude calculation.
     provided |= set(excluded_values)
     exclude = _unprovided_exclude(model, provided)
     if excluded_input_fields:
@@ -1171,7 +1170,7 @@ def _model_write_step(
     instance: Any,
     decoded: tuple[Any, list[Any], list[str] | None],
 ) -> Any | list[FieldError]:
-    """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M (spec-039 P1.5).
+    """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M.
 
     From validation onward create and update run an IDENTICAL tail (the prior
     ``_validate_save_assign_refetch_payload``): ``full_clean(exclude=...)`` mapped to
@@ -1213,7 +1212,7 @@ def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
 
     The update-side counterpart of ``save_or_field_errors`` (0.0.14 concurrency hardening), with the
     disappearing-row contract on top: a constraint race is the ``"__all__"``
-    ``IntegrityError`` envelope (the standing Major-2 mapping, checked FIRST -
+    ``IntegrityError`` envelope (the standing mapping, checked FIRST -
     ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
     the Django 5.2 untyped catch); a zero-row forced update runs through the
     version-compat conflict disambiguation (``forced_update_conflict_errors``:
@@ -1251,16 +1250,15 @@ def _run_delete(
     """The ``delete`` branch: locate -> authorize -> snapshot-before-delete -> delete -> payload.
 
     The snapshot is the optimizer-planned re-fetch fully materialized (relations
-    loaded into the instance) BEFORE the row is deleted (spec-036 AR-M5 /
-    Medium-2), so the detached in-memory instance's relations survive the row's
-    deletion. The re-fetch is by pk without the visibility filter (Medium-1),
-    consistent with create / update.
+    loaded into the instance) BEFORE the row is deleted (spec-036), so the detached in-memory
+    instance's relations survive the row's deletion. The re-fetch is by pk without the
+    visibility filter, consistent with create / update.
 
     The deletion runs against the **located instance**, not the returned
     snapshot: Django's ``Model.delete()`` sets ``instance.pk = None`` on the
     object it is called on, so deleting via ``instance`` leaves the snapshot's
     ``pk`` / ``id`` intact for the delete payload's cache-eviction contract
-    (feedback P1 - the spec promises the deleted id is preserved). ``instance`` is
+    (the deleted id must survive in the payload). ``instance`` is
     the visibility-located row (guaranteed present here); the snapshot is only the
     optimizer-shaped response object. The delete itself is guarded by
     ``_delete_or_field_errors``: a ``PROTECT`` / ``RESTRICT`` refusal returns the
@@ -1382,14 +1380,14 @@ def authorize_or_raise(
     Delegates to the Slice-2 ``check_permission`` method (which iterates
     ``Meta.permission_classes``); the resolver only maps a denial to a raised
     ``GraphQLError`` (the authorization-failure surface, distinct from the
-    field-keyed validation envelope - AR-H3 / Decision 15). The mutation instance
+    field-keyed validation envelope - Decision 15). The mutation instance
     is constructed once so an object-level ``check_permission`` override can hold
     per-request state.
 
     A coroutine return - an ``async def check_permission`` override - is NOT
     silently treated as "allow": a coroutine is truthy, so ``if not coroutine``
-    would never deny, letting an async deny-check pass (an authorization bypass,
-    feedback). It is closed and raised as a ``SyncMisuseError`` via
+    would never deny, letting an async deny-check pass (an authorization bypass).
+    It is closed and raised as a ``SyncMisuseError`` via
     ``_require_sync_bool_auth_result`` (the shared write-auth result contract;
     the async hook can never be awaited in this sync pipeline). The
     async-``has_permission`` case is rejected one level down, in
@@ -1418,13 +1416,13 @@ def _full_clean_or_field_errors(
     """Run ``full_clean(exclude=...)``; return the mapped ``FieldError``s on failure else ``None``.
 
     ``full_clean()`` runs ``validate_constraints()``, so a ``UniqueConstraint``
-    duplicate is caught here as a ``ValidationError`` BEFORE ``save()`` (Major-2);
+    duplicate is caught here as a ``ValidationError`` BEFORE ``save()``;
     its field-keyed messages populate the envelope (multi-field constraint ->
-    ``"__all__"`` sentinel, AR-M3). ``exclude=None`` for create (validate all
-    fields); the AR-H2-aware exclude list for update. Returns the
+    ``"__all__"`` sentinel). ``exclude=None`` for create (validate all
+    fields); the exclude-aware exclude list for update. Returns the
     ``list[FieldError]`` (the model ``write_step`` short-circuits to a null-object
     payload through the shared skeleton) so the payload build stays single-sited in
-    ``run_write_pipeline_sync`` (spec-039 P1.5).
+    ``run_write_pipeline_sync``.
     """
     try:
         instance.full_clean(exclude=exclude)
@@ -1434,7 +1432,7 @@ def _full_clean_or_field_errors(
 
 
 def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
-    """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None`` (Major-2).
+    """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None``.
 
     Wraps a zero-arg callable rather than a fixed ``instance.save()`` so ONE
     ``IntegrityError`` -> envelope catch (the ``_integrity_error_field_errors``
@@ -1453,14 +1451,14 @@ def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
 
 
 def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None]:  # noqa: A002
-    """Decode + type-check the update/delete ``id:`` against the target model (feedback #1).
+    """Decode + type-check the update/delete ``id:`` against the target model.
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
     ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` uses
     (``relay.py`` line 287), so the package decodes the GlobalID **server-side**
     rather than letting Strawberry's argument coercion own it. The wire value
     therefore arrives as a base64 GlobalID string; it is run through the shared
-    ``decode_model_global_id`` primitive (DRY-2) against the mutation's target
+    ``decode_model_global_id`` primitive against the mutation's target
     model - the same decode + model-check + pk-coercion contract the relation
     ``<field>_id`` decode uses, and the identity guard the typed ``DjangoNodeField``
     applies (``relay.py::_check_typed_match``).
@@ -1471,12 +1469,11 @@ def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None
       GlobalID shape) and ``WRONG_MODEL`` (a well-formed id for the *wrong* model)
       are an **invalid-id** ``FieldError`` on ``id`` BEFORE any pk lookup - no DB
       read, no existence leak, never coerced to a bare pk that would target the
-      same-pk row of the right model (feedback #1);
+      same-pk row of the right model;
     - ``UNCOERCIBLE_PK`` (a right-type id whose ``node_id`` is not a valid pk
       literal, e.g. ``"abc"`` for an integer pk) is the **not-found** ``FieldError``
       on ``id`` - identifies no row, exactly like the node field returns ``null``,
-      never the raw Django ``ValueError`` that would leak the pk column type
-      (feedback CR-1).
+      never the raw Django ``ValueError`` that would leak the pk column type.
 
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
@@ -1540,7 +1537,7 @@ async def run_pipeline_async(
     data, id)`` wrapper, single-sourced so the two flavors cannot drift on the
     boundary contract. ``sync_body`` is the flavor's ``_run_*_pipeline_sync``: it
     runs on ONE worker thread so its ``transaction.atomic()`` + every ORM call never
-    interleave with ``await``s (spec-036 AR-M4); a sync ``get_queryset`` runs
+    interleave with ``await``s; a sync ``get_queryset`` runs
     synchronously inside that thread, while an ``async def get_queryset`` raises
     ``SyncMisuseError`` there (no awaiting context - the standing discipline).
     """

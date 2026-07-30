@@ -147,7 +147,7 @@ class TestToolbarPresent:
     """The toolbar-present group: real ``/graphql/`` traffic under ``DEBUG=True``."""
 
     def test_graphiql_page_carries_stock_handle_and_bridge_script(self, toolbar_client):
-        """Test 1: the GraphiQL HTML page gets BOTH injections."""
+        """The GraphiQL HTML page gets BOTH injections."""
         response = toolbar_client.get("/graphql/", HTTP_ACCEPT="text/html")
         assert response.status_code == 200
         assert _content_type(response) == "text/html"
@@ -161,7 +161,7 @@ class TestToolbarPresent:
             assert int(response["Content-Length"]) == len(response.content)
 
     def test_no_toolbar_baseline_under_shipped_settings(self, stock_client):
-        """Test 2: fakeshop's shipped wiring is INERT under ``DEBUG=False`` (production safety).
+        """Fakeshop's shipped wiring is INERT under ``DEBUG=False`` (production safety).
 
         The middleware is now in fakeshop's shipped ``MIDDLEWARE``, but
         ``debug_toolbar``'s ``show_toolbar`` returns ``False`` when ``DEBUG`` is
@@ -181,7 +181,7 @@ class TestToolbarPresent:
         assert 'id="djDebug"' not in body
 
     def test_named_json_operation_gets_panel_payload(self, toolbar_client):
-        """Test 3: a real SQL-emitting named operation carries the injected payload."""
+        """A real SQL-emitting named operation carries the injected payload."""
         seed_data(1)
         response = _post_graphql(toolbar_client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
         assert response.status_code == 200
@@ -203,7 +203,7 @@ class TestToolbarPresent:
             assert int(response["Content-Length"]) == len(response.content)
 
     def test_introspection_query_is_skipped(self, toolbar_client):
-        """Test 4: no payload for ``operationName == "IntrospectionQuery"``."""
+        """No payload for ``operationName == "IntrospectionQuery"``."""
         response = _post_graphql(toolbar_client, _INTROSPECTION_QUERY, "IntrospectionQuery")
         assert response.status_code == 200
         payload = json.loads(response.content)
@@ -211,7 +211,7 @@ class TestToolbarPresent:
         assert "debugToolbar" not in payload
 
     def test_get_with_json_accept_hits_the_operation_name_except_branch(self, toolbar_client):
-        """Test 5: a JSON-``Accept`` GET (empty body) degrades to inject.
+        """A JSON-``Accept`` GET (empty body) degrades to inject.
 
         ``HTTP_ACCEPT="application/json"`` keeps this deterministic on the JSON
         branch (a GET without it renders the GraphiQL HTML page instead); the empty
@@ -231,7 +231,7 @@ class TestToolbarPresent:
         assert payload["debugToolbar"]["requestId"]
 
     def test_injected_request_id_round_trips_to_stored_sql_panel_content(self, toolbar_client):
-        """Test 6: the injected ``requestId`` is USABLE through the real panel route.
+        """The injected ``requestId`` is USABLE through the real panel route.
 
         ``render_panel`` returns 200 JSON with non-empty ``content`` even on a miss
         (the "isn't available anymore" fallback), so the success direction is
@@ -260,7 +260,7 @@ class TestToolbarPresent:
 
     @pytest.mark.parametrize("url", ["/", "/login/"])
     def test_non_strawberry_html_views_pass_through(self, toolbar_client, url):
-        """Test 7: HTML detection negatives for function-based AND class-based views.
+        """HTML detection negatives for function-based AND class-based views.
 
         Package-scoped, not toolbar-scoped: under the fixture's always-true
         callback the STOCK toolbar handle may legitimately appear in this ordinary

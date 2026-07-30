@@ -1,4 +1,4 @@
-"""Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
+"""Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
 
 The single owner of the ordered-precheck -> MRO-walk -> raising-fallthrough
 control flow both ``forms/converter.py::convert_form_field`` and
@@ -36,7 +36,7 @@ def convert_with_mro(
 
     The flavor-agnostic body of ``forms/converter.py::convert_form_field`` (and
     ``rest_framework/serializer_converter.py::convert_serializer_field``), single-sited
-    so the no-silent-catch-all contract lands once (spec-039 P1.4).
+    so the no-silent-catch-all contract lands once.
 
     Control flow, in order:
 

@@ -411,10 +411,10 @@ def test_apply_no_ops_when_toggle_disabled(settings):
 def test_apply_no_ops_when_django_dependency_opted_out(settings):
     """``{"APPLY_UPSTREAM_PATCHES": {"django": False}}`` disables only this module.
 
-    The per-dependency escape (rev-apps.md Medium 2, owned by rev-conf.md):
-    a mapping naming ``"django"`` makes this ``apply()`` decline to install,
-    while a mapping naming only a SIBLING dependency leaves this module
-    installing normally (each gate reads its own name).
+    The per-dependency escape: a mapping naming ``"django"`` makes this
+    ``apply()`` decline to install, while a mapping naming only a SIBLING
+    dependency leaves this module installing normally (each gate reads its own
+    name).
     """
     saved = SimpleTestCase.__dict__["_remove_databases_failures"]
     try:

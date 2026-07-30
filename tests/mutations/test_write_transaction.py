@@ -899,7 +899,7 @@ def test_has_perm_returning_non_bool_is_a_configuration_error():
 
 @pytest.mark.django_db
 def test_forced_update_integrity_error_race_maps_to_the_constraint_envelope():
-    """A forced-update ``IntegrityError`` race is the ``"__all__"`` envelope (Major-2 on update).
+    """A forced-update ``IntegrityError`` race is the ``"__all__"`` envelope on update.
 
     ``IntegrityError`` subclasses ``DatabaseError``, so under the Django 5.2
     untyped zero-row catch the ordering matters: the constraint race must hit
@@ -1091,7 +1091,7 @@ def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descripto
 
     ``FieldFile`` is a MUTABLE descriptor - a hook can assign ``instance.<file>.name`` on the
     SAME object, so a by-reference snapshot would alias it and the identity/``==`` check would
-    miss the unauthorized file-column change (round-5 P1). Snapshotting the ``name`` catches it.
+    miss the unauthorized file-column change. Snapshotting the ``name`` catches it.
     """
     from types import SimpleNamespace
 

@@ -21,7 +21,7 @@ promotion discipline).
   ``ConfigurationError`` contract and ``(target_type, node_id)`` return; the
   internal signature is already consumer-shaped.
 
-Asymmetry contract (Decision 10 / Revision 2 P2): a SECONDARY model-label
+Asymmetry contract (Decision 10): a SECONDARY model-label
 emitter mints the payload it genuinely emits, while decode routes that same
 payload to the model's PRIMARY via ``registry.get(model)`` - so
 ``decode_global_id(global_id_for(T, pk)) == (T, str(pk))`` holds only for
@@ -67,8 +67,7 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
         # 2.5 - BEFORE Phase 3 flips ``finalized`` - so a partial-finalize
         # failure can leave a non-``None`` strategy on an unfinalized type;
         # reading the stamp before this gate would mint an id in violation of
-        # the helper's "finalized Relay-Node-shaped type" contract (spec-032
-        # feedback P2).
+        # the helper's "finalized Relay-Node-shaped type" contract.
         raise ConfigurationError(
             f"global_id_for: {definition.graphql_type_name} is not finalized; "
             "call finalize_django_types() (or build the schema) first - the "

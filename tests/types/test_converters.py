@@ -350,8 +350,7 @@ def test_convert_choices_to_enum_raises_on_empty_choices(choice_fixture_model):
 def test_convert_choices_to_enum_raises_on_sanitized_member_collision(choice_fixture_model):
     """Two choice values that sanitize to the same Python identifier raise.
 
-    Pins the Medium fix from ``rev-types__converters.md``: without the
-    collision check, the dict comprehension silently kept the last
+    Without the collision check, the dict comprehension silently keeps the last
     value, leaving the GraphQL enum missing one of the choices and
     producing a runtime coercion error long after schema build.
     """
@@ -371,8 +370,8 @@ def test_convert_choices_to_enum_raises_on_sanitized_member_collision(choice_fix
 def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(choice_fixture_model):
     """Keyword-prefix collisions also raise: ``"if"`` mangles to ``"_if"`` and collides with raw ``"_if"``.
 
-    Pins the second collision shape from ``rev-types__converters.md``:
-    the value ``"if"`` is a Python keyword and is sanitized to ``"_if"``;
+    The second collision shape: the value ``"if"`` is a Python keyword
+    and is sanitized to ``"_if"``;
     a sibling raw value ``"_if"`` would silently overwrite the first
     without the guard.
     """
@@ -491,7 +490,7 @@ def test_convert_choices_to_enum_raises_on_enum_reserved_sanitize_collision(choi
 
 
 # ---------------------------------------------------------------------------
-# SCALAR_MAP subclass resolution (High fix from rev-types__converters.md)
+# SCALAR_MAP subclass resolution
 # ---------------------------------------------------------------------------
 
 
@@ -511,8 +510,7 @@ class _NullableTrimmedCharField(models.CharField):
 def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar():
     """A consumer subclass of ``CharField`` resolves to ``str`` via MRO walk.
 
-    Pins the High fix from ``rev-types__converters.md``: exact-type
-    ``SCALAR_MAP`` lookup misses subclasses, breaking the standard Django
+    Exact-type ``SCALAR_MAP`` lookup misses subclasses, breaking the standard Django
     extension path. The walker must find ``models.CharField`` on the
     subclass MRO and return its mapped scalar.
     """
@@ -1394,12 +1392,12 @@ def test_real_hstore_field_compatible_with_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - multi-type relation conversion regressions (H1 always-defer)
+# Slice 4 - multi-type relation conversion regressions (always-defer)
 # ---------------------------------------------------------------------------
 
 
 def test_consumer_authored_relation_annotation_override_survives_always_defer():
-    """Consumer-authored annotation override targeting a secondary survives H1.
+    """Consumer-authored annotation override targeting a secondary survives always-defer.
 
     With ``Meta.primary = True`` on ``ItemType`` and ``AdminItemType`` as a
     secondary, an annotation-only override on ``CategoryType.items`` that
@@ -1439,7 +1437,7 @@ def test_consumer_authored_relation_annotation_override_survives_always_defer():
 
 
 def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
-    """Consumer-assigned ``strawberry.field`` on a multi-type relation survives H1."""
+    """Consumer-assigned ``strawberry.field`` on a multi-type relation survives always-defer."""
     from apps.products.models import Category, Item
 
     class AdminItemType(DjangoType):
@@ -1484,7 +1482,7 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
 
 
 def test_relation_resolves_to_primary_type_when_target_model_has_multiple():
-    """Headline H1: a relation to a multi-type model resolves to the primary."""
+    """A relation to a multi-type model resolves to the primary."""
     from apps.products.models import Category, Item
 
     class ItemType(DjangoType):
@@ -1519,7 +1517,7 @@ def test_relation_resolves_to_primary_type_when_target_model_has_multiple():
 
 
 def test_relation_resolves_to_primary_when_secondary_registered_before_source_before_primary():
-    """H1 import-order trap closure: declare secondary -> source -> primary in order.
+    """Import-order trap closure: declare secondary -> source -> primary in order.
 
     Without always-defer, ``CategoryType.items`` would freeze against
     ``AdminItemType`` (the only registered type on ``Item`` at the
@@ -1885,7 +1883,7 @@ def test_convert_field_output_delegates_scalar_columns():
 
 
 def test_file_columns_stay_scalar_on_the_filter_input_path():
-    """P0 split: the SHARED scalar/filter-input path still sees ``str`` for a file column.
+    """The SHARED scalar/filter-input path still sees ``str`` for a file column.
 
     ``FIELD_OUTPUT_TYPE_MAP`` is read-output-only; ``scalar_for_field`` (the
     lookup ``filters/inputs._scalar_from_model_field`` delegates to) walks

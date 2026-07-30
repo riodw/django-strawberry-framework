@@ -10,7 +10,7 @@ with the ``"__all__"`` branch raising ``NotImplementedError``. Slice 2
 expands the file to:
 
 - Replace the ``"__all__"`` placeholder with the
-  ``_get_concrete_field_names_for_order`` walk per spec-028 Revision 4 B4.
+  ``_get_concrete_field_names_for_order`` walk per spec-028.
 - Add the resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
 - Add the classmethod permission pipeline
@@ -81,7 +81,7 @@ class OrderSetMetaclass(type):
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedOrder`` declarations and bind each to the new
-        # class via the shared set-family collector (the 0.0.9 DRY pass). The
+        # class via the shared set-family collector. The
         # plain ``type`` metaclass does no MRO merge, so
         # ``inherit_from_bases=True`` copies each base's ``related_orders``
         # first (reverse iteration lets earlier bases win) before the class
@@ -144,7 +144,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     # Family binding-state descriptor: the single source for the lifecycle attr
     # names ``get_fields`` (via ``expanded_once``) and ``registry.clear()`` (via
     # ``clear_order_input_namespace``'s ``binding_attrs``) reference, instead of
-    # re-spelling the tuple (the 0.0.9 DRY pass).
+    # re-spelling the tuple.
     # Mirrors ``FilterSet._lifecycle`` with the order-side slot names.
     _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
         owner="_owner_definition",
@@ -170,7 +170,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
         ``Meta.fields = "__all__"`` expands via
         ``_get_concrete_field_names_for_order`` (Slice 2's deliverable
-        per spec-028 Decision 3 / Revision 4 B4).
+        per spec-028 Decision 3).
         """
 
         def _build() -> OrderedDict:
@@ -180,7 +180,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
             # The two-condition cache-write gate (own ``related_orders`` +
             # no unresolved string lazy targets) is single-sited in
-            # ``sets_mixins.should_cache_expansion`` (DRY review A8).
+            # ``sets_mixins.should_cache_expansion``.
             if should_cache_expansion(
                 cls,
                 related_attr="related_orders",
@@ -190,8 +190,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             return fields
 
         # The class-level expansion cache + reentry-guard skeleton is shared with
-        # ``FilterSet.get_filters`` through ``sets_mixins.expanded_once`` (the
-        # 0.0.9 DRY pass). The order side passes no ``on_reentry``: its
+        # ``FilterSet.get_filters`` through ``sets_mixins.expanded_once``.
+        # The order side passes no ``on_reentry``: its
         # expansion never re-enters ``get_fields`` (the filter side's
         # self-referential-cycle fallback has no order analogue).
         return expanded_once(
@@ -207,7 +207,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
         Supports list / tuple form (``["title", "subtitle"]``) and the
         ``"__all__"`` shorthand (every column-backed model field name
-        per spec-028 Revision 4 B4 -- forward FK columns are included,
+        per spec-028 -- forward FK columns are included,
         M2M managers and reverse FKs are excluded).
         """
         fields: OrderedDict = OrderedDict()
@@ -268,7 +268,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         Django test client default) work without bespoke wiring. Any
         other shape raises ``ConfigurationError``. Thin delegate to
         ``utils/permissions.py::request_from_info`` (single-sited with the
-        filter side per the 0.0.9 DRY pass).
+        filter side).
         """
         return request_from_info(info, family_label="OrderSet")
 
@@ -313,7 +313,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     ) -> tuple[list[str], list[tuple[str, RelatedOrder, Any]]]:
         """Single-pass ``(leaf source paths, active related branches)`` for one level.
 
-        The fused traversal ``_run_permission_checks`` consumes (feedback H3):
+        The fused traversal ``_run_permission_checks`` consumes:
         one ``iter_active_fields`` walk yields both the per-field gate paths and
         the active ``RelatedOrder`` branches, instead of two full walks. Thin
         delegate to ``utils/permissions.py::active_permission_targets`` with the
@@ -506,7 +506,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
                 continue
             if _path_traverses_to_many(model, field_path):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
-                # generated alias (DRY review A9 - one owner for the mangle).
+                # generated alias (one owner for the mangle).
                 alias = f"_dst_order_{index}_{flatten_lookup_path(field_path)}"
                 # Ascending vs descending: ``Ordering.is_ascending`` (same rule
                 # ``Ordering.resolve`` uses) picks Min / Max for the aggregate.
@@ -519,7 +519,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
     @classmethod
     def _apply_orderings(cls, input_value: Any, queryset: models.QuerySet) -> models.QuerySet:
-        """Apply the normalized orderings to ``queryset`` - the un-colored tail (DRY review D1).
+        """Apply the normalized orderings to ``queryset`` - the un-colored tail.
 
         The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
         mirror of the filter side's ``_apply_common_prelude`` /
@@ -595,7 +595,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         blocking ORM read does not block the event loop.
         ``get_flat_orders`` and ``queryset.order_by(...)`` are NOT
         wrapped -- they are pure-Python parsing + a queryset-method call
-        that does no I/O (per spec-028 Decision 8 step 7 + N7 of rev1).
+        that does no I/O (per spec-028 Decision 8 step 7).
 
         The order side has NO equivalent of the filter side's
         ``_derive_related_visibility_querysets_async`` /

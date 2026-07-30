@@ -9,7 +9,7 @@ Covers ``django_strawberry_framework/rest_framework/sets.py``:
   ``serializer_class`` accepted as a known key; ``fields`` + ``exclude`` both set;
   bare-string ``optional_fields``; unknown key);
 - the public surface (``from django_strawberry_framework import SerializerMutation``
-  resolves through the root ``__getattr__``; NOT in ``__all__`` - F1);
+  resolves through the root ``__getattr__``; NOT in ``__all__``);
 - declaration registration (the serializer flavor rides the ``DjangoMutation``
   registry, NOT the plain-form registry; the abstract base registers nowhere;
   late declaration after finalize rejected);
@@ -130,7 +130,7 @@ def test_serializer_mutation_resolves_through_root_getattr():
 
 
 def test_serializer_mutation_not_in_all():
-    """``SerializerMutation`` is NOT in ``__all__`` while DRF is soft (F1)."""
+    """``SerializerMutation`` is NOT in ``__all__`` while DRF is soft."""
     assert "SerializerMutation" not in django_strawberry_framework.__all__
 
 
@@ -962,7 +962,7 @@ def test_deferred_and_allowed_meta_keys_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# get_serializer_for_schema() determinism fingerprint (spec-039 rev6 #10)
+# get_serializer_for_schema() determinism fingerprint
 # ---------------------------------------------------------------------------
 
 
@@ -1012,12 +1012,12 @@ def test_deterministic_schema_hook_binds_without_drift_error():
 
 
 # ---------------------------------------------------------------------------
-# Meta.injected_fields explicit contract (spec-039 rev6 #2)
+# Meta.injected_fields explicit contract
 # ---------------------------------------------------------------------------
 
 
 def test_meta_injected_fields_lets_narrowing_drop_required_field():
-    """``Meta.injected_fields`` lets a narrowing drop a required field WITHOUT the blanket waiver (rev6 #2)."""
+    """``Meta.injected_fields`` lets a narrowing drop a required field WITHOUT the blanket waiver."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()  # `name` + `category` are required.
 
@@ -1034,7 +1034,7 @@ def test_meta_injected_fields_lets_narrowing_drop_required_field():
 
 
 def test_narrowing_dropping_required_without_injected_still_raises():
-    """Dropping a required field with NEITHER an override nor ``injected_fields`` still fails loud (rev6 #2)."""
+    """Dropping a required field with NEITHER an override nor ``injected_fields`` still fails loud."""
     _declare_products_primaries()
 
     class BadMut(SerializerMutation):
@@ -1061,12 +1061,12 @@ def test_unknown_injected_fields_meta_key_still_rejected():
 
 
 # ---------------------------------------------------------------------------
-# Meta.select_for_update opt-in row lock (spec-039 rev6 #14)
+# Meta.select_for_update opt-in row lock
 # ---------------------------------------------------------------------------
 
 
 def test_meta_select_for_update_stored_on_snapshot():
-    """``Meta.select_for_update = True`` is validated + stored on the snapshot (rev6 #14)."""
+    """``Meta.select_for_update = True`` is validated + stored on the snapshot."""
 
     class LockMut(SerializerMutation):
         class Meta:
@@ -1081,9 +1081,9 @@ def test_meta_select_for_update_stored_on_snapshot():
 def test_meta_select_for_update_defaults_true():
     """``Meta.select_for_update`` defaults to ``True`` for locked writes.
 
-    The default flipped from opt-in (rev6 #14) to opt-out: the update/delete
-    locate and relation-target checks lock through the base manager unless the
-    consumer explicitly opts into weaker concurrency with ``False``.
+    The default is opt-out, not opt-in: the update/delete locate and relation-target
+    checks lock through the base manager unless the consumer explicitly opts into
+    weaker concurrency with ``False``.
     """
 
     class PlainMut(SerializerMutation):
@@ -1109,7 +1109,7 @@ def test_meta_select_for_update_explicit_false_opts_out():
 
 
 def test_meta_select_for_update_non_bool_raises():
-    """A non-bool ``Meta.select_for_update`` fails loud at class creation (rev6 #14)."""
+    """A non-bool ``Meta.select_for_update`` fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="select_for_update must be a bool"):
 
         class BadMut(SerializerMutation):
@@ -1121,7 +1121,7 @@ def test_meta_select_for_update_non_bool_raises():
 
 
 def test_meta_injected_fields_unknown_name_raises_at_class_creation():
-    """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation (rev6 rev2 P1)."""
+    """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
 
         class BadInject(SerializerMutation):
@@ -1133,7 +1133,7 @@ def test_meta_injected_fields_unknown_name_raises_at_class_creation():
 
 
 def test_input_type_name_runs_the_determinism_guard():
-    """``input_type_name`` reads the hook through the SAME guarded path; a drifted hook raises (rev6 rev2 P2)."""
+    """``input_type_name`` reads the hook through the SAME guarded path; a drifted hook raises."""
     _declare_products_primaries()
     serializer_cls = _item_serializer()
     drift = {"drop": False}
@@ -1179,7 +1179,7 @@ def test_input_type_name_reads_bound_name_after_finalize():
 
 
 # ---------------------------------------------------------------------------
-# Meta.nested_fields validation (spec-039 rev6 #17)
+# Meta.nested_fields validation
 # ---------------------------------------------------------------------------
 
 
@@ -1208,7 +1208,7 @@ def _category_field_map(*, with_create=True, with_items=True):
 
 
 def test_validate_nested_fields_none_returns_none():
-    """An unset ``Meta.nested_fields`` normalizes to ``None`` (rev6 #17)."""
+    """An unset ``Meta.nested_fields`` normalizes to ``None``."""
     serializer_cls, field_map = _category_field_map()
     assert (
         _validate_serializer_nested_fields("M", serializer_cls, "create", field_map, None) is None
@@ -1216,14 +1216,14 @@ def test_validate_nested_fields_none_returns_none():
 
 
 def test_validate_nested_fields_rejects_non_mapping():
-    """A non-mapping ``Meta.nested_fields`` fails loud at class creation (rev6 #17)."""
+    """A non-mapping ``Meta.nested_fields`` fails loud at class creation."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="must be a mapping"):
         _validate_serializer_nested_fields("M", serializer_cls, "create", field_map, ["items"])
 
 
 def test_validate_nested_fields_rejects_non_config_value():
-    """A value that is not a ``NestedSerializerConfig`` fails loud (rev6 #17)."""
+    """A value that is not a ``NestedSerializerConfig`` fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="must be a NestedSerializerConfig"):
         _validate_serializer_nested_fields(
@@ -1236,7 +1236,7 @@ def test_validate_nested_fields_rejects_non_config_value():
 
 
 def test_validate_nested_fields_rejects_unknown_field():
-    """A ``nested_fields`` key not in the serializer's field map fails loud (rev6 #17)."""
+    """A ``nested_fields`` key not in the serializer's field map fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
         _validate_serializer_nested_fields(
@@ -1249,7 +1249,7 @@ def test_validate_nested_fields_rejects_unknown_field():
 
 
 def test_validate_nested_fields_rejects_non_nested_field():
-    """A ``nested_fields`` key naming a scalar (not a nested serializer) fails loud (rev6 #17)."""
+    """A ``nested_fields`` key naming a scalar (not a nested serializer) fails loud."""
     serializer_cls, field_map = _category_field_map()
     with pytest.raises(ConfigurationError, match="not a nested serializer"):
         _validate_serializer_nested_fields(
@@ -1262,7 +1262,7 @@ def test_validate_nested_fields_rejects_non_nested_field():
 
 
 def test_validate_nested_fields_requires_create_override():
-    """``nested_fields`` on a create op requires the serializer to override ``create()`` (rev6 #17)."""
+    """``nested_fields`` on a create op requires the serializer to override ``create()``."""
     serializer_cls, field_map = _category_field_map(with_create=False)
     with pytest.raises(ConfigurationError, match="does not override create"):
         _validate_serializer_nested_fields(
@@ -1275,7 +1275,7 @@ def test_validate_nested_fields_requires_create_override():
 
 
 def test_validate_nested_fields_requires_update_override_for_update_op():
-    """``nested_fields`` on an update op requires the serializer to override ``update()`` (rev6 #17)."""
+    """``nested_fields`` on an update op requires the serializer to override ``update()``."""
     serializer_cls, field_map = _category_field_map(with_create=True)
     # The class overrides create() but NOT update(); an update op needs update().
     with pytest.raises(ConfigurationError, match="does not override update"):
@@ -1289,7 +1289,7 @@ def test_validate_nested_fields_requires_update_override_for_update_op():
 
 
 def test_validate_nested_fields_valid_returns_normalized_dict():
-    """A valid ``Meta.nested_fields`` normalizes to a plain dict (rev6 #17)."""
+    """A valid ``Meta.nested_fields`` normalizes to a plain dict."""
     serializer_cls, field_map = _category_field_map()
     config = NestedSerializerConfig()
     result = _validate_serializer_nested_fields(
@@ -1303,7 +1303,7 @@ def test_validate_nested_fields_valid_returns_normalized_dict():
 
 
 def test_nested_fields_stored_on_snapshot_and_builds():
-    """A declared ``Meta.nested_fields`` is stored on the snapshot and the mutation finalizes (rev6 #17)."""
+    """A declared ``Meta.nested_fields`` is stored on the snapshot and the mutation finalizes."""
 
     class ItemInline(serializers.ModelSerializer):
         class Meta:
@@ -1418,7 +1418,7 @@ def test_nested_star_source_field_raises_at_class_creation():
 
 
 def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation():
-    """A read-only nested serializer whose fields raise, narrowed away, still validates + binds (rev6 #17 review P1).
+    """A read-only nested serializer whose fields raise, narrowed away, still validates + binds.
 
     The fingerprint is scoped to the writable + narrowed (effective) set, so a read-only nested
     OUTPUT serializer (whose ``get_fields()`` raises if read) that is narrowed away is never
@@ -1470,7 +1470,7 @@ def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation
 
 
 def test_narrowed_away_writable_nested_not_fingerprinted():
-    """A WRITABLE nested serializer narrowed away by ``Meta.fields`` is not fingerprinted (rev6 #17 review P1).
+    """A WRITABLE nested serializer narrowed away by ``Meta.fields`` is not fingerprinted.
 
     Because the fingerprint is over the EFFECTIVE (narrowed) set, a writable nested field whose
     ``.fields`` cannot materialize no-arg does not break class creation when it is narrowed away.
@@ -1500,7 +1500,7 @@ def test_narrowed_away_writable_nested_not_fingerprinted():
 
 
 def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
-    """An UNOPTED writable nested child that raises from ``get_fields()`` reports the opt-in error (rev6 #17 review P2).
+    """An UNOPTED writable nested child that raises from ``get_fields()`` reports the opt-in error.
 
     The prior fingerprint descended into EVERY writable nested serializer, so an unopted,
     context-sensitive child raised a misleading "opted in via Meta.nested_fields..."
@@ -1538,8 +1538,8 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
 
 
 # ---------------------------------------------------------------------------
-# Per-pass shape-build-cache clear (spec-039 P1.3 - the serializer twin of the
-# model / form per-pass clears)
+# Per-pass shape-build-cache clear (the serializer twin of the model / form
+# per-pass clears)
 # ---------------------------------------------------------------------------
 
 

@@ -450,7 +450,7 @@ def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface():
 def test_register_arm_error_survives_a_reload_cycle():
     """After clear + re-declare, the SECOND finalize still fires the auth-specific arm.
 
-    Pins the every-call auth-ledger re-record (spec-040 Revision 4 P2): were the
+    Pins the every-call auth-ledger re-record (spec-040 Revision 4): were the
     auth-ledger record written once behind the cache guard, the drained ledger
     would leave ``bind_auth_mutations()`` blind to ``register`` on the second
     finalize and the generic ``_resolve_primary_type`` message would regress in.
@@ -918,7 +918,7 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
     assert target.password == ""
     assert target.username == "seam_probe"
     assert m2m_assignments == []
-    # ...while the AR-H2 exclude calculation still counts ``password`` as PROVIDED
+    # ...while the exclude calculation still counts ``password`` as PROVIDED
     # (an unprovided column like ``email`` is excluded; ``password`` is not).
     assert "password" not in exclude
     assert "email" in exclude

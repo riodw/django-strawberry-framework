@@ -8,8 +8,7 @@ Both contracts live here so optimizer and schema factories do not grow
 parallel unwrap loops.
 
 Also home to ``is_async_callable`` -- the partial-aware coroutine-callable
-predicate the public field factories and the GlobalID-callable validator share
-(the 0.0.9 DRY pass).
+predicate the public field factories and the GlobalID-callable validator share.
 
 And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
 accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the
@@ -138,7 +137,7 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
 
 
 def unwrap_container_type(strawberry_type: Any) -> Any:
-    """Peel Strawberry ``StrawberryContainer`` layers only, bounded (DRY review B3).
+    """Peel Strawberry ``StrawberryContainer`` layers only, bounded.
 
     The container-scoped sibling of ``unwrap_graphql_type`` for resolved
     Strawberry field types (``list[Edge[Node]]`` -> ``Edge``): the

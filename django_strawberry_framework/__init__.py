@@ -42,14 +42,14 @@ __version__ = "0.0.14"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared
-# ``rest_framework.require_drf()`` guard (spec-039 Decision 12 / rev6 #11). Each maps a
+# ``rest_framework.require_drf()`` guard (spec-039 Decision 12). Each maps a
 # public name to its ``(submodule, attr)`` import target; ALL are deliberately ABSENT
-# from ``__all__`` (F1) so ``from django_strawberry_framework import *`` stays DRF-free.
+# from ``__all__`` so ``from django_strawberry_framework import *`` stays DRF-free.
 # ``SerializerMutation`` is the write base; ``register_serializer_field_converter`` +
 # ``SerializerFieldConversion`` are the public serializer-field converter-registry
 # surface (a consumer registers a converter returning a ``SerializerFieldConversion``);
 # ``NestedSerializerConfig`` is the explicit opt-in for nested serializer inputs
-# (``Meta.nested_fields = {"items": NestedSerializerConfig(...)}``, spec-039 rev6 #17).
+# (``Meta.nested_fields = {"items": NestedSerializerConfig(...)}``, spec-039).
 _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
     "SerializerMutation": (".rest_framework.sets", "SerializerMutation"),
     "register_serializer_field_converter": (
@@ -75,7 +75,7 @@ def __getattr__(name: str) -> type:
 
     PEP 562 module-level ``__getattr__``: ``from django_strawberry_framework import
     SerializerMutation`` (and ``register_serializer_field_converter`` /
-    ``SerializerFieldConversion``, spec-039 rev6 #11) resolves by NAME through
+    ``SerializerFieldConversion``, spec-039) resolves by NAME through
     ``rest_framework.require_drf()`` (the shared DRF guard), so a DRF-absent consumer
     gets the install-hint ``ImportError`` only when they reach for one of these names -
     ``import django_strawberry_framework`` itself never eagerly imports
@@ -86,7 +86,7 @@ def __getattr__(name: str) -> type:
     ``globals()`` - each access re-fires the guard, so the absent-DRF test can evict
     ``rest_framework*`` / ``django_strawberry_framework.rest_framework*`` from
     ``sys.modules`` and re-hit the guard on the next access without a stale binding.
-    These names are deliberately ABSENT from ``__all__`` (F1) so ``from
+    These names are deliberately ABSENT from ``__all__`` so ``from
     django_strawberry_framework import *`` stays DRF-free and never trips the guard.
     """
     target = _DRF_SOFT_EXPORTS.get(name)

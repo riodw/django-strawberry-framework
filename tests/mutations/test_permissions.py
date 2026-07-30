@@ -135,7 +135,7 @@ def test_change_and_delete_perms_authorize_their_operations():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3: write-auth ENFORCEMENT through a schema (AR-H3 / Decision 15)
+# Slice 3: write-auth ENFORCEMENT through a schema (Decision 15)
 # ---------------------------------------------------------------------------
 
 
@@ -215,7 +215,7 @@ _CREATE_Q = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{
 
 @pytest.mark.django_db
 def test_anonymous_create_denied_top_level_error_no_write():
-    """An anonymous create is denied with a top-level ``GraphQLError`` and no write (AR-H3)."""
+    """An anonymous create is denied with a top-level ``GraphQLError`` and no write."""
     schema, (CategoryT, _ItemT) = _build_auth_schema()
     cat = product_models.Category.objects.create(name="Cat-anon")
     res = _execute(
@@ -413,7 +413,7 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
 
 @pytest.mark.django_db
 def test_async_has_permission_is_rejected_not_bypassed():
-    """An async ``has_permission`` raises SyncMisuseError, never a silent allow (feedback - async bypass).
+    """An async ``has_permission`` raises SyncMisuseError, never a silent allow.
 
     A coroutine is truthy, so a naive ``if not has_permission(...)`` would treat an
     async deny-check as ALLOW - an authorization bypass. The sync pipeline cannot
@@ -485,7 +485,7 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
 
 @pytest.mark.django_db
 def test_async_check_permission_override_is_rejected_not_bypassed():
-    """An async ``check_permission`` override raises SyncMisuseError, not a silent allow (feedback).
+    """An async ``check_permission`` override raises SyncMisuseError, not a silent allow.
 
     The override returns a coroutine; ``authorize_or_raise`` closes it and raises
     ``SyncMisuseError`` rather than treating the truthy coroutine as authorized. No

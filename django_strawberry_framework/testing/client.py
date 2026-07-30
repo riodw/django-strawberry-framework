@@ -191,7 +191,7 @@ class TestClient(BaseGraphQLTestClient):
     ) -> Response:
         """Decode ``resp`` into the typed :class:`Response` + the ``assert_no_errors`` raise.
 
-        The un-colored tail both ``query()`` colors share (DRY review B4): only
+        The un-colored tail both ``query()`` colors share: only
         the ``request()`` call is sync/async-colored, so the ``_decode`` ->
         ``Response`` construction -> Decision-5 guard (an EXPLICIT raise, not a
         bare ``assert``, so it survives ``python -O``) is written once. This

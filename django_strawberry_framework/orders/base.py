@@ -5,7 +5,7 @@ port of the cookbook's ``django_graphene_filters/orders.py::BaseRelatedOrder``
 + ``::RelatedOrder`` pair (per spec-028 Decision 2 - single-symbol public
 surface). ``LazyRelatedClassMixin`` is reused from the neutral
 ``django_strawberry_framework.sets_mixins`` module via sibling import per
-spec-028 Revision 4 H1 (importing through ``filters.base`` would load the
+spec-028 (importing through ``filters.base`` would load the
 entire filter subsystem just to build orders, and would re-couple sibling
 Layer-3 packages after the neutral module was extracted).
 
@@ -46,7 +46,7 @@ class RelatedOrder(RelatedSetTargetMixin):
     """
 
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
-    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass). The filter
+    # owner-bind / lazy-target machinery reads. The filter
     # twin uses ``("_filterset", "bound_filterset")``.
     _target_attr = "_orderset"
     _owner_attr = "bound_orderset"

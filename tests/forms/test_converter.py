@@ -175,7 +175,7 @@ def test_file_and_image_fields_are_file_kind():
 
 
 # ---------------------------------------------------------------------------
-# Fail-loud dispatch - no base-Field catch-all (the load-bearing P2 assertion)
+# Fail-loud dispatch - no base-Field catch-all
 # ---------------------------------------------------------------------------
 
 

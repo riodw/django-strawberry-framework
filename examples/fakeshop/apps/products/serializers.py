@@ -12,7 +12,7 @@ Decision-13 live matrix:
 * a ``validate_name`` rejecting ``REJECTED_SERIALIZER_ITEM_NAME`` - the field-level
   ``serializer.errors`` case (a ``validate_<field>`` error keyed to ``name``).
 * a cross-field / object ``validate()`` reading ``self.context["request"].user`` -
-  the request-context PROOF (F9: a ``validate()`` branch, NOT a
+  the request-context PROOF (a ``validate()`` branch, NOT a
   ``HiddenField(default=CurrentUserDefault())``, which is subtle under
   ``partial=True``). It rejects an item ``name`` equal to the authenticated
   username, surfacing under the ``"__all__"`` non-field bucket.
@@ -48,7 +48,7 @@ class ItemSerializer(serializers.ModelSerializer):
     generated ``categoryId`` input writes through (the reverse map). ``validate_name``
     rejects ``REJECTED_SERIALIZER_ITEM_NAME`` so a field-level error keys to ``name``;
     the object ``validate()`` reads ``self.context["request"].user`` (the request-context
-    proof, F9) and rejects a ``name`` equal to the authenticated username under
+    proof) and rejects a ``name`` equal to the authenticated username under
     ``"__all__"``; the model's ``unique_item_per_category`` constraint surfaces
     automatically through DRF's ``UniqueTogetherValidator`` as a ``"__all__"`` entry.
     """
@@ -68,7 +68,7 @@ class ItemSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        # The request-context proof (F9): an explicit object ``validate()`` reading
+        # The request-context proof: an explicit object ``validate()`` reading
         # the injected ``context["request"].user``. Rejecting a name equal to the
         # authenticated username proves the framework-merged request context lands.
         # On partial update ``attrs`` carries only the provided fields, so guard on

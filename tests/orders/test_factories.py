@@ -354,7 +354,7 @@ def test_factory_raises_when_reachable_related_orderset_is_empty():
 
 
 # ---------------------------------------------------------------------------
-# Pass-2 B1 coverage closure -- pop-time ``if os_class in seen: continue`` guard
+# Pop-time ``if os_class in seen: continue`` guard
 # ---------------------------------------------------------------------------
 
 

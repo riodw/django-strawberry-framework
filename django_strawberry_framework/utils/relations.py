@@ -439,7 +439,7 @@ def instance_accessor(field: object) -> str:
     ``ForeignObjectRel.name`` is the related *query* name (``"book"`` - the
     filter/annotation vocabulary) while the instance attribute is
     ``get_accessor_name()`` (``"book_set"``); ``getattr(root, field.name)``
-    raises ``AttributeError`` there (Round-4 review S3), and Django's
+    raises ``AttributeError`` there, and Django's
     ``prefetch_related`` rejects the query name as a lookup for the same
     reason. They coincide whenever ``related_name`` is set, which is why
     every fakeshop fixture masked the split. Forward fields

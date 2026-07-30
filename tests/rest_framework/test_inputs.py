@@ -16,7 +16,7 @@ substrate):
   annotations, identical descriptors dedupe, two distinct descriptors on one name
   raise);
 - the create-required-narrowing guard + its waiver + the per-declaration discipline;
-- nullability / defaults (M2);
+- nullability / defaults;
 - the input-attr / GraphQL-name / writable-source collisions;
 - module-global materialization.
 
@@ -482,7 +482,7 @@ def test_differing_annotations_yield_distinct_descriptor_names():
 
 
 def test_allow_null_difference_yields_distinct_descriptor_names():
-    """Two divergent shapes over one serializer differing ONLY in a field's ``allow_null`` get distinct names (spec-039 High / M2).
+    """Two divergent shapes over one serializer differing ONLY in a field's ``allow_null`` get distinct names.
 
     The descriptor identity records the EMITTED (post-nullable-widening) annotation, not the
     base one: a ``required=True, allow_null=False`` field is ``str`` while ``required=True,
@@ -732,7 +732,7 @@ def test_guard_runs_per_declaration():
 
 
 # ---------------------------------------------------------------------------
-# Nullability / defaults (M2)
+# Nullability / defaults
 # ---------------------------------------------------------------------------
 
 
@@ -904,7 +904,7 @@ def test_scalar_reverse_map_is_identity():
 
 
 # ---------------------------------------------------------------------------
-# Aggregate schema-time diagnostics (spec-039 rev6 #5)
+# Aggregate schema-time diagnostics
 # ---------------------------------------------------------------------------
 
 
@@ -975,7 +975,7 @@ def test_generated_input_field_carries_drf_metadata_description():
 
 
 def test_injected_fields_subtract_from_create_required_guard():
-    """A required field a narrowing drops but that is DECLARED injected does not raise (rev6 #2)."""
+    """A required field a narrowing drops but that is DECLARED injected does not raise."""
     ser = _required_field_serializer()
     # Dropping `required_scalar` (narrow to `maybe`) is fine when it is declared injected.
     guard_create_required_serializer_fields(
@@ -986,7 +986,7 @@ def test_injected_fields_subtract_from_create_required_guard():
 
 
 def test_dropped_required_not_injected_still_raises():
-    """A dropped required field NOT declared injected STILL raises (the guard is not blanket) (rev6 #2)."""
+    """A dropped required field NOT declared injected STILL raises (the guard is not blanket)."""
     ser = _required_field_serializer()
     with pytest.raises(ConfigurationError, match="required_scalar"):
         guard_create_required_serializer_fields(
@@ -997,12 +997,12 @@ def test_dropped_required_not_injected_still_raises():
 
 
 # ---------------------------------------------------------------------------
-# Shape debug/introspection registry (spec-039 rev6 #15)
+# Shape debug/introspection registry
 # ---------------------------------------------------------------------------
 
 
 def test_describe_serializer_input_reports_shape():
-    """``describe_serializer_input`` describes a built shape and returns ``None`` for an unknown name (rev6 #15)."""
+    """``describe_serializer_input`` describes a built shape and returns ``None`` for an unknown name."""
     from django_strawberry_framework.rest_framework.inputs import describe_serializer_input
 
     class SourceSer(serializers.Serializer):
@@ -1021,7 +1021,7 @@ def test_describe_serializer_input_reports_shape():
 
 
 def test_materialize_collision_message_enriched_with_shape_description():
-    """A distinct-class materialize collision enriches the error with the registered shape (rev6 #15)."""
+    """A distinct-class materialize collision enriches the error with the registered shape."""
     _register_products_types()
     cre, shape = build_serializer_input_class(_item_serializer(), operation_kind="create")
     materialize_serializer_input_class(shape.type_name, cre)  # first: ok
@@ -1038,7 +1038,7 @@ def test_materialize_collision_message_enriched_with_shape_description():
 
 
 def test_schema_fingerprint_sensitive_to_choices_and_help_text():
-    """The hook fingerprint changes when only choice members or help_text differ (rev6 rev2 P2)."""
+    """The hook fingerprint changes when only choice members or help_text differ."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class C1(serializers.Serializer):
@@ -1063,7 +1063,7 @@ def test_schema_fingerprint_sensitive_to_choices_and_help_text():
 
 
 def test_schema_fingerprint_sensitive_to_converter_extras():
-    """The fingerprint changes when a ``ModelField`` wrapped field or a ``ListField`` child differs (rev6 rev2 P2)."""
+    """The fingerprint changes when a ``ModelField`` wrapped field or a ``ListField`` child differs."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class ModelFieldA(serializers.Serializer):
@@ -1092,7 +1092,7 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
 
 
 # ===========================================================================
-# Opt-in nested serializer inputs (spec-039 rev6 #17)
+# Opt-in nested serializer inputs
 # ===========================================================================
 
 
@@ -1107,7 +1107,7 @@ def _nested_child_serializer():
 
 
 def test_nested_serializer_config_defaults_and_root_import():
-    """``NestedSerializerConfig`` is importable from the package root and defaults to all-None (rev6 #17)."""
+    """``NestedSerializerConfig`` is importable from the package root and defaults to all-None."""
     import django_strawberry_framework as dsf
 
     assert dsf.NestedSerializerConfig is NestedSerializerConfig
@@ -1119,7 +1119,7 @@ def test_nested_serializer_config_defaults_and_root_import():
 
 
 def test_nested_single_field_builds_recursive_input():
-    """A single opted-in nested serializer field builds a nested input class + records nested_specs (rev6 #17)."""
+    """A single opted-in nested serializer field builds a nested input class + records nested_specs."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1139,7 +1139,7 @@ def test_nested_single_field_builds_recursive_input():
 
 
 def test_nested_multi_field_builds_list_of_nested_input():
-    """A ``many=True`` opted-in nested serializer builds a ``list[<nested>]`` field (kind nested_multi) (rev6 #17)."""
+    """A ``many=True`` opted-in nested serializer builds a ``list[<nested>]`` field (kind nested_multi)."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1157,7 +1157,7 @@ def test_nested_multi_field_builds_list_of_nested_input():
 
 
 def test_nested_config_narrows_nested_fields():
-    """``NestedSerializerConfig(fields=...)`` narrows the NESTED input's field set (rev6 #17)."""
+    """``NestedSerializerConfig(fields=...)`` narrows the NESTED input's field set."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1173,7 +1173,7 @@ def test_nested_config_narrows_nested_fields():
 
 
 def test_nested_config_deeper_nesting_opts_in_grandchild():
-    """A ``NestedSerializerConfig.nested_fields`` opts a DEEPER nested serializer in (rev6 #17)."""
+    """A ``NestedSerializerConfig.nested_fields`` opts a DEEPER nested serializer in."""
 
     class Grand(serializers.Serializer):
         leaf = serializers.CharField()
@@ -1199,7 +1199,7 @@ def test_nested_config_deeper_nesting_opts_in_grandchild():
 
 
 def test_nested_field_without_opt_in_still_rejects():
-    """A nested serializer field NOT named in ``nested_configs`` fails loud (nesting is opt-in only) (rev6 #17)."""
+    """A nested serializer field NOT named in ``nested_configs`` fails loud (nesting is opt-in only)."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1210,7 +1210,7 @@ def test_nested_field_without_opt_in_still_rejects():
 
 
 def test_nested_cycle_guard_fails_loud():
-    """A self-nesting serializer (a class re-entering the recursion path) fails loud (rev6 #17)."""
+    """A self-nesting serializer (a class re-entering the recursion path) fails loud."""
 
     class SelfNest(serializers.Serializer):
         x = serializers.CharField()
@@ -1229,7 +1229,7 @@ def test_nested_cycle_guard_fails_loud():
 
 
 def test_nested_depth_guard_fails_loud(monkeypatch):
-    """Nesting deeper than ``_NESTED_MAX_DEPTH`` (distinct serializers, no cycle) fails loud (rev6 #17)."""
+    """Nesting deeper than ``_NESTED_MAX_DEPTH`` (distinct serializers, no cycle) fails loud."""
     monkeypatch.setattr(serializer_inputs, "_NESTED_MAX_DEPTH", 1)
 
     class Inner(serializers.Serializer):
@@ -1247,7 +1247,7 @@ def test_nested_depth_guard_fails_loud(monkeypatch):
 
 
 def test_nested_config_key_not_in_effective_set_raises():
-    """A ``nested_fields`` key naming a field NOT in the effective set fails loud (rev6 #17)."""
+    """A ``nested_fields`` key naming a field NOT in the effective set fails loud."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1262,7 +1262,7 @@ def test_nested_config_key_not_in_effective_set_raises():
 
 
 def test_nested_config_key_naming_scalar_raises():
-    """A ``nested_fields`` key naming a SCALAR (not a nested serializer) fails loud (rev6 #17)."""
+    """A ``nested_fields`` key naming a SCALAR (not a nested serializer) fails loud."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1278,7 +1278,7 @@ def test_nested_config_key_naming_scalar_raises():
 
 
 def test_identical_nested_shape_dedupes_to_one_class():
-    """Two builds of the same nested shape resolve the nested input to ONE cached class object (rev6 #17)."""
+    """Two builds of the same nested shape resolve the nested input to ONE cached class object."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1305,7 +1305,7 @@ def test_identical_nested_shape_dedupes_to_one_class():
 
 
 def test_distinct_nested_shapes_yield_distinct_top_names():
-    """Two DIFFERENT nested shapes give the top inputs DISTINCT descriptor-derived names (rev6 #17)."""
+    """Two DIFFERENT nested shapes give the top inputs DISTINCT descriptor-derived names."""
 
     class ChildA(serializers.Serializer):
         code = serializers.CharField()
@@ -1334,7 +1334,7 @@ def test_distinct_nested_shapes_yield_distinct_top_names():
 
 
 def test_build_serializer_inputs_threads_nested_into_both_shapes():
-    """``build_serializer_inputs`` threads ``nested_configs`` into BOTH the create + partial shapes (rev6 #17)."""
+    """``build_serializer_inputs`` threads ``nested_configs`` into BOTH the create + partial shapes."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1358,7 +1358,7 @@ def test_build_serializer_inputs_threads_nested_into_both_shapes():
 
 
 def test_recursive_fingerprint_sensitive_to_nested_shape_change():
-    """The fingerprint recurses into an OPTED-IN nested serializer's fields (a nested change is detected) (rev6 #17)."""
+    """The fingerprint recurses into an OPTED-IN nested serializer's fields (a nested change is detected)."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class ChildA(serializers.Serializer):
@@ -1374,7 +1374,7 @@ def test_recursive_fingerprint_sensitive_to_nested_shape_change():
     class ParentB(serializers.Serializer):
         detail = ChildB()
 
-    # Opt the nested field in (rev6 #17 review P2): only then does the fingerprint descend.
+    # Opt the nested field in: only then does the fingerprint descend.
     configs = {"detail": NestedSerializerConfig()}
     fp_a = serializer_schema_fingerprint(dict(ParentA().fields), nested_configs=configs)
     fp_b = serializer_schema_fingerprint(dict(ParentB().fields), nested_configs=configs)
@@ -1385,7 +1385,7 @@ def test_recursive_fingerprint_sensitive_to_nested_shape_change():
 
 
 def test_recursive_fingerprint_terminates_on_nested_cycle():
-    """The recursive fingerprint terminates (a cycle marker) for an OPTED-IN self-nesting serializer (rev6 #17)."""
+    """The recursive fingerprint terminates (a cycle marker) for an OPTED-IN self-nesting serializer."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class SelfNest(serializers.Serializer):
@@ -1397,7 +1397,7 @@ def test_recursive_fingerprint_terminates_on_nested_cycle():
             return fields
 
     # Opt ``me`` in at two levels so the recursion re-enters SelfNest and hits the on-path cycle
-    # guard (rev6 #17 review P2: an unopted nested field is not descended into at all).
+    # guard - an unopted nested field is not descended into at all.
     configs = {"me": NestedSerializerConfig(nested_fields={"me": NestedSerializerConfig()})}
     fingerprint = serializer_schema_fingerprint(dict(SelfNest().fields), nested_configs=configs)
     # It terminated (no RecursionError) and the nested axis carries the cycle marker.
@@ -1406,7 +1406,7 @@ def test_recursive_fingerprint_terminates_on_nested_cycle():
 
 
 def test_describe_serializer_input_reports_nested_fields():
-    """``describe_serializer_input`` lists a nested field's own child field names (rev6 #17 / #15)."""
+    """``describe_serializer_input`` lists a nested field's own child field names."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
@@ -1424,7 +1424,7 @@ def test_describe_serializer_input_reports_nested_fields():
 
 
 def test_fingerprint_skips_read_only_nested_serializer():
-    """The fingerprint does NOT descend into a read-only nested serializer (rev6 #17 review P1).
+    """The fingerprint does NOT descend into a read-only nested serializer.
 
     A read-only nested output serializer whose ``get_fields()`` raises if read must not break
     class validation - it never produces an input field, so the writable-scoped fingerprint
@@ -1448,7 +1448,7 @@ def test_fingerprint_skips_read_only_nested_serializer():
 
 
 def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
-    """An OPTED-IN nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError (rev6 #17 review P1)."""
+    """An OPTED-IN nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class RaisingWritableChild(serializers.Serializer):
@@ -1466,7 +1466,7 @@ def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
 
 
 def test_fingerprint_unopted_nested_raising_child_is_shallow_not_materialized():
-    """An UNOPTED nested field is NOT descended into - a raising ``get_fields()`` is never read (rev6 #17 review P2).
+    """An UNOPTED nested field is NOT descended into - a raising ``get_fields()`` is never read.
 
     The prior behavior descended into every writable nested serializer, so an unopted,
     context-sensitive child raised a misleading "opted in via Meta.nested_fields..."
@@ -1495,7 +1495,7 @@ def test_fingerprint_unopted_nested_raising_child_is_shallow_not_materialized():
 
 
 def test_nested_source_axis_recorded_single_and_many():
-    """A nested field with ``source=`` records the normalized source axis (rev6 #17 review P1)."""
+    """A nested field with ``source=`` records the normalized source axis."""
 
     class Inner(serializers.Serializer):
         x = serializers.CharField()
@@ -1522,7 +1522,7 @@ def test_nested_source_axis_recorded_single_and_many():
 
 
 def test_nested_dotted_source_rejected():
-    """A nested field with a dotted source / ``source='*'`` fails loud (rev6 #17 review P1)."""
+    """A nested field with a dotted source / ``source='*'`` fails loud."""
 
     class Inner(serializers.Serializer):
         x = serializers.CharField()
@@ -1539,7 +1539,7 @@ def test_nested_dotted_source_rejected():
 
 
 def test_fingerprint_propagates_nested_configuration_error_unwrapped():
-    """A nested ``get_fields()`` raising ConfigurationError propagates it unchanged, not double-wrapped (rev6 #17 review P1)."""
+    """A nested ``get_fields()`` raising ConfigurationError propagates it unchanged, not double-wrapped."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class BadConfigChild(serializers.Serializer):

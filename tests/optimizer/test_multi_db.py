@@ -23,8 +23,8 @@ Per ``AGENTS.md #"Test through real usage and prefer the example project"``, rea
 package-internal mocking when both reach the line.
 
 The five resolver-level Slice 1 tests (FK-id elision branches + strictness
-connection-agnostic shape) live in ``tests/types/test_resolvers.py`` per
-rev2 H4 + rev3 R2 - both ``_build_fk_id_stub`` and ``_check_n1`` live in
+connection-agnostic shape) live in ``tests/types/test_resolvers.py``: both
+``_build_fk_id_stub`` and ``_check_n1`` live in
 ``django_strawberry_framework/types/resolvers.py``, so the source-mirror
 partner is the resolver-tests module.
 
@@ -116,8 +116,8 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
         registry.clear()
 
     # Apply against an UNROUTED parent queryset - the consumer's hint is
-    # what carries the child alias, not the parent qs (rev2 H2 - generated
-    # child querysets do NOT inherit the parent alias).
+    # what carries the child alias, not the parent qs (generated child
+    # querysets do NOT inherit the parent alias).
     result = plan.apply(Category.objects.all())
 
     # The walker either returns the consumer's ``Prefetch`` unchanged or

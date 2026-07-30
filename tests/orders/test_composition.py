@@ -239,7 +239,7 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
 def test_filter_and_order_share_lazy_related_class_mixin_via_neutral_module():
     """Both subsystems' ``Related*`` primitives inherit the shared mixin.
 
-    Spec-028 Revision 4 H1 pinned the mixin's neutral home at
+    Spec-028 pinned the mixin's neutral home at
     ``django_strawberry_framework/sets_mixins.py``. ``RelatedFilter``
     (declared at ``django_strawberry_framework.filters.base.RelatedFilter``)
     AND ``RelatedOrder`` (declared at

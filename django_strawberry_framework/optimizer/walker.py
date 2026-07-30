@@ -47,8 +47,8 @@ from .selections import (
     with_runtime_prefix,
 )
 
-# The selection-traversal primitives moved to ``optimizer/selections.py`` in the
-# 0.0.9 DRY pass so the walker and the AST seam in ``extension.py`` share ONE
+# The selection-traversal primitives live in ``optimizer/selections.py`` so the
+# walker and the AST seam in ``extension.py`` share ONE
 # fragment/directive/response-key implementation. The underscore aliases keep
 # this module's bodies - and the tests that import these names from
 # ``optimizer.walker`` - working unchanged; the walker-specific merge /
@@ -81,7 +81,7 @@ def _record_path_resolver_keys(
     lookup_path: str,
     keys: tuple[str, ...],
 ) -> None:
-    """Append unique resolver keys onto one path ledger entry (B8)."""
+    """Append unique resolver keys onto one path ledger entry."""
     if not keys:
         return
     recorded = path_map.get(lookup_path, ())
@@ -93,7 +93,7 @@ def _record_prefetch_path_keys(
     lookup_path: str,
     keys: tuple[str, ...],
 ) -> None:
-    """Attribute resolver / FK-id keys to a ``prefetch_related`` lookup path (B8)."""
+    """Attribute resolver / FK-id keys to a ``prefetch_related`` lookup path."""
     _record_path_resolver_keys(plan.prefetch_path_resolver_keys, lookup_path, keys)
 
 
@@ -102,7 +102,7 @@ def _record_select_path_keys(
     lookup_path: str,
     keys: tuple[str, ...],
 ) -> None:
-    """Attribute resolver / FK-id keys to a ``select_related`` lookup path (B8)."""
+    """Attribute resolver / FK-id keys to a ``select_related`` lookup path."""
     _record_path_resolver_keys(plan.select_path_resolver_keys, lookup_path, keys)
 
 
@@ -362,7 +362,7 @@ def _build_child_queryset(
     method does not need to be called twice on the prefetch path.
 
     The custom ``get_queryset`` visibility hook runs through the shared
-    ``utils/querysets.py::apply_type_visibility_sync`` (the 0.0.9 DRY pass) so
+    ``utils/querysets.py::apply_type_visibility_sync`` so
     plan-time prefetch visibility uses the SAME sync routing the resolver
     surfaces do: an async-only related ``get_queryset`` surfaces a clean
     ``SyncMisuseError`` here (the optimizer walker is sync; a coroutine would
@@ -737,7 +737,7 @@ def _plan_select_relation(
         append_unique_many(plan.fk_id_elisions, resolver_identities)
         return
     append_unique(plan.select_related, full_path)
-    # Couple the directive to the resolver metadata it satisfies (B8): if
+    # Couple the directive to the resolver metadata it satisfies: if
     # reconciliation later drops this path because a consumer projection
     # cannot traverse it (``plans.py::prune_unsupportable_select_related``),
     # these keys leave ``planned_resolver_keys`` with it.
@@ -775,7 +775,7 @@ def _plan_prefetch_relation(
     the related QUERY name (``"book"``) while the accessor is ``"book_set"``
     - planning the query name made every optimized query over such a
     relation fail with ``AttributeError: ... invalid parameter to
-    prefetch_related()`` (Round-4 S3 follow-up). Plan keys and resolver
+    prefetch_related()``. Plan keys and resolver
     identities stay in field-name vocabulary; only the lookup string
     Django consumes uses the accessor.
 
@@ -959,7 +959,7 @@ def _apply_hint(
     if hint.prefetch_obj is not None:
         hinted_to_attr = getattr(hint.prefetch_obj, "to_attr", None)
         if hinted_to_attr and not consumer_assigned:
-            # feedback2 P0-4: Django lands ``to_attr`` rows on that attribute
+            # Django lands ``to_attr`` rows on that attribute
             # instead of ``_prefetched_objects_cache[accessor]`` - which is
             # what the GENERATED relation resolver reads. Accepting the hint
             # would record the relation as planned (silencing strictness)
@@ -1126,7 +1126,7 @@ def _selected_scalar_names(
     # registry.get(model), which is what the default _resolve_field_map(model)
     # call already does. The scalar-only secondary-type regression is
     # exercised through the root _walk_selections path, not through this
-    # helper. (spec-018 rev6 M1 audit invariant.)
+    # helper. (An audit invariant.)
     type_cls, _definition, field_map = _resolve_field_map(model)
     # TODO(spec-035 Slice 3): audit this FK-id-elision helper as the walker's
     # second ``included_field_selections`` consumer. Pseudocode: either share
@@ -1294,8 +1294,8 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             # arguments across aliases are window-planned together (one shared
             # ``to_attr``), while divergent aliases (``a: books(first:2)`` +
             # ``b: books(first:5)``, or differing filter/orderBy) plan ONE
-            # WINDOW PER RESPONSE KEY under per-key ``to_attr``s (idea #2 -
-            # O(aliases) batched queries). The first occurrence's
+            # WINDOW PER RESPONSE KEY under per-key ``to_attr``s
+            # (O(aliases) batched queries). The first occurrence's
             # ``arguments`` stays the merged selection's primary value (the
             # pre-033 first-args-win contract for non-connection fields); the
             # per-response-key map is the side-channel ``_plan_connection_relation``
@@ -1393,7 +1393,7 @@ def _aliased_arguments_diverge(selection: Any) -> bool:
     different argument payloads (e.g. ``a: books(first: 2)`` +
     ``b: books(first: 5)``). The scheme selector for
     ``_plan_connection_relation``: divergent aliases plan one window PER
-    RESPONSE KEY (each under its own ``to_attr``; idea #2), while agreeing
+    RESPONSE KEY (each under its own ``to_attr``), while agreeing
     aliases share the single legacy window. Payloads compare
     pagination-normalized (``_normalized_alias_payload``) so the literal
     ``first: 2`` and a variable resolving to ``2`` agree. Selections built

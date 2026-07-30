@@ -40,7 +40,7 @@ import strawberry
 from strawberry import relay
 
 # ``SerializerMutation`` is imported BY NAME (never via star import): the root
-# ``__all__`` intentionally omits it while DRF is a soft dependency (F1), so the
+# ``__all__`` intentionally omits it while DRF is a soft dependency, so the
 # root ``__getattr__`` resolves it on demand. DRF is present in the test context
 # (the dev-group dependency, Decision 12), so this import succeeds here.
 from django_strawberry_framework import (
@@ -123,7 +123,7 @@ class ItemType(DjangoType):
         The view_item branch cascades just like the anonymous fallback: a non-staff
         viewer only sees Items whose ``category`` target is itself visible to them, so
         selecting the non-null ``category { ... }`` can never hit a hidden target and
-        raise ``RelatedObjectDoesNotExist`` (feedback H1). Only staff bypass the cascade.
+        raise ``RelatedObjectDoesNotExist``. Only staff bypass the cascade.
         """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
@@ -160,7 +160,7 @@ class PropertyType(DjangoType):
 
         Like ItemType, the view_property branch cascades through the non-null
         ``category`` edge so a nested ``category { ... }`` selection can never reach a
-        hidden target. Only staff bypass the cascade (feedback H1).
+        hidden target. Only staff bypass the cascade.
         """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
@@ -198,7 +198,7 @@ class EntryType(DjangoType):
         The view_entry branch cascades through both non-null FK edges (``item`` and
         ``property``), so a non-staff viewer only sees Entries whose targets are visible
         to them - selecting ``item { ... }`` / ``property { ... }`` can never hit a hidden
-        target and raise ``RelatedObjectDoesNotExist`` (feedback H1). Only staff bypass.
+        target and raise ``RelatedObjectDoesNotExist``. Only staff bypass.
         """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
@@ -346,7 +346,7 @@ class SubmitPing(DjangoFormMutation):
     to the ``DenyAll`` deny-by-default default (spec-038 Decision 11). Every live call
     is rejected with a top-level ``GraphQLError`` before the form runs, so the deny
     posture is earned over a real ``/graphql`` request rather than only in package
-    tests (``spec-038-form_mutations-0_0_12`` review - live deny-default coverage).
+    tests.
     """
 
     class Meta:

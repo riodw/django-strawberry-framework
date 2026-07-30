@@ -156,7 +156,7 @@ class _Probe(Enum):
     stream is no longer in a state anything can safely read". Collapsing those
     into one sentinel is what let a failed position-restore fall through to a
     bounded read that then read from the wrong offset, so the two states are
-    named (review Low 6).
+    named.
 
     - :attr:`UNMEASURABLE` - the probe declined or failed, and the stream is
       **known** to be exactly where it started, so the bounded read is safe and
@@ -207,7 +207,7 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
        over-limit: reading from an unknown offset would hand Strawberry bytes
        that are not the request's, and an application that cannot measure a body
        must not process it. This is the one branch that answers ``True`` without
-       a measurement, and it is the fail-closed direction (review Low 6). It is
+       a measurement, and it is the fail-closed direction. It is
        also the one branch that logs: the client cannot be told this refusal is
        different from an ordinary over-limit one, so the operator is
        (:data:`_CORRUPTED_PROBE_LOG_MESSAGE`).
@@ -237,7 +237,7 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
 def _measured_remaining(stream: Any) -> int | _Probe:
     """The unread byte count of ``stream``, or which way the probe failed.
 
-    Three outcomes, never two (review Low 6): a positive ``int``,
+    Three outcomes, never two: a positive ``int``,
     :attr:`_Probe.UNMEASURABLE` ("ask the bounded read instead", with the stream
     provably untouched), or :attr:`_Probe.CORRUPTED` ("nothing may read this
     stream now"). "The body is empty" is not among them, which is enforced rather

@@ -77,7 +77,7 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     """Classify child-queryset states NO fetch strategy can window safely.
 
     The strategy-independent safety gate the nested planner runs before building a
-    ``NestedConnectionRequest`` (feedback2 P0-3): these shapes come from
+    ``NestedConnectionRequest``: these shapes come from
     consumer hooks (a target ``get_queryset`` returning a pre-shaped
     queryset) and either crash inside ``apply_window_pagination`` before any
     fallback could help, or silently change semantics under raw SQL:

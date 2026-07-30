@@ -29,9 +29,9 @@ from django_strawberry_framework.filters import FilterSet, RelatedFilter
 def _validate_email_must_have_at_sign(value: str) -> None:
     """Reject email strings without an ``@`` sign.
 
-    Spec-021 L1054 (H4-rev8): a plain ``String!`` declared filter whose
-    custom validator raises ``forms.ValidationError("missing @",
-    code="missing_at_sign")``. Used by ``PatronFilter.email_must_have_at_sign``
+    A plain ``String!`` declared filter whose custom validator raises
+    ``forms.ValidationError("missing @", code="missing_at_sign")``. Used by
+    ``PatronFilter.email_must_have_at_sign``
     so the filter input bypasses GraphQL enum coercion and reaches
     ``_validate_form_or_raise``'s ``FILTER_INVALID`` path.
     """
@@ -116,9 +116,9 @@ class LoanFilter(FilterSet):
 class PatronFilter(FilterSet):
     """Patron filterset bound to ``PatronType`` at finalize phase 2.5.
 
-    ``email_must_have_at_sign`` is the declared custom filter
-    spec-021 H4-rev8 (L1054) names. The underlying form field carries
-    ``_validate_email_must_have_at_sign`` as a validator so an input
+    ``email_must_have_at_sign`` is the declared custom filter. The underlying
+    form field carries ``_validate_email_must_have_at_sign`` as a validator so
+    an input
     without ``@`` raises ``forms.ValidationError("missing @",
     code="missing_at_sign")``; ``_validate_form_or_raise`` in
     ``sets.py::FilterSet`` then translates that into the

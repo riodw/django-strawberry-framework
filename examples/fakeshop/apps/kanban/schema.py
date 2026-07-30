@@ -347,7 +347,7 @@ class CardType(DjangoType):
     # model's queryset properties. All three are resolver-backed relation fields
     # (the same "declare-but-resolve-from-attribute" idiom as ``slug`` above).
     #
-    # LIMITATION (feedback P2-3): ``dependencies`` / ``dependents`` are N+1 on the
+    # LIMITATION: ``dependencies`` / ``dependents`` are N+1 on the
     # full-board export and ``optimizer_hints`` cannot prefetch them. They are
     # backed by Card *properties* (``dependency_cards`` / ``dependent_cards``),
     # not ORM relations, and each property runs a fresh ``Card.objects.filter(...)``

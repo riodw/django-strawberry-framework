@@ -145,7 +145,7 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
 def test_optimizer_prefetches_reverse_fk_without_related_name(django_assert_num_queries):
     """The optimizer plans a no-``related_name`` reverse FK via its ACCESSOR.
 
-    Round-4 S3 follow-up: ``_plan_prefetch_relation`` used to emit the
+    ``_plan_prefetch_relation`` used to emit the
     relation's QUERY name (``"plainissue"``) as the prefetch lookup, which
     Django's ``prefetch_related`` rejects for reverse relations without
     ``related_name`` - the whole optimized query died with
@@ -1212,7 +1212,7 @@ def test_query_and_mutation_plans_coexist_distinct_keys():
 
 @pytest.mark.django_db
 def test_mutation_real_execution_suppresses_only_keeps_select_related():
-    """spec-035 G2 (review P2): a REAL ``mutation`` execution suppresses ``only``.
+    """spec-035 G2: a REAL ``mutation`` execution suppresses ``only``.
 
     The walker-level tests prove the gate with synthetic ``OperationType.MUTATION``
     info doubles; this proves the integration seam end-to-end - a Strawberry
@@ -2429,7 +2429,7 @@ def test_strictness_warn_stashes_sentinel():
 @pytest.mark.django_db
 @pytest.mark.parametrize("mode", ["warn", "raise"])
 def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
-    """B3/M2: an empty plan plus strictness='warn'/'raise' must not raise or warn.
+    """B3: an empty plan plus strictness='warn'/'raise' must not raise or warn.
 
     ``_publish_plan_to_context`` stashes the strictness sentinels (planned set,
     lookup paths, mode) before ``_optimize`` short-circuits on ``plan.is_empty``.
@@ -4178,7 +4178,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
 
 
 # The two B8 behavior-only collision tests (descendant prefetch and
-# exact-plus-descendant) moved to the live fakeshop suite per feedback2.md:
+# exact-plus-descendant) live in the fakeshop suite:
 # examples/fakeshop/test_query/test_library_api.py::
 #   test_b8_consumer_descendant_prefetch_stays_flat_over_http and
 #   test_b8_consumer_exact_plus_descendant_prefetch_stays_flat_over_http.
@@ -4190,7 +4190,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
 
 @pytest.mark.django_db
 def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
-    """B8 P1: a consumer's plain ``"items"`` string is replaced by the optimizer's nested ``Prefetch``."""
+    """B8: a consumer's plain ``"items"`` string is replaced by the optimizer's nested ``Prefetch``."""
     from django.db.models import Prefetch
 
     services.seed_data(1)
@@ -4313,13 +4313,13 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 - H2 plan-cache origin separation + H3 multi-type audit dedupe
+# Slice 4 - plan-cache origin separation + multi-type audit dedupe
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model():
-    """H2: a primary-return resolver and a secondary-return resolver do not collide.
+    """A primary-return resolver and a secondary-return resolver do not collide.
 
     Two root fields on the same schema return ``list[ItemType]`` and
     ``list[AdminItemType]`` respectively. Both target ``Item`` but
@@ -4366,7 +4366,7 @@ def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_mode
 
 
 def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
-    """H3: a relation field only present on a secondary still surfaces a warning.
+    """A relation field only present on a secondary still surfaces a warning.
 
     ``ItemType`` (primary) excludes ``category``; ``AdminItemType``
     (secondary) includes ``category`` with an unregistered target. The
@@ -4410,7 +4410,7 @@ def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
 
 
 def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types():
-    """H3: identical (source_model, field_name) warnings collapse to one.
+    """Identical (source_model, field_name) warnings collapse to one.
 
     Both ``ItemType`` (primary) and ``AdminItemType`` (secondary) expose
     ``category`` whose target ``Category`` has no registered
@@ -4456,7 +4456,7 @@ def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_type
 
 
 def test_schema_audit_warning_names_the_source_type_for_multi_type_models():
-    """B6/M1: the warning text includes ``type_cls.__name__`` for multi-type models.
+    """B6: the warning text includes ``type_cls.__name__`` for multi-type models.
 
     Per-source-model dedupe collapses warnings to one per ``(model, field_name)``
     even when two registered types for the same model expose the same relation.

@@ -164,7 +164,7 @@ def test_default_both_synthesizes_m2m_connection_siblings():
 def test_reverse_fk_without_related_name_resolves_list_and_connection():
     """A reverse FK with NO ``related_name`` resolves on both relation surfaces.
 
-    Round-4 review S3: for such a relation, Django's ``ForeignObjectRel.name``
+    For such a relation, Django's ``ForeignObjectRel.name``
     is the related QUERY name (``"plainbook"``) while the instance attribute
     is ``get_accessor_name()`` (``"plainbook_set"``). Both the Phase-2 list
     resolver and the synthesized connection resolver used to
@@ -492,7 +492,7 @@ def test_synthesized_connection_paginates():
 def test_synthesized_connection_per_parent_query_cost(django_assert_num_queries):
     """Each parent row pays its own window query - the documented cost contract.
 
-    Round-4 review minor: relation-seeded connections run per-parent (no
+    Relation-seeded connections run per-parent (no
     cross-parent batching in the pre-``033`` posture), so a nested connection
     under an N-row parent list issues ``1 + N`` queries: the parent list, then
     one window query per parent (a ``totalCount`` selection would add one
@@ -562,7 +562,7 @@ def test_connection_only_relation_stays_list_suppressed_on_refinalize():
     synthesis). On the rerun, Phase 2 must NOT reattach an unannotated ``items``
     resolver (it would otherwise survive: synthesis sees its own marker and
     skips before re-removing). The final SDL carries ``itemsConnection`` and no
-    ``items`` field (spec-032 feedback P1).
+    ``items`` field.
     """
 
     class _PropertyFilter(FilterSet):
@@ -1833,7 +1833,7 @@ async def test_async_fast_path_last_zero_falls_back_for_total_count_and_pageinfo
     ``last: 0`` is the one remaining always-fallback shape after the
     marker-row disambiguation (workstream C): upstream ``ListConnection``
     slices ``edges[-0:]`` - the WHOLE list - so only the per-parent pipeline
-    reproduces it (the walker plans nothing for it; feedback2 P0-3). Driven
+    reproduces it (the walker plans nothing for it). Driven
     by ``await schema.execute(...)``, the per-parent queryset resolves
     through ``ListConnection`` asynchronously, so
     ``_consume_fallback``'s ``super().resolve_connection`` returns a coroutine
@@ -1869,8 +1869,8 @@ def test_fast_path_last_zero_quirk_parity_via_fallback():
 
     Upstream ``ListConnection`` slices ``edges[-last:]`` for the ``last``-only
     branch, and ``edges[-0:]`` is the WHOLE list - so ``last: 0`` returns every
-    edge. The walker leaves this shape FULLY UNPLANNED (feedback2 P0-3: a
-    reversed window would always come back empty and be discarded, paying a
+    edge. The walker leaves this shape FULLY UNPLANNED (a reversed window
+    would always come back empty and be discarded, paying a
     dead query per request while its resolver keys silenced strictness), so
     the per-parent pipeline - the only path that reproduces the quirk - runs
     directly and stays byte-identical to the optimizer-off answer.
@@ -1884,7 +1884,7 @@ def test_fast_path_last_zero_quirk_parity_via_fallback():
 
     with CaptureQueriesContext(db_connection) as captured:
         fast = _exec(_genres_list_schema(optimizer=True, book_total_count=True), query)
-    # feedback2 P0-3: the walker plans NOTHING for ``last: 0``. One parent
+    # The walker plans NOTHING for ``last: 0``. One parent
     # query + the single genre's per-parent pipeline (a count query for
     # ``totalCount`` + the edges query) = 3, with NO dead window query
     # riding along (pre-fix this was 4: the discarded reversed window ran
@@ -2683,8 +2683,8 @@ def test_consumer_assigned_relation_with_hint_is_planned_and_silent():
 def test_fast_path_last_zero_visible_under_strictness():
     """``last: 0`` is a REAL per-parent fallback and strictness must see it.
 
-    feedback2 P0-3: pre-fix the walker planned a reversed window for
-    ``last: 0`` and recorded ``planned_resolver_keys``; the window was then
+    The walker once planned a reversed window for ``last: 0`` and recorded
+    ``planned_resolver_keys``; the window was then
     discarded at resolve time and the per-parent fallback ran SILENTLY under
     ``strictness="raise"`` - a planned-then-fallback strictness hole. Fully
     unplanned, the shape now raises like every other Decision-6 fallback.
@@ -2704,7 +2704,7 @@ def test_fast_path_last_zero_visible_under_strictness():
 def test_resolve_from_window_last_zero_stays_a_defensive_guard():
     """The resolve-side ``last: 0`` guard survives as the defensive tail.
 
-    The walker no longer plans the shape (feedback2 P0-3), so no live path
+    The walker no longer plans the shape, so no live path
     reaches this branch - but ``_resolve_from_window`` must not ASSUME
     walker behavior (direct callers, plan/resolve drift). An empty reversed
     ``limit == 0`` window still refuses to serve (upstream's ``edges[-0:]``
@@ -2746,8 +2746,8 @@ def _windowed_book_connection_class(*, total_count=False):
 def test_consume_window_unservable_window_runs_the_sync_fallback():
     """The unservable-window tail of ``_consume_window`` is a defensive layer.
 
-    No live path produces it anymore (``last: 0`` is fully unplanned since
-    feedback2 P0-3, and the ambiguous-empty shapes serve from markers), but
+    No live path produces it anymore (``last: 0`` is fully unplanned, and the
+    ambiguous-empty shapes serve from markers), but
     the resolve side must not ASSUME walker behavior: a window the resolver
     refuses (here: the reversed ``last: 0`` quirk shape) recovers the
     carried per-parent queryset and runs the shipped sync pipeline.

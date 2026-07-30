@@ -1021,7 +1021,7 @@ def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_
 
 
 def test_register_same_type_re_register_with_flipped_primary_false_raises(fresh_registry):
-    """Flip of stored ``primary=True`` to ``primary=False`` raises (M1 regression)."""
+    """Flip of stored ``primary=True`` to ``primary=False`` raises."""
 
     class ItemType:
         pass
@@ -1350,7 +1350,7 @@ def test_finalize_ambiguity_error_message_contains_actionable_fix():
 
 
 def test_audit_runs_once_per_build(monkeypatch):
-    """The ambiguity audit runs exactly once per finalize-cycle build (M1 regression).
+    """The ambiguity audit runs exactly once per finalize-cycle build.
 
     Pins that ``_audit_primary_ambiguity`` sits *below* the
     ``registry.is_finalized()`` short-circuit in ``finalize_django_types``;
@@ -1378,7 +1378,7 @@ def test_audit_runs_once_per_build(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# L1 (docs/plan-registry-helpers.md) - unregister public helper. Tests below
+# The ``unregister`` public helper. Tests below
 # exercise the new public surface that replaces the direct private-map
 # pokes in Slice 4 walker/extension fixtures and the older
 # check_schema-audit fixtures (types list, model index, primary slot, and
@@ -1409,7 +1409,7 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry):
 
     ``clear()`` already purges the whole identity-keyed cache; ``unregister``
     promises "all traces" of one type, so its eviction keeps the two public
-    mutators consistent (Round-4 review minor). Entries for OTHER types
+    mutators consistent. Entries for OTHER types
     survive.
     """
     from django_strawberry_framework.connection import _connection_type_cache

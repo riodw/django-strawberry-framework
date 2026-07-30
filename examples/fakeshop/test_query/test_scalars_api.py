@@ -156,7 +156,7 @@ def test_scalar_specimen_bigint_zero_serializes_as_string():
 
 @pytest.mark.django_db
 def test_filter_specimens_by_bigint_in_accepts_64bit_values():
-    """Spec-021 H2: a ``BigIntegerField`` ``in`` lookup uses the ``BigInt`` scalar.
+    """A ``BigIntegerField`` ``in`` lookup uses the ``BigInt`` scalar.
 
     Regression for the generated CSV (``BaseInFilter``) element collapsing to
     ``Int`` (32-bit), which rejected the 64-bit values a ``BigIntegerField``

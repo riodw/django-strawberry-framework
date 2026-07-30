@@ -57,7 +57,7 @@ _EMPTY_ELISIONS: frozenset[str] = frozenset()
 # Sentinel distinguishing "caller did not read the PLAN sentinel" from a real
 # ``planned is None``. ``forward_resolver`` reads the plan once and threads it
 # (plus the resolver key) into ``_check_n1`` so the runtime-path walk is not
-# repeated when both the FK-id-elision and N+1 checks need it (feedback L3).
+# repeated when both the FK-id-elision and N+1 checks need it.
 _PLAN_UNREAD: Any = object()
 
 # Sentinel returned by ``_build_fk_id_stub`` when the FK ``attname`` is deferred
@@ -186,7 +186,7 @@ def _check_n1(
     resolver keys in field-name vocabulary); ``accessor_name`` keys the
     instance CACHE probes - Django's prefetch/fields caches store under
     the accessor, which diverges from ``field.name`` for reverse
-    relations without ``related_name`` (Round-4 S3 follow-up). Production
+    relations without ``related_name``. Production
     callers always supply it; ``None`` falls back to ``field_name`` for
     test-double direct callers.
 
@@ -195,7 +195,7 @@ def _check_n1(
     and the windowed-prefetch ``to_attr`` it actually probed - the shared
     ``_dst_<field>_connection``, or the per-response-key
     ``_dst_<field>$<key>_connection`` when a divergent-alias window held
-    rows (idea #2; the caller threads whichever attr its fast-path probe
+    rows (the caller threads whichever attr its fast-path probe
     found). The access truly queries iff that ``to_attr`` is ABSENT on
     ``root`` - when present, Slice 1's window already served the page, so no
     lazy load happens and the check is silent. ``reason`` (the per-parent-fallback
@@ -205,7 +205,7 @@ def _check_n1(
     list-relation calls pass no ``reason`` and produce the byte-identical
     pre-slice message.
 
-    ``planned`` / ``precomputed_key`` (keyword-only, feedback L3): a caller that
+    ``planned`` / ``precomputed_key`` (keyword-only): a caller that
     already read the ``DST_OPTIMIZER_PLANNED`` sentinel and computed the resolver
     key (``forward_resolver``) threads both so this function neither re-reads the
     sentinel nor re-walks ``info.path``. Omitting them (every other call site)
@@ -223,7 +223,7 @@ def _check_n1(
     context = getattr(info, "context", None)
     # ``forward_resolver`` may have already read the PLAN sentinel and computed
     # the resolver key; reuse them when threaded so the ``info.path`` walk runs
-    # once per row, not once per consumer (feedback L3). Other call sites omit
+    # once per row, not once per consumer. Other call sites omit
     # both and get the original read-and-compute behavior.
     if planned is _PLAN_UNREAD:
         planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
@@ -327,7 +327,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     field_name = field.name
     # Instance reads go through the accessor; ``field_name`` stays the
     # GraphQL-surface / optimizer-key vocabulary. They diverge for reverse
-    # relations without ``related_name`` (Round-4 review S3).
+    # relations without ``related_name``.
     accessor_name = instance_accessor(field)
     field_meta = _field_meta_for_resolver(field, parent_type)
     kind = field_meta.relation_kind
@@ -340,7 +340,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             # ``_prefetched_objects_cache[accessor_name]`` - the same key the N+1
             # probe above uses. Read it directly and return Django's materialized
             # list, skipping the ``manager.all()`` QuerySet clone and the
-            # ``list(...)`` copy this otherwise pays per parent row (feedback H1).
+            # ``list(...)`` copy this otherwise pays per parent row.
             # Same rows, same order. Any miss falls through to the manager path.
             prefetched = getattr(root, "_prefetched_objects_cache", None)
             if prefetched is not None:
@@ -370,7 +370,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         # resolver key, which requires an ``info.path`` walk. Read both sentinels
         # first; when neither is active - the common request shape - skip the walk
         # entirely. When at least one is active, walk once and share the key
-        # across both checks (feedback L3).
+        # across both checks.
         elisions = (
             _get_context_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS)
             if field_meta.attname is not None

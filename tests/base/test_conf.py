@@ -201,7 +201,7 @@ def test_upstream_patches_enabled_false_when_set_false(settings, dependency):
 def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
     """A mapping disables exactly the named dependency; missing names stay on.
 
-    The rev-apps.md Medium-2 escape hatch: ``{"django": False}`` silences the
+    The per-dependency escape hatch: ``{"django": False}`` silences the
     test-only Django patch without dropping the production request-hardening
     patches (``strawberry`` / ``cross_web``).
     """

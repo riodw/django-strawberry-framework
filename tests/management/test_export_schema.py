@@ -18,8 +18,7 @@ from django_strawberry_framework.management.commands.export_schema import Comman
 # Every test that synthesizes ``test_module`` does so via
 # ``monkeypatch.setitem(sys.modules, "test_module", module)`` so pytest's
 # ``monkeypatch`` teardown clears the entry from ``sys.modules`` at end of
-# test (rev3 L4 cleanup contract). The tests are order-independent under
-# any pytest collection ordering.
+# test. The tests are order-independent under any pytest collection ordering.
 
 
 def _make_test_module(monkeypatch, **attrs):

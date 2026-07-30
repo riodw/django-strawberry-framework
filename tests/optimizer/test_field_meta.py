@@ -121,8 +121,8 @@ def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk():
     """``accessor_name`` carries ``get_accessor_name()`` when it diverges from ``name``.
 
     A reverse FK without ``related_name`` exposes the related QUERY name as
-    ``field.name`` and the ``*_set`` accessor as the instance attribute
-    (Round-4 S3). ``FieldMeta`` is a frozen snapshot that cannot answer
+    ``field.name`` and the ``*_set`` accessor as the instance attribute.
+    ``FieldMeta`` is a frozen snapshot that cannot answer
     ``get_accessor_name()`` live, so the builder precomputes the accessor
     for the optimizer's prefetch lookups and the strictness cache probes.
     """

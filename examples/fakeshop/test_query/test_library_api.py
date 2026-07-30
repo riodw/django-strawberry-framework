@@ -143,7 +143,7 @@ def _input_field_type(type_name: str, field_name: str) -> dict:
     == "SCALAR"``, ``name == "String"``) means a nullable, omittable ``String``. Pins, e.g.,
     that an ``allow_blank=True`` required ``CharField`` is still ``String!`` (allow_blank is
     absent from the SDL) and that two hooks differing only in ``allow_null`` emit
-    ``String!`` vs ``String`` (spec-039 M2 / High).
+    ``String!`` vs ``String``.
     """
     response = _post_graphql(
         f"""
@@ -356,7 +356,7 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
             ],
         },
     }
-    # Slice 4 added ShelfType.get_queryset for the H1-rev4 nested-visibility
+    # Slice 4 added ShelfType.get_queryset for the nested-visibility
     # contract; the optimizer correctly downgrades select_related("shelf") to
     # Prefetch so the visibility hook applies before the join surfaces hidden
     # rows. Two queries - one for the books, one prefetch for shelves through
@@ -635,15 +635,15 @@ def test_library_relation_override_shapes_http_response_data():
 def test_library_branches_via_djangolistfield_optimized_nested_selection():
     """End-to-end pipeline coverage for ``DjangoListField`` via ``/graphql/``.
 
-    Pins the Slice 4 end-to-end contract (spec-016 Decision 4 + rev3 M6,
+    Pins the Slice 4 end-to-end contract (spec-016 Decision 4,
     spec-016 #"live HTTP test in `examples/fakeshop/test_query/test_library_api.py` covers"):
     URL routing + view + schema execution + JSON serialization + optimizer
     cooperation through the real Django + Strawberry HTTP stack. The package-
     internal return-shape contract is pinned separately by
     ``tests/test_list_field.py::test_djangolistfield_at_root_position_is_optimized``
-    (rev2 M3, spec-016 #"Pinned by `test_djangolistfield_at_root_position_is_optimized`").
+    (spec-016 #"Pinned by `test_djangolistfield_at_root_position_is_optimized`").
 
-    Query count derivation (rev6 M6, spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
+    Query count derivation (spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
         default resolver returns ``Branch._default_manager.all()``).
       * 0 SELECTs for a ``shelves`` prefetch: the consumer override on
@@ -683,8 +683,8 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     payload = response.json()
     assert "errors" not in payload, payload
     branches = payload["data"]["allLibraryBranchesViaListField"]
-    # Order-agnostic comparison: the new field has no ``order_by`` (rev2 M1 -
-    # the add-only posture deliberately does NOT inherit ``order_by("id")``
+    # Order-agnostic comparison: the new field has no ``order_by`` (the
+    # add-only posture deliberately does NOT inherit ``order_by("id")``
     # from the sibling ``all_library_branches`` resolver because the new field
     # exercises the default-resolver code path, not a consumer resolver).
     branches_by_name = {b["name"]: b for b in branches}
@@ -705,7 +705,7 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
 
     Pins ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"_coerced_manager_queryset(source)"`` - the field-wrapper's
     shared ``Manager.all()`` coercion (reached via ``_post_process_consumer_sync``) before
-    ``apply_type_visibility_sync`` runs (rev4 M1). The fakeshop resolver
+    ``apply_type_visibility_sync`` runs. The fakeshop resolver
     ``apps.library.schema._branches_manager_resolver`` returns
     ``Branch.objects`` (a ``Manager``, NOT a ``QuerySet``); rows coming
     back through ``/graphql/`` prove the wrapper coerced and applied the
@@ -996,7 +996,7 @@ def test_library_books_filter_by_choice_enum():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_choice_enum_in():
-    """Spec-021 H2: a choice column's ``in`` lookup keeps its enum element type.
+    """A choice column's ``in`` lookup keeps its enum element type.
 
     Regression for the CSV (``BaseInFilter``) branch collapsing a choice
     column's ``in`` element to ``String`` -- so ``{ in: [available] }`` failed
@@ -1080,14 +1080,14 @@ def test_library_books_filter_by_relay_m2m_global_id():
 
 @pytest.mark.django_db
 def test_library_genres_filter_by_relay_own_pk_global_id_in_list():
-    """Own-PK Relay ``id: {in: [...]}`` accepts a LIST of GlobalIDs (H5 + M1 E2E).
+    """Own-PK Relay ``id: {in: [...]}`` accepts a LIST of GlobalIDs, end to end.
 
     ``GenreType`` is a Relay node, so ``GenreFilter.id`` is a GlobalID. The
     ``in`` lookup must take a *list*: the resolved filter is
-    ``GlobalIDMultipleChoiceFilter`` (cardinality, H5a), its form field
+    ``GlobalIDMultipleChoiceFilter``, its form field
     accepts the submitted list instead of rejecting it against an empty
-    ``choices`` set (H5b), and each element is decoded + type-validated
-    before the ``id__in`` clause runs (M1). Previously the own-PK branch
+    ``choices`` set, and each element is decoded + type-validated
+    before the ``id__in`` clause runs. Previously the own-PK branch
     collapsed every lookup to a single ``GlobalIDFilter`` and ``in`` could
     not take a list at all.
     """
@@ -1115,7 +1115,7 @@ def test_library_genres_filter_by_relay_own_pk_global_id_in_list():
 
 @pytest.mark.django_db
 def test_library_genres_filter_by_relay_own_pk_global_id_in_rejects_wrong_type():
-    """A wrong-type GlobalID in the ``in`` list is rejected before the query (M1 + H5b).
+    """A wrong-type GlobalID in the ``in`` list is rejected before the query.
 
     Each list element is type-validated against the ``library.genre`` model
     label; a ``library.book`` (``BookType``) GlobalID must raise rather than
@@ -1201,17 +1201,16 @@ def test_library_genres_filter_malformed_own_pk_global_id_in_names_index():
 
 @pytest.mark.django_db
 def test_library_genres_filter_empty_id_scalar_global_id_raises_globalid_invalid():
-    """A well-typed own-PK GlobalID whose id part is EMPTY is ``GLOBALID_INVALID`` (Medium 6).
+    """A well-typed own-PK GlobalID whose id part is EMPTY is ``GLOBALID_INVALID``.
 
     ``to_base64("library.genre", "")`` decodes to the accepted ``library.genre``
     ``type_name`` with an EMPTY ``node_id``: it clears decode + strategy +
     ``type_name`` validation, but an empty identifier is not a valid resource id.
     The shared ``base.py::_decode_and_validate_global_id`` boundary now REJECTS it
     with the uniform ``GLOBALID_INVALID`` coded error rather than silently
-    no-op'ing to an UNFILTERED query (the pre-fix scalar-widening behavior). This
-    is the live acceptance test the review requires for the newly reachable
-    empty-id branch: a package stub cannot be the acceptance test for a
-    consumer-visible ``/graphql/`` surface.
+    no-op'ing to an UNFILTERED query (the pre-fix scalar-widening behavior).
+    Live acceptance for the empty-id branch: a package stub cannot be the
+    acceptance test for a consumer-visible ``/graphql/`` surface.
     """
     models.Genre.objects.create(name="SciFi")
     empty_gid = str(relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=""))
@@ -1237,13 +1236,13 @@ def test_library_genres_filter_empty_id_scalar_global_id_raises_globalid_invalid
 
 @pytest.mark.django_db
 def test_library_genres_filter_empty_id_in_list_raises_globalid_invalid_at_index_0():
-    """An all-empty-id ``id: { in: ["<empty gid>"] }`` list is rejected, naming index 0 (Medium 6).
+    """An all-empty-id ``id: { in: ["<empty gid>"] }`` list is rejected, naming index 0.
 
     Each list element is decoded independently; an empty-``node_id`` element
     raises the same ``GLOBALID_INVALID`` coded error with its list position
     named, rather than being DROPPED -- dropping it would turn the restrictive
     ``{in: ["type:"]}`` into an unfiltered query (the pre-fix list-widening
-    behavior the review flagged). Live acceptance for the empty-id branch on the
+    behavior). Live acceptance for the empty-id branch on the
     multi-value ``GlobalIDMultipleChoiceFilter``.
     """
     models.Genre.objects.create(name="SciFi")
@@ -1269,7 +1268,7 @@ def test_library_genres_filter_empty_id_in_list_raises_globalid_invalid_at_index
 
 @pytest.mark.django_db
 def test_library_genres_filter_mixed_empty_id_in_list_rejects_whole_input_at_index_1():
-    """A mixed ``[valid, empty-id]`` list rejects the WHOLE input, naming index 1 (Medium 6).
+    """A mixed ``[valid, empty-id]`` list rejects the WHOLE input, naming index 1.
 
     The valid element at index 0 does not narrow-and-continue: a single empty-id
     element at index 1 rejects the whole membership input with
@@ -1480,7 +1479,7 @@ def test_book_genres_uses_absolute_import_path_related_filter():
 
 @pytest.mark.django_db
 def test_nested_related_filter_honors_target_get_queryset():
-    """Spec-021 L1053 (H1-rev4): nested ``RelatedFilter`` honors target visibility.
+    """Nested ``RelatedFilter`` honors target visibility.
 
     Uses ``BookFilter.shelf`` (no explicit ``queryset=`` constraint) so the
     nested visibility hook on ``ShelfType.get_queryset`` is the only gate
@@ -1549,7 +1548,7 @@ def test_nested_related_filter_honors_target_get_queryset():
 
 @pytest.mark.django_db
 def test_apply_raises_graphqlerror_on_invalid_filter_input():
-    """Spec-021 L1054 (H4-rev8): form-validation rejection surfaces ``FILTER_INVALID``."""
+    """Form-validation rejection surfaces ``FILTER_INVALID``."""
     models.Patron.objects.create(name="Ada", email="ada@example.com")
 
     response = _post_graphql(
@@ -1575,7 +1574,7 @@ def test_apply_raises_graphqlerror_on_invalid_filter_input():
 
 @pytest.mark.django_db
 def test_apply_passes_graphql_enum_coercion_before_form_validation():
-    """Spec-021 L1055 (H4-rev8 companion): enum coercion fires before form validation."""
+    """Enum coercion fires before form validation."""
     response = _post_graphql(
         """
         query {
@@ -1601,7 +1600,7 @@ def test_apply_passes_graphql_enum_coercion_before_form_validation():
 
 @pytest.mark.django_db
 def test_root_get_queryset_runs_before_filter_apply():
-    """Spec-021 L1056 (M5-rev4 + M1-rev8): ``get_queryset`` runs before ``apply``."""
+    """``get_queryset`` runs before ``apply``."""
     models.Branch.objects.create(name="Andromeda Main", city="Boston")
     models.Branch.objects.create(name="Andromeda Restricted", city="restricted")
 
@@ -1641,7 +1640,7 @@ def test_root_get_queryset_runs_before_filter_apply():
 
 @pytest.mark.django_db
 def test_relay_global_id_filter_rejects_wrong_type_name():
-    """Spec-021 L1057 (M6-rev4): mismatched GlobalID ``type_name`` is rejected."""
+    """A mismatched GlobalID ``type_name`` is rejected."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1714,7 +1713,7 @@ def _seed_books_with_nullable_subtitles():
     """Seed one nullable-subtitle book + two non-null-subtitle books.
 
     Load-bearing for the ``NULLS_FIRST`` / ``NULLS_LAST`` contracts per
-    spec-028 Slice 4 Test 2 (B3-rev3): the null row must move to the
+    spec-028 Slice 4 Test 2: the null row must move to the
     requested edge, while the two non-null rows still prove ASC versus
     DESC ordering inside the non-null partition.
     """
@@ -1838,9 +1837,8 @@ def test_library_branches_order_by_reverse_fk_relation():
     shelves appears ONCE, not N times: Alpha (min code A) then Beta (min code
     B).
 
-    Corrected contract per the ``spec-030-connection_field-0_0_9`` review, P1-B. The old raw
-    ``order_by("shelves__code")`` multiplied parent rows (one per child), which
-    silently corrupted cursors / ``totalCount`` on a connection. ``OrderSet``
+    The old raw ``order_by("shelves__code")`` multiplied parent rows (one per
+    child), which silently corrupted cursors / ``totalCount`` on a connection. ``OrderSet``
     now orders to-many paths by ``Min`` / ``Max`` of the child column so the
     parent row is not multiplied; ``DjangoListField`` (this field) and
     ``DjangoConnectionField`` both get the row-preserving result.
@@ -1869,17 +1867,17 @@ def test_library_branches_order_by_reverse_fk_relation():
 
 @pytest.mark.django_db
 def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplication():
-    """Mixed scalar + to-many-aggregate ``orderBy`` executes and preserves rows (P1-B).
+    """Mixed scalar + to-many-aggregate ``orderBy`` executes and preserves rows.
 
     A mixed order input -- a scalar term (``city``) followed by a to-many
     ``RelatedOrder`` term (``shelves: { code: ASC }``) -- compiles to
     ``.annotate(<alias>=Min("shelves__code")).order_by("city", <alias>)``: a
     ``GROUP BY`` on the parent that ALSO orders by a non-aggregate scalar
     column. This live query exercises that GROUP-BY functional-dependency shape
-    end-to-end (``spec-030-connection_field-0_0_9`` review, round-2 follow-up): the
-    unit test in ``tests/orders/test_sets.py`` asserts the expression SHAPE, while
-    this asserts the EXECUTED result on a real backend, and proves both terms are
-    load-bearing AND no parent row is multiplied despite multi-shelf branches.
+    end-to-end: the unit test in ``tests/orders/test_sets.py`` asserts the
+    expression SHAPE, while this asserts the EXECUTED result on a real backend,
+    and proves both terms are load-bearing AND no parent row is multiplied
+    despite multi-shelf branches.
 
     Seed -- each branch's MIN shelf code in parentheses:
       West  (Austin; shelves A + Z -> min A)
@@ -1935,9 +1933,8 @@ def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplicati
 def test_library_genres_connection_pages_by_to_many_aggregate():
     """A root connection paginates a grouped to-many order without duplicate or missing nodes.
 
-    This is the cross-backend acceptance pin for the orders pre-BETA review:
-    the same live HTTP test runs in the default SQLite suite and the PostgreSQL
-    CI tier. ``GenreOrder.books.title`` traverses the reverse M2M, so ASC orders
+    This is the cross-backend acceptance pin: the same live HTTP test runs in
+    the default SQLite suite and the PostgreSQL CI tier. ``GenreOrder.books.title`` traverses the reverse M2M, so ASC orders
     each genre by ``Min("books__title")``. The connection then appends its
     deterministic pk tiebreaker and cursor-slices that grouped queryset.
 
@@ -2099,7 +2096,7 @@ def test_library_books_filter_and_order_compose():
 
 @pytest.mark.django_db
 def test_library_books_order_preserves_optimizer_cooperation():
-    """Spec-028 Slice 4 Test 7 (H2-rev1): ``order_by(...)`` survives the optimizer plan.
+    """Spec-028 Slice 4 Test 7: ``order_by(...)`` survives the optimizer plan.
 
     ``select_related("shelf")`` + ``prefetch_related("genres")`` survive
     ``.order_by(...)``; the query count is identical to the shipped
@@ -2217,7 +2214,7 @@ def test_root_get_queryset_runs_before_order_apply():
 
 @pytest.mark.django_db
 def test_order_check_permission_denies_for_active_field():
-    """Spec-028 Slice 4 Test 9 (M6-rev1): scalar gate fires for active field.
+    """Spec-028 Slice 4 Test 9: scalar gate fires for active field.
 
     ``BranchOrder.check_name_permission`` fires for anonymous request
     because ``name`` is active in the input; the gate raises
@@ -2242,7 +2239,7 @@ def test_order_check_permission_denies_for_active_field():
 
 @pytest.mark.django_db
 def test_order_check_permission_quiet_for_inactive_field():
-    """Spec-028 Slice 4 Test 10 (M6-rev1): scalar gate quiet for inactive field.
+    """Spec-028 Slice 4 Test 10: scalar gate quiet for inactive field.
 
     ``BranchOrder.check_name_permission`` does NOT fire because
     ``name`` is absent from the input; the only active field is
@@ -2270,7 +2267,7 @@ def test_order_check_permission_quiet_for_inactive_field():
 
 @pytest.mark.django_db
 def test_order_check_permission_denies_active_related_branch():
-    """Spec-028 Slice 4 Test 11 (H3-rev3): active-branch relation-level gate.
+    """Spec-028 Slice 4 Test 11: active-branch relation-level gate.
 
     ``BranchOrder.check_shelves_permission`` fires when the ``shelves``
     RelatedOrder branch is active in the input; quiet when the branch
@@ -2354,7 +2351,7 @@ def test_library_books_order_by_multi_field_priority():
 
 @pytest.mark.django_db
 def test_library_books_order_by_flat_shorthand_path():
-    """Spec-028 Slice 4 Test 13 (M2-rev1): flat-shorthand ``shelfCode: ASC``.
+    """Spec-028 Slice 4 Test 13: flat-shorthand ``shelfCode: ASC``.
 
     ``BookOrder.Meta.fields = [..., "shelf__code"]`` renders as
     ``shelfCode: Ordering`` on the GraphQL input type; the runtime
@@ -2389,7 +2386,7 @@ def test_library_books_order_by_flat_shorthand_path():
 
 @pytest.mark.django_db
 def test_library_branches_order_empty_list_and_null_direction_no_op():
-    """Spec-028 Slice 4 Test 14 (M7-rev1): combined empty-list + null-direction no-op.
+    """Spec-028 Slice 4 Test 14: combined empty-list + null-direction no-op.
 
     Both halves return the queryset in its default resolver-level
     order (``models.Branch.objects.order_by("id")``) without raising.
@@ -3000,7 +2997,7 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
 def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_http():
     """The mixed direct/relational OR is row-preserving over the ``allLibraryLoans`` list field.
 
-    The central production oracle (feedback High 4): ``note icontains "Cardio" OR
+    The central production oracle: ``note icontains "Cardio" OR
     book__loans__patron__email icontains "Cardio"`` unions a DIRECT scalar leaf
     with a DEEP relational leaf that routes through the row-preserving correlated
     ``EXISTS``. Over the Medtrics graph the result is EXACTLY
@@ -3067,7 +3064,7 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
 ):
     """A test-scoped live Loan CONNECTION paginates the mixed-OR row-preserved roots.
 
-    The user-mandated connection contract (feedback High 4): under the default-OFF
+    The user-mandated connection contract: under the default-OFF
     ``FAKESHOP_TEST_LOAN_CONNECTION`` flag the real ``LoanType`` gains ``relay.Node``
     and the root ``allLibraryLoansConnection`` (a ``DjangoConnectionField(LoanType)``
     auto-deriving ``filter:`` from ``LoanFilter``) is exposed at ``/graphql/``. The
@@ -3462,7 +3459,7 @@ def test_anonymous_inline_fragment_under_connection_field_resolves():
 def test_anonymous_inline_fragment_with_total_count_resolves():
     """``totalCount`` alongside an anonymous inline fragment resolves and counts.
 
-    Pins the second crash site flagged in the optimizer-folder review Low: the
+    Pins the second ``convert_selections`` crash site: the
     ``totalCount`` fast path reads ``info.selected_fields`` (Strawberry's crashing
     ``convert_selections``) via ``_total_count_requested``, and Strawberry's own
     ``should_resolve_list_connection_edges`` reads it too. The single prime of
@@ -4798,7 +4795,7 @@ def _seed_two_genres_three_shared_books():
 def test_divergent_aliases_nested_same_key_conflict_serves_each_subtree_args():
     """A same-key nested conflict under divergent aliases serves each subtree's args.
 
-    The idea-#2 review P0: both alias subtrees select ``genresConnection``
+    Both alias subtrees select ``genresConnection``
     (ONE response key) with DIFFERENT ``first`` values. The union merge must
     flag the conflict and leave the NESTED level per-parent - a silent
     first-payload-wins window served ``b``'s books one genre instead of two.
@@ -5604,8 +5601,7 @@ def test_nested_connection_pagination_from_graphql_variable_live():
     The in-process Slice-3 cache-key tests pin variable resolution at the plan
     layer; this earns the end-to-end half live - ``$n`` flows through the request
     body, ``ConnectionExtension``, and the window so the page size IS the
-    variable's value (spec-033 Slice 5; the round-3 live-coverage G2 follow-up,
-    which also added the ``variables=`` parameter to ``_post_graphql``).
+    variable's value (spec-033 Slice 5).
     """
     shelf = _seed_shelf()
     _seed_genre_with_books(
@@ -5645,7 +5641,7 @@ def test_nested_connection_first_zero_empty_page_live():
     this rounds out the live matrix with the NESTED ambiguous-empty window
     (fast-path -> per-parent fallback, spec-033 Decision 5): empty edges, but
     ``hasNextPage`` True because the genre genuinely has books beyond the zero
-    window (the round-3 live-coverage G3 follow-up).
+    window.
     """
     shelf = _seed_shelf()
     _seed_genre_with_books("Empty", shelf, ("a", "b", "c"))
@@ -5981,9 +5977,8 @@ def test_branches_via_list_field_default_resolver_applies_get_queryset_live():
 
 # ---------------------------------------------------------------------------
 # Scalar logic-tree filter unions/intersections and nested-branch validation
-# over live /graphql/ (the high-confidence and qualifying conditional moves from
-# ``tests/filters/test_sets.py`` under the live-first coverage mandate). The
-# live ``BranchFilter`` exposes ``name``/``city`` scalar lookups and the
+# over live /graphql/. The live ``BranchFilter`` exposes ``name``/``city``
+# scalar lookups and the
 # ``PatronFilter`` carries the ``emailMustHaveAtSign`` custom-validator filter,
 # so the union/intersection and per-branch form-validation contracts are
 # reachable through the real API.
@@ -6104,7 +6099,7 @@ def test_malformed_nested_branch_form_raises_filter_invalid_live():
 
 
 # ---------------------------------------------------------------------------
-# B8 consumer-prefetch collision over live /graphql/ (feedback2.md high-confidence
+# Consumer-prefetch collision over live /graphql/ (feedback2.md high-confidence
 # moves from tests/optimizer/test_extension.py). A consumer resolver returning a
 # queryset whose prefetch_related overlaps the optimizer's own Genre -> books ->
 # loans plan must reconcile, not raise, and must stay flat (no per-row prefetch)
@@ -6114,7 +6109,7 @@ def test_malformed_nested_branch_form_raises_filter_invalid_live():
 
 
 def _seed_genre_book_loan_graph() -> None:
-    """Seed two genres -> books -> loans for the B8 consumer-prefetch tests.
+    """Seed two genres -> books -> loans for the consumer-prefetch tests.
 
     G1 owns two books (one with a loan, one without); G2 owns one book with two
     loans. The variety makes an N+1 regression explode the query count while the
@@ -6698,7 +6693,7 @@ def test_named_library_records_returns_polymorphic_interface_list_over_http():
 
 @pytest.mark.django_db
 def test_named_library_records_hides_restricted_branch_from_anonymous_over_http():
-    """``namedLibraryRecords`` routes Branch rows through ``BranchType.get_queryset`` (feedback #3).
+    """``namedLibraryRecords`` routes Branch rows through ``BranchType.get_queryset``.
 
     The resolver materializes a plain list (no downstream queryset re-execution), so a
     direct ``Branch.objects`` read would serialize ``city="restricted"`` rows that
@@ -6794,7 +6789,7 @@ def test_create_branch_pair_rolls_back_first_write_when_second_conflicts():
 
 # ---------------------------------------------------------------------------
 # Serializer-mutation surface (spec-039): get_serializer_for_schema() schema hook +
-# subclass validation, earned live over /graphql/ (the README live-first mandate).
+# subclass validation, earned live over /graphql/.
 # Shelf is non-Relay, so the payload object slot is `result` and the `branch` relation
 # input is a raw pk. The schema-hook / subclass inputs take descriptor-derived (non-
 # canonical) names, so their input object is supplied INLINE (no typed `$d` variable).
@@ -7057,9 +7052,9 @@ def test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field
 
 @pytest.mark.django_db
 def test_create_shelf_via_blank_code_serializer_accepts_empty_string_over_http():
-    """An ``allow_blank=True`` required ``code`` is a non-null ``String!`` in the SDL but accepts ``""`` at runtime (spec-039 M2 - allow_blank pinned).
+    """An ``allow_blank=True`` required ``code`` is a non-null ``String!`` in the SDL but accepts ``""`` at runtime.
 
-    ``allow_blank`` is NOT a GraphQL concern (M2): the generated input's ``code`` is still a
+    ``allow_blank`` is NOT a GraphQL concern: the generated input's ``code`` is still a
     non-null ``String`` (a required ``CharField`` - allow_blank is absent from the SDL), and
     the empty-string acceptance is enforced by the serializer at runtime. Introspection pins
     the non-null shape; posting ``code: ""`` then proves the serializer accepts + writes the
@@ -7142,13 +7137,13 @@ def test_serializer_optional_fields_over_http_uses_distinct_input_and_in_band_re
 
 @pytest.mark.django_db
 def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability_over_http():
-    """Two mutations over ONE serializer whose hooks differ ONLY in a field's ``allow_null`` bind to DISTINCT inputs with the CORRECT per-field nullability (spec-039 High / M2).
+    """Two mutations over ONE serializer whose hooks differ ONLY in a field's ``allow_null`` bind to DISTINCT inputs with the CORRECT per-field nullability.
 
     ``createShelfViaHookNonNullNote`` and ``createShelfViaHookNullableNote`` share
     ``NoteShelfSerializer`` and return the SAME ``code`` + ``branch`` + ``note`` hook fields,
     with ``note`` a ``required=True`` ``CharField`` differing ONLY in ``allow_null``; each also
-    constructs the SAME serializer at runtime with the matching ``note_allow_null`` (rev6 #1 -
-    the agreement guard forbids a schema-only field the runtime does not declare). The EMITTED
+    constructs the SAME serializer at runtime with the matching ``note_allow_null`` (the
+    agreement guard forbids a schema-only field the runtime does not declare). The EMITTED
     nullability is part of the descriptor identity, so the two generated inputs are DISTINCT
     types: the ``allow_null=False`` half exposes ``note`` as a non-null ``String!``, the
     ``allow_null=True`` half as a nullable, OMITTABLE ``String``. Before the fix the descriptor
@@ -7169,7 +7164,7 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     assert non_null_input != nullable_input
 
     # The allow_null=False half emits a non-null String! note; the allow_null=True half a
-    # nullable String (M2 - required-AND-nullable is omittable, DRF enforces presence in-band).
+    # nullable String (required-AND-nullable is omittable, DRF enforces presence in-band).
     non_null_note = _input_field_type(non_null_input, "note")
     assert non_null_note["kind"] == "NON_NULL"
     assert non_null_note["ofType"]["name"] == "String"
@@ -7225,7 +7220,7 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
 
 @pytest.mark.django_db
 def test_create_shelf_via_metadata_serializer_expanded_input_type_system_over_http():
-    """The rev6 type-system matrix over ``/graphql/``: a serializer-only enum, a DictField JSON, and a registry-mapped custom field (spec-039 rev6 #6 / #7 / #11).
+    """The type-system matrix over ``/graphql/``: a serializer-only enum, a DictField JSON, and a registry-mapped custom field.
 
     ``ShelfMetadataSerializer`` carries three serializer-only write-only fields:
     ``priority`` (a ``ChoiceField`` -> a GENERATED GraphQL enum, #6), ``attributes`` (a
@@ -7289,7 +7284,7 @@ def test_create_shelf_via_metadata_serializer_expanded_input_type_system_over_ht
 
 
 def _input_field_description(type_name: str, field_name: str) -> str | None:
-    """Return an input object field's GraphQL description via introspection (spec-039 rev6 #9)."""
+    """Return an input object field's GraphQL description via introspection."""
     response = _post_graphql(
         f"""
         query {{
@@ -7306,7 +7301,7 @@ def _input_field_description(type_name: str, field_name: str) -> str | None:
 
 @pytest.mark.django_db
 def test_serializer_input_field_description_threads_drf_metadata_over_http():
-    """A DRF field's ``help_text`` + validation constraints surface as the input field's SDL description (spec-039 rev6 #9).
+    """A DRF field's ``help_text`` + validation constraints surface as the input field's SDL description.
 
     ``ShelfMetadataSerializer.label`` is a ``CharField(help_text=..., max_length=40)``; the
     generated ``ShelfMetadataSerializerInput.label`` carries a description combining the help
@@ -7325,7 +7320,7 @@ def test_serializer_input_field_description_threads_drf_metadata_over_http():
 
 @pytest.mark.django_db
 def test_serializer_error_envelope_carries_codes_and_path_over_http():
-    """The mutation error envelope carries structured ``codes`` + ``path`` alongside ``field`` / ``messages`` (spec-039 rev6 #4 / #13).
+    """The mutation error envelope carries structured ``codes`` + ``path`` alongside ``field`` / ``messages``.
 
     A DRF field validation error preserves the DRF ``ErrorDetail.code`` (``label`` exceeds its
     ``max_length=40`` -> code ``max_length``) and a structured ``path`` (``["label"]``); a
@@ -7367,7 +7362,7 @@ def test_serializer_error_envelope_carries_codes_and_path_over_http():
 
 @pytest.mark.django_db
 def test_serializer_injected_field_contract_over_http():
-    """A required field narrowed away + declared in ``Meta.injected_fields`` is supplied by the override (spec-039 rev6 #2).
+    """A required field narrowed away + declared in ``Meta.injected_fields`` is supplied by the override.
 
     ``CreateShelfWithInjectedTopic`` narrows the input to ``code`` + ``branchId`` (dropping the
     ``OwnerStampShelfSerializer``-required ``topic``) and declares ``Meta.injected_fields =
@@ -7403,7 +7398,7 @@ def test_serializer_injected_field_contract_over_http():
 
 @pytest.mark.django_db
 def test_serializer_m2m_relation_visibility_over_http():
-    """A raw-pk M2M serializer input writes visible branches and rejects a hidden one (spec-039 rev6 #3).
+    """A raw-pk M2M serializer input writes visible branches and rejects a hidden one.
 
     ``createShelfViaAltBranchesSerializer`` exposes ``alt_branches`` (a raw-pk M2M over the
     non-Relay ``BranchType``). The decode confirms the whole list's visibility in one batched
@@ -7504,7 +7499,7 @@ def test_serializer_save_kwargs_naming_a_model_field_is_rejected_over_http():
 
 @pytest.mark.django_db
 def test_serializer_save_kwargs_rejects_renamed_source_shadow_over_http():
-    """A save kwarg cannot silently replace a renamed input's value (spec-039 rev6 #12).
+    """A save kwarg cannot silently replace a renamed input's value.
 
     ``shelfCode`` is declared as ``shelf_code`` but validates into DRF's ``code`` key through
     ``source="code"``. The colliding server-side ``code`` kwarg is rejected before save, and
@@ -7534,7 +7529,7 @@ def test_serializer_save_kwargs_rejects_renamed_source_shadow_over_http():
 
 @pytest.mark.django_db
 def test_serializer_update_with_select_for_update_over_http():
-    """An update serializer mutation with ``Meta.select_for_update = True`` updates cleanly over HTTP (spec-039 rev6 #14).
+    """An update serializer mutation with ``Meta.select_for_update = True`` updates cleanly over HTTP.
 
     ``UpdateBookViaSerializerWithLock`` locks the located ``Book`` row inside the pipeline
     transaction (after visibility filtering). On sqlite Django silently skips the ``FOR UPDATE``
@@ -7736,7 +7731,7 @@ def test_serializer_update_substituted_instance_is_rejected_without_writes_over_
 
 @pytest.mark.django_db
 def test_create_branch_with_nested_shelves_over_http():
-    """An EXPLICIT opt-in nested serializer write creates a branch + nested shelves over HTTP (spec-039 rev6 #17).
+    """An EXPLICIT opt-in nested serializer write creates a branch + nested shelves over HTTP.
 
     ``CreateBranchWithNestedShelves`` opts a nested ``shelves`` list in via
     ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}``; the serializer's OWN
@@ -7784,7 +7779,7 @@ def test_create_branch_with_nested_shelves_over_http():
 
 @pytest.mark.django_db
 def test_nested_shelf_hidden_alt_branch_is_structured_path_error_over_http():
-    """A hidden id in a NESTED relation is a structured ``shelves.<i>.altBranches`` error with no partial write (spec-039 rev6 #17 / #3 / #13).
+    """A hidden id in a NESTED relation is a structured ``shelves.<i>.altBranches`` error with no partial write.
 
     A nested ``shelves[0].altBranches`` pointing at a ``city="restricted"`` branch (hidden from
     the anonymous caller by ``BranchType.get_queryset``) is a relation error keyed to the FULL
@@ -7813,14 +7808,14 @@ def test_nested_shelf_hidden_alt_branch_is_structured_path_error_over_http():
     assert err["field"] == "shelves.0.altBranches"
     assert err["path"] == ["shelves", "0", "altBranches"]
     assert err["codes"] == ["invalid"]
-    # H6: the error envelope committed nothing.
+    # The error envelope committed nothing.
     assert not models.Branch.objects.filter(name="NestedRollback").exists()
     assert not models.Shelf.objects.filter(code="N1", branch__name="NestedRollback").exists()
 
 
 @pytest.mark.django_db
 def test_nested_shelf_validation_error_flattens_to_structured_path_over_http():
-    """A NESTED DRF validation error flattens to the structured ``shelves.<i>.code`` path (spec-039 rev6 #17).
+    """A NESTED DRF validation error flattens to the structured ``shelves.<i>.code`` path.
 
     ``NestedShelfSerializer.validate_code`` rejects the sentinel ``"BANNED"`` (a valid String at
     the GraphQL boundary, so it survives coercion and reaches DRF's ``is_valid()``). The nested
@@ -7849,7 +7844,7 @@ def test_nested_shelf_validation_error_flattens_to_structured_path_over_http():
 
 
 # ---------------------------------------------------------------------------
-# Golden SDL coverage for the serializer-mutation input lane (spec-039 rev6 #16)
+# Golden SDL coverage for the serializer-mutation input lane
 # ---------------------------------------------------------------------------
 
 
@@ -7864,7 +7859,7 @@ def _render_gql_type(type_dict: dict) -> str:
 
 
 def _input_fields_sdl(type_name: str) -> list[tuple]:
-    """Return an input object's ``[(field, rendered_type, description)]`` via introspection (rev6 #16)."""
+    """Return an input object's ``[(field, rendered_type, description)]`` via introspection."""
     response = _post_graphql(
         'query { __type(name: "' + type_name + '") { inputFields { name description '
         "type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }",
@@ -7877,7 +7872,7 @@ def _input_fields_sdl(type_name: str) -> list[tuple]:
 
 
 def _type_fields_sdl(type_name: str) -> list[tuple]:
-    """Return an object type's ``[(field, rendered_type, description)]`` via introspection (rev6 #16)."""
+    """Return an object type's ``[(field, rendered_type, description)]`` via introspection."""
     response = _post_graphql(
         'query { __type(name: "' + type_name + '") { fields { name description '
         "type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }",
@@ -7890,12 +7885,12 @@ def _type_fields_sdl(type_name: str) -> list[tuple]:
 
 
 def test_golden_sdl_library_schema_hook_serializer_input():
-    """Golden SDL for a library schema-hook serializer input + payload + the FieldError envelope (rev6 #16).
+    """Golden SDL for a library schema-hook serializer input + payload + the FieldError envelope.
 
-    Pins the generated input names, field names, nullability, descriptions (rev6 #9), the
-    serializer-only enum (rev6 #6), the JSON / registry-mapped scalars (rev6 #7 / #11), the
+    Pins the generated input names, field names, nullability, descriptions, the
+    serializer-only enum, the JSON / registry-mapped scalars, the
     raw-pk relation id, the ``result`` payload slot (non-Relay ``Shelf``), and the additive
-    ``codes`` / ``path`` on the shared ``FieldError`` envelope (rev6 #4 / #13) - so cross-field
+    ``codes`` / ``path`` on the shared ``FieldError`` envelope - so cross-field
     SDL drift is caught in one focused snapshot (NOT a whole-schema dump).
     """
     assert _input_fields_sdl("ShelfMetadataSerializerInput") == [
@@ -7910,7 +7905,7 @@ def test_golden_sdl_library_schema_hook_serializer_input():
         ("result", "ShelfType", None),
         ("errors", "[FieldError!]!", None),
     ]
-    # The shared FieldError envelope carries the additive codes + path (rev6 #4 / #13).
+    # The shared FieldError envelope carries the additive codes + path.
     assert _type_fields_sdl("FieldError") == [
         ("field", "String!", None),
         ("messages", "[String!]!", None),
@@ -7920,10 +7915,10 @@ def test_golden_sdl_library_schema_hook_serializer_input():
 
 
 def test_golden_sdl_products_serializer_input():
-    """Golden SDL for a products serializer input + payload (rev6 #16).
+    """Golden SDL for a products serializer input + payload.
 
     Pins the file (``Upload``) + Relay-``GlobalID`` relation id (``categoryId: ID!``) + the
-    ``allow_blank`` / ``max_length`` descriptions (rev6 #9) + the ``node`` payload slot
+    ``allow_blank`` / ``max_length`` descriptions + the ``node`` payload slot
     (Relay-Node ``Item``). Both this and the library snapshot read the ONE aggregate
     ``/graphql/`` schema.
     """
@@ -8223,7 +8218,7 @@ def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args):
 
 @pytest.mark.django_db
 def test_library_card_projection_survives_select_related_relation():
-    """B8 root fix (feedback2 P0-1), live: consumer ``.only()`` + ``select_related``.
+    """Root fix, live: consumer ``.only()`` + ``select_related``.
 
     ``allLibraryCardsProjected`` returns ``.only("barcode")`` while the query
     selects the forward ``patron`` relation - ``PatronType`` has no
@@ -8262,7 +8257,7 @@ def test_library_card_projection_survives_select_related_relation():
 
 @pytest.mark.django_db
 def test_library_card_deferred_projection_survives_select_related():
-    """B8 root fix, defer flavor, live: ``.defer("patron")`` + ``select_related``.
+    """Root fix, defer flavor, live: ``.defer("patron")`` + ``select_related``.
 
     Django raises the same deferred-and-traversed ``FieldError`` for a
     ``defer()`` projection, so the prune's defer-mode rules (exact entries
@@ -8301,9 +8296,9 @@ def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
     """``last: 0`` live: the serve-all quirk through the fallback, no dead window.
 
     Upstream ``ListConnection`` slices ``edges[-0:]`` - the WHOLE list - so
-    ``last: 0`` returns every edge. The walker plans NOTHING for the shape
-    (feedback2 P0-3): live queries pay the root query plus the per-parent
-    pipeline (count + edges per genre for ``totalCount``), and NO discarded
+    ``last: 0`` returns every edge. The walker plans NOTHING for the shape:
+    live queries pay the root query plus the per-parent pipeline (count +
+    edges per genre for ``totalCount``), and NO discarded
     reversed-window query rides along.
     """
     shelf = _seed_shelf()

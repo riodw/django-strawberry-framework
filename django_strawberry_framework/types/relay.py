@@ -34,7 +34,7 @@ from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
 
-# ``SyncMisuseError`` moved to ``utils/querysets.py`` in the 0.0.9 DRY pass; the
+# ``SyncMisuseError`` moved to ``utils/querysets.py``; the
 # redundant ``as`` alias re-exports it from this module so ``from
 # ...types.relay import SyncMisuseError`` and the ``types/__init__.py`` re-export
 # keep working unchanged.
@@ -69,7 +69,7 @@ def implements_relay_node(type_cls: type) -> bool:
 # model with TWO registered Relay types makes every candidate's installed
 # ``is_type_of`` answer ``True`` for the same bare instance and graphql-core's
 # candidate-iteration order picks the ``__typename`` - regardless of which
-# type the GlobalID named (Round-4 review S2). The hint is the missing wire
+# type the GlobalID named. The hint is the missing wire
 # between the decode routing (which type's resolvers fetched the row) and
 # graphql-core's concrete-type selection.
 _NODE_TYPE_HINT_ATTR = "_dsf_node_type_hint"
@@ -197,7 +197,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
 # inherits its parent's stamp). Deliberately NOT Strawberry's ``_id_attr``
 # slot: stamping ``"pk"`` there would satisfy upstream's inherited-cache
 # check on a chain child and silently bypass the composite-pk gate's
-# ``NodeIDAnnotationError`` detection - the exact bug class the Round-4 S1
+# ``NodeIDAnnotationError`` detection - the exact bug class the composite-pk
 # gate hardening removed.
 _RELAY_ID_ATTR_SLOT = "_dsf_relay_id_attr"
 
@@ -205,7 +205,7 @@ _RELAY_ID_ATTR_SLOT = "_dsf_relay_id_attr"
 def _stamp_relay_id_attr(type_cls: type) -> None:
     """Resolve the Relay id attribute ONCE and pin it on the class (Phase 2.5).
 
-    Two defects in the per-call path this replaces (Round-4 follow-up):
+    Two defects in the per-call path this replaces:
 
     - **Order-dependent shadowing.** Strawberry's ``Node.resolve_id_attr``
       caches its scan result on ``cls._id_attr``, and its cache check reads
@@ -254,7 +254,7 @@ def _resolve_id_attr_default(cls: type) -> str:
     bound at runtime, a relay-shaped DjangoType subclassing another
     relay-shaped DjangoType inherits the parent's installed copy of this
     default, and the MRO walk from the child lands back on that copy
-    re-bound to the child - infinite recursion (Round-4 review S1). The
+    re-bound to the child - infinite recursion. The
     direct call asks Strawberry's annotation scan the same question
     without traversing the MRO's method chain, so the default behaves
     identically at every inheritance depth. (Skipping installation on

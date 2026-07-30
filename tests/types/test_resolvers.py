@@ -92,7 +92,7 @@ def test_o1_make_relation_resolver_forward_returns_attribute():
 
 
 def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
-    """B2: forward resolver returns a target stub from ``<field>_id`` when elided."""
+    """Forward resolver returns a target stub from ``<field>_id`` when elided."""
     from types import SimpleNamespace
 
     from django.db import router
@@ -107,7 +107,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
 
         @property
         def category(self):
-            raise AssertionError("B2 resolver should not lazy-load the relation")
+            raise AssertionError("the relation resolver must not lazy-load the relation")
 
     field = Item._meta.get_field("category")
     resolver = _make_relation_resolver(field, parent_type=ItemType)
@@ -128,7 +128,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
 
 
 def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
-    """B2: resolver FK-id elision reads attname from registered FieldMeta."""
+    """Resolver FK-id elision reads attname from registered FieldMeta."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.optimizer.field_meta import FieldMeta
@@ -174,7 +174,7 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
 
         @property
         def category(self):
-            raise AssertionError("B2 resolver should not lazy-load the relation")
+            raise AssertionError("the relation resolver must not lazy-load the relation")
 
     result = resolver(Root(), fake_info)
 
@@ -183,7 +183,7 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
 
 
 def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
-    """B2: nullable FK ids still resolve to ``None`` instead of a stub."""
+    """Nullable FK ids still resolve to ``None`` instead of a stub."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
@@ -222,7 +222,7 @@ def test_b2_fk_id_stub_returns_none_without_related_model():
 
 
 def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
-    """B2/O4: elision for one parent type does not affect another type."""
+    """Elision for one parent type does not affect another type."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
@@ -248,7 +248,7 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
 
 
 def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
-    """B2/O4: elision requires the full branch-sensitive resolver key."""
+    """Elision requires the full branch-sensitive resolver key."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
@@ -270,7 +270,7 @@ def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
 
 
 def test_check_n1_ignores_bare_field_name_key():
-    """B3/O4: planned relations require the full branch-sensitive resolver key."""
+    """Planned relations require the full branch-sensitive resolver key."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.exceptions import OptimizerError
@@ -290,7 +290,7 @@ def test_check_n1_ignores_bare_field_name_key():
 
 
 def test_check_n1_returns_when_relation_is_already_loaded():
-    """B3: unplanned-but-cached relations do not warn or raise."""
+    """Unplanned-but-cached relations do not warn or raise."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -307,7 +307,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
 
 
 def test_check_n1_warns_for_unplanned_lazy_load(caplog):
-    """B3: warn strictness logs an unplanned lazy-load relation."""
+    """Warn strictness logs an unplanned lazy-load relation."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -327,7 +327,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog):
 
 
 def test_check_n1_planned_absent_is_silent():
-    """B3 branch: no planned sentinel on context -> optimizer is not engaged."""
+    """No planned sentinel on context -> optimizer is not engaged."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -342,7 +342,7 @@ def test_check_n1_planned_absent_is_silent():
 
 
 def test_check_n1_planned_hit_is_silent():
-    """B3 branch: planned key present -> resolver is a no-op regardless of strictness."""
+    """Planned key present -> resolver is a no-op regardless of strictness."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -359,7 +359,7 @@ def test_check_n1_planned_hit_is_silent():
 
 
 def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
-    """B3 branch: strictness defaults to ``off`` and an unplanned lazy load is silent."""
+    """Strictness defaults to ``off`` and an unplanned lazy load is silent."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -375,7 +375,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
 
 
 def test_check_n1_raise_strictness_raises_on_lazy_load():
-    """B3 branch: strictness=raise + unplanned + lazy -> OptimizerError."""
+    """Strictness=raise + unplanned + lazy -> OptimizerError."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.exceptions import OptimizerError
@@ -394,7 +394,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
 
 @pytest.mark.parametrize("kind", ("many", "reverse_many_to_one"))
 def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(kind):
-    """B3: many-side ignores ``__dict__`` short-circuit.
+    """Many-side ignores ``__dict__`` short-circuit.
 
     A consumer (or test double) setting ``root.<field>`` directly does
     not populate Django's prefetch cache, so the many-side resolver
@@ -421,7 +421,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(kind):
 
 
 def test_check_n1_many_kind_respects_prefetched_objects_cache():
-    """B3: many-side recognises ``_prefetched_objects_cache`` as the only valid cache."""
+    """Many-side recognises ``_prefetched_objects_cache`` as the only valid cache."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -439,12 +439,12 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
 
 
 def test_check_n1_probes_prefetch_cache_under_accessor_name():
-    """B3: the cache probe keys on the ACCESSOR, the plan key on the field name.
+    """The cache probe keys on the ACCESSOR, the plan key on the field name.
 
     Django stores many-side prefetches under the instance accessor
     (``"plainbook_set"``), which diverges from ``field.name``
-    (``"plainbook"``) for reverse relations without ``related_name``
-    (Round-4 S3 follow-up). With ``accessor_name`` supplied - as every
+    (``"plainbook"``) for reverse relations without ``related_name``.
+    With ``accessor_name`` supplied - as every
     production resolver does - a manually prefetched relation is
     recognized as cached; the field-name fallback (test-double direct
     callers) would mislabel the same root as lazy and raise.
@@ -527,7 +527,7 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 
 @pytest.mark.django_db
 def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries):
-    """O1 is correctness-only: query count is 1 + N until O3 lands the optimizer.
+    """Correctness-only: query count is 1 + N until the optimizer lands.
 
     Without the optimizer extension, ``{ allCategories { items { name } } }``
     returns correct results in 26 SQL queries (1 + 25): one category query
@@ -563,7 +563,7 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 
 
 # ---------------------------------------------------------------------------
-# Multi-database cooperation - spec-019 Slice 1 (rev4)
+# Multi-database cooperation - spec-019 Slice 1
 # ---------------------------------------------------------------------------
 #
 # TODO(spec-019 Slice 1, tests/types/test_resolvers.py extension - append-only):
@@ -726,7 +726,7 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeyp
 
     # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"if related_id is None"``
     # - early ``return None`` before reaching the
-    # router. Rev2 H5: split from the parent-lacks-``_state`` case because
+    # router. Split from the parent-lacks-``_state`` case because
     # the two branches are distinct and a regression in either is a
     # different bug class.
     result = _build_fk_id_stub(parent_row, field_meta)
@@ -934,7 +934,7 @@ def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
 
 @pytest.mark.django_db
 def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog):
-    """Decision 5 (review P2): a REAL ``Item.objects.only("name")`` instance.
+    """Decision 5: a REAL ``Item.objects.only("name")`` instance.
 
     The double-based fallback test asserts the behavior; this pins the actual
     Django deferred-field bookkeeping the guard depends on - that a real
@@ -1135,9 +1135,9 @@ def test_empty_required_file_resolves_to_null_without_error(tmp_path):
     stores ``""`` (the same empty-string state legacy rows, direct
     ``Model.objects.create()``, fixtures, and manual SQL produce). The parent
     resolver maps that empty ``FieldFile`` to ``None``, so the generated SDL must
-    be nullable to represent it (spec-037 Decision 4). Regression guard for the
-    finding that a required file column emitted ``attachment: DjangoFileType!``
-    and turned the empty-file ``None`` into a GraphQL non-null execution error.
+    be nullable to represent it (spec-037 Decision 4). Emitting
+    ``attachment: DjangoFileType!`` instead would turn the empty-file ``None``
+    into a GraphQL non-null execution error.
     """
     model = _make_asset_model()
     with db_connection.schema_editor() as schema_editor:

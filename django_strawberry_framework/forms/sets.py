@@ -135,7 +135,7 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # twin of ``mutations/sets.py::_shape_build_cache``. Without it each ``build_input``
 # call would build a FRESH ``@strawberry.input`` class object, so two mutations
 # over the same form + effective set would hand the materialize ledger two DISTINCT
-# same-named classes and trip the AR-M6 collision raise instead of deduping. Caching
+# same-named classes and trip the collision raise instead of deduping. Caching
 # by shape identity makes identical shapes reuse one class object, so
 # ``materialize_form_input_class`` dedupes idempotently (the same dedupe contract the
 # model flavor's ``_shape_build_cache`` provides). The cache VALUE is the
@@ -148,7 +148,7 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # consult it via ``_cached_build_form_input``.
 #
 # The ``(cache, clear)`` pair rides the promoted ``utils/inputs.py::make_shape_build_cache``
-# plumbing (spec-039 P1.3 / SR-1), the SAME factory the serializer cache uses, so the
+# plumbing, the SAME factory the serializer cache uses, so the
 # form + serializer + mutation caches share one dict-plus-clear shape while staying
 # disjoint (separate dicts, registered + cleared separately). ``clear_form_shape_build_cache``
 # is co-cleared from ``registry.clear()`` (a ``registry.clear()``-only reset, NOT a
@@ -195,7 +195,7 @@ def _cached_build_form_input(
     # non-waiving mutation reusing the same cached shape - the guard is tied to the
     # declaration, not the built input shape (spec-038 Decision 7 P2). The create
     # shape rejects ANY dropped required field; the partial (update) shape rejects
-    # only dropped required COLUMN-LESS fields (feedback #4) - a model-backed
+    # only dropped required COLUMN-LESS fields - a model-backed
     # required field is widened optional and reconstructed from the row, but a
     # column-less extra cannot be reconstructed, so dropping it finalizes a form that
     # can never validate.
@@ -264,7 +264,7 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
     the override supplies, so it trusts the override and waives the guard.
 
     Rides the promoted ``mutations/sets.py::_hook_overridden(cls, base, name)``
-    (spec-039 P2.6) for each hook - the per-hook identity comparison is single-sited
+    for each hook - the per-hook identity comparison is single-sited
     there (the serializer ``get_serializer_kwargs`` waiver rides the same primitive),
     so the form / serializer waivers cannot drift on how an override is detected.
 
@@ -347,7 +347,7 @@ def _build_and_stash_form_input(
     base whose default ``get_form_kwargs`` / ``get_form`` an override is detected
     against). Routes through ``_cached_build_form_input`` (per-shape dedupe +
     per-declaration create-required guard) and the promoted
-    ``mutations/sets.py::build_and_stash_input`` (spec-039 P1.7), which materializes
+    ``mutations/sets.py::build_and_stash_input``, which materializes
     the class into ``forms.inputs`` and stashes the reverse-map ``field_specs`` on
     the mutation (``cls._input_field_specs``) for the Slice-3 decode. The form's
     per-flavor stash value (``build_and_stash_input``'s ``payload``) IS the
@@ -832,7 +832,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         the model flavor applies).
 
         The walk body is single-sited in
-        ``mutations/permissions.py::run_permission_classes`` (DRY review A5),
+        ``mutations/permissions.py::run_permission_classes``,
         shared with ``DjangoMutation.check_permission``, so the authorization
         seam cannot fork between the flavors.
         """
@@ -863,7 +863,7 @@ def _bind_form_mutation(mutation_cls: type) -> None:
     ``forms.inputs``) + the pinned model-less ``{ ok errors }`` payload (via
     ``build_payload_type(object_type=None)`` - the single-sourced payload builder,
     routed through the SAME ``materialize_mutation_input_class`` ledger as the
-    model payloads so the AR-M6 distinct-shape collision raise + the
+    model payloads so the distinct-shape collision raise + the
     ``registry.clear()`` co-clear apply). Stashes the refs for Slice 3's
     ``DjangoMutationField`` (``_primary_type`` stays ``None`` - no object to
     return).
@@ -899,10 +899,9 @@ def bind_form_mutations() -> None:
     the top so each form input is rebuilt fresh. The cross-pass materialization
     ledgers (the form-input ledger here, plus the mutation ledger the plain ``{ ok
     errors }`` payload rides) are reset ONCE by ``finalize_django_types`` before the
-    bind sequence so a recover-in-place re-finalize is retry-idempotent (feedback
-    #6); they are NOT reset here, where a per-pass clear would wipe the
-    ``ModelForm``-flavor inputs ``bind_mutations()`` already materialized into the
-    form ledger.
+    bind sequence so a recover-in-place re-finalize is retry-idempotent; they are NOT reset
+    here, where a per-pass clear would wipe the ``ModelForm``-flavor inputs
+    ``bind_mutations()`` already materialized into the form ledger.
     """
     _form_shape_build_cache.clear()
     for mutation_cls in iter_form_mutations():

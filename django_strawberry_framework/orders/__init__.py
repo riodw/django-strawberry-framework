@@ -54,7 +54,7 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
     The returned annotation is the canonical Strawberry forward-
     reference idiom for the **element type** of an order argument:
     ``Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]``.
-    Per spec-028 Revision 4 B1, consumers wrap the helper's return as
+    Per spec-028, consumers wrap the helper's return as
     ``list[order_input_type(MyOrder)] | None`` at the resolver site so
     the GraphQL argument shape is ``orderBy: [MyOrderInputType!]``
     (list-of-non-null per Spec Decision 5).
@@ -76,8 +76,8 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
     """
     # Decision-11 consumer-helper body shared with ``filters/__init__.py::
     # filter_input_type`` via ``utils/inputs.py::build_lazy_input_annotation``
-    # (the 0.0.9 DRY pass). The return is the **element type** (spec-028
-    # Revision 4 B1) -- consumers wrap as ``list[order_input_type(MyOrder)] |
+    # The return is the **element type** -- consumers wrap as
+    # ``list[order_input_type(MyOrder)] |
     # None``. The shared helper preserves the ForwardRef-wrapped
     # ``Annotated[<runtime str>, strawberry.lazy(...)]`` form
     # ``LazyType.resolve_type`` requires.

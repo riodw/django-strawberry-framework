@@ -85,8 +85,8 @@ class TypedFilter(Filter):
 class _EmptyListAwareFilterMethod(FilterMethod):
     """``FilterMethod`` that treats an empty list as a real value.
 
-    Shared base for `ArrayFilterMethod` / `ListFilterMethod` (single-sited per
-    the 0.0.9 DRY pass): a consumer-supplied `method=` callable must run for
+    Shared base for `ArrayFilterMethod` / `ListFilterMethod` (single-sited):
+    a consumer-supplied `method=` callable must run for
     `[]` -- the empty list is a valid filter value for array / list-shaped
     filters -- unlike the default `FilterMethod`, which short-circuits the whole
     `EMPTY_VALUES` set. Only `None` short-circuits to the unfiltered queryset
@@ -367,7 +367,7 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
     - **Range coercion** (the original overflow fix): each member is coerced through
       the column and an out-of-range one is dropped, so it never reaches the backend
       as a raw `OverflowError`.
-    - **Empty-aware match-nothing** (feedback): a NON-empty input whose members ALL
+    - **Empty-aware match-nothing**: a NON-empty input whose members ALL
       drop - every value is out of range and can identify no row - matches NOTHING,
       so it short-circuits to `qs.none()` rather than degrading to django-filter's
       empty-value SKIP, which would silently widen a restrictive `in` to no
@@ -816,7 +816,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         # every other target passes ``None``, leaving the predicate byte-identical to the
         # raw ``{field_name__in: node_ids}`` form. Framework generation stamps the marker
         # on this filter for a forward, single-valued FK bound on a non-pk ``to_field``
-        # whose ``in`` lookup is list-shaped (High 3): ``filter_for_field`` selects
+        # whose ``in`` lookup is list-shaped: ``filter_for_field`` selects
         # ``GlobalIDMultipleChoiceFilter`` for such an ``in`` and applies the marker, so
         # the pk-qualified path is honored identically to ``GlobalIDFilter``'s
         # single-value ``in`` (shared derivation, one home).
@@ -844,7 +844,7 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     """
 
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
-    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass). The order
+    # owner-bind / lazy-target machinery reads. The order
     # twin uses ``("_orderset", "bound_orderset")``.
     _target_attr = "_filterset"
     _owner_attr = "bound_filterset"
@@ -888,7 +888,7 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
             strict cross-owner mismatch detection runs later at
             finalize time in
             ``types/finalizer.py::_bind_filterset_owner`` (subpass 1 of
-            finalizer phase 2.5's ``_bind_filtersets`` umbrella; H2-rev8
+            finalizer phase 2.5's ``_bind_filtersets`` umbrella's strict-equality
             check), so a real divergent-owner reuse still surfaces a
             ``ConfigurationError`` with both owners named - just not at
             class-creation time.

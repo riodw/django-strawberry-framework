@@ -5,8 +5,7 @@ contract: resolve the request from ``info``, walk only supplied input fields,
 dedupe ``check_<field>_permission`` calls by class, recurse into active related
 branches, and fire both child gates and parent branch gates. A divergence
 between the two copies is a real authorization-bug class -- a fix to one side is
-easy to miss on the other -- so the neutral mechanics are single-sited here (the
-0.0.9 DRY pass).
+easy to miss on the other -- so the neutral mechanics are single-sited here.
 
 This module owns mechanics only; the family-specific shape stays at the call
 sites as configuration:
@@ -75,14 +74,14 @@ def _check_method_name(field_path: str) -> str:
     The transform is request-independent (it depends only on the declared field
     path), so it is memoized over the bounded set of declared paths; only the
     bound-instance ``getattr`` / ``callable`` probe in
-    ``invoke_permission_method`` stays per-request (feedback L5). The lookup
-    flatten itself is the shared ``flatten_lookup_path`` (DRY review A9).
+    ``invoke_permission_method`` stays per-request. The lookup
+    flatten itself is the shared ``flatten_lookup_path``.
     """
     return f"check_{flatten_lookup_path(field_path)}_permission"
 
 
-# ``iter_input_items`` is single-sited in ``utils/input_values.py`` (the 0.0.9
-# DRY pass). Re-exported here so the existing ``from ..utils.permissions import
+# ``iter_input_items`` is single-sited in ``utils/input_values.py``.
+# Re-exported here so the existing ``from ..utils.permissions import
 # iter_input_items`` consumers (``filters/sets.py``, the permission test suite) keep
 # their import path.
 __all__ = [
@@ -192,7 +191,7 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     is **family-neutral** (no ``.apply`` suffix): the helper is shared by the
     filter / order ``apply`` seam AND the mutation ``check_permission`` seam,
     which has no ``.apply`` method, so hard-coding ``.apply`` would mis-describe
-    the mutation caller (feedback CR-5).
+    the mutation caller.
     """
     context = getattr(info, "context", None)
     if context is None:
@@ -278,11 +277,11 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
     the sentinel check a harmless ``value is None`` no-op.
 
     Shares the active-value rule with every traversal surface via
-    ``input_values.is_inactive_value`` (the 0.0.9 DRY pass). Used by the filter
+    ``input_values.is_inactive_value``. Used by the filter
     side's logical-branch pre-walk
     (``_collect_nested_visibility_querysets_async``) to read ``and_`` / ``or_`` /
     ``not_`` arms off the raw input. The dict-vs-dataclass single-field read is
-    ``input_values.input_field_value`` (DRY review C6), so the shape sniff stays
+    ``input_values.input_field_value``, so the shape sniff stays
     single-sited in the traversal-primitives module.
     """
     if input_value is None:
@@ -361,7 +360,7 @@ def active_permission_targets(
     (``LEAF``) and the related branches (``RELATED``) at the same nesting level.
     Running ``iter_active_fields`` once and partitioning by ``.kind`` removes the
     second full traversal + re-classification + config rebuild the two separate
-    walkers otherwise pay per level (feedback H3). ``LOGIC`` records are dropped
+    walkers otherwise pay per level. ``LOGIC`` records are dropped
     (the logical-branch recursion owns them).
 
     The single config is the superset of the two callers': ``field_specs`` and
@@ -414,7 +413,7 @@ def active_related_branches(
     top-level list separately so the parent gate fires once per active branch
     occurrence (the caller's ``_fired`` dedup collapses repeats per class).
 
-    Consumes the shared ``iter_active_fields`` classifier (the 0.0.9 DRY pass),
+    Consumes the shared ``iter_active_fields`` classifier,
     keeping the ``RELATED`` records; the yield order is the input-iteration order
     rather than the declared-collection order, which is immaterial here (the
     per-class ``_fired`` dedup, the AND-commutative
@@ -422,7 +421,7 @@ def active_related_branches(
     map are all order-independent).
 
     Thin wrapper over ``active_permission_targets`` (keeps the single-pass
-    classification single-sited, feedback H3): ``RELATED`` records are
+    classification single-sited): ``RELATED`` records are
     independent of ``field_specs`` / ``logic_keys``, so the empty/identity values
     here yield the same branch tuples this always returned.
     """
@@ -467,11 +466,10 @@ def active_permission_field_paths(
     classifier marks them ``LOGIC`` / ``RELATED`` and only the ``LEAF`` records
     are kept. ``None`` / ``unset_sentinel`` values are skipped (active-input-only)
     and ``handle_top_level_list`` (order side) aggregates across the elements of
-    a top-level list input -- both handled inside the classifier (the 0.0.9 DRY
-    pass).
+    a top-level list input -- both handled inside the classifier.
 
-    Thin wrapper over ``active_permission_targets`` (single-sited classification,
-    feedback H3): returns only the ``LEAF`` half.
+    Thin wrapper over ``active_permission_targets`` (single-sited classification):
+    returns only the ``LEAF`` half.
     """
     leaf_paths, _branches = active_permission_targets(
         cls,
@@ -617,7 +615,7 @@ def run_active_input_permission_checks(
     class_fired = fired.setdefault(cls, set())
 
     # ONE active-input traversal yields both the per-field gate paths and the
-    # related branches for this level (feedback H3); the two used to be separate
+    # related branches for this level; the two used to be separate
     # full walks of the same input. Gates key on the SOURCE FIELD (one fire per
     # field across all its lookups).
     field_paths, related_branches = cls._active_permission_targets(input_value)

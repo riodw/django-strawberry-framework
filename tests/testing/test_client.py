@@ -1,6 +1,6 @@
 """DB-free test-client tests for endpoints, multipart bodies, responses, mixin assertions, and exports.
 
-Placement per spec-043 Decision 11 and the feedback's live-first split: every
+Placement per spec-043 Decision 11 and the live-first split: every
 case that drives a real ``/graphql/`` request (the sync raising direction on a
 live invalid selection, the ``AsyncTestClient`` paths, and the unittest family
 end to end) lives in ``examples/fakeshop/test_query/test_client_api.py`` so it is
@@ -96,17 +96,17 @@ class _MixinProbe(GraphQLTestMixin):
 
 
 # ---------------------------------------------------------------------------
-# Endpoint resolution (Tests 6-8) - DB-free mechanics.
+# Endpoint resolution - DB-free mechanics.
 # ---------------------------------------------------------------------------
 
 
 def test_default_endpoint_is_graphql_with_trailing_slash():
-    """Test 6: no settings key -> ``"/graphql/"`` (fakeshop's mount, slash kept)."""
+    """No settings key -> ``"/graphql/"`` (fakeshop's mount, slash kept)."""
     assert TestClient().path == "/graphql/"
 
 
 def test_settings_key_sets_the_endpoint_and_the_default_restores_after_override():
-    """Test 7: the ``TESTING_ENDPOINT`` key is read at construction, on both clients.
+    """The ``TESTING_ENDPOINT`` key is read at construction, on both clients.
 
     The second half pins the ``conf.py`` ``setting_changed`` receiver: after the
     override exits, a fresh client is back on the default - the settings read is
@@ -119,7 +119,7 @@ def test_settings_key_sets_the_endpoint_and_the_default_restores_after_override(
 
 
 def test_constructor_path_outranks_the_settings_key():
-    """Test 8 (constructor rung): an explicit ``path=`` wins over the settings key.
+    """Constructor rung: an explicit ``path=`` wins over the settings key.
 
     The resolved endpoint is also forwarded to the engine base, so the
     inherited ``url`` attribute mirrors ``path`` instead of reading the base's
@@ -132,7 +132,7 @@ def test_constructor_path_outranks_the_settings_key():
 
 
 def test_per_call_url_outranks_the_constructor_and_never_persists():
-    """Test 8 (per-call rung): ``query(url=)`` wins for ONE request; ``self.path`` is untouched.
+    """Per-call rung: ``query(url=)`` wins for ONE request; ``self.path`` is untouched.
 
     The recording transport receives ``/percall/`` for the overridden call, the
     stored ``path`` is unchanged afterward (the non-persistence guarantee), and
@@ -371,12 +371,12 @@ def test_response_extensions_surface_decoded_or_none():
 
 
 # ---------------------------------------------------------------------------
-# Surface guards (Tests 13-14) - DB-free.
+# Surface guards - DB-free.
 # ---------------------------------------------------------------------------
 
 
 def test_clients_carry_the_pytest_collection_guard():
-    """Test 13: ``__test__ is False`` on both ``Test*``-named classes.
+    """``__test__ is False`` on both ``Test*``-named classes.
 
     Without the guard, pytest collects the imported class as a suite and warns -
     a hard failure under the repo's ``-W error`` posture the moment any test
@@ -387,7 +387,7 @@ def test_clients_carry_the_pytest_collection_guard():
 
 
 def test_export_surface_is_the_testing_root_not_the_package_root():
-    """Test 14: the six names live on ``testing``'s ``__all__``; the package root has none.
+    """The six names live on ``testing``'s ``__all__``; the package root has none.
 
     The no-root-export contract is pinned by its two accurate shapes (spec-043
     Decision 4): ``getattr`` on the root raises ``AttributeError`` (the PEP 562
@@ -472,8 +472,8 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
 
     Canned Responses, no live request: the helpers are pure functions over a
     typed :class:`Response`, so their FAILURE directions are pinned against
-    constructed responses here (spec-043 Decision 11 + the feedback's live-first
-    split). Composed over ``unittest.TestCase`` (not the DB-backed
+    constructed responses here (spec-043 Decision 11 + the live-first split).
+    Composed over ``unittest.TestCase`` (not the DB-backed
     ``GraphQLTestCase``) so this file stays DB-free.
     """
 

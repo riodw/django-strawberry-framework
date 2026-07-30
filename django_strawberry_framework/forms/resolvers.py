@@ -25,7 +25,7 @@ and the form-specific invariants this module owns:
   ``RELATION_MULTI`` / ``FILE``).
 
 - **The dedicated form relation decoder visibility-checks EVERY branch**
-  (Decision 7 / Decision 8 step 1, P1). Each relation id - a ``relay.GlobalID``
+  (Decision 7 / Decision 8 step 1). Each relation id - a ``relay.GlobalID``
   *or* a raw pk - is type-checked (``decode_model_global_id`` for the Relay
   branch, ``_coerce_relation_pk_or_none`` for the raw-pk branch), then **resolved
   to the visible object through the related primary ``DjangoType.get_queryset``**
@@ -37,7 +37,7 @@ and the form-specific invariants this module owns:
   ``to_field_name`` (``obj.serializable_value(field.to_field_name)`` else
   ``obj.pk``) so the bound form validates by the same key it was built on.
 
-- **``update`` reconstructs the full bound payload** (Decision 8 step 4, P1): for
+- **``update`` reconstructs the full bound payload** (Decision 8 step 4): for
   every non-file declared form field the input did not provide, supply the located
   row's value under the form field name, then overlay ``provided_data``; ``files =
   provided_files``. Scalars + a ``to_field_name``-less FK come
@@ -45,7 +45,7 @@ and the form-specific invariants this module owns:
   bound form resolves), while M2M and a ``ModelChoiceField`` with ``to_field_name`` set
   are reconstructed from the related object(s) as ``to_field_name`` values
   (``_to_form_key_value``) so an omitted relation binds in the SAME shape a provided one
-  decodes to (Decision 8 / feedback #5). An
+  decodes to (Decision 8). An
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
   required in the Slice-1 partial input, so it is always present in
@@ -67,7 +67,7 @@ and the form-specific invariants this module owns:
 
 - **Write via ``form.save()`` (``ModelForm``) / ``perform_mutate`` (plain),
   wrapped by the reused ``save_or_field_errors`` ``IntegrityError`` -> envelope
-  mapper** (Decision 8 step 5, P1) - one catch, never a top-level ``GraphQLError``
+  mapper** (Decision 8 step 5) - one catch, never a top-level ``GraphQLError``
   at the write.
 
 - **The ``ModelForm`` re-fetch rides the ``036`` ``refetch_optimized`` G2 path**
@@ -135,7 +135,7 @@ _FORM_ASYNC_RECOURSE = sync_pipeline_recourse("form mutation")
 
 
 def _to_form_key_value(obj: Any, form_field: Any) -> Any:
-    """Convert a resolved relation object to its form-key value via ``to_field_name`` (P2 #6).
+    """Convert a resolved relation object to its form-key value via ``to_field_name``.
 
     A ``ModelChoiceField`` / ``ModelMultipleChoiceField`` with ``to_field_name``
     set validates the bound value against THAT field (``obj.serializable_value(
@@ -156,10 +156,10 @@ def _decode_form_relation_single(
     form_field: Any,
     info: Any,
 ) -> tuple[Any, Any | None]:
-    """Decode ONE relation id to its form-key value, visibility-checked (spec-038 P1).
+    """Decode ONE relation id to its form-key value, visibility-checked.
 
     The form coloring of the shared
-    ``utils/write_values.py::decode_visible_relation`` spine (DRY review A1):
+    ``utils/write_values.py::decode_visible_relation`` spine:
     type-check + pk coercion -> visible object (a hidden / missing / wrong-model
     / uncoercible id is the uniform field-keyed ``FieldError``, closing the
     raw-pk visibility gap) -> the form-key projection via ``to_field_name``
@@ -202,7 +202,7 @@ def _decode_form_relation_multi(
     form_field: Any,
     info: Any,
 ) -> tuple[Any, Any | None]:
-    """Decode an M2M ``list[<id>]`` to a list of form-key values, visibility-checked (NET-NEW, P1).
+    """Decode an M2M ``list[<id>]`` to a list of form-key values, visibility-checked (NET-NEW).
 
     Maps ``_decode_form_relation_single`` over each element (so every member is
     type-checked, visibility-checked on its own branch, and ``to_field_name``
@@ -263,7 +263,7 @@ def _decode_form_data(
 
     A relation decode ``FieldError`` short-circuits. The reverse-map build + the
     ``UNSET``-strip walk + the kind dispatch are single-sited in
-    ``utils/write_values.py::decode_provided_fields`` (DRY review A2); the
+    ``utils/write_values.py::decode_provided_fields``; the
     handlers below carry the FORM destination policy (data/files split, form-key
     routing).
     """
@@ -323,7 +323,7 @@ def _reconstruct_partial_data(
     instance: Any,
     provided_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """Reconstruct the full bound ``data=`` for a partial ``ModelForm`` update (NET-NEW, P1).
+    """Reconstruct the full bound ``data=`` for a partial ``ModelForm`` update (NET-NEW).
 
     For every non-file declared form field NOT overridden by ``provided_data``,
     supply the located row's value under the form field name, then overlay
@@ -352,7 +352,7 @@ def _reconstruct_partial_data(
       <to_field_name>=value)``), so a ``model_to_dict`` pk would fail ``to_python``
       for an OMITTED unchanged FK while a PROVIDED unchanged FK (decoded to the
       ``to_field_name`` value) passes - the same omitted-vs-provided inconsistency
-      the M2M branch already fixes (feedback #5). Gated on ``to_field_name`` so the
+      the M2M branch already fixes. Gated on ``to_field_name`` so the
       common ``to_field_name``-less FK keeps its cheap ``model_to_dict`` path (no
       per-FK related-object fetch); a nullable FK whose row value is ``None`` falls
       through to ``model_to_dict`` (the form's empty value), never
@@ -433,7 +433,7 @@ def _modelform_decode_step(
     *,
     instance: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]] | list[Any]:
-    """The ``ModelForm`` ``decode_step``: form-decode + partial reconstruction (spec-039 P1.5).
+    """The ``ModelForm`` ``decode_step``: form-decode + partial reconstruction.
 
     Decodes the bound input into a FORM-field-keyed ``(provided_data,
     provided_files)`` (the ``038`` ``_decode_form_data`` contract: visibility on
@@ -459,7 +459,7 @@ def _modelform_write_step(
     instance: Any,
     decoded: tuple[dict[str, Any], dict[str, Any]],
 ) -> Any | list[Any]:
-    """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save`` (spec-039 P1.5).
+    """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save``.
 
     Constructs the form via the overridable ``get_form`` hook over the decoded bound
     data, runs ``is_valid()`` once (a failure maps ``form.errors`` onto the envelope
@@ -493,7 +493,7 @@ def _run_modelform_pipeline_sync(
 ) -> Any:
     """The ``ModelForm`` flavor body (locate -> authorize -> decode -> validate -> save -> refetch).
 
-    Rides the promoted shared ``run_write_pipeline_sync`` skeleton (spec-039 P1.5):
+    Rides the promoted shared ``run_write_pipeline_sync`` skeleton:
     the ``transaction.atomic()`` boundary + the locate preamble + the
     authorize-before-decode security ordering + the optimizer re-fetch tail are
     single-sited there, and this flavor supplies only the form ``decode_step`` (form
@@ -548,7 +548,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
 
         def _error_payload(errors: list[Any]) -> Any:
-            """Roll back, then return the ``{ ok: false }`` envelope (spec-039 H6).
+            """Roll back, then return the ``{ ok: false }`` envelope.
 
             An ``{ ok: false }`` envelope means the mutation did NOT succeed, so
             nothing it wrote may persist. A ``perform_mutate`` (or the plain form's

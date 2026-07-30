@@ -186,7 +186,7 @@ def test_instance_accessor_uses_get_accessor_name_for_reverse_relations():
 
     For a reverse FK declared without ``related_name``, Django's
     ``ForeignObjectRel.name`` is the related QUERY name (``"book"``) while the
-    instance attribute is ``"book_set"`` - the Round-4 S3 split.
+    instance attribute is ``"book_set"``.
     """
     rel = SimpleNamespace(name="book", get_accessor_name=lambda: "book_set")
     assert instance_accessor(rel) == "book_set"
@@ -654,7 +654,7 @@ def _legacy_traverses_to_many(model, field_path):
 
     Copied verbatim from ``git show HEAD:.../utils/relations.py`` and used ONLY
     to prove the ``classify_path``-based reimplementation returns byte-identical
-    booleans across the adversarial matrix below.
+    booleans across the hostile-path matrix below.
     """
     current = model
     for segment in field_path.split("__"):

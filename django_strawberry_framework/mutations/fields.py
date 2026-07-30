@@ -34,12 +34,12 @@ rather than letting Strawberry's argument conversion own it. The SDL renders
 ``id: ID!`` by design (the Relay-spec / node-field contract), and the resolver
 decodes the id and type-checks it against the mutation's target model -
 ``resolvers.py::coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a
-malformed / unresolvable / wrong-model id, never coercing it to a bare pk
-(feedback #1). This is a single, consistent contract (NOT the headline schema's
-``id: GlobalID!``, which the spec is reconciled to ``id: ID!`` to match - feedback
-#4); the relation ``<field>_id`` inputs, by contrast, ARE typed ``GlobalID`` (the
-Relay-Node target's id type), so malformed *relation* ids are a Strawberry
-coercion error while a well-formed-but-invalid one is the in-band ``FieldError``.
+malformed / unresolvable / wrong-model id, never coercing it to a bare pk. This is
+a single, consistent contract (NOT the headline schema's ``id: GlobalID!``, which
+the spec is reconciled to ``id: ID!`` to match); the relation ``<field>_id`` inputs, by
+contrast, ARE typed ``GlobalID`` (the Relay-Node target's id type), so malformed *relation*
+ids are a Strawberry coercion error while a well-formed-but-invalid one is the in-band
+``FieldError``.
 
 Fallback (NOT implemented - spec-036 Decision 5 / Risks): if Strawberry rejects a
 resolver-typed field assigned with no class annotation, the documented fallback is
@@ -161,7 +161,7 @@ def _lazy_ref(type_name: str, module_path: str) -> Any:
     ``mutations.inputs`` (both flavors materialize their payload there - spec-038
     Decision 5, the load-bearing namespace divergence).
 
-    Promoted to shared field-factory machinery (spec-040 Helper-reuse D12 / P1 / P2):
+    Promoted to shared field-factory machinery (spec-040 Helper-reuse D12):
     the auth fixed-field factories (``login_mutation`` / ``logout_mutation`` /
     ``current_user``) build their ``strawberry.lazy`` payload / alias return refs
     through THIS helper rather than re-spelling ``Annotated[..., strawberry.lazy(...)]``

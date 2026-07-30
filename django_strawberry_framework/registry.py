@@ -325,10 +325,9 @@ class TypeRegistry:
         ]
         # Connection-class cache eviction (best-effort via ``_clear_if_importable``
         # - the ``clear()`` co-clear precedent). The cache is identity-keyed on
-        # the target type, so a leftover entry is hygiene rather than correctness
-        # (Round-4 review minor) - but this method promises "all traces", and
-        # ``clear()`` already purges the whole cache; eviction keeps the two
-        # public mutators consistent.
+        # the target type, so a leftover entry is hygiene rather than correctness -
+        # but this method promises "all traces", and ``clear()`` already purges the
+        # whole cache; eviction keeps the two public mutators consistent.
         _clear_if_importable(
             "django_strawberry_framework.connection",
             "_connection_type_cache",
@@ -375,7 +374,7 @@ class TypeRegistry:
 
         A model with multiple registered types appears multiple times in
         the iterator; consumers that need a per-model action must dedupe
-        by model. Public iterator so consumers (B6 schema audit, B7
+        by model. Public iterator so consumers (the schema audit, the
         walker) do not reach into ``_types`` directly.
         """
         for model, type_list in self._types.items():

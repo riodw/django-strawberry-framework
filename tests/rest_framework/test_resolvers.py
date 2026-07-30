@@ -11,12 +11,11 @@ branch is earned LIVE; this file holds the genuinely-unreachable internals:
   dicts;
 - raw-pk / NON-Relay relation decoding and MANY-relation decoding (products'
   `Category` is Relay-`GlobalID` + single, so the input only ever delivers one
-  shape live - these need a synthetic non-Relay / many fixture and a direct call,
-  M1);
+  shape live - these need a synthetic non-Relay / many fixture and a direct call);
 - the value-preserving `save()`-called-once capture (a save spy);
 - the save-time DRF-vs-Django `ValidationError` class split + the `IntegrityError`
   branch (a synthetic serializer whose `save()` raises each);
-- the `get_serializer_kwargs` / framework-merge / `partial` / H3 seams + the bare
+- the `get_serializer_kwargs` / framework-merge / `partial` seams + the bare
   `HttpRequest` `request_from_info` fallback;
 - the config-assessment grep-guard + the post-finalization
   `_resolve_globalid_strategy` monkeypatch (recorded strategy consumed, not the
@@ -133,7 +132,7 @@ def test_flattener_top_level_non_field_bucket_is_all_sentinel():
 
 
 def test_flattener_rekeys_root_segment_through_reverse_map():
-    """A top-level field's leaf path is re-keyed through the recursive reverse map (F5)."""
+    """A top-level field's leaf path is re-keyed through the recursive reverse map."""
     reverse_map = {"category": ("categoryId", None)}
     errors = {"category": ["bad relation"], "items": [{"category": ["nested"]}]}
     flat = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
@@ -144,7 +143,7 @@ def test_flattener_rekeys_root_segment_through_reverse_map():
 
 
 def test_flattener_recursively_rekeys_nested_child_fields():
-    """Nested child fields are re-keyed to their GraphQL names at EVERY depth (rev6 #17 review P2).
+    """Nested child fields are re-keyed to their GraphQL names at EVERY depth.
 
     A nested child field whose GraphQL name differs from its serializer name
     (``alt_branches`` -> ``altBranches``) is re-keyed inside the nested path, not left as the
@@ -178,7 +177,7 @@ def test_flattener_recursively_rekeys_nested_child_fields():
 
 
 def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map():
-    """A nested non-field bucket normalizes to ``<path>.__all__`` even with the recursive map (rev6 #17 review P2)."""
+    """A nested non-field bucket normalizes to ``<path>.__all__`` even with the recursive map."""
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     child_specs = (
@@ -202,7 +201,7 @@ def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map
 
 
 # ===========================================================================
-# Raw-pk / non-Relay + many-relation decode (synthetic, M1 - unreachable live)
+# Raw-pk / non-Relay + many-relation decode (synthetic - unreachable live)
 # ===========================================================================
 # Products' `Category` is Relay-`GlobalID` + single, so the generated input only
 # ever delivers one GlobalID shape; the raw-pk / non-Relay and many branches are
@@ -551,13 +550,13 @@ def test_save_time_integrity_error_maps_to_all_sentinel_envelope():
 
 
 # ===========================================================================
-# H6 - a save-time validation error after a partial write rolls back
+# A save-time validation error after a partial write rolls back
 # ===========================================================================
 
 
 @pytest.mark.django_db
 def test_save_time_validation_after_partial_write_is_rolled_back():
-    """A serializer whose `save()` writes a row then raises validation -> the partial write is rolled back (spec-039 H6).
+    """A serializer whose `save()` writes a row then raises validation -> the partial write is rolled back.
 
     The shared write skeleton wraps the pipeline in `transaction.atomic()`; a
     `write_step` that made a partial DB write and THEN raised a validation error
@@ -595,12 +594,12 @@ def test_save_time_validation_after_partial_write_is_rolled_back():
 
     # The mutation returns the error envelope (null object + the field error)...
     assert [fe.field for fe in result.errors] == ["name"]
-    # ...and the side-effect row is NOT persisted: the atomic block was rolled back (H6).
+    # ...and the side-effect row is NOT persisted: the atomic block was rolled back.
     assert not product_models.Category.objects.filter(name=sentinel).exists()
 
 
 # ===========================================================================
-# get_serializer_kwargs precedence / framework merge / H3 (hermetic)
+# get_serializer_kwargs precedence / framework merge (hermetic)
 # ===========================================================================
 
 
@@ -1126,7 +1125,7 @@ async def test_async_entry_rejects_data_rewriting_hook_too():
 
 
 # ===========================================================================
-# Structured error codes + paths (spec-039 rev6 #4 / #13)
+# Structured error codes + paths
 # ===========================================================================
 
 
@@ -1188,7 +1187,7 @@ def test_flattener_bare_error_detail_preserves_code():
 
 
 # ===========================================================================
-# Schema/runtime serializer agreement guard (spec-039 rev6 #1)
+# Schema/runtime serializer agreement guard
 # ===========================================================================
 
 
@@ -1331,7 +1330,7 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree():
 
 
 # ===========================================================================
-# Explicit injection contract runtime verification (spec-039 rev6 #2)
+# Explicit injection contract runtime verification
 # ===========================================================================
 
 
@@ -1370,7 +1369,7 @@ def _injected_topic_mut(specs=None):
 
 
 def test_declared_injected_field_dropped_by_runtime_serializer_raises():
-    """An injected field the RUNTIME serializer does not declare fails loud (rev6 rev2 P1 - not just presence)."""
+    """An injected field the RUNTIME serializer does not declare fails loud (not just presence)."""
     # ``_shelf_model_serializer`` has NO ``topic``; the write-surface agreement check catches
     # it even though the framework-built data would carry the key.
     serializer = _shelf_model_serializer()
@@ -1379,7 +1378,7 @@ def test_declared_injected_field_dropped_by_runtime_serializer_raises():
 
 
 def test_supplied_injected_field_passes_runtime_check():
-    """A declared injected field the runtime serializer accepts passes (rev6 #2 happy path)."""
+    """A declared injected field the runtime serializer accepts passes (happy path)."""
     serializer = _topic_shelf_serializer_class()(
         data={"code": "X", "branch": 1, "topic": "supplied"},
     )
@@ -1489,13 +1488,13 @@ def test_injected_data_hook_cannot_mutate_nested_client_containers():
 
 
 # ===========================================================================
-# Batched multi-relation visibility (spec-039 rev6 #3)
+# Batched multi-relation visibility
 # ===========================================================================
 
 
 @pytest.mark.django_db
 def test_decode_relation_multi_uses_a_single_batched_visibility_query():
-    """A many-relation confirms the WHOLE set's visibility in ONE ``pk__in`` query (rev6 #3)."""
+    """A many-relation confirms the WHOLE set's visibility in ONE ``pk__in`` query."""
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
@@ -1518,7 +1517,7 @@ def test_decode_relation_multi_uses_a_single_batched_visibility_query():
 
 @pytest.mark.django_db
 def test_decode_relation_multi_hidden_member_is_field_error_via_batch():
-    """A hidden member in the batched set collapses to the uniform relation error (no leak) (rev6 #3)."""
+    """A hidden member in the batched set collapses to the uniform relation error (no leak)."""
 
     class GenreT(DjangoType):
         class Meta:
@@ -1754,7 +1753,7 @@ def test_relation_queryset_scope_handles_many_related_field():
 
 @pytest.mark.django_db
 def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_instances():
-    """Concurrent requests scope instance-local single/many fields without cross-bleed (review P2).
+    """Concurrent requests scope instance-local single/many fields without cross-bleed.
 
     DRF deep-copies a serializer class's declared fields into each runtime serializer instance.
     Synchronizing both requests inside ``get_queryset`` forces their visibility rewrites to
@@ -1851,7 +1850,7 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
 
 
 # ===========================================================================
-# get_serializer_save_kwargs shadow guard (spec-039 rev6 #12)
+# get_serializer_save_kwargs shadow guard
 # ===========================================================================
 
 
@@ -1863,7 +1862,7 @@ def _validated_serializer(serializer_cls, data):
 
 
 def test_save_kwargs_shadowing_validated_key_raises():
-    """A save kwarg colliding with a ``validated_data`` key fails loud (would clobber it) (rev6 #12)."""
+    """A save kwarg colliding with a ``validated_data`` key fails loud (would clobber it)."""
 
     class CodeSer(serializers.Serializer):
         code = serializers.CharField()
@@ -1875,7 +1874,7 @@ def test_save_kwargs_shadowing_validated_key_raises():
 
 
 def test_save_kwargs_not_shadowing_validated_key_is_allowed():
-    """A save kwarg NOT in ``validated_data`` (server-side data) is allowed (rev6 #12)."""
+    """A save kwarg NOT in ``validated_data`` (server-side data) is allowed."""
 
     class CodeSer(serializers.Serializer):
         code = serializers.CharField()
@@ -2394,7 +2393,7 @@ def test_frozen_hook_view_rejects_cycles_preserves_sharing_and_freezes_uploads()
 
 
 def test_frozen_hook_view_freezes_the_full_value_algebra_and_fails_closed_on_opaque_leaves():
-    """The freeze covers tuples/sets/bytearray and rejects opaque mutable leaves (round-5 P2).
+    """The freeze covers tuples/sets/bytearray and rejects opaque mutable leaves.
 
     A tuple / set is a mutable-reachable container (a tuple can carry a mutable member; a
     ``set`` itself is mutable), and a ``bytearray`` is a mutable scalar - all were passed to
@@ -3246,7 +3245,7 @@ def test_validator_queryset_explicitly_routed_elsewhere_fails_closed():
 
 @pytest.mark.django_db
 def test_relation_queryset_scope_composes_with_author_queryset():
-    """Visibility scoping AND-s the author's field queryset - never replaces it (rev6 rev2 P1).
+    """Visibility scoping AND-s the author's field queryset - never replaces it.
 
     A serializer author's own ``PrimaryKeyRelatedField(queryset=...)`` restriction is the base
     contract; visibility is an ADDITIONAL constraint. A visible-but-author-DISALLOWED row must
@@ -3329,7 +3328,7 @@ def test_relation_queryset_scope_composes_with_author_queryset():
 
 
 # ===========================================================================
-# Nested serializer inputs - decode + agreement internals (spec-039 rev6 #17)
+# Nested serializer inputs - decode + agreement internals
 # ===========================================================================
 
 
@@ -3361,7 +3360,7 @@ def _nested_child_input_cls(top_cls):
 
 
 def test_decode_nested_single_recurses_into_child():
-    """A single nested input decodes recursively into a nested serializer-keyed dict (rev6 #17)."""
+    """A single nested input decodes recursively into a nested serializer-keyed dict."""
     top_cls, specs = _nested_single_input_and_specs()
     child_cls = _nested_child_input_cls(top_cls)
     data = top_cls(detail=child_cls(code="X"))
@@ -3371,7 +3370,7 @@ def test_decode_nested_single_recurses_into_child():
 
 
 def test_decode_nested_explicit_none_passes_through():
-    """An explicit ``null`` nested value passes through unchanged (the serializer's validation decides) (rev6 #17)."""
+    """An explicit ``null`` nested value passes through unchanged (the serializer's validation decides)."""
     top_cls, specs = _nested_single_input_and_specs()
     data = top_cls(detail=None)
     provided, error = serializer_resolvers._decode_input_object(specs, data, info=None)
@@ -3430,21 +3429,21 @@ def _child_many_serializer():
 
 
 def test_nested_agreement_multi_spec_over_single_runtime_raises():
-    """A schema nested-MULTI field that is a single serializer at runtime fails loud (rev6 #17)."""
+    """A schema nested-MULTI field that is a single serializer at runtime fails loud."""
     fake = _nested_agreement_fake(kind=NESTED_MULTI)
     with pytest.raises(ConfigurationError, match="nested list of serializers"):
         serializer_resolvers._assert_schema_runtime_agreement(fake, _child_single_serializer())
 
 
 def test_nested_agreement_single_spec_over_many_runtime_raises():
-    """A schema nested-SINGLE field that is a ``ListSerializer`` at runtime fails loud (rev6 #17)."""
+    """A schema nested-SINGLE field that is a ``ListSerializer`` at runtime fails loud."""
     fake = _nested_agreement_fake(kind=NESTED_SINGLE)
     with pytest.raises(ConfigurationError, match="nested serializer"):
         serializer_resolvers._assert_schema_runtime_agreement(fake, _child_many_serializer())
 
 
 def test_nested_agreement_recurses_into_child_specs():
-    """A nested field's child spec is held to the SAME agreement contract (recursion) (rev6 #17)."""
+    """A nested field's child spec is held to the SAME agreement contract (recursion)."""
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     ghost_child = (
@@ -3462,7 +3461,7 @@ def test_nested_agreement_recurses_into_child_specs():
 
 
 def test_agreement_scalar_field_that_became_nested_serializer_raises():
-    """A schema SCALAR field that is a nested serializer at runtime fails loud (the kind moved) (rev6 #17)."""
+    """A schema SCALAR field that is a nested serializer at runtime fails loud (the kind moved)."""
     from django_strawberry_framework.utils.inputs import InputFieldSpec
 
     class Child(serializers.Serializer):
@@ -3491,7 +3490,7 @@ def test_agreement_scalar_field_that_became_nested_serializer_raises():
 
 
 def test_decode_nested_single_error_short_circuits():
-    """A decode error INSIDE a single nested input short-circuits with the nested error (rev6 #17)."""
+    """A decode error INSIDE a single nested input short-circuits with the nested error."""
     top_cls, specs = _nested_single_input_and_specs()
     child_cls = _nested_child_input_cls(top_cls)
     # A lone surrogate in the nested scalar trips the invalid-Unicode preflight inside the

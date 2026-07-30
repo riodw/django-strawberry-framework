@@ -118,8 +118,8 @@ def materialize_serializer_input_class(name: str, input_cls: type) -> None:
     raise (a second, DIFFERENT class under one name raises ``ConfigurationError``).
 
     Defined here; called by Slice 2's phase-2.5 bind. On a distinct-class name COLLISION the
-    raised message is ENRICHED with the shape registered under ``name`` (rev6 #15's
-    ``describe_serializer_input``), so a clash between two descriptor-derived shapes is
+    raised message is ENRICHED with the shape registered under ``name``
+    (``describe_serializer_input``), so a clash between two descriptor-derived shapes is
     diagnosable (which serializer / operation / fields produced the contested name).
     """
     try:
@@ -145,7 +145,7 @@ def clear_serializer_input_namespace() -> None:
     holder. Like ``clear_mutation_input_namespace`` (and unlike the set families'
     clear), this resets only the module-level ledger it owns - the serializer
     subsystem has no arguments-factory cache and no per-set ``_lifecycle`` binding
-    state. Wired into ``registry.clear()`` in Slice 2 (spec-039). Also resets the rev6 #15
+    state. Wired into ``registry.clear()`` in Slice 2 (spec-039). Also resets the
     shape debug registry (same build lifecycle).
     """
     _clear_input_namespace()
@@ -153,7 +153,7 @@ def clear_serializer_input_namespace() -> None:
 
 
 # Register the serializer input-namespace clear as a canonical PRE-BIND clear
-# (spec-039 P1.6 / M4 - the seam centerpiece). The row is a static STRING pair, so
+# (the seam centerpiece). The row is a static STRING pair, so
 # Importing this owner only happens with DRF present, so the callback exists
 # exactly when serializer state can exist. A DRF-absent build imports neither
 # state nor callback, preserving the soft-dependency boundary.
@@ -164,8 +164,8 @@ register_subsystem_clear(
 )
 
 
-# The maximum serializer nesting DEPTH the opt-in nested build will descend (spec-039 rev6
-# #17). Recursion is already bounded by the finite, immutable ``NestedSerializerConfig`` tree
+# The maximum serializer nesting DEPTH the opt-in nested build will descend.
+# Recursion is already bounded by the finite, immutable ``NestedSerializerConfig`` tree
 # (a consumer opts in each level EXPLICITLY, and a frozen dataclass cannot contain itself) AND
 # by the on-path cycle guard (a serializer class that reappears on the recursion path fails
 # loud). This numeric cap is the additional POLICY backstop: a legitimately-but-absurdly deep
@@ -176,7 +176,7 @@ _NESTED_MAX_DEPTH: int = 5
 
 @dataclass(frozen=True)
 class NestedSerializerConfig:
-    """Explicit opt-in configuration for ONE nested serializer input field (spec-039 rev6 #17).
+    """Explicit opt-in configuration for ONE nested serializer input field.
 
     The descriptor-keyed contract that turns the framework's default fail-loud rejection of a
     nested ``Serializer`` / ``ListSerializer`` field into a supported, RECURSIVE input:
@@ -269,8 +269,8 @@ def _fingerprint_relation_target(field: serializers.Field) -> str | None:
 def _fingerprint_choices(field: serializers.Field) -> tuple[str, ...] | None:
     """Return a ``ChoiceField``'s choice VALUES for the fingerprint, else ``None``.
 
-    The generated enum's members come from the choice VALUES (rev6 #6), so a hook that changes
-    the choices changes the SDL enum - folded into the fingerprint (rev2 P2). Every
+    The generated enum's members come from the choice VALUES, so a hook that changes
+    the choices changes the SDL enum - folded into the fingerprint. Every
     ``ChoiceField`` (incl. ``FilePathField``, whose choices are filesystem-dynamic but stable
     within a single process between the two hook reads) is fingerprinted; a non-choice field
     yields ``None``.
@@ -284,8 +284,8 @@ def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
     """Return converter-affecting discriminants (``ModelField`` wrapped / ``ListField`` child), else ``None``.
 
     A ``ModelField``'s wrapped ``model_field`` and a ``ListField``'s ``child`` determine the
-    generated annotation, so a hook that swaps them changes the SDL - folded into the fingerprint
-    (rev2 P2).
+    generated annotation, so a hook that swaps them changes the SDL - folded into the
+    fingerprint.
     """
     if isinstance(field, serializers.ModelField):
         return type(getattr(field, "model_field", None)).__name__
@@ -300,7 +300,7 @@ def _fingerprint_nested(
     seen: frozenset[type],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
 ) -> tuple[Any, ...] | None:
-    """Return a fingerprint of a nested serializer field, else ``None`` (rev6 #17 / review P2).
+    """Return a fingerprint of a nested serializer field, else ``None``.
 
     A nested ``Serializer`` / ``ListSerializer`` field's generated input derives from the NESTED
     serializer's fields, so a hook that changes an OPTED-IN nested shape changes the SDL - folded
@@ -309,7 +309,7 @@ def _fingerprint_nested(
     the recursion path yields a terminal cycle marker instead of recursing forever (a
     self-referential nested serializer terminates). A non-nested field yields ``None``.
 
-    **Gated on the opt-in tree (rev6 #17 review P2).** A nested field is descended into ONLY when it
+    **Gated on the opt-in tree.** A nested field is descended into ONLY when it
     is declared in ``nested_configs`` (this level's ``Meta.nested_fields`` / the parent
     ``NestedSerializerConfig.nested_fields``) - the SAME tree the input builder walks. A nested
     field NOT opted in produces NO nested input (nesting is opt-in only; the field walk raises the
@@ -322,10 +322,11 @@ def _fingerprint_nested(
 
     Reads an OPTED-IN nested serializer's ``.fields`` lazily; one that cannot materialize its fields
     no-arg (a context-requiring nested ``get_fields()``) raises through the fingerprint, so the raw
-    exception is translated to a ``ConfigurationError`` naming the hook contract rather than leaking
-    (rev6 #17 review P1). Only WRITABLE nested fields ever reach here - the caller
-    (``_fingerprint_field_map``) drops ``read_only`` / ``HiddenField`` fields BEFORE fingerprinting,
-    so a read-only nested output field is never descended into (its ``.fields`` never read).
+    exception is translated to a ``ConfigurationError`` naming the hook contract rather than
+    leaking. Only WRITABLE nested fields ever reach here - the caller
+    (``_fingerprint_field_map``) drops ``read_only`` / ``HiddenField`` fields BEFORE
+    fingerprinting, so a read-only nested output field is never descended into (its
+    ``.fields`` never read).
     """
     if not is_nested_serializer_field(field):
         return None
@@ -335,7 +336,7 @@ def _fingerprint_nested(
     if nested_config is None:
         # Not opted in: no nested input is built (opt-in only), so the child shape cannot affect
         # the SDL and the field walk raises the canonical opt-in error. Record a shallow marker
-        # WITHOUT reading child.fields (an unopted context-sensitive child may raise) - rev6 #17 P2.
+        # WITHOUT reading child.fields (an unopted context-sensitive child may raise).
         return ("<unopted-nested>", child_class.__name__, many)
     if child_class in seen:
         return ("<cycle>", child_class.__name__, many)
@@ -363,16 +364,16 @@ def _fingerprint_field_map(
     seen: frozenset[type],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[Any, ...], ...]:
-    """The recursive fingerprint core (spec-039 rev6 #10 / #17 - the nested recursion).
+    """The recursive fingerprint core (the nested recursion).
 
     Captures every SDL-affecting axis per WRITABLE field (see ``serializer_schema_fingerprint``),
-    plus the recursive nested fingerprint for OPTED-IN nested fields (rev6 #17). ``seen`` carries
+    plus the recursive nested fingerprint for OPTED-IN nested fields. ``seen`` carries
     the serializer classes already on the recursion path so a nested cycle terminates;
     ``nested_configs`` is THIS level's opt-in tree (``Meta.nested_fields`` at the top, the parent
-    ``NestedSerializerConfig.nested_fields`` deeper) - only fields it names are descended into
-    (rev6 #17 review P2), so an unopted nested field's ``.fields`` is never read.
+    ``NestedSerializerConfig.nested_fields`` deeper) - only fields it names are descended
+    into, so an unopted nested field's ``.fields`` is never read.
 
-    **Scoped to the writable field set (rev6 #17 review P1).** ``read_only`` / ``HiddenField``
+    **Scoped to the writable field set.** ``read_only`` / ``HiddenField``
     fields are DROPPED - they never produce an input field at any nesting level (the input builder
     drops them too), so their nested structure cannot affect the SDL, and fingerprinting them
     would needlessly read a read-only nested serializer's ``.fields`` (a context-sensitive nested
@@ -408,21 +409,21 @@ def serializer_schema_fingerprint(
     *,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[Any, ...], ...]:
-    """Return a stable, request-independent fingerprint of a schema-time field map (spec-039 rev6 #10 / #17).
+    """Return a stable, request-independent fingerprint of a schema-time field map.
 
     ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
     input is generated once at finalization, BEFORE any request), but the hook is called at
     class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
     one shape and bind another. This captures EVERY axis the generated input / SDL / reverse map
     depends on, so the bind can recompute it and raise if the hook DRIFTED (turning the spec's
-    stable-shape promise into an enforced contract, rev2 P2): each WRITABLE field's name, class,
+    stable-shape promise into an enforced contract): each WRITABLE field's name, class,
     source, write flag, required, allow_null, relation target model, the description inputs
-    (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
+    (``help_text`` + the constraint summary), the enumerable choice members,
     the converter discriminants (``ModelField`` wrapped field / ``ListField`` child), and - for an
     OPTED-IN nested serializer field - a RECURSIVE fingerprint of the nested serializer's own field
-    map (rev6 #17, bounded by an on-path cycle guard).
+    map (bounded by an on-path cycle guard).
 
-    **Gated on the opt-in tree (rev6 #17 review P2).** ``nested_configs`` is the mutation's
+    **Gated on the opt-in tree.** ``nested_configs`` is the mutation's
     ``Meta.nested_fields`` map - the SAME opt-in tree the input builder walks. Only nested fields it
     names are descended into; an unopted nested field records a shallow marker WITHOUT reading its
     ``.fields`` (nesting is opt-in only, so it produces no nested input and the field walk raises the
@@ -430,7 +431,7 @@ def serializer_schema_fingerprint(
     shadows it). Callers pass ``Meta.nested_fields`` so class-validation and the bind fingerprint the
     identical opt-in structure.
 
-    **Scoped to the writable set (rev6 #17 review P1).** ``read_only`` / ``HiddenField`` fields are
+    **Scoped to the writable set.** ``read_only`` / ``HiddenField`` fields are
     dropped (they never produce an input), so this must be fed the SAME field set the input build
     uses: the callers pass the NARROWED effective map (post ``Meta.fields`` / ``Meta.exclude``), and
     ``_fingerprint_field_map`` drops read-only / hidden at every nesting level - so a read-only or
@@ -621,7 +622,7 @@ def resolve_effective_serializer_fields(
     # covers explicit ``read_only=True`` fields; ``HiddenField`` is read_only=False
     # but never accepts client input (it injects a fixed value), so it is dropped
     # by class too. The narrowing spine + the pinned error wording are single-sited
-    # in ``utils/inputs.py::resolve_effective_fields`` (spec-039 M4), shared with the
+    # in ``utils/inputs.py::resolve_effective_fields``, shared with the
     # form flavor; this wrapper supplies the WRITABLE basis + the serializer message
     # knobs so the read-only drop stays intrinsic to the serializer flavor.
     writable = writable_serializer_fields(discovered)
@@ -680,7 +681,7 @@ def resolve_injected_field_specs(
     field_map: dict[str, serializers.Field],
     injected_fields: Any,
 ) -> list[InputFieldSpec]:
-    """Resolve the schema-time ``InputFieldSpec`` for each ``Meta.injected_fields`` name (rev6 rev2 P1).
+    """Resolve the schema-time ``InputFieldSpec`` for each ``Meta.injected_fields`` name.
 
     ``Meta.injected_fields`` names required schema-time fields a ``get_serializer_injected_data``
     override supplies (they are NARROWED OUT of the generated input, so their specs are NOT in
@@ -724,7 +725,7 @@ class SerializerInputShape:
     - ``field_specs`` - the ordered tuple of each emitted field's reverse-map
       ``InputFieldSpec`` (input_attr / graphql_name / target_name / kind / source).
     - ``annotations`` - the ordered tuple of each emitted field's stringified EMITTED
-      annotation (post-nullable-widening - M2 / High), so two hook-returned shapes with
+      annotation (post-nullable-widening - High), so two hook-returned shapes with
       the SAME names but a DIFFERENT emitted annotation diverge: a ``CharField`` vs an
       ``IntegerField`` (different base type) under one name, AND a ``required=True,
       allow_null=False`` (``str``) vs ``required=True, allow_null=True`` (``str | None``)
@@ -761,7 +762,7 @@ class SerializerInputShape:
         return self
 
 
-# spec-039 rev6 #15: the generated-input-name -> ``SerializerInputShape`` debug registry.
+# The generated-input-name -> ``SerializerInputShape`` debug registry.
 # ``build_serializer_input_class`` records each shape it produces here (keyed by the generated
 # type name), so ``describe_serializer_input`` can explain WHY a (deliberately opaque,
 # descriptor-derived) input has its shape / name - the fields, sources, relation targets,
@@ -772,7 +773,7 @@ _SERIALIZER_SHAPE_REGISTRY: dict[str, SerializerInputShape] = {}
 
 
 def describe_serializer_input(name: str) -> str | None:
-    """Return a human-readable description of a generated serializer input shape (spec-039 rev6 #15).
+    """Return a human-readable description of a generated serializer input shape.
 
     Given a generated input class name (e.g. a descriptor-derived
     ``NoteShelfSerializerCode...Note...Input``), returns a multi-line summary of its
@@ -814,7 +815,7 @@ def describe_serializer_input(name: str) -> str | None:
         if description is not None:
             extra += f", description={description!r}"
         if spec.nested_specs is not None:
-            # rev6 #17: name the nested input's own fields so a nested shape is inspectable
+            # name the nested input's own fields so a nested shape is inspectable
             # (the recursive reverse map, one level - deeper levels have their own registry rows).
             nested_names = ", ".join(child.target_name for child in spec.nested_specs)
             extra += f", nested_fields=[{nested_names}]"
@@ -992,7 +993,7 @@ def guard_create_required_serializer_fields(
     both ``Meta.fields`` and ``Meta.exclude``. ``read_only`` / ``HiddenField``
     fields are exempt (already dropped, never required input).
 
-    **The explicit injection contract (spec-039 rev6 #2, hardened).** ``injected_fields``
+    **The explicit injection contract (hardened).** ``injected_fields``
     names the fields a ``get_serializer_injected_data`` override supplies
     (``Meta.injected_fields``); they are SUBTRACTED from the dropped-required set, so a
     required field a narrowing drops but that is DECLARED injected does not raise, while a
@@ -1029,14 +1030,14 @@ def _collect_input_attr_collision_messages(
     serializer_class: type[serializers.BaseSerializer],
     field_specs: list[InputFieldSpec],
 ) -> list[str]:
-    """Return every input-attr / GraphQL-name / writable-source collision message (spec-039 rev6 #5).
+    """Return every input-attr / GraphQL-name / writable-source collision message.
 
     Three ways two serializer fields collapse to one generated input field (or one
     model attr), all of which would otherwise SILENTLY drop / double-write - so all
     fail loud (the package's fail-loud contract). Formerly this RAISED on the FIRST
     collision; it now COLLECTS every collision message and returns them, so the caller
     (``_walk_serializer_fields``) can aggregate them with the per-field conversion errors
-    into ONE ``ConfigurationError`` (rev6 #5 - report all actionable problems at once,
+    into ONE ``ConfigurationError`` (report all actionable problems at once,
     not one-fix-rerun-per-field). The message wording is byte-unchanged, so a consumer
     (and the tests) still see the same per-collision sentence, now as one bullet in the
     aggregate:
@@ -1063,7 +1064,7 @@ def _collect_input_attr_collision_messages(
       rejects them before a spec is built).
 
     The seen-dict walk + the three collision arms are single-sited in
-    ``utils/inputs.py::iter_input_field_collisions`` (DRY review A3); the
+    ``utils/inputs.py::iter_input_field_collisions``; the
     serializer flavor collects every yielded message for aggregation (the form
     raises on the first instead), with byte-stable wording via the threaded
     serializer nouns (incl. the id-like-suffix ``camel_case_note`` and the
@@ -1086,7 +1087,7 @@ def _aggregate_field_problems(
     serializer_class: type[serializers.BaseSerializer],
     messages: list[str],
 ) -> ConfigurationError:
-    """Build ONE ``ConfigurationError`` from all collected schema-time problems (spec-039 rev6 #5).
+    """Build ONE ``ConfigurationError`` from all collected schema-time problems.
 
     A SINGLE problem is raised VERBATIM (so the precise per-field / per-collision wording -
     and every ``pytest.raises(match=...)`` substring - is preserved unchanged); TWO OR MORE
@@ -1135,12 +1136,12 @@ def _walk_serializer_fields(
     - ``triples`` - the ``build_strawberry_input_class`` ``(python_attr, annotation,
       field_kwargs)`` triples (a nullable field widens to ``T | None`` AND carries
       ``strawberry.UNSET`` so it is OMITTABLE - spec-039 M2 / H3; each also carries a
-      ``description`` threaded from the DRF field's metadata - rev6 #9).
+      ``description`` threaded from the DRF field's metadata).
 
     Factored out so the canonical-name gate can re-walk the DEFAULT full shape with
     the exact same logic, rather than the name choice drifting from the build walk.
 
-    **Aggregate diagnostics (spec-039 rev6 #5).** Every per-field conversion error
+    **Aggregate diagnostics.** Every per-field conversion error
     (unsupported field, non-PK relation, missing relation-primary, dotted / star source,
     the model-backed type-override conflict) is COLLECTED rather than raised on the first,
     then combined with the input-attr / GraphQL-name / source collision messages and raised
@@ -1149,7 +1150,7 @@ def _walk_serializer_fields(
     fix-one-rerun-discover-the-next. A single problem is raised verbatim, so the precise
     per-field wording (and every ``pytest.raises(match=...)`` substring) is preserved.
     """
-    # rev6 #17: nested op kind mirrors the top-level operation - a create builds
+    # nested op kind mirrors the top-level operation - a create builds
     # ``CREATE``-shaped nested inputs (required nested fields required), an update builds
     # ``PARTIAL``-shaped ones (all optional). Derived from ``is_partial`` so the walk needs no
     # extra operation param.
@@ -1163,7 +1164,7 @@ def _walk_serializer_fields(
     for name, field in effective.items():
         try:
             if is_nested_serializer_field(field) and nested_configs and name in nested_configs:
-                # rev6 #17: an EXPLICITLY-opted-in nested serializer field builds a nested input
+                # an EXPLICITLY-opted-in nested serializer field builds a nested input
                 # RECURSIVELY (never routed through ``resolve_serializer_field``, which would
                 # reject it). A nested field NOT in ``nested_configs`` falls through to the
                 # converter, which fails loud (nesting is opt-in only).
@@ -1181,7 +1182,7 @@ def _walk_serializer_fields(
                     provisional_name,
                 )
         except ConfigurationError as exc:
-            # rev6 #5: collect the per-field conversion error (prefixed with the field
+            # collect the per-field conversion error (prefixed with the field
             # name) and keep walking so the aggregate names every bad field at once.
             field_errors.append(f"{name}: {exc}")
             continue
@@ -1190,14 +1191,14 @@ def _walk_serializer_fields(
         required = False if is_partial else (field.required and name not in optional_fields)
         required_state.append(required)
 
-        # Nullability (M2): the annotation is widened ``T | None`` when the field is
+        # Nullability: the annotation is widened ``T | None`` when the field is
         # ``allow_null`` OR is optional; a nullable field is ALWAYS omittable (default
         # ``UNSET``), even when DRF ``required=True`` (H3 - GraphQL cannot express
         # required-AND-nullable, so omission is allowed at coercion and the resolver
         # strips ``UNSET`` -> DRF raises its own field-keyed required error in-band). A
         # non-nullable required field gets NO default, so GraphQL enforces presence.
         # The widening tail itself is single-sited in
-        # ``utils/inputs.py::optional_input_field`` (DRY review A10).
+        # ``utils/inputs.py::optional_input_field``.
         nullable = getattr(field, "allow_null", False) or not required
         annotation, field_kwargs = optional_input_field(
             annotation,
@@ -1212,7 +1213,7 @@ def _walk_serializer_fields(
         if description is not None:
             field_kwargs["description"] = description
         # Record the EMITTED (post-widening) annotation repr - NOT the base annotation
-        # (spec-039 High / M2). The descriptor identity + the name token must reflect the
+        # (spec-039 High). The descriptor identity + the name token must reflect the
         # GraphQL nullability actually generated: two same-name hook shapes differing ONLY
         # in ``allow_null`` (``required=True, allow_null=False`` -> ``T`` vs
         # ``required=True, allow_null=True`` -> ``T | None``) emit DIFFERENT nullability,
@@ -1224,7 +1225,7 @@ def _walk_serializer_fields(
         annotation_reprs.append(repr(annotation))
         triples.append((python_attr, annotation, field_kwargs))
 
-    # rev6 #5: fold the collision messages (over the fields that DID resolve) in with the
+    # fold the collision messages (over the fields that DID resolve) in with the
     # per-field errors, then raise ONE aggregated ConfigurationError if anything failed.
     all_problems = field_errors + _collect_input_attr_collision_messages(
         serializer_class,
@@ -1240,7 +1241,7 @@ def _guard_nested_recursion(
     nested_path: tuple[type, ...],
     field_name: str,
 ) -> None:
-    """Fail loud on a nested-serializer CYCLE or excessive DEPTH (spec-039 rev6 #17).
+    """Fail loud on a nested-serializer CYCLE or excessive DEPTH.
 
     ``nested_path`` is the tuple of serializer classes already on the recursion path (the
     parent chain, including the serializer whose ``field_name`` field is being descended into).
@@ -1266,7 +1267,7 @@ def _dedupe_and_materialize_nested(
     nested_cls: type,
     nested_shape: SerializerInputShape,
 ) -> tuple[type, SerializerInputShape]:
-    """Dedupe a nested input on its descriptor, materialize it, return the canonical pair (rev6 #17).
+    """Dedupe a nested input on its descriptor, materialize it, return the canonical pair.
 
     Two references to the SAME nested shape (within one build or across two top-level mutations)
     must resolve to ONE class object, or Strawberry rejects two distinct types under one GraphQL
@@ -1295,7 +1296,7 @@ def _resolve_nested_field(
     operation_kind: str,
     nested_path: tuple[type, ...],
 ) -> tuple[str, Any, InputFieldSpec]:
-    """Resolve ONE opted-in nested serializer field to ``(python_attr, annotation, spec)`` (rev6 #17).
+    """Resolve ONE opted-in nested serializer field to ``(python_attr, annotation, spec)``.
 
     Builds the nested input RECURSIVELY from the nested serializer's OWN bound field map (read
     off the nested serializer instance - ``.child`` for a ``many=True`` ``ListSerializer``, the
@@ -1308,7 +1309,7 @@ def _resolve_nested_field(
     input class (single) or ``list[<nested input>]`` (many); the caller applies the
     required / ``allow_null`` widening. The cycle / depth guard runs BEFORE the recursion.
 
-    **The ``source`` axis (rev6 #17 review P1).** A nested field with a DRF ``source=`` records
+    **The ``source`` axis.** A nested field with a DRF ``source=`` records
     the same normalized one-segment source scalar / relation fields do (``renamed =
     ChildSerializer(source="actual")`` -> ``source="actual"``), so the runtime schema/runtime
     agreement guard's source comparison matches instead of failing every invocation. A dotted
@@ -1318,7 +1319,7 @@ def _resolve_nested_field(
     child_serializer, many = nested_serializer_child(field)
     nested_class = type(child_serializer)
     _guard_nested_recursion(nested_class, nested_path, field_name)
-    # rev6 #17 review P1: the source axis. A dotted / star source has no single write-back
+    # The source axis. A dotted / star source has no single write-back
     # attribute for the nested write; reject via the shared one-segment policy (the same
     # detection ``backing_model_field`` uses for model-column resolve).
     require_one_segment_source(
@@ -1358,7 +1359,7 @@ def _validate_nested_config_keys(
     effective: dict[str, serializers.Field],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
 ) -> None:
-    """Fail loud if a ``nested_fields`` key does not name an effective NESTED serializer field (rev6 #17).
+    """Fail loud if a ``nested_fields`` key does not name an effective NESTED serializer field.
 
     Runs at EVERY nesting level (so a typo in a deeper ``NestedSerializerConfig.nested_fields``
     fails loud, not silently ignored): each key must be in the effective input set (not narrowed
@@ -1461,7 +1462,7 @@ def build_serializer_input_class(
     ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
     default module discovery when called in isolation).
 
-    ``nested_configs`` is the mutation's ``Meta.nested_fields`` map (spec-039 rev6 #17):
+    ``nested_configs`` is the mutation's ``Meta.nested_fields`` map:
     each named nested serializer field is built RECURSIVELY into a nested input (an
     un-named nested field still fails loud). ``_nested_path`` is the internal
     recursion-path accumulator (serializer classes already descended into) for the cycle /
@@ -1469,7 +1470,7 @@ def build_serializer_input_class(
 
     A nullable input field (``allow_null=True`` OR optional) widens to
     ``annotation | None`` AND carries a ``strawberry.UNSET`` default so the key is
-    OMITTABLE at GraphQL coercion (spec-039 M2 / H3): a ``required=True,
+    OMITTABLE at GraphQL coercion: a ``required=True,
     allow_null=True`` field is nullable-but-must-provide, so the GraphQL field is
     omittable (the resolver strips ``UNSET`` -> DRF sees the key MISSING and raises
     its own field-keyed required error) while still accepting an explicit ``null``.
@@ -1480,7 +1481,7 @@ def build_serializer_input_class(
     and the ``SerializerInputShape`` descriptor (which carries the reverse-map
     field specs + the generated name). Slice 2's phase-2.5 bind calls
     ``materialize_serializer_input_class`` to pin the class as a module global.
-    Any NESTED input classes are deduped + materialized during the walk (rev6 #17).
+    Any NESTED input classes are deduped + materialized during the walk.
     """
     effective = resolve_effective_serializer_fields(
         serializer_class,
@@ -1488,7 +1489,7 @@ def build_serializer_input_class(
         exclude=exclude,
         field_map=field_map,
     )
-    # rev6 #17: fail loud NOW (at every nesting level) if a ``nested_fields`` key does not name
+    # fail loud NOW (at every nesting level) if a ``nested_fields`` key does not name
     # an effective nested serializer field - a typo / excluded / non-nested key is a config error.
     _validate_nested_config_keys(serializer_class, effective, nested_configs)
     optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
@@ -1507,9 +1508,9 @@ def build_serializer_input_class(
     # computed after the field walk (it needs the resolved specs / annotations).
     provisional_name = f"{serializer_class.__name__}{'PartialInput' if is_partial else 'Input'}"
 
-    # The per-field walk resolves each field, threads DRF metadata into descriptions
-    # (rev6 #9), and AGGREGATES every per-field conversion error + input-attr / GraphQL-name
-    # / source collision into ONE ``ConfigurationError`` (rev6 #5) - the collision guard is
+    # The per-field walk resolves each field, threads DRF metadata into descriptions,
+    # and AGGREGATES every per-field conversion error + input-attr / GraphQL-name
+    # / source collision into ONE ``ConfigurationError`` - the collision guard is
     # now folded into the walk (no separate call).
     field_specs, annotation_reprs, descriptions, required_state, triples = _walk_serializer_fields(
         effective,
@@ -1533,7 +1534,7 @@ def build_serializer_input_class(
     # ``exclude is None`` clauses are retained so ANY explicit narrowing or optional
     # override takes a divergent name even when it happens to reproduce the default
     # identity.) ``descriptions`` is part of the identity so a description-only divergence
-    # diverges too (rev6 #9).
+    # diverges too.
     current_identity = (
         tuple(field_specs),
         tuple(annotation_reprs),
@@ -1579,7 +1580,7 @@ def build_serializer_input_class(
         optional_fields=optional_fields,
         type_name=type_name,
     )
-    # rev6 #15: record the shape under its generated name for the debug registry (identical
+    # record the shape under its generated name for the debug registry (identical
     # descriptors overwrite harmlessly; a genuine distinct-descriptor name clash is caught by
     # the materialize ledger, whose error is then enriched with this shape's description).
     _SERIALIZER_SHAPE_REGISTRY[type_name] = shape

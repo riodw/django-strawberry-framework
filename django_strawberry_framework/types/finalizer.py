@@ -26,7 +26,7 @@ decoration touches a consumer-facing class:
   runs. ``_bind_filtersets`` then runs four ordered
   subpasses (bind owners, expand filtersets, materialize input classes,
   reject orphan ``filter_input_type`` references) per spec-027 Decision 6
-  / H1 of rev8 - every subpass MUST complete across all wired types
+  - every subpass MUST complete across all wired types
   before the next subpass starts so cross-filterset references resolve
   against bound owners regardless of registration order. Runs before
   Phase 3 so the ``strawberry.type`` decorator sees the mutated bases
@@ -143,7 +143,7 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
 
     Runs exactly once per build, inside ``finalize_django_types()`` after the
     ``registry.is_finalized()`` short-circuit and before pending-relation
-    resolution. The pre-resolution placement (M1) is what makes Phase 1
+    resolution. The pre-resolution placement is what makes Phase 1
     failure-atomic - an ambiguity raise leaves every collected class intact
     and the pending-relation list preserved for a re-call. The once-per-build
     guarantee for the underlying ``registry.models_with_multiple_types()``
@@ -502,9 +502,9 @@ def _synthesize_relation_connections() -> None:
     ``ConfigurationError`` on an explicit ``"connection"`` / ``"both"``
     request (Decision 6's fail-loud-on-explicit split). Consumer-authored
     relations are skipped under the implicit default - an explicit key
-    already raised at type creation (Decision 7 / Revision 3 P2).
+    already raised at type creation (Decision 7).
 
-    Collision guard (Revision 3 P3): the generated name is checked against
+    Collision guard: the generated name is checked against
     every existing field name on BOTH surfaces - Python attribute names AND
     default-camel-cased GraphQL names (``to_camel_case``, the rule
     Strawberry's default ``NameConverter`` applies under
@@ -543,7 +543,7 @@ def _synthesize_relation_connections() -> None:
                 # Implicit-default skip only (the shipped override contract
                 # outranks the upgrade); an explicit relation_shapes key
                 # naming a consumer-authored relation already raised at type
-                # creation (Decision 7 / Revision 3 P2).
+                # creation (Decision 7).
                 continue
             target_type = registry.get(field.related_model)
             if target_type is None or not implements_relay_node(target_type):
@@ -575,7 +575,7 @@ def _synthesize_relation_connections() -> None:
                 # for a ``"connection"`` shape the list form must be removed
                 # AGAIN here - without this the rerun would skip on the marker
                 # and leave a reattached, now-unannotated ``items`` resolver
-                # that breaks Phase 3 (spec-032 feedback P1). Then skip rather
+                # that breaks Phase 3. Then skip rather
                 # than misread our own field as a collision.
                 if shape == "connection":
                     _suppress_relation_list_form(type_cls, name)
@@ -611,7 +611,7 @@ def _synthesize_relation_connections() -> None:
                 # ACCESSOR (``get_accessor_name()``); ``name`` (the related
                 # query name) stays the GraphQL vocabulary for the generated
                 # field name and the collision guard. The two diverge for a
-                # reverse relation without ``related_name`` (Round-4 S3).
+                # reverse relation without ``related_name``.
                 resolver=_build_relation_connection_resolver(
                     target_type,
                     instance_accessor(field),
@@ -891,7 +891,7 @@ def finalize_django_types() -> None:
     # ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` change (a mutation ``Meta`` is
     # its own namespace).
     # Reset the cross-pass materialization ledgers ONCE before the bind sequence so
-    # finalize is retry-idempotent (feedback #6). Mutation and form binders clear
+    # finalize is retry-idempotent. Mutation and form binders clear
     # their own build caches; the pre-bind sweep clears the serializer build cache
     # because it has no independent binder. The cross-pass materialization ledgers
     # persist across passes: the ``ModelForm`` flavor rides ``bind_mutations`` yet
@@ -924,7 +924,7 @@ def finalize_django_types() -> None:
     # ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``
     # resolves them - surface-keyed, each artifact only when its surface was
     # declared (an empty auth ledger makes the call a no-op). Guarded via the
-    # already-loaded-only ``loaded_attr`` (DRY review B1 - the opt-in-preserving
+    # already-loaded-only ``loaded_attr`` (the opt-in-preserving
     # lookup ``registry.py::_clear_if_loaded`` routes this same module through),
     # never a plain local import, so a consumer who never imported the auth
     # subsystem never pays its import (the opt-in contract): a declared auth
@@ -983,9 +983,8 @@ def _bind_set_owner_common(
 ) -> None:
     """Bind ``set_cls._owner_definition`` with shared first-bind/idempotency/target checks.
 
-    The phase-2.5 owner-binding skeleton shared by FilterSet and OrderSet (the
-    0.0.9 DRY pass). Family-specific behaviour
-    enters through hooks:
+    The phase-2.5 owner-binding skeleton shared by FilterSet and OrderSet.
+    Family-specific behaviour enters through hooks:
 
     - ``get_model`` reads the set's ``Meta.model`` (FilterSet exposes it via
       ``_meta``, OrderSet via the raw ``Meta``).
@@ -1066,7 +1065,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     and returns. Re-binding the same ``(filterset_cls, definition)``
     pair is idempotent (supports partial-finalize recovery per spec-027
     Decision 6 #"Partial-finalize lifecycle"). A second, distinct owner triggers the
-    H2-rev8 strict-equality check (``_check_filterset_owner_axes``) across the
+    the strict-equality check (``_check_filterset_owner_axes``) across the
     owner-dependent axes:
 
     1. **Own-PK Relay identity.** A filterset's own primary key resolves
@@ -1193,7 +1192,7 @@ def _check_filterset_owner_pk_identity(
     from ``_check_filterset_owner_axes`` (the filter-only ``before_second_owner_check``
     hook, alongside ``_check_filterset_owner_get_queryset_safety``); the order
     side passes ``None`` because ``ORDER BY id`` uses the column, not the GraphQL
-    ID type (spec-027 H2 of rev8 / spec-028 Decision 6).
+    ID type (spec-028 Decision 6).
     """
     prev_is_relay = implements_relay_node(previous.origin)
     new_is_relay = implements_relay_node(new.origin)
@@ -1213,7 +1212,7 @@ def _format_owner_mismatch_error(
     prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
     new_target: tuple[DjangoTypeDefinition, models.Field] | None,
 ) -> str:
-    """Return the canonical H2-rev8 multi-owner-mismatch message.
+    """Return the canonical multi-owner-mismatch message.
 
     Sibling of ``_format_unresolved_targets_error`` /
     ``_format_ambiguity_error`` above; all three formatters live at the
@@ -1229,7 +1228,7 @@ def _format_owner_mismatch_error(
         f"diverging targets: {previous.origin.__qualname__} resolves "
         f"{field_name!r} to {prev_name}, but {new.origin.__qualname__} resolves it "
         f"to {new_name}. Declare separate FilterSet subclasses for the diverging "
-        "owners (per spec-027 H2 of rev8)."
+        "owners."
     )
 
 
@@ -1254,7 +1253,7 @@ def _format_owner_pk_mismatch_error(
         f"type_name={new.graphql_type_name!r}). The filterset's own `id` filter "
         "resolves to a GlobalID typed to its owner, so owners diverging on "
         "Relay-node-ness or GraphQL type name cannot share one FilterSet. Declare "
-        "separate FilterSet subclasses for the diverging owners (per spec-027 H2 of rev8)."
+        "separate FilterSet subclasses for the diverging owners."
     )
 
 
@@ -1280,7 +1279,7 @@ def _format_owner_get_queryset_mismatch_error(
         "registration-order-dependent row-visibility leak. A shared custom "
         "get_queryset is NOT safe either: it still runs with each owner's own cls, so "
         "a cls-parameterized hook can diverge per owner. Declare separate FilterSet "
-        "subclasses per owner (per spec-027 H2 of rev8)."
+        "subclasses per owner."
     )
 
 
@@ -1293,7 +1292,7 @@ def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDef
     mismatch would otherwise raise once a lookup runs against the wrong
     model's queryset - names both models so the consumer can realign the
     wiring. Grep-stable alongside the other ``_format_*`` finalize-error
-    helpers (H-core-3 of the pre-merge review).
+    helpers.
     """
     return (
         f"FilterSet {filterset_cls.__qualname__} is declared as the filterset_class "
@@ -1419,7 +1418,7 @@ def _format_owner_orderset_model_mismatch_error(
     Fires on the FIRST owner binding when a ``Meta.orderset_class`` is
     keyed on a model unrelated to its owner type's model. Names all four
     entities (owner type, owner model, orderset class, orderset model)
-    per spec-028 Revision 4 H2 / Decision 6 so the consumer can realign
+    per spec-028 Decision 6 so the consumer can realign
     the wiring at finalize time rather than seeing an opaque query-time
     ``FieldError`` once an ``order_by(...)`` lookup runs against the wrong
     model's queryset. Grep-stable alongside the other ``_format_*``
@@ -1467,7 +1466,7 @@ class _SidecarBindingSpec:
     """Per-family configuration for the shared phase-2.5 binding driver.
 
     The ordered four-subpass binding skeleton (``_bind_sidecar_sets``) is shared
-    by FilterSet and OrderSet (the 0.0.9 DRY pass); this carries the family
+    by FilterSet and OrderSet; this carries the family
     differences. ``expand`` runs Layer-4 expansion for one set;
     ``post_expand_audit`` is the optional filter-only
     unregistered-``RelatedFilter``-target walk (``None`` for orders).
@@ -1541,7 +1540,7 @@ def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
 def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
     """Run the ordered phase-2.5 subpasses for one sidecar family.
 
-    Shared by ``_bind_filtersets`` / ``_bind_ordersets`` (the 0.0.9 DRY pass).
+    Shared by ``_bind_filtersets`` / ``_bind_ordersets``.
     The ordering is load-bearing: every subpass MUST complete across all wired
     types before the next starts so cross-set references resolve against bound
     owners regardless of registration order.
@@ -1765,7 +1764,7 @@ def _bind_filtersets() -> None:
 
     Subpass 1 - bind every owner. Walks every wired definition and
     binds ``filterset_cls._owner_definition`` via
-    ``_bind_filterset_owner``. The H2-rev8 strict-equality check
+    ``_bind_filterset_owner``. The strict-equality check
     rejects diverging multi-owner reuse before any subsequent subpass
     runs.
 

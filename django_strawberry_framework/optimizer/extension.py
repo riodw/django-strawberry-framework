@@ -16,7 +16,7 @@ it walks the entire selection tree once using the O2 walker, builds an
 through untouched - Django's ``prefetch_related`` with ``__``-chained
 paths handles nested optimization in a single pass.
 
-Load-bearing rule (O6): when a related field's target ``DjangoType``
+Load-bearing rule: when a related field's target ``DjangoType``
 defines a non-default ``get_queryset``, generate a
 ``Prefetch(...)`` keyed on the filtered queryset instead of a
 ``select_related``. This is the visibility-leak fix from
@@ -94,8 +94,8 @@ from .selections import (
 )
 from .walker import plan_optimizations, plan_relation
 
-# The selection-traversal primitives moved to ``optimizer/selections.py`` in the
-# 0.0.9 DRY pass. The underscore aliases keep this module's bodies - and the tests
+# The selection-traversal primitives live in ``optimizer/selections.py``.
+# The underscore aliases keep this module's bodies - and the tests
 # that import ``_named_children`` / ``_node_children_with_runtime_prefix`` from
 # ``optimizer.extension`` - working unchanged. ``extension`` no longer imports the
 # converted-selection helpers back from ``walker`` (the reverse dependency the
@@ -373,8 +373,9 @@ def _collect_reachable_fragment_definitions(
     ``_unvisited_fragment_definition``). The returned tuple feeds
     ``_print_operation_with_reachable_fragments`` so the plan-cache
     key includes the fragment bodies the planner will actually expand,
-    closing the ``query Q { ...F } fragment F { ... }`` cache-key gap
-    flagged in this module's review artifact.
+    closing the ``query Q { ...F } fragment F { ... }`` cache-key gap:
+    without them, two operations differing only in a fragment body share
+    one cache key.
     """
     reachable: list[Any] = []
     _walk_reachable_fragment_definitions(node, fragments, set(), reachable)
@@ -972,7 +973,7 @@ class DjangoOptimizerExtension(SchemaExtension):
            Steps 1-2 are the shared ``utils/querysets.py::normalize_query_source``
            contract - the same Manager-coercion + is-queryset decision the
            list / connection field consumer paths use, so the middleware never
-           decides it independently (the 0.0.9 DRY pass).
+           decides it independently.
         3. An already-evaluated queryset (``_result_cache`` populated) is
            returned unchanged (G1, ``spec-035`` Decision 3). The consumer's
            root resolver already ran the SQL (a ``len(qs)`` guard, a

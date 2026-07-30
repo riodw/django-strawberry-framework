@@ -208,7 +208,7 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
     in Phase 2.5, BEFORE Phase 3 flips ``finalized``. If Phase 3
     (``strawberry.type``) raises, the type carries a non-None strategy yet is
     not finalized; ``global_id_for`` must gate on ``finalized`` and still raise
-    the finalize-first error rather than mint an id (spec-032 feedback P2).
+    the finalize-first error rather than mint an id (spec-032).
     """
     category_node = _make_node_type("CategoryNode")
 
@@ -257,5 +257,5 @@ def test_secondary_model_label_emitter_decodes_to_primary():
     assert relay.GlobalID.from_id(minted).type_name == "products.item"
     assert _emitted_typename(secondary) == "products.item"
     # ... and decode routes the model-label payload to the model's PRIMARY
-    # via registry.get(model) - the documented asymmetry (Revision 2 P2).
+    # via registry.get(model) - the documented asymmetry.
     assert decode_global_id(minted) == (primary, "3")

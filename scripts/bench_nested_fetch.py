@@ -1,6 +1,6 @@
 r"""Benchmark the nested-connection fetch strategies on live Postgres data.
 
-The spec-045 go/no-go gate for the lateral backend
+The go/no-go gate for the lateral backend
 (``optimizer/lateral_fetch.py``): on seeded Postgres data it measures the
 same nested-connection GraphQL request under
 

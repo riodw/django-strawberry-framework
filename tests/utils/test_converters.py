@@ -1,4 +1,4 @@
-"""Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
+"""Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
 
 ``convert_with_mro`` single-sites the ordered-precheck -> MRO-walk ->
 raising-fallthrough control flow both ``forms/converter.py`` and

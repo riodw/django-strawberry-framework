@@ -45,8 +45,7 @@ that delivers undecoded bytes to it, in
 ``views.py::_RawBodyRequestAdapter``. Owning only the decode was not
 enough: with the ``cross_web`` half off, upstream's sync adapter decodes
 inside its own property and the view's ``parse_json`` is never entered
-with bytes at all, which cost the sync transport its controlled ``400``
-(spec-046 review W3-2). See
+with bytes at all, which cost the sync transport its controlled ``400``. See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug

@@ -13,7 +13,7 @@ Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
 - the renamed-field reverse map (declared name -> GraphQL name; backing column via
   ``source``; declared name preserved as ``target_name``), the id-like-suffix rule,
   the dotted-``source`` rejection, the serializer-only relation (``queryset.model``),
-  and the M3 missing-primary-DjangoType raise.
+  and the missing-primary-DjangoType raise.
 
 The relation id-type (Relay-``GlobalID`` vs raw pk, single + multi) is pinned at
 the ``resolve_serializer_field`` build site over a real model's primary
@@ -64,9 +64,9 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 def _restore_converter_registry():
     """Snapshot + restore the module converter registry so a test registration cannot leak.
 
-    The serializer-field converter registry (spec-039 rev6 #11) mirrors the read-side
-    ``SCALAR_MAP``: a mutable module dict NOT reset by ``registry.clear()``, so a test
-    that registers a converter restores the snapshot on teardown.
+    The serializer-field converter registry mirrors the read-side ``SCALAR_MAP``: a
+    mutable module dict NOT reset by ``registry.clear()``, so a test that registers a
+    converter restores the snapshot on teardown.
     """
     snapshot = dict(serializer_converter._SERIALIZER_FIELD_CONVERTERS)
     yield
@@ -289,7 +289,7 @@ def test_list_serializer_field_raises():
 
 
 def test_is_nested_serializer_field_detects_nested_and_scalar():
-    """``is_nested_serializer_field`` is True for a nested serializer / list, False for a scalar (rev6 #17)."""
+    """``is_nested_serializer_field`` is True for a nested serializer / list, False for a scalar."""
 
     class Inner(serializers.Serializer):
         x = serializers.CharField()
@@ -300,7 +300,7 @@ def test_is_nested_serializer_field_detects_nested_and_scalar():
 
 
 def test_nested_serializer_child_reports_single_vs_many():
-    """``nested_serializer_child`` peels a ``ListSerializer`` to its child (many=True) vs a single (many=False) (rev6 #17)."""
+    """``nested_serializer_child`` peels a ``ListSerializer`` to its child (many=True) vs a single (many=False)."""
 
     class Inner(serializers.Serializer):
         x = serializers.CharField()
@@ -317,7 +317,7 @@ def test_nested_serializer_child_reports_single_vs_many():
 
 
 def test_resolve_serializer_field_rejects_nested_over_relation_column():
-    """A nested serializer over a REVERSE-relation column fails loud, not misrouted as a relation (rev6 #17).
+    """A nested serializer over a REVERSE-relation column fails loud, not misrouted as a relation.
 
     ``resolve_serializer_field`` rejects a nested serializer FIRST, before the backing-column
     lookup - so a ``CategorySerializer.items = ItemInline(many=True)`` (whose ``items`` source
@@ -375,7 +375,7 @@ def test_many_related_field_is_relation_multi():
 
 
 def test_slug_related_field_raises_non_pk_relation():
-    """A writable ``SlugRelatedField`` (a non-PK relation) fails loud (spec-039 H5).
+    """A writable ``SlugRelatedField`` (a non-PK relation) fails loud.
 
     Only ``PrimaryKeyRelatedField`` decodes to a primary key; a slug-expecting field has
     no pk-based input shape, so it raises rather than silently misdecoding a pk.
@@ -393,7 +393,7 @@ def test_slug_related_field_raises_non_pk_relation():
 
 
 def test_many_related_field_non_pk_child_raises():
-    """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud (H5)."""
+    """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud."""
     _register_products_types()
     field = _bind(
         serializers.SlugRelatedField(
@@ -518,13 +518,13 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     assert spec.target_name == "category_pk"
     assert spec.source == "category"
     assert spec.kind == RELATION_SINGLE
-    # H4: the relation's target model is recorded on the spec at build time so the
+    # The relation's target model is recorded on the spec at build time so the
     # Slice-3 decode never re-discovers the serializer field set per request.
     assert spec.related_model is product_models.Category
 
 
 def test_model_backed_slug_related_field_raises():
-    """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve (spec-039 H5).
+    """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve.
 
     The model-backed relation branch (``column.is_relation``) would otherwise type the
     field as a pk-decoding GlobalID / raw-pk input, silently misdecoding a pk into a
@@ -600,12 +600,12 @@ def test_require_one_segment_source_rejects_star_and_dotted():
 
 
 # ---------------------------------------------------------------------------
-# Serializer-only relation (queryset.model) + M3 missing primary DjangoType
+# Serializer-only relation (queryset.model) + missing primary DjangoType
 # ---------------------------------------------------------------------------
 
 
 def test_serializer_only_relation_resolves_target_from_queryset_model():
-    """A plain-``Serializer`` relation resolves its target from ``field.queryset.model`` (F4)."""
+    """A plain-``Serializer`` relation resolves its target from ``field.queryset.model``."""
     _register_products_types()
 
     class PlainSer(serializers.Serializer):
@@ -648,9 +648,9 @@ def test_relation_with_no_backing_column_and_no_queryset_raises():
 
 
 def test_relation_target_with_no_registered_primary_raises():
-    """A relation whose target model has no registered primary DjangoType raises (M3)."""
+    """A relation whose target model has no registered primary DjangoType raises."""
 
-    # No DjangoType registered for Category in this test -> M3 fires.
+    # No DjangoType registered for Category in this test -> the raise fires.
     class ItemSer(serializers.ModelSerializer):
         class Meta:
             model = product_models.Item
@@ -662,7 +662,7 @@ def test_relation_target_with_no_registered_primary_raises():
 
 
 # ---------------------------------------------------------------------------
-# Expanded DRF scalar capability matrix (spec-039 rev6 #7) - no catch-all
+# Expanded DRF scalar capability matrix - no catch-all
 # ---------------------------------------------------------------------------
 
 
@@ -676,7 +676,7 @@ def test_relation_target_with_no_registered_primary_raises():
     ],
 )
 def test_expanded_scalar_matrix(field, expected):
-    """The rev6 #7 scalars each map to their EXPLICIT annotation, kind ``scalar``.
+    """Each expanded-matrix scalar maps to its EXPLICIT annotation, kind ``scalar``.
 
     ``DictField`` -> ``JSON``; ``IPAddressField`` / ``FilePathField`` -> ``str``;
     ``DurationField`` -> ``str`` (a DELIBERATE scalar - DRF renders a duration as an
@@ -725,7 +725,7 @@ def test_model_field_over_unsupported_column_fails_loud():
 
 
 # ---------------------------------------------------------------------------
-# Public converter registry (spec-039 rev6 #11) - sanctioned extension, no catch-all
+# Public converter registry - sanctioned extension, no catch-all
 # ---------------------------------------------------------------------------
 
 
@@ -796,7 +796,7 @@ def test_register_converter_rejects_non_callable(_restore_converter_registry):
 
 
 # ---------------------------------------------------------------------------
-# Serializer-only ChoiceField -> generated enum (spec-039 rev6 #6)
+# Serializer-only ChoiceField -> generated enum
 # ---------------------------------------------------------------------------
 
 
@@ -865,7 +865,7 @@ def test_serializer_only_choice_enum_name_collision_with_diverging_members_raise
 
 
 # ---------------------------------------------------------------------------
-# Model-backed type-override conflict policy (spec-039 rev6 #8)
+# Model-backed type-override conflict policy
 # ---------------------------------------------------------------------------
 
 
@@ -945,7 +945,7 @@ def test_auto_generated_model_field_is_not_conflict_checked():
 
 
 # ---------------------------------------------------------------------------
-# DRF field metadata -> SDL description (spec-039 rev6 #9)
+# DRF field metadata -> SDL description
 # ---------------------------------------------------------------------------
 
 
@@ -1000,7 +1000,7 @@ def test_serializer_field_description_notes_allow_empty_false():
 
 
 def test_declared_choicefield_over_model_column_emits_serializer_enum():
-    """A declared ``ChoiceField(source=<model col>, choices=...)`` emits the serializer-only enum (rev6 rev2 P2).
+    """A declared ``ChoiceField(source=<model col>, choices=...)`` emits the serializer-only enum.
 
     The declared choices are a schema-affecting override: even mapped (via ``source``) to a
     plain non-choice model column, the field emits the GENERATED enum from its declared choices,

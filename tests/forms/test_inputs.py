@@ -170,7 +170,7 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
 
     Reading ``base_fields`` (the class-level declared-fields dict) needs no
     ``KwargForm()`` call, so a migrated form requiring ``user`` / ``request`` /
-    a tenant still has a discoverable, request-independent stable shape (P2).
+    a tenant still has a discoverable, request-independent stable shape.
     """
 
     class KwargForm(forms.Form):
@@ -240,7 +240,7 @@ def test_partial_input_model_backed_optional_extra_field_still_required():
         assert fields[name].default is UNSET, name
 
     # The non-model required ``confirm`` keeps its declared ``field.required``
-    # (P2 - the load-bearing partial assertion).
+    # (the load-bearing partial assertion).
     assert not _is_optional(fields["confirm"])
 
 
@@ -615,7 +615,7 @@ def test_create_guard_waiver_does_not_raise():
 
 
 def test_partial_guard_rejects_dropping_required_column_less_field():
-    """A partial (update) narrowing dropping a required COLUMN-LESS field raises naming it (feedback #4).
+    """A partial (update) narrowing dropping a required COLUMN-LESS field raises naming it.
 
     ``confirm`` is a non-model required extra; on update it cannot be reconstructed
     from the row (``model_to_dict`` only returns columns), so dropping it would
@@ -628,7 +628,7 @@ def test_partial_guard_rejects_dropping_required_column_less_field():
 
 
 def test_partial_guard_allows_dropping_model_backed_required_field():
-    """Dropping a MODEL-BACKED required field on update does NOT raise (feedback #4 scoping).
+    """Dropping a MODEL-BACKED required field on update does NOT raise (the scoping rule).
 
     The load-bearing column-less scoping: ``name`` is a required model column, so the
     partial path widens it optional and reconstructs it from the located row - dropping

@@ -40,7 +40,7 @@ def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes()
     forbidden = {
         "label": "Decision 2 (default last-segment label is already unique)",
         "default_auto_field": "Decision 5 (package ships zero Django models)",
-        "default": "Decision 8 (no `default` attribute at any value, rev4 L4)",
+        "default": "Decision 8 (no `default` attribute at any value)",
     }
     for key, why in forbidden.items():
         assert key not in DjangoStrawberryFrameworkConfig.__dict__, (

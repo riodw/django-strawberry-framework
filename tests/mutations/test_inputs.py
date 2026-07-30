@@ -5,7 +5,7 @@ Covers the spec-036 Slice 1 generation substrate
 
 - ``editable_input_fields`` selection (pk / auto-timestamp / reverse exclusion,
   M2M inclusion, ``fields`` / ``exclude`` narrowing + unknown-name rejection);
-- ``input_field_required`` (the Major-1 create-required rule);
+- ``input_field_required`` (the create-required rule);
 - ``build_mutation_input`` create vs partial shapes, FK/O2O ``<field>_id`` mapping,
   M2M ``list[<id>]``, Relay-vs-non-Relay id type, and the consumer-override seam;
 - ``mutation_input_type_name`` stable full-shape names + shape-derived narrowed
@@ -13,7 +13,7 @@ Covers the spec-036 Slice 1 generation substrate
   ``materialize_mutation_input_class``;
 - the ``FileField`` / ``ImageField`` -> ``Upload`` input mapping (required /
   optional shapes, ``| None`` widening, ``Meta.fields`` / ``Meta.exclude``
-  narrowing, and the lifted spec-036 CR-6 merge-override carve-out)
+  narrowing, and the lifted spec-036 merge-override carve-out)
   (spec-037);
 - ``FieldError`` / ``build_payload_type`` envelope shape + the ``node`` / ``result``
   slot;
@@ -112,7 +112,7 @@ def test_inputs_module_path_constant():
 
 
 def test_non_field_error_key_is_django_all_sentinel():
-    """The non-field error key is pinned to Django's ``"__all__"`` sentinel (AR-M3)."""
+    """The non-field error key is pinned to Django's ``"__all__"`` sentinel."""
     assert NON_FIELD_ERROR_KEY == "__all__"
 
 
@@ -175,7 +175,7 @@ def test_editable_fields_rejects_unknown_exclude_name():
 
 
 # ---------------------------------------------------------------------------
-# input_field_required - the Major-1 create-required rule
+# input_field_required - the create-required rule
 # ---------------------------------------------------------------------------
 
 
@@ -371,7 +371,7 @@ def test_m2m_to_relay_target_becomes_list_of_globalid():
     cls = build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
     fields = _field_map(cls)
     assert "tags" in fields
-    # M2M is always optional (resolver replace/clear/omit contract, AR-M1).
+    # M2M is always optional (resolver replace/clear/omit contract).
     assert _is_optional(fields["tags"])
     list_part = fields["tags"].type.of_type
     assert isinstance(list_part, StrawberryList)
@@ -401,7 +401,7 @@ def test_m2m_to_non_relay_target_becomes_list_of_raw_pk():
 
 
 # ---------------------------------------------------------------------------
-# Consumer-override seam (spec-010 relation-override / AR-M2)
+# Consumer-override seam (spec-010 relation-override)
 # ---------------------------------------------------------------------------
 
 
@@ -619,12 +619,12 @@ def test_type_name_narrowed_shape_is_deterministic_and_distinct():
 
 
 def test_type_name_token_boundaries_do_not_collide():
-    """Different field sets that share a pascalized token stream get distinct names (bug 8).
+    """Different field sets that share a pascalized token stream get distinct names.
 
     A per-segment-capitalize token (``IsPrivate``) keeps interior capitals, so a bare
     concatenation re-decomposes ambiguously: ``("a_b", "c")`` and ``("a", "b_c")``
     both collapse onto ``ABC`` - a generated GraphQL type-name collision that trips
-    the AR-M6 distinct-shape raise at materialize. A single-leading-capital token
+    the distinct-shape collision raise at materialize. A single-leading-capital token
     (letter underscores collapsed, no interior capital) makes the concatenation
     uniquely decomposable at uppercase boundaries, so the suffix is injective over
     field-name sets (``AbC`` vs ``ABc``). Underscore-before-digit is retained so the
@@ -652,9 +652,9 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
 
     ``pascalize_token`` used to strip every underscore (``field_2`` / ``field2`` both
     -> ``Field2``), so two legitimate narrowed shapes claimed one GraphQL input type
-    name and the second materialize raised AR-M6. Retaining underscore-before-digit
-    keeps the tokens injective; the shared builder pins ``strawberry.input(name=)``
-    so the underscore survives on the wire.
+    name and the second materialize raised a distinct-shape collision. Retaining
+    underscore-before-digit keeps the tokens injective; the shared builder pins
+    ``strawberry.input(name=)`` so the underscore survives on the wire.
     """
     full = ("not_the_narrowed_set",)
 
@@ -699,7 +699,7 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
         fields=("field2",),
     )
     materialize_mutation_input_class(left.__name__, left)
-    materialize_mutation_input_class(right.__name__, right)  # must not AR-M6-collide
+    materialize_mutation_input_class(right.__name__, right)  # must not collide
 
     def _probe(left_inp, right_inp) -> int:
         return 1
@@ -755,7 +755,7 @@ def test_build_empty_field_set_raises_configuration_error():
 
 
 # ---------------------------------------------------------------------------
-# materialize_mutation_input_class - dedupe + collision raise (AR-H1 / AR-M6)
+# materialize_mutation_input_class - dedupe + collision raise
 # ---------------------------------------------------------------------------
 
 
@@ -771,7 +771,7 @@ def test_identical_shape_dedupes_via_ledger():
 
 
 def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
-    """Two DISTINCT classes under one name raise ``ConfigurationError`` (AR-H1 / AR-M6)."""
+    """Two DISTINCT classes under one name raise ``ConfigurationError``."""
     cls_a = build_mutation_input(product_models.Item, operation_kind=CREATE, primary_type=ItemType)
     cls_b = build_mutation_input(
         product_models.Category,
@@ -987,7 +987,7 @@ def test_file_field_narrowed_by_meta_fields_and_exclude():
 
 
 def test_file_field_consumer_override_skips_generated_upload_field():
-    """A file column in ``overrides`` is SKIPPED, lifting the spec-036 CR-6 carve-out.
+    """A file column in ``overrides`` is SKIPPED, lifting the spec-036 carve-out.
 
     The old staged ``NotImplementedError`` ran BEFORE the override skip, so a file
     column could not participate in the ``Meta.input_class`` merge override. Now it
@@ -1018,7 +1018,7 @@ def test_file_field_consumer_override_skips_generated_upload_field():
 
 
 # ---------------------------------------------------------------------------
-# FieldError + payload wrapper (Decision 7 / AR-H5)
+# FieldError + payload wrapper (Decision 7)
 # ---------------------------------------------------------------------------
 
 
@@ -1063,8 +1063,8 @@ def test_payload_result_slot_for_non_relay_target():
 def test_payload_slot_never_model_derived_for_property_like_model():
     """A model whose name would collide with a builtin uses the uniform slot, not its name.
 
-    Pins AR-H5: a ``Property``-shaped payload exposes ``node`` (Relay) / ``result``
-    (non-Relay), NEVER a ``property``-named field.
+    The payload slot is uniform: a ``Property``-shaped payload exposes ``node``
+    (Relay) / ``result`` (non-Relay), NEVER a ``property``-named field.
     """
     payload = build_payload_type("CreateProperty", object_type=ItemType, object_slot="node")
     fields = {f.python_name for f in payload.__strawberry_definition__.fields}

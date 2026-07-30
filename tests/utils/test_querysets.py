@@ -1,8 +1,8 @@
 """Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
 
-The 0.0.9 DRY pass (Major 1) single-sited the query-source
-contract the list field, connection field, optimizer middleware, Relay node
-defaults, and filter related-visibility derive had each spelled separately:
+This module single-sites the query-source contract the list field, connection
+field, optimizer middleware, Relay node defaults, and filter
+related-visibility derive had each spelled separately:
 ``Manager`` -> ``QuerySet`` coercion, the is-queryset decision, and the sync /
 async ``DjangoType.get_queryset`` visibility routing. ``get_queryset`` is the
 visibility hook, so a divergence between those copies is a data-leak bug class;
@@ -14,7 +14,7 @@ surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
 Visibility-boundary decision references below resolve to
 ``docs/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
 
-``coerce_field_value_or_none`` (the 0.0.13 DRY pass) is the sibling "raw
+``coerce_field_value_or_none`` is the sibling "raw
 literal -> Django field value, or nothing" primitive shared by the Relay id
 decode, the raw relation-pk decode, and the ``__in`` filter member decode; its
 own through-schema coverage lives in the same surface suites plus
@@ -284,9 +284,8 @@ async def test_post_process_async_passes_python_list_through():
 def test_run_in_one_sync_boundary_is_single_sourced_from_utils():
     """Mutations re-exports the utils owner; sites must not re-inline the wrapper.
 
-    The 0.0.13 DRY pass promoted the byte-identical
-    ``sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)`` shape out of
-    ``mutations/resolvers.py`` into this module so filters / orders /
+    The byte-identical ``sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)``
+    shape was promoted out of ``mutations/resolvers.py`` into this module so filters / orders /
     permissions / auth share one boundary. Pin the re-export identity so a
     future split cannot silently fork a second definition.
     """
@@ -1688,7 +1687,7 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
 
 
 def test_exact_wherenode_shadowed_clone_never_dispatches():
-    """Finding 1: an EXACT ``WhereNode`` whose ``__dict__`` shadows ``clone`` fails closed.
+    """An EXACT ``WhereNode`` whose ``__dict__`` shadows ``clone`` fails closed.
 
     ``sql.Query.clone`` dispatches ``self.where.clone()``. A non-data-descriptor
     shadow on an exact ``WhereNode`` instance would win over the class method and,
@@ -1714,7 +1713,7 @@ def test_exact_wherenode_shadowed_clone_never_dispatches():
 
 
 def test_shadowed_leaf_as_sql_never_dispatches():
-    """Finding 3: an exact Django lookup leaf whose ``__dict__`` shadows ``as_sql`` fails closed.
+    """An exact Django lookup leaf whose ``__dict__`` shadows ``as_sql`` fails closed.
 
     Exact-type discipline on the leaf is not enough: a non-data-descriptor shadow
     of ``as_sql`` on an otherwise-genuine ``Value`` / lookup would be dispatched at
@@ -1740,7 +1739,7 @@ def test_shadowed_leaf_as_sql_never_dispatches():
 
 
 def test_hostile_order_by_expression_fails_closed():
-    """Finding 3: a consumer ``order_by`` expression (never walked before) fails closed.
+    """A consumer ``order_by`` expression (never walked before) fails closed.
 
     ``order_by`` holds field-reference strings and expressions the compiler
     dispatches ``as_sql`` on; the old inventory never walked it, so a consumer
@@ -1763,7 +1762,7 @@ def test_hostile_order_by_expression_fails_closed():
 
 
 def test_consumer_expression_nested_in_genuine_func_fails_closed():
-    """Finding 3 / H: a consumer expression nested inside a genuine ``Func`` fails closed.
+    """A consumer expression nested inside a genuine ``Func`` fails closed.
 
     The old top-level check trusted a genuine ``Func`` annotation without walking
     its operands, so a consumer expression in operand position reached compile. The
@@ -1783,7 +1782,7 @@ def test_consumer_expression_nested_in_genuine_func_fails_closed():
 
 
 def test_module_spoofed_type_is_not_genuine_django():
-    """Finding 3: ``__module__`` is spoofable, so provenance is proven by object identity.
+    """``__module__`` is spoofable, so provenance is proven by object identity.
 
     A consumer class declaring ``__module__ = "django.db.models.functions"`` is NOT
     the object Django exposes at ``sys.modules[module].<qualname>``, so identity
@@ -1801,7 +1800,7 @@ def test_module_spoofed_type_is_not_genuine_django():
 
 
 def test_hostile_subquery_inner_query_fails_closed():
-    """Finding 3: a ``Subquery`` wrapping a foreign inner ``Query`` fails closed.
+    """A ``Subquery`` wrapping a foreign inner ``Query`` fails closed.
 
     ``Subquery.get_source_expressions()`` surfaces the wrapped ``sql.Query``, so the
     walk reaches it and requires it to be a genuine Django type -- a consumer
@@ -1822,7 +1821,7 @@ def test_hostile_subquery_inner_query_fails_closed():
 
 
 def test_hostile_expression_inside_genuine_subquery_where_fails_closed():
-    """Finding 3: a consumer expression buried in a genuine subquery's ``where`` fails closed.
+    """A consumer expression buried in a genuine subquery's ``where`` fails closed.
 
     The subquery node and its inner query are both genuine Django, but a consumer
     leaf hidden in the inner query's ``where`` tree would have its ``as_sql``
@@ -1845,7 +1844,7 @@ def test_hostile_expression_inside_genuine_subquery_where_fails_closed():
 
 
 def test_deferred_filter_hostile_resolve_expression_never_dispatches():
-    """Finding 2: a deferred-filter value with a hostile ``resolve_expression`` fails closed.
+    """A deferred-filter value with a hostile ``resolve_expression`` fails closed.
 
     ``add_q`` -> ``build_filter`` dispatches ``resolve_expression(self=query)`` on an
     expression value; a consumer expression could there erase the predicate and
@@ -1876,7 +1875,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
 
 
 def test_deferred_filter_bake_leaves_candidate_unmutated_and_is_repeatable():
-    """Finding 6: baking a deferred filter mutates only the detached clone, repeatably.
+    """Baking a deferred filter mutates only the detached clone, repeatably.
 
     The candidate's ``_deferred_filter`` is left untouched (observational
     immutability), so a concurrent caller sees no half-baked state -- and sealing
@@ -1897,7 +1896,7 @@ def test_deferred_filter_bake_leaves_candidate_unmutated_and_is_repeatable():
 
 
 def test_non_string_query_dict_key_is_typed_defect_not_raise():
-    """Finding 5: a non-string ``Query.__dict__`` key becomes a typed defect, not a raise.
+    """A non-string ``Query.__dict__`` key becomes a typed defect, not a raise.
 
     ``_shadow_defect`` passes every ``__dict__`` key to ``getattr``; a non-string
     key would raise ``TypeError`` past the boundary's typed contract. It is rejected
@@ -1912,7 +1911,7 @@ def test_non_string_query_dict_key_is_typed_defect_not_raise():
 
 
 def test_hostile_query_container_subclass_fails_closed():
-    """Finding 1: a container ``sql.Query.clone`` copies must be an exact builtin.
+    """A container ``sql.Query.clone`` copies must be an exact builtin.
 
     ``Query.clone`` calls ``self.alias_refcount.copy()`` (and ``.copy()`` on the
     other containers); a ``dict`` SUBCLASS with an overridden ``.copy()`` would
@@ -1935,7 +1934,7 @@ def test_hostile_query_container_subclass_fails_closed():
 
 
 def test_unrouted_parent_rejects_cross_routed_prefetch_child():
-    """Finding 4: an UNROUTED parent fails closed on an explicitly cross-routed child.
+    """An UNROUTED parent fails closed on an explicitly cross-routed child.
 
     When the outer effective alias is unresolved (an unrouted parent), a prefetch
     child pinned to any explicit alias must fail closed rather than being accepted
@@ -1966,7 +1965,7 @@ def test_unrouted_parent_rejects_cross_routed_prefetch_child():
 
 
 def test_poisoned_base_table_cache_fails_closed_on_real_first_alias():
-    """P1: the base table is recomputed from ``alias_map``, never the poisonable cache.
+    """The base table is recomputed from ``alias_map``, never the poisonable cache.
 
     ``Query.base_table`` is a ``@cached_property``; ``Query.clone`` DELETES the cache and
     recomputes the first alias. A hostile query bakes its alias map against ``Item``,
@@ -1992,7 +1991,7 @@ def test_poisoned_base_table_cache_fails_closed_on_real_first_alias():
 
 
 def test_stateful_combined_queries_tuple_subclass_fails_closed():
-    """P1: ``combined_queries`` must be an exact tuple before any branch is walked.
+    """``combined_queries`` must be an exact tuple before any branch is walked.
 
     ``Query.clone`` re-iterates ``combined_queries`` to rebuild it, so a tuple SUBCLASS
     with a stateful ``__iter__`` could yield ``Category`` branches at validation and a
@@ -2018,7 +2017,7 @@ def test_stateful_combined_queries_tuple_subclass_fails_closed():
 
 
 def test_is_inert_value_uses_exact_types_not_isinstance():
-    """P1: a ``str`` subclass carrying ``resolve_expression`` is NOT inert.
+    """A ``str`` subclass carrying ``resolve_expression`` is NOT inert.
 
     ``isinstance`` would treat a ``str`` subclass as an inert parameter; exact-type
     membership does not, so a subclass defining an expression / compiler protocol falls
@@ -2044,7 +2043,7 @@ def test_is_inert_value_uses_exact_types_not_isinstance():
 
 
 def test_deferred_str_subclass_expression_never_dispatches():
-    """P1: a ``str``-subclass deferred value with ``resolve_expression`` fails closed.
+    """A ``str``-subclass deferred value with ``resolve_expression`` fails closed.
 
     The exact-type inert check refuses to short-circuit the subclass, so it reaches the
     genuine-Django proof and is rejected before ``add_q`` can dispatch its
@@ -2068,7 +2067,7 @@ def test_deferred_str_subclass_expression_never_dispatches():
 
 
 def test_deferred_model_instance_with_instance_resolve_expression_fails_closed():
-    """P1: a model instance carrying an INSTANCE-level ``resolve_expression`` fails closed.
+    """A model instance carrying an INSTANCE-level ``resolve_expression`` fails closed.
 
     ``build_filter`` dispatches when ``hasattr(value, "resolve_expression")`` -- which
     finds an instance-level attribute too. A model instance whose own ``__dict__`` shadows
@@ -2106,7 +2105,7 @@ def test_deferred_plain_model_instance_still_seals():
 
 
 def test_dynamic_as_vendor_shadow_never_dispatches():
-    """P1: an ``as_<vendor>`` instance shadow fails closed even absent from the node class.
+    """An ``as_<vendor>`` instance shadow fails closed even absent from the node class.
 
     The compiler resolves the emitter as ``getattr(node, "as_" + vendor, node.as_sql)``,
     so an ``as_sqlite`` shadow Django never defined on the class would still be dispatched.
@@ -2132,7 +2131,7 @@ def test_dynamic_as_vendor_shadow_never_dispatches():
 
 
 def test_func_arg_joiner_metadata_non_string_fails_closed():
-    """P1: a genuine ``Func`` whose ``arg_joiner`` is a non-string object fails closed.
+    """A genuine ``Func`` whose ``arg_joiner`` is a non-string object fails closed.
 
     ``Func.as_sql`` runs ``self.arg_joiner.join(...)`` and formats ``self.template``; these
     are never reached via ``get_source_expressions``. An instance override with a non-string
@@ -2155,7 +2154,7 @@ def test_func_arg_joiner_metadata_non_string_fails_closed():
 
 
 def test_where_node_non_string_connector_fails_closed():
-    """P1: a ``WhereNode`` whose ``connector`` is a non-string object fails closed.
+    """A ``WhereNode`` whose ``connector`` is a non-string object fails closed.
 
     ``WhereNode.as_sql`` interpolates ``self.connector`` into the emitted SQL, so a
     non-string override would run its ``__str__`` at compile time.
@@ -2181,7 +2180,7 @@ def test_where_node_non_string_connector_fails_closed():
     ],
 )
 def test_extra_order_by_non_string_state_fails_closed(holder, detail):
-    """P1: ``extra_order_by`` (emitted as raw SQL) must be an exact sequence of strings."""
+    """``extra_order_by`` (emitted as raw SQL) must be an exact sequence of strings."""
     source = Category.objects.all()
     str(source.query)
     source.query.extra_order_by = holder
@@ -2375,7 +2374,7 @@ def test_legit_filtered_relation_seals_byte_identical():
 
 
 def test_filtered_relation_hostile_resolved_condition_never_dispatches():
-    """P1: a consumer expression in a join's ``filtered_relation.resolved_condition`` fails closed.
+    """A consumer expression in a join's ``filtered_relation.resolved_condition`` fails closed.
 
     ``Join.as_sql`` compiles ``filtered_relation.resolved_condition`` (a ``WhereNode``),
     which is not reachable from ``alias_map`` alone. The join walk recurses it through the
@@ -2397,7 +2396,7 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
 
 
 def test_join_defect_non_genuine_filtered_relation_fails_closed():
-    """P1: a join carrying a non-Django ``filtered_relation`` object fails closed."""
+    """A join carrying a non-Django ``filtered_relation`` object fails closed."""
     _frq, alias, join = _filtered_relation_join()
     join.filtered_relation = object()
     defect = _join_defect(join, alias, set())
@@ -2405,7 +2404,7 @@ def test_join_defect_non_genuine_filtered_relation_fails_closed():
 
 
 def test_join_defect_shadowed_filtered_relation_fails_closed():
-    """P1: a genuine ``filtered_relation`` with a shadowed ``as_sql`` method fails closed.
+    """A genuine ``filtered_relation`` with a shadowed ``as_sql`` method fails closed.
 
     ``as_sql`` is a genuine class method on ``FilteredRelation``, so a shadow of it
     reports as a plain method (the "compiler method" wording is reserved for a
@@ -2428,7 +2427,7 @@ def test_join_defect_unresolved_filtered_relation_is_clean():
 
 
 def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
-    """P2: provenance reads ``__module__`` / ``__qualname__`` via ``type.__getattribute__``.
+    """Provenance reads ``__module__`` / ``__qualname__`` via ``type.__getattribute__``.
 
     A consumer metaclass overriding ``__getattribute__`` would otherwise run during the
     provenance read that is meant to reject the type; ``type.__getattribute__`` resolves
@@ -2450,7 +2449,7 @@ def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
 
 
 def test_provenance_of_type_with_raising_module_descriptor_fails_closed():
-    """P2: a metaclass whose ``__module__`` descriptor raises fails closed, not errors.
+    """A metaclass whose ``__module__`` descriptor raises fails closed, not errors.
 
     ``type.__getattribute__`` still consults a metaclass DATA descriptor, so a hostile
     ``__module__`` property that raises would propagate past the typed contract; the
@@ -2480,7 +2479,7 @@ def test_provenance_of_type_with_raising_module_descriptor_fails_closed():
     ],
 )
 def test_retained_state_field_wrong_shape_fails_closed(field, value, detail):
-    """P2: each retained ``QuerySet`` state field is pinned to its exact shape."""
+    """Each retained ``QuerySet`` state field is pinned to its exact shape."""
     source = Category.objects.all()
     str(source.query)
     setattr(source, field, value)
@@ -2490,7 +2489,7 @@ def test_retained_state_field_wrong_shape_fails_closed(field, value, detail):
 
 
 def test_hostile_hints_bool_and_iter_never_dispatch():
-    """P2: a ``_hints`` dict subclass with a hostile ``__bool__`` / ``__iter__`` fails closed."""
+    """A ``_hints`` dict subclass with a hostile ``__bool__`` / ``__iter__`` fails closed."""
     fired = []
 
     class _EvilHints(dict):
@@ -2512,7 +2511,7 @@ def test_hostile_hints_bool_and_iter_never_dispatch():
 
 
 def test_hints_non_string_key_fails_closed():
-    """P2: a ``_hints`` dict with a non-string key fails closed before it is copied."""
+    """A ``_hints`` dict with a non-string key fails closed before it is copied."""
     source = Category.objects.all()
     str(source.query)
     source._hints = {object(): 1}
@@ -2532,7 +2531,7 @@ def test_none_hints_seals_to_fresh_dict():
 
 
 def test_prefetch_lookups_wrong_shape_fails_closed():
-    """P2: ``_prefetch_related_lookups`` must be an exact tuple / list before iteration."""
+    """``_prefetch_related_lookups`` must be an exact tuple / list before iteration."""
 
     class _EvilLookups:
         def __bool__(self):  # pragma: no cover - must never run
@@ -2557,7 +2556,7 @@ def test_missing_prefetch_lookups_key_seals():
 
 
 # ---------------------------------------------------------------------------
-# Fourth adversarial round: deferred-filter truthiness and cyclic containers.
+# Deferred-filter truthiness and cyclic containers.
 # ---------------------------------------------------------------------------
 
 

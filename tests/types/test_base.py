@@ -496,7 +496,7 @@ def test_relation_shapes_validation_matrix(
 def test_relation_shapes_on_consumer_annotated_relation_raises():
     """An explicit key naming a consumer-ANNOTATED relation raises at type creation.
 
-    Spec-032 Decision 7 / Revision 3 P2: the consumer annotation owns the
+    Spec-032 Decision 7: the consumer annotation owns the
     field's shape; the silent-accept-then-skip path must not exist. (The
     implicit ``"both"`` default still skips consumer-authored relations
     silently - only the explicit key fails loud.)
@@ -554,9 +554,9 @@ def test_interfaces_is_shipped_not_deferred():
 def test_select_fields_signature_accepts_validated_specs():
     """``_select_fields`` consumes the already-normalized specs from ``_ValidatedMeta``.
 
-    Pins the Medium fix from ``rev-types__base.md``: the function no longer
-    re-runs ``_normalize_fields_spec`` / ``_normalize_sequence_spec`` (those
-    ran inside ``_validate_meta``) - it takes the model plus the two
+    The function does not re-run ``_normalize_fields_spec`` /
+    ``_normalize_sequence_spec`` (those ran inside ``_validate_meta``) - it
+    takes the model plus the two
     validated specs directly. Calling with both specs ``None`` returns every
     Django field; passing a fields tuple narrows the result.
     """
@@ -669,9 +669,9 @@ def test_meta_connection_non_relay_type_raises():
 
 
 def test_meta_connection_accepts_direct_relay_node_inheritance():
-    """``Meta.connection`` opt-in works on a direct ``relay.Node`` subclass (P2).
+    """``Meta.connection`` opt-in works on a direct ``relay.Node`` subclass.
 
-    ``spec-030-connection_field-0_0_9`` P2: the Relay-shape gate for
+    ``spec-030-connection_field-0_0_9``: the Relay-shape gate for
     ``Meta.connection`` runs in ``__init_subclass__`` using the canonical
     ``_is_relay_shaped`` predicate, so a direct
     ``class Foo(DjangoType, relay.Node)`` - Relay-shaped WITHOUT
@@ -864,8 +864,7 @@ def test_meta_globalid_strategy_async_callable_object_raises():
     ``inspect.iscoroutinefunction`` returns ``False`` for the instance itself, so
     without the ``__call__`` arm of the sync-ness check this object would survive
     validation and only blow up at first encode (a coroutine return + an unawaited
-    -coroutine warning) instead of failing loud at type creation
-    (``spec-031-globalid_encoding-0_0_9`` P2).
+    -coroutine warning) instead of failing loud at type creation.
     """
     from strawberry import relay
 
@@ -895,8 +894,7 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
     ``async def`` function - NOT a partial around an async callable *instance*, so
     both the partial and its ``__call__`` read as sync. The validator unwraps
     ``partial.func`` before the sync-ness check, so it fails loud at type creation
-    instead of leaking a coroutine at the first encode
-    (``spec-031-globalid_encoding-0_0_9`` P2).
+    instead of leaking a coroutine at the first encode.
     """
     from strawberry import relay
 
@@ -1051,8 +1049,8 @@ def test_meta_exclude_unknown_name_raises():
 def test_meta_optimizer_hints_for_excluded_field_raises():
     """A hint for a real Django field that is *excluded* from the type raises.
 
-    Pins the Medium fix from ``rev-types__base.md``: without this check
-    the consumer's optimization intent is silently dead because the
+    Without this check the consumer's optimization intent is
+    silently dead, because the
     walker never visits an excluded field.
     """
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
@@ -1412,9 +1410,9 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
     "intermediate abstract subclasses without Meta are allowed". For
     that pattern to work end-to-end with the optimizer's
     downgrade-to-Prefetch rule, the sentinel flip must run regardless
-    of whether the abstract base declares its own ``Meta``. Used to be
-    a P1 bug: the flip sat after the ``meta is None`` early return, so
-    an abstract base that overrode ``get_queryset`` without Meta never
+    of whether the abstract base declares its own ``Meta``. When the
+    flip sat after the ``meta is None`` early return instead, an
+    abstract base that overrode ``get_queryset`` without Meta never
     flipped the flag, and concrete subclasses inheriting from it
     silently reported ``has_custom_get_queryset() is False``.
     """

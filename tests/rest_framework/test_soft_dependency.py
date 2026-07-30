@@ -8,7 +8,7 @@ Covers the ``rest_framework/__init__.py::require_drf()`` guard + the root
   ``import ...rest_framework.sets`` ALL raise ``ImportError`` with the install hint
   when DRF is absent;
 - ``from django_strawberry_framework import *`` stays DRF-free and binds no
-  serializer export (F1);
+  serializer export;
 - the root ``__getattr__`` does NOT memoize any successful serializer export
   access (the absent-DRF test can re-hit the guard on the next access).
 
@@ -64,7 +64,7 @@ def _simulate_drf_absent():
 
 
 def test_fresh_root_package_import_and_star_import_succeed_without_drf():
-    """A fresh process imports the root and its ``__all__`` while DRF is absent (review P2)."""
+    """A fresh process imports the root and its ``__all__`` while DRF is absent."""
     script = """
 import sys
 
@@ -113,7 +113,7 @@ def test_rest_framework_sets_import_raises_install_hint(_simulate_drf_absent):
 
 
 def test_star_import_stays_drf_free_and_binds_no_serializer_surface(_simulate_drf_absent):
-    """``from django_strawberry_framework import *`` succeeds and binds no DRF surface (F1)."""
+    """``from django_strawberry_framework import *`` succeeds and binds no DRF surface."""
     namespace: dict[str, object] = {}
     exec("from django_strawberry_framework import *", namespace)
     # The star import consulted ``__all__`` (DRF-free) and never tripped the guard.

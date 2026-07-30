@@ -356,7 +356,7 @@ def test_select_and_filter_cards_by_changed_tracked_paths():
 
 @pytest.mark.django_db
 def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean():
-    """Spec-021 H1: own-PK Relay ``id: { isNull: ... }`` coerces a Boolean.
+    """Own-PK Relay ``id: { isNull: ... }`` coerces a Boolean.
 
     Regression for forcing every non-``in`` lookup on a Relay PK to
     ``GlobalIDFilter``, which typed ``isNull`` as ``String`` so
@@ -382,7 +382,7 @@ def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean():
 
 @pytest.mark.django_db
 def test_filter_non_relay_card_items_by_plain_integer_id_exact():
-    """Spec-021 H2: non-Relay int PK ``id: { exact: <int> }`` accepts an Int.
+    """Non-Relay int PK ``id: { exact: <int> }`` accepts an Int.
 
     Companion to the ``id: { in: [...] }`` case: the scalar catch-all now uses
     the ``AutoField`` model field (-> ``Int``) as the source of truth instead

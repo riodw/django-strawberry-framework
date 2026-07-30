@@ -715,7 +715,8 @@ def _shelf_books_visibility_request(**overrides):
 def test_extract_recognizes_the_planned_visibility_scope():
     """The planned single-table scope in the fetch-time residue is
     proven byte-equal to the spec and consumed, leaving the parent ids AND the
-    APPROVED compiled predicate the executor reuses (P3-1: no third compile)."""
+    APPROVED compiled predicate the executor reuses (so it never compiles a third
+    time)."""
     queryset = _prefetch_filtered(
         _shelf_books_visibility_request(),
         "shelf",
@@ -790,7 +791,7 @@ def test_extract_empty_parent_list_short_circuits_to_no_rows():
 
 
 # ---------------------------------------------------------------------------
-# The shared window-predicate signature (the P2 recognizer-safety boundary)
+# The shared window-predicate signature (the recognizer-safety boundary)
 # ---------------------------------------------------------------------------
 
 
@@ -901,7 +902,7 @@ def test_normalize_window_node_fails_closed_on_a_nested_unmapped_leaf():
 def test_extract_returns_none_for_unrecognized_shapes(mutate, reason):
     """Every unrecognized fetch-time mutation falls back to the windowed body.
 
-    Includes the shared window-predicate-signature guard (P2): a leaf whose ``lhs``
+    Includes the shared window-predicate-signature guard: a leaf whose ``lhs``
     is the planned ``Window`` annotation but whose bound / multiplicity differs
     from the captured plan is caught here even though ``_is_window_qual`` would
     structurally accept it - the recognizer must execute the range it PLANNED, not
@@ -943,7 +944,7 @@ def test_parent_in_values_guards_target_and_rhs_shapes():
     """The ``__in`` matcher's defensive tail, pinned with synthetic nodes.
 
     C1: ``_parent_in_values`` takes the target ``column``/``table`` as keyword
-    arguments (feedback2 Step 1's signature), not a whole spec.
+    arguments, not a whole spec.
     """
     from django_strawberry_framework.optimizer.lateral_fetch import _parent_in_values
 
@@ -1302,7 +1303,7 @@ def test_auto_fallback_executes_the_windowed_body_end_to_end():
 
 
 def test_spec_downgrades_for_custom_queryset_subclasses():
-    """A custom ``QuerySet`` subclass keeps the windowed strategy (feedback2 P0-5).
+    """A custom ``QuerySet`` subclass keeps the windowed strategy.
 
     ``_as_lateral_queryset`` rebinds the queryset class, which would erase a
     manager/visibility subclass's ``_clone`` state and iterator behavior.

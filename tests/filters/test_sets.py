@@ -3,7 +3,7 @@
 Covers the metaclass (`FilterSetMetaclass`), `FilterSet`'s class-creation
 behavior (cycle-safe `get_filters` expansion + `_get_fields` narrowing),
 the Decision-4 owner-aware Relay-vs-scalar conditional in
-`filter_for_field`, and the Decision-8 / M1-of-rev5 apply pipeline
+`filter_for_field`, and the Decision-8 apply pipeline
 (`apply_sync` / `apply_async` / `apply` + the five named helpers).
 """
 
@@ -481,7 +481,7 @@ def test_filter_for_field_picks_global_id_filter_for_relay_forward_fk_target():
 
 
 def test_filter_for_field_marks_non_pk_to_field_relation_globalid_with_pk_path():
-    """A forward FK on a non-pk ``to_field`` gets the pk-qualification flag (High 3).
+    """A forward FK on a non-pk ``to_field`` gets the pk-qualification flag.
 
     The generated ``GlobalIDFilter`` must carry the boolean
     ``_GLOBALID_RELATION_PK_ATTR`` flag set ``True`` so its predicate derives
@@ -529,7 +529,7 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
 
 
 # ---------------------------------------------------------------------------
-# High 3 (``spec-054`` Part 1 plan): a forward, single-valued Relay relation ``in`` lookup
+# A forward, single-valued Relay relation ``in`` lookup
 # is list-shaped over the wire, so the PRODUCTION generation path must emit
 # ``GlobalIDMultipleChoiceFilter`` -- NOT the scalar ``GlobalIDFilter`` that a
 # cardinality-only reselection produced. These tests drive the real
@@ -542,7 +542,7 @@ def test_filter_for_field_fk_to_pk_relation_globalid_carries_no_marker():
 
 
 def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk():
-    """Forward Relay FK ``in`` over an ordinary FK-to-pk generates a list filter (High 3).
+    """Forward Relay FK ``in`` over an ordinary FK-to-pk generates a list filter.
 
     The generated ``shelf__in`` leaf must be ``GlobalIDMultipleChoiceFilter`` with a
     ``list[str]`` input annotation, while the sibling ``shelf`` (exact) leaf stays the
@@ -579,7 +579,7 @@ def test_generated_forward_fk_in_is_multiple_choice_over_fk_to_pk():
 
 @pytest.mark.django_db
 def test_generated_forward_fk_in_execution_matches_requested_targets():
-    """The generated forward-FK ``in`` leaf unions the requested targets (High 3).
+    """The generated forward-FK ``in`` leaf unions the requested targets.
 
     Also pins the package's established list semantics for the generated leaf: an
     empty list matches nothing and a malformed member rejects the whole input with
@@ -633,7 +633,7 @@ def test_generated_forward_fk_in_execution_matches_requested_targets():
 
 
 def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
-    """Forward Relay FK ``in`` over a non-pk ``to_field`` is pk-qualified (High 3).
+    """Forward Relay FK ``in`` over a non-pk ``to_field`` is pk-qualified.
 
     ``RpToFieldChild.target`` binds on ``RpToFieldTarget.code`` (a non-pk column), so
     the generated ``target__in`` leaf must be a ``GlobalIDMultipleChoiceFilter`` that
@@ -671,7 +671,7 @@ def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
 
 @pytest.mark.django_db(transaction=True)
 def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
-    """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk (High 3).
+    """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk.
 
     The FK stores / joins on ``code`` but a Relay GlobalID carries the target's pk, so
     the pk-qualified ``target__pk__in`` predicate returns the children of the encoded
@@ -795,7 +795,7 @@ def test_expanded_related_filter_derives_pk_path_from_live_field_name():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 1 (``spec-054`` Part 1 plan): a framework-owned Relay relation supports ONLY the
+# A framework-owned Relay relation supports ONLY the
 # ``{exact, in, isnull}`` wire shapes. Any other lookup (pattern / ordering /
 # range) has no GlobalID semantics and must be rejected at BUILD time with a
 # typed ``ConfigurationError`` naming the filterset, field, and lookup -- never
@@ -832,7 +832,7 @@ def _register_relay_target(model):
 
 
 def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
-    """An unsupported ordering lookup on a framework-owned forward FK is rejected (Blocker 1)."""
+    """An unsupported ordering lookup on a framework-owned forward FK is rejected."""
     _register_relay_target(library_models.Shelf)
 
     for lookup in ("gt", "lt"):
@@ -850,7 +850,7 @@ def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
 
 
 def test_framework_relay_m2m_unsupported_lookup_raises_at_build():
-    """An unsupported pattern lookup on a framework-owned M2M relation is rejected (Blocker 1)."""
+    """An unsupported pattern lookup on a framework-owned M2M relation is rejected."""
     _register_relay_target(library_models.Genre)
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -867,7 +867,7 @@ def test_framework_relay_m2m_unsupported_lookup_raises_at_build():
 
 
 def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
-    """An unsupported ordering lookup on a framework-owned reverse relation is rejected (Blocker 1)."""
+    """An unsupported ordering lookup on a framework-owned reverse relation is rejected."""
     _register_relay_target(library_models.Loan)
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -884,7 +884,7 @@ def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
 
 
 def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build():
-    """A RelatedFilter target declaring an unsupported relay-relation lookup fails at build (Blocker 1).
+    """A RelatedFilter target declaring an unsupported relay-relation lookup fails at build.
 
     The parent references the child (the expansion target) by string, so it
     defines successfully with an unresolved lazy target. The child's own
@@ -918,7 +918,7 @@ def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build
 
 
 def test_framework_relay_relation_supported_lookups_generate_without_raising():
-    """Positive controls: exact/in/isnull on framework-owned relay relations still build (Blocker 1).
+    """Positive controls: exact/in/isnull on framework-owned relay relations still build.
 
     ``exact`` is cardinality-selected (``GlobalIDFilter`` single-valued /
     ``GlobalIDMultipleChoiceFilter`` many-side), ``in`` is always the list-shaped
@@ -952,7 +952,7 @@ def test_framework_relay_relation_supported_lookups_generate_without_raising():
 
 
 def test_consumer_override_relation_nonstandard_lookup_not_rejected():
-    """A consumer-owned relation override implementing a nonstandard lookup is NOT rejected (Blocker 1).
+    """A consumer-owned relation override implementing a nonstandard lookup is NOT rejected.
 
     Ownership is decided before the wire-shape policy: a ``Meta.filter_overrides``
     entry selecting a custom filter class means the consumer owns the wire shape,
@@ -1064,11 +1064,11 @@ def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
 
 @pytest.mark.django_db(transaction=True)
 def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
-    """Round-4 High 3: the expanded non-pk-``to_field`` ``in`` leaf through the adapter.
+    """The expanded non-pk-``to_field`` ``in`` leaf through the adapter.
 
     The only regression that composes all three recently corrected mechanisms at
     once -- lookup-aware ``in``, non-pk pk-qualification, and live candidate
-    authorization -- over the reverse to-many ``children`` prefix. The prior High-3
+    authorization -- over the reverse to-many ``children`` prefix. The earlier
     ``in`` tests invoked the generated CHILD leaf directly on the child queryset;
     this expands ``children__target__in`` across the reverse hop through the PARENT
     ``FilterSet`` and its ``.qs`` -> ``_apply_flat_leaves`` gate. Proves the
@@ -1159,7 +1159,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
 
 
 # ---------------------------------------------------------------------------
-# Round-4 Blocker 2 (``spec-054`` Part 1 plan): a consumer-selected relation filter over a
+# A consumer-selected relation filter over a
 # Relay-node target -- chosen via ``Meta.filter_overrides`` OR a shadowed
 # class-level ``FILTER_DEFAULTS`` -- must be honored byte-for-byte. Before the
 # fix, ``filter_for_lookup`` unconditionally replaced ANY Relay-node relation
@@ -1172,7 +1172,7 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
 # ---------------------------------------------------------------------------
 
 
-def test_blocker2_direct_m2m_relation_override_on_relay_target_is_honored():
+def test_direct_m2m_relation_override_on_relay_target_is_honored():
     """A ``Meta.filter_overrides`` M2M relation filter over a Relay target is kept."""
     import django_filters
     from django.db import models as django_models
@@ -1207,7 +1207,7 @@ def test_blocker2_direct_m2m_relation_override_on_relay_target_is_honored():
     assert "genres" not in snapshot.candidates
 
 
-def test_blocker2_direct_forward_fk_relation_override_on_relay_target_is_honored():
+def test_direct_forward_fk_relation_override_on_relay_target_is_honored():
     """A ``Meta.filter_overrides`` forward-FK filter over a Relay target is kept."""
     import django_filters
     from django.db import models as django_models
@@ -1241,7 +1241,7 @@ def test_blocker2_direct_forward_fk_relation_override_on_relay_target_is_honored
     assert "shelf" not in snapshot.candidates
 
 
-def test_blocker2_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
+def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     """A shadowed class-level ``FILTER_DEFAULTS`` relation override is honored too.
 
     The capability check already makes a ``FILTER_DEFAULTS`` shadow non-routable
@@ -1263,7 +1263,7 @@ def test_blocker2_filter_defaults_shadow_relation_override_on_relay_target_is_ho
         pass
 
     class BookFilter(FilterSet):
-        # Shadow the package-owned FROZEN baseline (Blocker 2): untouched entries stay
+        # Shadow the package-owned FROZEN baseline: untouched entries stay
         # the frozen proxies (framework_default) while the M2M entry is REPLACED with a
         # new object (unambiguously consumer-owned).
         FILTER_DEFAULTS = {
@@ -1291,7 +1291,7 @@ def test_blocker2_filter_defaults_shadow_relation_override_on_relay_target_is_ho
     assert "genres" not in snapshot.candidates
 
 
-def test_blocker2_related_filter_expansion_preserves_child_relation_override():
+def test_related_filter_expansion_preserves_child_relation_override():
     """An expanded ``<related>__<relation>`` leaf inherits the child's override.
 
     The child ``BookFilter`` overrides its own Relay-node M2M relation
@@ -1340,7 +1340,7 @@ def test_blocker2_related_filter_expansion_preserves_child_relation_override():
 
 
 @pytest.mark.django_db
-def test_blocker2_honored_override_runs_outer_with_no_reserved_alias():
+def test_honored_override_runs_outer_with_no_reserved_alias():
     """End-to-end: the honored consumer M2M filter runs OUTER, not through EXISTS.
 
     ``Book.genres`` is a to-many hop, so a framework GlobalID replacement would be
@@ -1513,7 +1513,7 @@ def test_medtrics_ordered_sequence_baseline_freezes_fanout():
     assert distinct_sequence == [graph.relation_and_direct, graph.relation_only, graph.direct_only]
 
     # DISTINCT hides but does not remove the fan-out: the self-join still adds a
-    # second ``library_loan`` alias (the T3 arm) and the ``library_patron`` table.
+    # second ``library_loan`` alias and the ``library_patron`` table.
     loan_aliases = [
         alias for alias, join in qs.query.alias_map.items() if join.table_name == "library_loan"
     ]
@@ -3580,7 +3580,7 @@ def test_permission_checks_run_only_through_apply_entrypoint():
     branches). The tree-composition path
     (``filter_queryset`` -> ``_q_for_branch`` -> ``.qs``) deliberately does
     NOT re-run permission checks -- it relies on that up-front call. This
-    pins the contract (H-filters-7 of the pre-merge review): bypassing
+    pins the contract: bypassing
     ``apply_*`` by constructing the filterset and reading ``.qs`` directly
     skips the gate, so ``apply_*`` must remain the only permission-aware
     entry point. If a future refactor moves filtering off ``apply_*`` this
@@ -4100,7 +4100,7 @@ def test_apply_related_constraints_proxy_model_is_rejected():
 
 @pytest.mark.django_db
 def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
-    """H3-of-rev8 pipeline ordering - constraints land in `self.queryset`.
+    """Pipeline ordering - constraints land in `self.queryset`.
 
     `apply_sync` must apply `_apply_related_constraints` BEFORE
     constructing the `FilterSet` instance so the explicit
@@ -4196,7 +4196,7 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 
 
 # ---------------------------------------------------------------------------
-# Round-5 coverage: helper / config / async / depth-cap branches
+# Helper / config / async / depth-cap branches
 # ---------------------------------------------------------------------------
 
 
@@ -4350,7 +4350,7 @@ def test_check_permissions_walks_explicit_requested_fields():
 def test_evaluate_logic_tree_caps_recursion_depth():
     """``_evaluate_logic_tree`` raises past ``_MAX_LOGIC_DEPTH``.
 
-    The round-4 depth guard is independent of the ``_run_permission_checks``
+    The depth guard is independent of the ``_run_permission_checks``
     cap; this pins the ``_evaluate_logic_tree`` / ``_q_for_branch`` arm.
     """
 
@@ -4489,7 +4489,7 @@ def test_is_own_pk_under_relay_owner_false_when_model_missing():
 
 
 def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
-    """Spec-021 H1: an explicit unsupported lookup on a Relay owner's PK raises.
+    """An explicit unsupported lookup on a Relay owner's PK raises.
 
     The ``get_fields`` ``"__all__"`` narrowing only covers the generated
     surface; an explicit ``Meta.fields`` list naming ``range`` / ``gt`` / a
@@ -5033,12 +5033,12 @@ def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch()
 
 
 # ---------------------------------------------------------------------------
-# Permission gate dispatch keys on the field, not the lookup (H2)
+# Permission gate dispatch keys on the field, not the lookup
 # ---------------------------------------------------------------------------
 
 
 def test_active_permission_field_paths_covers_input_shapes():
-    """``_active_permission_field_paths`` resolves source paths, skips the rest (H2)."""
+    """``_active_permission_field_paths`` resolves source paths, skips the rest."""
     import dataclasses
 
     class ShelfFilter(FilterSet):
@@ -5647,7 +5647,7 @@ def test_generation_provenance_override_generated_for_meta_filter_overrides():
     """A leaf produced through ``Meta.filter_overrides`` is ``override_generated``.
 
     The override must GENUINELY diverge from the package policy: ownership is now a
-    normalized VALUE comparison (Blocker 1 + High 3), so a ``filter_overrides`` entry
+    normalized VALUE comparison, so a ``filter_overrides`` entry
     byte-equal to the package default (same ``filter_class``, no ``extra``) is
     framework-equivalent -- the generated filter would be identical to the package's own.
     A consumer ``extra`` provider (here ``required=True``) makes the normalized entry
@@ -5855,7 +5855,7 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 1 -- own class-body declaration is an UNCONDITIONAL origin transition
+# Own class-body declaration is an UNCONDITIONAL origin transition
 #
 # ``FilterSetMetaclass.__new__`` distinguishes an OWN declaration (a
 # ``django_filters.Filter`` assigned directly in THIS class body) from an
@@ -5869,8 +5869,8 @@ def test_generation_provenance_declared_never_restamped_by_later_machinery():
 
 
 @pytest.mark.django_db
-def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
-    """Blocker 1 (red->green): a borrowed eligible generated leaf fails closed.
+def test_borrowed_generated_leaf_becomes_declared_and_fails_closed():
+    """A borrowed eligible generated leaf fails closed.
 
     django-filter's declarative machinery lets a consumer deepcopy a filter
     instance obtained from another filterset's ``base_filters`` -- which still
@@ -5935,7 +5935,7 @@ def test_blocker1_borrowed_generated_leaf_becomes_declared_and_fails_closed():
     assert list(result.order_by("id").values_list("pk", flat=True)) == [matched_pk]
 
 
-def test_blocker1_inherited_declared_filter_retains_declared_record_unchanged():
+def test_inherited_declared_filter_retains_declared_record_unchanged():
     """Positive control: an INHERITED declared filter keeps its ``declared`` record.
 
     A subclass that does not re-declare the filter must not restamp or mangle the
@@ -5965,10 +5965,10 @@ def test_blocker1_inherited_declared_filter_retains_declared_record_unchanged():
     assert filter_generation_provenance(inherited) == FilterGenerationProvenance(origin="declared")
 
 
-def test_blocker1_inherited_declaration_without_record_is_backfilled():
+def test_inherited_declaration_without_record_is_backfilled():
     """The ``if provenance is None`` fallback backfills a record-less inheritance.
 
-    Blocker 1 keeps the fallback for an inherited declaration that somehow reaches
+    The fallback is kept for an inherited declaration that somehow reaches
     the subclass metaclass run without a provenance record: it is stamped
     ``declared`` (never left record-less), while an inherited declaration that DOES
     carry a record is untouched (covered by the positive control above).
@@ -6114,7 +6114,7 @@ def test_candidate_snapshot_omits_override_generated_leaf():
 
     The override must GENUINELY diverge from the package policy (a consumer ``extra``
     provider here): a byte-equal override is framework-equivalent under the normalized
-    value comparison (Blocker 1 + High 3) and would keep its row.
+    value comparison and would keep its row.
     """
     import django_filters
     from django.db import models as django_models
@@ -6413,7 +6413,7 @@ def _reserved_aliases(queryset):
 
 @pytest.mark.django_db
 def test_capability_gate_init_override_fails_closed():
-    """Seam 4 (round-4 Blocker 1): a consumer ``__init__`` override is not capable.
+    """Seam 4: a consumer ``__init__`` override is not capable.
 
     ``__init__`` is the standard place a consumer replaces or mutates
     ``self.filters`` per request. A subclass that defines its own ``__init__`` is
@@ -6564,8 +6564,8 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
     """Seam 4 (ReplacesAtInit): a consumer ``__init__`` swaps in a different filter.
 
     ``__init__`` is the standard place a consumer replaces ``self.filters`` per
-    request, so overriding it is itself a generation-capability BREAK (round-4
-    Blocker 1): its otherwise-eligible ``genres__name__icontains`` leaf is NOT
+    request, so overriding it is itself a generation-capability BREAK: its
+    otherwise-eligible ``genres__name__icontains`` leaf is NOT
     routable, so routing fails closed at the build-time capability gate --
     independent of whatever the ``__init__`` body does to the live instance. The
     replaced TITLE filter runs on the outer queryset, exactly as the consumer
@@ -6726,7 +6726,7 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     expansion (asserted via the expanded row's provenance below).
 
     The custom child class is an unaudited ``CharFilter`` subclass, so under the
-    exact-class family gate (``spec-054`` Part 1 plan, Blocker 2) it resolves to NO profile and
+    exact-class family gate it resolves to NO profile and
     the expanded ``loans__note__icontains`` row is INELIGIBLE -- a fail-closed
     FAMILY-gate layer that subsumes the capability gate: even were it eligible, the
     propagated ``generation_capable=False`` would still make it non-routable. Either
@@ -6771,7 +6771,7 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     # to no family) AND non-routable (the child was not generation-capable).
     leaf = ParentBookFilter.get_filters()["loans__note__icontains"]
     assert isinstance(leaf, CustomChildGenerated)
-    assert _family_profile_for(leaf) is None  # unaudited subclass -> no family (Blocker 2)
+    assert _family_profile_for(leaf) is None  # unaudited subclass -> no family
     row = ParentBookFilter._expansion_snapshot().candidates["loans__note__icontains"]
     assert row.eligible is False  # ...so the leaf never becomes an eligible candidate
     assert row.provenance.generation_capable is False  # ...and the child bit propagated
@@ -6837,7 +6837,7 @@ def test_capability_gate_related_filter_expands_capable_child_is_routed():
 
 
 # ---------------------------------------------------------------------------
-# Blocker 2 - resolved-field origin oracle (isnull / transform / precision).
+# Resolved-field origin oracle (isnull / transform / precision).
 #
 # ``_generation_origin_for_field`` mirrors django-filter's RESOLVED-field
 # selection: a ``Meta.filter_overrides`` product is ``override_generated`` (and
@@ -6848,7 +6848,7 @@ def test_capability_gate_related_filter_expands_capable_child_is_routed():
 
 
 def test_origin_isnull_boolean_override_on_many_side_is_override_generated():
-    """Blocker 2: a BooleanField override selected by ``isnull`` -> override_generated.
+    """A BooleanField override selected by ``isnull`` -> override_generated.
 
     ``Loan.note`` is a ``TextField``; the ``isnull`` lookup resolves the SELECTION
     field to ``BooleanField``, which the consumer override governs. The generated
@@ -6880,7 +6880,7 @@ def test_origin_isnull_boolean_override_on_many_side_is_override_generated():
 
 
 def test_origin_transform_output_field_selects_override_is_override_generated():
-    """Blocker 2: a transform whose OUTPUT field selects an override -> override_generated.
+    """A transform whose OUTPUT field selects an override -> override_generated.
 
     ``ScalarSpecimen.occurred_on`` is a ``DateField``; the ``year`` transform
     resolves the output field to ``IntegerField``, which the consumer override
@@ -6907,7 +6907,7 @@ def test_origin_transform_output_field_selects_override_is_override_generated():
 
 
 def test_origin_precision_plain_many_side_leaf_stays_framework_default_and_eligible():
-    """Blocker 2: an unmatched leaf on an override-bearing class stays framework_default.
+    """An unmatched leaf on an override-bearing class stays framework_default.
 
     On the SAME class that carries a ``BooleanField`` override, the plain
     ``loans__note__icontains`` leaf resolves to a ``TextField`` selection the
@@ -6977,8 +6977,8 @@ def test_generation_origin_oracle_fails_closed_on_unresolvable_lookup():
 class _R5PreFanBookFilter(FilterSet):
     """Module-scope harness: an eligible direct-M2M ``Book.genres`` leaf.
 
-    ``Genre`` is NOT registered as a Relay node, so ``genres`` stays the review's
-    exact ``ModelMultipleChoiceFilter`` family (the one whose ``get_filter_predicate``
+    ``Genre`` is NOT registered as a Relay node, so ``genres`` stays the exact
+    ``ModelMultipleChoiceFilter`` family (the one whose ``get_filter_predicate``
     reads ``field.to_field_name``), generated through the package's own machinery ->
     eligible and routable. The snapshot is frozen once at import; each test seeds
     its own rows.
@@ -7009,7 +7009,7 @@ def _seed_r5_prefan_genre_book():
     with a ``to_field="name"`` redirect builds ``{genres: getattr(genre, "name")}`` --
     i.e. it filters the M2M by the EXTRACTED value against the target pk -- so the
     name must be a valid pk for the failed-closed outer predicate to still match the
-    same genre (round-5 Blocker 2). For every other (pk-based) mutation the name is
+    same genre. For every other (pk-based) mutation the name is
     irrelevant.
     """
     genre = library_models.Genre.objects.create(name="temp")
@@ -7051,7 +7051,7 @@ def test_method_owned_leaf_is_ineligible_on_framework_many_side_path():
 
     ``_candidate_metadata_for`` eligibility requires ``method is None`` -- a set method
     routes through a consumer ``FilterMethod`` whose semantics the correlated adapter
-    must never smuggle into a subquery (``spec-054`` Part 1 plan, High 5). A synthetic
+    must never smuggle into a subquery. A synthetic
     framework-stamped leaf with a genuine to-many ``field_name`` but a set method gets
     a candidate row that is ineligible SOLELY because of the method (mirrors the
     unknown-family eligibility probe).
@@ -7090,7 +7090,7 @@ def test_routed_leaf_preserves_prefanned_multiplicity():
 
 
 # ======================================================================
-# Round-5 Blocker 1: an ``extra``-only class-level ``FILTER_DEFAULTS`` shadow is
+# An ``extra``-only class-level ``FILTER_DEFAULTS`` shadow is
 # consumer-owned. A shadow that keeps the standard filter class but supplies its
 # own ``extra`` factory (restricted queryset, non-default ``to_field_name``, ...)
 # is a documented django-filter customization; whole-entry ownership now honors it
@@ -7116,11 +7116,11 @@ def _extra_only_shadow_filter(
 ):
     """Build a FilterSet whose ``FILTER_DEFAULTS`` shadows ONE field class.
 
-    The shared shape of the round-5 Blocker-1 tests: an ordinary
+    The shared shape of these tests: an ordinary
     ``{**FilterSet.FILTER_DEFAULTS, field_cls: {...}}`` shallow copy that keeps the
     SAME upstream ``filter_class`` but supplies a consumer ``extra`` provider. The
     copy is taken from ``FilterSet.FILTER_DEFAULTS`` -- the package-authored public
-    table (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``, Blocker 1 + High 3) -- NOT
+    table (``_PUBLIC_PACKAGE_FILTER_DEFAULTS``) -- NOT
     django-filter's mutable ``BaseFilterSet.FILTER_DEFAULTS``, so every untouched
     nested entry is carried by reference as the SAME (filter_class, provider) pair the
     ownership oracle NORMALIZES and compares by value against the private baseline
@@ -7139,7 +7139,7 @@ def _extra_only_shadow_filter(
 
 
 @pytest.mark.django_db
-def test_blocker1_m2m_extra_only_shadow_is_consumer_owned():
+def test_m2m_extra_only_shadow_is_consumer_owned():
     """Same base M2M class + a consumer ``extra`` (restricted queryset) is honored."""
     import django_filters
     from django.db import models as dj_models
@@ -7166,7 +7166,7 @@ def test_blocker1_m2m_extra_only_shadow_is_consumer_owned():
 
 
 @pytest.mark.django_db
-def test_blocker1_fk_extra_only_shadow_is_consumer_owned():
+def test_fk_extra_only_shadow_is_consumer_owned():
     """Same base FK class + a consumer ``extra`` (non-default to_field_name) is kept."""
     import django_filters
     from django.db import models as dj_models
@@ -7191,7 +7191,7 @@ def test_blocker1_fk_extra_only_shadow_is_consumer_owned():
 
 
 @pytest.mark.django_db
-def test_blocker1_extra_only_shadow_survives_related_filter_expansion():
+def test_extra_only_shadow_survives_related_filter_expansion():
     """An ``extra``-only shadow on a child survives ``RelatedFilter`` expansion."""
     import django_filters
     from django.db import models as dj_models
@@ -7223,7 +7223,7 @@ def test_blocker1_extra_only_shadow_survives_related_filter_expansion():
 
 
 @pytest.mark.django_db
-def test_blocker1_extra_only_shadow_runs_outer_with_no_reserved_alias():
+def test_extra_only_shadow_runs_outer_with_no_reserved_alias():
     """End-to-end: the honored ``extra``-only shadow runs OUTER, not through EXISTS."""
     import django_filters  # noqa: F401
     from django.db import models as dj_models
@@ -7263,7 +7263,7 @@ def test_blocker1_extra_only_shadow_runs_outer_with_no_reserved_alias():
 
 
 @pytest.mark.django_db
-def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
+def test_shallow_copy_untouched_entry_stays_framework_default():
     """Positive control: an untouched entry in a shallow-copied defaults map is NOT
 
     falsely treated as consumer-owned. A ``{**base, M2M: {...}}`` shadow that changes
@@ -7296,7 +7296,7 @@ def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
 
 
 # ======================================================================
-# High 3 (``spec-054`` Part 1 plan, "Required regressions"): the public
+# The public
 # ------------------------------------------------------------------------
 # ``FilterSet.FILTER_DEFAULTS`` must stay a drop-in django-filter mapping -- a plain,
 # deepcopyable ``dict`` a consumer can copy and customize (django-filter's inherited
@@ -7304,13 +7304,13 @@ def test_blocker1_shallow_copy_untouched_entry_stays_framework_default():
 # every Python version. Ownership is instead anchored on the PRIVATE, immutable,
 # normalized ``_PACKAGE_POLICY_BASELINE`` (a distinct object graph derived from the
 # package's OWN table), compared by VALUE -- so the public surface can be freely
-# copyable without weakening the ownership boundary. The round-7 tests that ASSERTED
-# these ``deepcopy`` / mutation ``TypeError``s as "the fix" are flipped here: those
-# ``TypeError``s were a consumer-visible compatibility break, not a feature.
+# copyable without weakening the ownership boundary. The ``deepcopy`` / mutation
+# ``TypeError``s a nested ``MappingProxyType`` produced were a consumer-visible
+# compatibility break, not a feature, so these tests assert they do NOT happen.
 # ======================================================================
 
 
-def test_high3_public_filter_defaults_is_deepcopyable():
+def test_public_filter_defaults_is_deepcopyable():
     """``copy.deepcopy(FilterSet.FILTER_DEFAULTS)`` works and the copy is independent.
 
     The public table is a plain ``dict`` of plain ``dict`` entries (the ``extra``
@@ -7343,7 +7343,7 @@ def test_high3_public_filter_defaults_is_deepcopyable():
     assert isinstance(PlainFilter.get_filters()["title"], CharFilter)
 
 
-def test_high3_private_baseline_is_immutable_and_independent():
+def test_private_baseline_is_immutable_and_independent():
     """The PRIVATE normalized baseline is immutable and a distinct object graph.
 
     ``_PACKAGE_POLICY_BASELINE`` is a ``MappingProxyType`` (mutating it raises
@@ -7389,7 +7389,7 @@ def test_normalize_policy_entry_none_returns_none():
     assert present == _NormalizedPolicyEntry(CharFilter, None)
 
 
-def test_high3_inherited_defaults_identity():
+def test_inherited_defaults_identity():
     """A pristine subclass inherits ``_PUBLIC_PACKAGE_FILTER_DEFAULTS`` by identity.
 
     An unmodified subclass does not reassign ``FILTER_DEFAULTS``, so its
@@ -7409,13 +7409,13 @@ def test_high3_inherited_defaults_identity():
 def test_public_filter_defaults_matches_upstream_django_filter_table():
     """Drift guard: the package table's SHAPE matches upstream ``FILTER_FOR_DBFIELD_DEFAULTS``.
 
-    High 3 / Blocker 1 replaced a snapshot of django-filter's mutable global with a
-    package-AUTHORED copy. That copy is deliberate duplication, so it can silently drift
-    from django-filter across versions (``spec-054`` Part 1 plan, Sixth-review bug hunt): a new
+    The package table is a package-AUTHORED copy, not a snapshot of django-filter's
+    mutable global. That copy is deliberate duplication, so it can silently drift
+    from django-filter across versions: a new
     field type, a changed default ``filter_class``, or an added/removed ``extra`` in a
     future release would go unnoticed.
 
-    SCOPE -- what this actually compares (``spec-054`` Part 1 plan, Seventh review, High 2):
+    SCOPE -- what this actually compares:
     the key SET, the per-key ``filter_class`` IDENTITY, ``extra`` PRESENCE per key, and for
     the six relation kinds the provider's OUTPUT keys plus ``to_field_name`` /
     ``null_label`` / ``queryset.model``. It does NOT compare full queryset semantics
@@ -7489,7 +7489,7 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 
 
 # ======================================================================
-# Blocker 1 (``spec-054`` Part 1 plan, "Required regressions"): package ownership must be
+# Package ownership must be
 # ------------------------------------------------------------------------
 # anchored on the package-AUTHORED table, not on a snapshot of django-filter's mutable
 # global. These regressions prove: (a) a consumer mutation of the global BEFORE the
@@ -7500,11 +7500,11 @@ def test_public_filter_defaults_matches_upstream_django_filter_table():
 # ======================================================================
 
 
-def test_blocker1_import_order_does_not_capture_consumer_global_mutation():
+def test_import_order_does_not_capture_consumer_global_mutation():
     """Fresh-process: a pre-import mutation of django-filter's global is NOT captured.
 
-    The review's Blocker 1: snapshotting ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at
-    import time froze whatever a consumer/reusable-app/init-hook had already put there
+    Snapshotting ``filterset.BaseFilterSet.FILTER_DEFAULTS`` at
+    import time would freeze whatever a consumer/reusable-app/init-hook had already put there
     into the "package" baseline. In a FRESH process, a consumer swaps the ``TextField``
     ``filter_class`` to its own class and installs an ``exclude=True`` ``extra`` provider
     BEFORE importing ``django_strawberry_framework.filters.sets``; the package table must
@@ -7549,10 +7549,10 @@ def test_blocker1_import_order_does_not_capture_consumer_global_mutation():
 
 
 @pytest.mark.django_db
-def test_blocker1_ordering_override_on_to_many_path_is_override_generated_and_unroutable():
+def test_ordering_override_on_to_many_path_is_override_generated_and_unroutable():
     """A consumer ordering CharFilter on a to-many path is consumer-owned and runs outer.
 
-    The review's ordering attack: a custom filter whose OUTER ``.filter`` invocation
+    The ordering attack: a custom filter whose OUTER ``.filter`` invocation
     changes ordering, installed via ``Meta.filter_overrides`` on a reverse-FK
     (``loans__note``) path. It must be ``override_generated`` (its normalized entry
     diverges from the package baseline), carry NO candidate row (never
@@ -7592,7 +7592,7 @@ def test_blocker1_ordering_override_on_to_many_path_is_override_generated_and_un
 
 
 @pytest.mark.django_db
-def test_blocker1_exclude_extra_override_refused_and_pristine_never_excludes():
+def test_exclude_extra_override_refused_and_pristine_never_excludes():
     """An ``exclude=True`` ``extra`` provider is refused; pristine candidates never exclude.
 
     An ``extra`` provider that yields ``{"exclude": True}`` installed via
@@ -7637,11 +7637,11 @@ def test_blocker1_exclude_extra_override_refused_and_pristine_never_excludes():
 
 
 @pytest.mark.django_db
-def test_blocker1_pristine_defaults_produce_routable_candidate():
+def test_pristine_defaults_produce_routable_candidate():
     """Positive control: a pristine framework to-many leaf is still ROUTABLE.
 
-    Mirrors the review's "prove pristine package defaults still generate routable
-    candidates" so the ownership fix is not merely closing routing everywhere.
+    Proves pristine package defaults still generate routable candidates, so the
+    ownership fix is not merely closing routing everywhere.
     """
 
     class BookFilter(FilterSet):
@@ -7676,7 +7676,7 @@ def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider():
     assert leaf.field.queryset.model is library_models.MembershipCard
 
 
-def test_blocker2_replacement_shadow_does_not_contaminate_other_filtersets():
+def test_replacement_shadow_does_not_contaminate_other_filtersets():
     """Cross-filterset isolation: A's replaced M2M entry cannot alter unmodified B.
 
     Filterset A legitimately REPLACES the M2M entry (a new dict with a restricted
@@ -7732,7 +7732,7 @@ def test_blocker2_replacement_shadow_does_not_contaminate_other_filtersets():
 
 
 @pytest.mark.django_db
-def test_blocker2_replacement_preserves_restricted_queryset_and_wire_shape():
+def test_replacement_preserves_restricted_queryset_and_wire_shape():
     """Observable: a REPLACED M2M entry keeps its restricted queryset AND wire shape.
 
     Genre is a Relay node, so a framework default over ``Book.genres`` WOULD convert to
@@ -7740,7 +7740,8 @@ def test_blocker2_replacement_preserves_restricted_queryset_and_wire_shape():
     consumer instead REPLACES the entry with a restricted-queryset, ``required``
     ``ModelMultipleChoiceFilter``; ownership resolves ``override_generated``, the leaf is
     the consumer's class (NOT a GlobalID), and the restricted queryset survives on the
-    built form field. This is the observable green side of the Blocker-2 fix. (The public
+    built form field. This is the observable green side of the ownership-resolution fix.
+    (The public
     ``FILTER_DEFAULTS`` table is intentionally a normal mutable, copyable ``dict`` again;
     what makes a nested-mutation spelling of this customization non-routable is the
     ownership comparison against the PRIVATE normalized baseline, not immutability.)
@@ -7777,7 +7778,7 @@ def test_blocker2_replacement_preserves_restricted_queryset_and_wire_shape():
     assert leaf.field.required is True
 
 
-def test_blocker2_positive_controls_unchanged_converts_replacement_preserved():
+def test_positive_controls_unchanged_converts_replacement_preserved():
     """Positive controls: an UNCHANGED canonical entry converts; a REPLACEMENT is kept.
 
     An unmodified ``FilterSet`` on a Relay-relation model classifies the M2M entry
@@ -7821,13 +7822,13 @@ def test_blocker2_positive_controls_unchanged_converts_replacement_preserved():
 
 
 # ======================================================================
-# Round-6 HIGH-2: a relation ``isnull`` under a Relay-node target stays the upstream
+# A relation ``isnull`` under a Relay-node target stays the upstream
 # ------------------------------------------------------------------------
 # BooleanFilter. The relation branch of ``filter_for_lookup`` / ``filter_for_field``
 # converts only the equality / membership wire shapes to a package GlobalID; a null
 # test is a Boolean predicate (a GlobalID-shaped input for it -- a LIST on the
 # multi-valued side -- raised ``ValueError`` at bind). Mirrors the own-PK
-# ``isnull`` pass-through (spec-027 H1).
+# ``isnull`` pass-through (spec-027).
 # ======================================================================
 
 
@@ -7904,7 +7905,7 @@ def test_r6_relation_isnull_filters_correctly_no_500():
 
 
 # ======================================================================
-# Round-6 HIGH-3: the origin oracle replicates upstream's MERGED FILTER_DEFAULTS +
+# The origin oracle replicates upstream's MERGED FILTER_DEFAULTS +
 # ------------------------------------------------------------------------
 # filter_overrides selection (one ``try_dbfield`` MRO walk over the merged map),
 # not a separate walk over ``filter_overrides`` alone. Merge order matters: a
@@ -7998,7 +7999,7 @@ def test_r6_benign_base_override_does_not_block_to_many_routing():
 
 
 # ======================================================================
-# ``spec-054`` Part 1 plan, High 4: the supported generated django-filter families are an
+# The supported generated django-filter families are an
 # EXECUTABLE fail-closed boundary (``_FILTER_FAMILY_REGISTRY`` +
 # ``_family_profile_for``), not prose. A framework-origin many-side leaf whose
 # filter class resolves to no registered family is ineligible, and therefore never
@@ -8007,7 +8008,7 @@ def test_r6_benign_base_override_does_not_block_to_many_routing():
 
 
 class _UnknownFamilyFilter(Filter):
-    """A direct ``Filter`` subclass in NO registered family (High 4 fail-closed probe).
+    """A direct ``Filter`` subclass in NO registered family fails closed.
 
     Stands in for a novel filter class a future unbounded ``django-filter`` (or any
     path that places an unaudited class behind a framework origin) could introduce.
@@ -8056,7 +8057,7 @@ def test_every_registered_family_resolves_to_its_profile(family_cls):
 
 
 def test_genuine_dynamic_concrete_in_and_range_resolve_to_sequence_profile():
-    """django-filter's genuine dynamic ``in`` / ``range`` CSV classes route (Blocker 2).
+    """django-filter's genuine dynamic ``in`` / ``range`` CSV classes route.
 
     These are real django-filter products (a NEW class object per ``filter_for_lookup``
     call), so they can never be registry keys and are recognized STRUCTURALLY -- not via
@@ -8121,7 +8122,7 @@ def test_integer_in_resolves_by_exact_type_and_bare_base_in_is_unregistered():
 def test_unregistered_subclass_of_registered_category_fails_closed(base_cls):
     """An unaudited subclass of EACH broad registered category resolves to NO profile.
 
-    The dangerous Blocker 2 case: a subclass of a registered base (with an overridden
+    The dangerous case: a subclass of a registered base (with an overridden
     ``.filter`` and added state) is NOT accepted through its ancestor. Exact match misses
     (it is not a registry key) and the structural validator refuses it (a single-base
     subclass is not the ``(BaseInFilter|BaseRangeFilter, <scalar>)`` 2-tuple shape, and a
@@ -8138,13 +8139,13 @@ def test_unregistered_subclass_of_registered_category_fails_closed(base_cls):
 
 
 def test_dynamic_csv_subclass_with_added_behavior_fails_closed():
-    """A dynamic-CSV-shaped class with ONE added body member fails closed (Blocker 2).
+    """A dynamic-CSV-shaped class with ONE added body member fails closed.
 
     The structural validator accepts ONLY genuine empty-body dynamic classes over an
     exact-audited scalar. Each variant below violates exactly one condition and must
     resolve to ``None``. Crucially this covers DUNDER-NAMED state and behavior, not just
     non-dunder members: an exact own-name-set compare against a ``pass``-body reference is
-    what closes the ``spec-054`` Part 1 plan's Sixth-review bug-hunt gap, where a
+    what closes the gap where a
     "startswith/endswith ``__``" test let ``__evil_state__`` / an overridden
     ``__getattribute__`` / ``__init_subclass__`` / ``__slots__`` slip through.
     """
@@ -8253,7 +8254,7 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
     ("genres" is an M2M on ``Book``) DOES get a candidate row and DOES cross a
     many-side hop, yet is INELIGIBLE because its class resolves to no registered
     family. Without the family gate this leaf would be routable before its runtime
-    reads were audited (``spec-054`` Part 1 plan, High 4).
+    reads were audited.
     """
     leaf = _UnknownFamilyFilter(field_name="genres")
     _stamp_generation_provenance(
@@ -8269,7 +8270,7 @@ def test_unknown_family_leaf_is_ineligible_on_framework_many_side_path():
 
 
 # ======================================================================
-# ``spec-054`` Part 1 plan (Seventh review) High 2: the AUDITED django-filter range gates
+# The AUDITED django-filter range gates
 # the OPTIMIZATION, not the dependency.
 # ----------------------------------------------------------------------
 # ``pyproject.toml`` keeps ``django-filter>=25.2`` UNBOUNDED so a consumer

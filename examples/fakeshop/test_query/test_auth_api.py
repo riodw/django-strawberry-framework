@@ -322,7 +322,7 @@ def test_login_surrogate_password_is_the_undifferentiated_envelope_not_a_crash()
 
 @pytest.mark.django_db
 def test_register_surrogate_password_keys_to_password_not_a_crash():
-    """A surrogate password bypasses the decode preflight (D6 exclusion seam); key it to ``password``.
+    """A surrogate password bypasses the decode preflight (the register exclusion seam); key it to ``password``.
 
     ``password`` rides the register exclusion seam, so it skips the shared decode's
     scalar unicode preflight; a strong-but-surrogate password passes

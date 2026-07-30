@@ -572,7 +572,7 @@ def test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists
 
 
 # ---------------------------------------------------------------------------
-# Review Blocker 1: HOW the body is measured. A wire ``413`` cannot tell a
+# HOW the body is measured. A wire ``413`` cannot tell a
 # rejection that cost one ``seek`` from one that first copied the whole payload
 # into memory, so every row below is about the operation the cap performs, not
 # about the status it produces. ``_request_body.py`` owns the private-Django
@@ -715,7 +715,7 @@ class _OverReportingPositionStream(_UndeclaredSeekableStream):
 
 
 class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
-    """``seekable()`` itself raises - review Low 6's first stand-in.
+    """``seekable()`` itself raises - the first probe-failure stand-in.
 
     A wrapper that answers the capability question with an error rather than a
     boolean, which is a shape a consumer middleware or a custom ASGI server can
@@ -732,7 +732,7 @@ class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
 class _UnseekableToEndStream(_UndeclaredSeekableStream):
     """Reports its position, then refuses the seek to the end.
 
-    Review Low 6's second stand-in. The end seek is the first call that can move
+    The second probe-failure stand-in. The end seek is the first call that can move
     the stream, so its failure leaves the position UNKNOWN rather than known - the
     restore has to run anyway, and only a restore that verifies may license the
     bounded read.
@@ -747,7 +747,7 @@ class _UnseekableToEndStream(_UndeclaredSeekableStream):
 class _UnnumberedSeekStream(_UndeclaredSeekableStream):
     """A ``seek`` that returns ``None`` instead of a position, and never moves.
 
-    Review Low 6's third stand-in: the subtraction ``end - position`` is what
+    The third probe-failure stand-in: the subtraction ``end - position`` is what
     fails here, with a ``TypeError`` rather than an ``OSError``, which is exactly
     the class of failure an enumerated ``except`` tuple misses. ``seek`` returning
     ``None`` is legal for a file-like object that simply does not report positions,
@@ -760,7 +760,7 @@ class _UnnumberedSeekStream(_UndeclaredSeekableStream):
 
 
 class _UnrestorableStream(_UndeclaredSeekableStream):
-    """Seeks to the end and then cannot get back - review Low 6's fourth stand-in.
+    """Seeks to the end and then cannot get back - the fourth probe-failure stand-in.
 
     The one shape that must NOT reach the bounded read: the probe has moved the
     stream to its end and the restore failed, so a read would return the tail of
@@ -855,7 +855,7 @@ def test_a_seekable_over_limit_body_is_refused_without_ever_being_read(
     max_size,
     content_length,
 ):
-    """Review Blocker 1: the rejecting operation itself is bounded, not just the verdict.
+    """The rejecting operation itself is bounded, not just the verdict.
 
     The old implementation ended in ``len(request.body) > limit``, and
     ``HttpRequest.body`` performs an unbounded ``self.read()`` that copies the
@@ -1022,7 +1022,7 @@ def test_an_unmeasurable_stream_falls_back_to_the_bounded_read(view_class):
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
-    """A size probe may never answer "the body is empty" on its own (review W3-1).
+    """A size probe may never answer "the body is empty" on its own.
 
     ``_measured_remaining``'s contract is that ``None`` means "ask the bounded
     read instead", never "the body is empty" - and a probed count of ``0`` is the
@@ -1055,7 +1055,7 @@ def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
 def _assert_the_corrupted_probe_was_recorded(caplog, stream):
     """Exactly one ``WARNING`` naming the probe outcome and the stream that caused it.
 
-    Review round 2 L2: this refusal is by design indistinguishable from an ordinary
+    This refusal is by design indistinguishable from an ordinary
     over-limit one on the wire (Decision 9's non-attributability), so an operator
     debugging a ``413`` for a request that is not oversized has nothing to go on
     unless the server records the distinction. The message object is asserted by
@@ -1083,7 +1083,7 @@ def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
     ``max(end - position, 0)`` clamped a negative measurement - a ``tell()`` that
     over-reports - to "no bytes remaining, allowed", so a full body reached
     ``HttpRequest.body`` unbounded. The pair is judged rather than clamped now, and
-    the verdict is the third probe outcome rather than the second (review Low 6):
+    the verdict is the third probe outcome rather than the second:
     the position this stream reports is a lie, so the restore lands somewhere the
     stream did not start, the verifying ``tell()`` says so, and the request is
     refused with the package's own ``413``.
@@ -1097,7 +1097,7 @@ def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
     was materialized: a stream whose coordinates are incoherent is not a stream the
     package will read bytes out of.
 
-    The server-side record is asserted too (review round 2 L2): the wire cannot
+    The server-side record is asserted too: the wire cannot
     carry the distinction, so the log is the only place it exists.
     """
     view = _capped_view(_PROBE_CAP, view_class=view_class)
@@ -1129,7 +1129,7 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
     view_class,
     stream_class,
 ):
-    """Review Low 6: a failed probe is a ``413`` from a bounded read, never a ``500``.
+    """A failed probe is a ``413`` from a bounded read, never a ``500``.
 
     Three failure sites, one classification. ``seekable()`` raising and the
     subtraction failing both leave the stream untouched; the seek to the end
@@ -1161,7 +1161,7 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(view_class, caplog):
-    """Review Low 6's fail-closed state: a failed restore ends the request.
+    """The fail-closed state: a failed restore ends the request.
 
     The one outcome that must never become a bounded read. The probe has already
     moved this stream to its end and the restore raises, so every byte a read
@@ -1174,7 +1174,7 @@ def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(vie
     no read was even attempted: the refusal comes from the probe's verdict, not
     from a read that happened to come back empty.
 
-    The second stand-in for the same server-side record (review round 2 L2), so the
+    The second stand-in for the same server-side record, so the
     log is pinned by both ``CORRUPTED`` shapes rather than by whichever one a later
     refactor happens to keep - and the stream class in ``args`` differs between
     them, which is the detail an operator needs.
@@ -1296,7 +1296,7 @@ def test_the_cap_defers_on_a_request_that_carries_no_stream_at_all():
 
 
 # ---------------------------------------------------------------------------
-# Review High 2: the strict UTF-8 wire contract is the package VIEW's, so it
+# The strict UTF-8 wire contract is the package VIEW's, so it
 # does not share the ``APPLY_UPSTREAM_PATCHES`` lifecycle of the upstream-bug
 # workarounds. The wire outcomes are live in fakeshop; what only this tier can
 # state is WHICH mechanism refused which byte shape, because all nine rejected
@@ -1359,7 +1359,7 @@ def test_the_package_view_rejects_every_non_utf8_wire_shape(view_class, body, ca
 
     Pinning the second group matters because that rejection is *inherited*: a
     future stdlib that tolerated a leading U+FEFF, or NUL-studded text, would
-    silently turn these 400s into 200s with no package change to review. Both
+    silently turn these 400s into 200s with no package change at all. Both
     views run every row because the two transports share the one mixin method and
     must not be able to drift.
     """
@@ -1376,9 +1376,9 @@ def test_the_package_view_rejects_every_non_utf8_wire_shape(view_class, body, ca
 @pytest.mark.parametrize(("body", "cause"), _WIRE_SHAPES)
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_the_wire_contract_holds_with_the_upstream_patches_opted_out(view_class, body, cause):
-    """Review High 2: the identical nine rows with ``{"strawberry": False}`` in effect.
+    """The identical nine rows with ``{"strawberry": False}`` in effect.
 
-    This is the finding, executable. The strict decode used to live inside
+    The strict decode used to live inside
     ``_patched_parse_json``, so a consumer who disabled the package's *upstream
     bug workarounds* also disabled a permanent security policy and silently got
     UTF-16 / UTF-32 acceptance back. With the policy on the view, the whole matrix
@@ -1492,7 +1492,7 @@ def _json_request(raw):
 
 
 def test_the_sync_view_hands_parse_json_raw_bytes_in_every_patch_state():
-    """Review W3-2: the sync transport's body source is the package view's own.
+    """The sync transport's body source is the package view's own.
 
     ``parse_json`` can only enforce the strict decode over bytes it is given, and
     on the sync transport upstream's request adapter decides that: its ``body``
@@ -1575,14 +1575,14 @@ def test_both_package_views_resolve_parse_json_to_the_one_shared_mixin_method():
 
 
 # ---------------------------------------------------------------------------
-# Review High 2 (multipart): the effective form encoding is a codec question,
+# Multipart: the effective form encoding is a codec question,
 # not a string-matching one, so the alias matrix is a pure-function contract
 # that belongs here. The wire outcomes - real multipart requests carrying a
 # malformed byte, an explicit Latin-1 declaration, genuine multibyte UTF-8, and
 # an escaped replacement character - are live in
 # ``examples/fakeshop/test_query/test_transport_api.py``.
 #
-# Review round 2 M1 / M4: the gate is TWO independent conditions, so each one and
+# The gate is TWO independent conditions, so each one and
 # each sub-rung of the effective encoding gets its own row that fails on its own.
 # One row used to pin two rungs at once, which means removing either of them cost
 # the suite the same single failure and neither was really pinned:
@@ -1730,7 +1730,7 @@ def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_ty
 
 
 def test_a_declared_utf8_charset_does_not_mask_a_middleware_set_request_encoding():
-    """Review round 2 M1: the two conditions are ``and``, not a fallback chain.
+    """The two conditions are ``and``, not a fallback chain.
 
     The bypass this closes, proved end to end here rather than asserted: a client
     declares ``charset=utf-8``, one line of consumer middleware assigns
@@ -1846,7 +1846,7 @@ def test_a_reconfigured_default_charset_is_refused_but_a_declared_utf8_still_win
 
 
 def test_a_get_carrying_a_stray_multipart_content_type_is_not_a_multipart_form():
-    """Review round 2 L1: the guard is scoped to the requests Django decodes.
+    """The guard is scoped to the requests Django decodes.
 
     ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
     parsing anything unless the method is ``POST``, so a stale
@@ -1905,7 +1905,7 @@ def test_a_bytes_control_field_is_left_to_the_strict_decode_rather_than_the_mark
 
 
 # ---------------------------------------------------------------------------
-# Review High 3 (ordering): the outer dispatch callback is ``csrf_exempt`` so
+# Ordering: the outer dispatch callback is ``csrf_exempt`` so
 # Django's global ``CsrfViewMiddleware.process_view`` cannot read
 # ``request.POST`` before the body boundary, and the view re-enters the same
 # middleware from inside ``run``. The behavioral proof - a ``413`` with the

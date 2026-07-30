@@ -49,8 +49,7 @@ def describe_value(value: object) -> str:
       ``sys.get_int_max_str_digits()`` digits to a string, so
       ``f"{10**10000!r}"`` raises ``ValueError`` - which would replace the
       package's promised ``ConfigurationError`` with an unrelated exception
-      precisely on the hostile-configuration path where the typed error matters
-      (spec-046 review, the enormous-window finding).
+      precisely on the hostile-configuration path where the typed error matters.
 
     Both collapse to a placeholder that still names the type, because the type
     is what makes the message actionable.
@@ -63,9 +62,9 @@ def describe_value(value: object) -> str:
     value a hostile or fat-fingered deployment hands the package directly, which
     is where a message that raises while being formatted destroys the typed
     contract. Dozens of other ``got {...}`` tails elsewhere in the package still
-    interpolate their own values; routing them is a separate DRY pass with its
-    own review surface and is deliberately not claimed here (spec-046 review
-    W3-3). A new rejection whose value came from outside the package belongs on
+    interpolate their own values; routing them is a separate change with its own
+    surface and is deliberately not claimed here. A new rejection whose value came
+    from outside the package belongs on
     this helper.
     """
     try:

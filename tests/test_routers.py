@@ -35,13 +35,13 @@ structural, and the revalidation rows drive real sockets through
 them at this tier - fakeshop has no ``asgi.py``, so the router half keeps the
 documented genuinely-unreachable-live exemption.
 
-Revalidation has **two** checkpoints (spec-046 review round 2, Blocker 1), and
-the rows are organized around that split:
+Revalidation has **two** checkpoints, and the rows are organized around that
+split:
 
 - **admission** - a NEW operation on a revoked session never starts; and
 - **the outbound information-bearing frame** - an ALREADY-ADMITTED operation
-  (the running subscription the review found, and equally a slow query) can no
-  longer put ``next`` / ``data`` / an operation-scoped ``error`` on the wire.
+  (a running subscription, and equally a slow query) can no longer put ``next``
+  / ``data`` / an operation-scoped ``error`` on the wire.
 
 Both failures are connection-scoped: the socket is CLOSED with ``4403`` and one
 non-disclosing reason, no operation-level error frame is emitted first, and the
@@ -53,7 +53,8 @@ router behavior is schema-agnostic, so deterministic scalar fields (plus one
 one-shot subscription, the only operation type the legacy ``graphql-ws``
 protocol can execute) are sufficient (spec-041 Test plan). Every out-of-band
 session / user mutation the revalidation rows need therefore rides
-``database_sync_to_async``, as Test 18's session mint already did.
+``database_sync_to_async``, as the authenticated-session round trip's session
+mint already did.
 
 The outbound-checkpoint rows additionally need an operation whose *timeline* the
 test body owns - one that has been admitted, has produced a payload, and is
@@ -72,8 +73,9 @@ out here. A hand-written expectation would pass just as happily against a
 package-local reimplementation of ``ALLOWED_HOSTS`` matching, which is the exact
 thing Decision 19 refuses to write.
 
-One row (Test 34) additionally needs a *real second HTTP request* against the
-socket's own session, so this module doubles as a probe URLConf: a single
+One row - the real-second-request logout - additionally needs a *real second
+HTTP request* against the socket's own session, so this module doubles as a
+probe URLConf: a single
 logout view plus ``urlpatterns``, reached through
 ``override_settings(ROOT_URLCONF=__name__)`` and ``django.test.AsyncClient``.
 The socket stays package-tier on the router either way - the probe serves no
@@ -126,9 +128,8 @@ from tests._soft_dependency import evicted_modules, simulated_absence
 _HINT_SUBSTRING = "channels>=4.3.2"
 # The Strawberry floor the hint recommends must be the floor the package METADATA
 # accepts: ``pyproject.toml`` requires ``strawberry-graphql>=0.316.0`` and the
-# minimum CI matrix node pins exactly ``0.316.0``, so the older ``0.262.0`` this
-# literal used to pin was advice to install a version the install would reject
-# (``spec-046-transport_security-0_0_15`` Medium 5).
+# minimum CI matrix node pins exactly ``0.316.0``, so an older floor here would be
+# advice to install a version the install would reject.
 _STRAWBERRY_FLOOR_SUBSTRING = "strawberry-graphql>=0.316.0"
 
 # Same discipline for the revocation close and the two new construction hints: a
@@ -146,7 +147,7 @@ _ASYNC_FACTORY_SUBSTRING = "make it a plain `def`"
 
 # The two opt-in auth submodules ``auth/__init__`` imports eagerly (spec-040
 # Decision 3). The WebSocket revalidation must resolve its session store without
-# either of them entering ``sys.modules`` - review Medium 4, Test 33.
+# either of them entering ``sys.modules``, which the import-boundary row asserts.
 _AUTH_SUBSYSTEM_PREFIX = "django_strawberry_framework.auth"
 _AUTH_SUBSYSTEM_MODULES = (
     f"{_AUTH_SUBSYSTEM_PREFIX}.mutations",
@@ -232,7 +233,7 @@ class Query:
 
     @strawberry.field
     def username(self, info: strawberry.Info) -> str:
-        """The authenticated-session probe (Test 18): the session actor's username."""
+        """The authenticated-session probe: the session actor's username."""
         request = request_from_info(info, family_label="FilterSet")
         return request.user.username
 
@@ -247,10 +248,10 @@ class Query:
         """The revalidation-freshness probe (spec-046 row 26): two identity reads.
 
         A field of its own rather than an extension of ``actor`` (whose exact
-        string Test 16 asserts). Both values are attribute reads off whatever
-        object ``scope["user"]`` currently holds, so a stale connect-time actor
-        and a revalidation-refreshed one are distinguishable without any ORM
-        work in the resolver.
+        string the request-contract row asserts). Both values are attribute reads
+        off whatever object ``scope["user"]`` currently holds, so a stale
+        connect-time actor and a revalidation-refreshed one are distinguishable
+        without any ORM work in the resolver.
         """
         request = request_from_info(info, family_label="FilterSet")
         return f"{request.user.username}|{request.user.is_staff}"
@@ -352,7 +353,7 @@ GATED_SCHEMA = strawberry.Schema(
 
 
 # ---------------------------------------------------------------------------
-# Probe URLConf for the real secondary-request revocation row (Test 34).
+# Probe URLConf for the real secondary-request revocation row.
 #
 # The holder-free variant of the ``override_settings(ROOT_URLCONF=__name__)``
 # pattern ``examples/fakeshop/test_query/test_multi_db.py`` established: this
@@ -671,7 +672,7 @@ def _assert_revoked_close(closed):
 # touch rides ``database_sync_to_async`` (the resolver side runs on the event
 # loop, where sync ORM raises ``SynchronousOnlyOperation``), and every row that
 # needs the executor thread to SEE these writes carries
-# ``django_db(transaction=True)`` - Test 18's shape.
+# ``django_db(transaction=True)`` - the authenticated round trip's shape.
 # ---------------------------------------------------------------------------
 
 
@@ -679,8 +680,9 @@ def _assert_revoked_close(closed):
 def _make_user_and_session(username, password="pw-9x-strong"):
     """Create a user plus a real logged-in session row; return (user, cookie, key).
 
-    Lifted verbatim out of Test 18's local ``make_user_and_session_cookie`` when
-    the revalidation rows needed a fifth copy of it: same three session keys,
+    Lifted verbatim out of the authenticated-session round trip's local
+    ``make_user_and_session_cookie`` when the revalidation rows needed a fifth
+    copy of it: same three session keys,
     same ``session.save()``, same cookie spelling. The session key is returned
     too, because the revocation rows revoke the row out of band.
     """
@@ -760,8 +762,8 @@ def _poison_the_session_store(monkeypatch):
     exception would surface as a denied operation, so "the operation succeeded"
     is only possible if the read never happened.
 
-    The target is ``utils/sessions.py``, the resolver's home since review Medium
-    4 moved it out of the eagerly-importing ``auth`` package;
+    The target is ``utils/sessions.py``, the resolver's home: it lives outside the
+    eagerly-importing ``auth`` package;
     ``consumers.py::_refreshed_actor`` imports the name from there per call, so
     patching the module attribute is what the coroutine reads.
     """
@@ -944,8 +946,8 @@ async def _logout_through_a_real_second_request(session_key, username):
     Django's own ``logout``, reached over ``AsyncClient`` against this module's
     probe URLConf, asserting on the way that the request resolved the SAME session
     key and the SAME actor as the open socket - which is what makes it a separate
-    request rather than a second fixture. Lifted out of Test 34 when the
-    running-subscription rows needed the same revocation.
+    request rather than a second fixture. Lifted out of the real-second-request
+    logout row when the running-subscription rows needed the same revocation.
     """
     cookie_name = settings.SESSION_COOKIE_NAME
     with override_settings(ROOT_URLCONF=__name__):
@@ -965,12 +967,12 @@ async def _logout_through_a_real_second_request(session_key, username):
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: construction and composition (Tests 1-6)
+# Channels-present: construction and composition
 # ---------------------------------------------------------------------------
 
 
 def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket():
-    """Test 1: a true ``ProtocolTypeRouter`` whose mapping carries exactly the two protocols.
+    """A true ``ProtocolTypeRouter`` whose mapping carries exactly the two protocols.
 
     Framed as a current-shape parity assertion (upstream maps exactly these
     two); the behavior tests below are what the mapping must actually deliver.
@@ -981,7 +983,7 @@ def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket():
 
 
 def test_http_branch_is_the_supplied_django_application_by_identity():
-    """Test 2 (spec-046 row 8): ``"http"`` IS the supplied object, with no wrapper.
+    """Spec-046 row 8: ``"http"`` IS the supplied object, with no wrapper.
 
     Object identity, not structural equality: after the protocol split there is
     nothing left to introspect on the HTTP branch, which is the point. The
@@ -998,7 +1000,7 @@ def test_http_branch_is_the_supplied_django_application_by_identity():
 
 
 def test_construction_rejects_an_omitted_or_unusable_django_application():
-    """Test 3 (spec-046 row 10): omission is ``TypeError``; unusable is ``ConfigurationError``.
+    """Spec-046 row 10: omission is ``TypeError``; unusable is ``ConfigurationError``.
 
     Omission fails as a required parameter should - Python's own signature
     binding, naming the parameter. Explicit ``None`` (the shape a ``0.0.14``
@@ -1023,7 +1025,7 @@ def test_construction_rejects_an_omitted_or_unusable_django_application():
 
 
 def test_graphql_http_consumer_left_the_router_module_entirely():
-    """Test 3b (spec-046 row 9): ``GraphQLHTTPConsumer`` is nowhere in ``routers.py``.
+    """Spec-046 row 9: ``GraphQLHTTPConsumer`` is nowhere in ``routers.py``.
 
     Read the module's own SOURCE, not ``dir(routers_module)``: an unimported name
     is absent from ``dir()`` whether or not the module still references it, so
@@ -1035,7 +1037,7 @@ def test_graphql_http_consumer_left_the_router_module_entirely():
 
 
 def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():
-    """Test 4: ``AllowedHostsOriginValidator`` OUTSIDE ``AuthMiddlewareStack`` on WS only.
+    """``AllowedHostsOriginValidator`` OUTSIDE ``AuthMiddlewareStack`` on WS only.
 
     Both original assertions are preserved verbatim (the origin validator sits
     outside the auth stack; the ``"http"`` value is no ``OriginValidator``); the
@@ -1056,7 +1058,7 @@ def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():
 
 
 def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
-    """Test 5 (spec-046 row 11, structural half): the pattern is WebSocket-only now.
+    """Spec-046 row 11, structural half: the pattern is WebSocket-only now.
 
     ``websocket_url_pattern=`` governs one branch; the HTTP value stays the
     identical supplied object, because HTTP path matching belongs entirely to
@@ -1073,7 +1075,7 @@ def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
 
 
 def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias():
-    """Test 5b (spec-046 Decision 4): both NEGATIVE halves of the rename.
+    """Spec-046 Decision 4: both NEGATIVE halves of the rename.
 
     Decision 4 renames rather than aliases - "a single parameter that no longer
     affects HTTP would be a name that lies" - and makes the replacement
@@ -1090,7 +1092,7 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
 
 
 def test_repeated_access_returns_the_cached_class_which_is_subclassable():
-    """Test 6: the builder memoizes into ``_ROUTER_CLASS``; the class is a real base."""
+    """The builder memoizes into ``_ROUTER_CLASS``; the class is a real base."""
     first = _router_class()
     second = _router_class()
     assert first is second
@@ -1106,7 +1108,7 @@ def test_repeated_access_returns_the_cached_class_which_is_subclassable():
 
 # ---------------------------------------------------------------------------
 # Channels-present: the WebSocket consumer-injection seam and the window's
-# construction-time validation (Tests 19-25; spec-046 Decision 11, rows 28-29).
+# construction-time validation (spec-046 Decision 11, rows 28-29).
 # Structural only - no socket, no database.
 # ---------------------------------------------------------------------------
 
@@ -1132,7 +1134,7 @@ def _mounted_ws_callback(router):
 
 
 def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass():
-    """Test 19 (spec-046 checklist boxes 2-3): the default mount is the package consumer.
+    """Spec-046 checklist boxes 2-3: the default mount is the package consumer.
 
     ``websocket_consumer_class=None`` selects ``consumers.py``'s revalidating
     subclass - a real ``GraphQLWSConsumer`` subclass that is NOT
@@ -1154,7 +1156,7 @@ def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass():
 
 
 def test_the_generated_consumer_installs_a_derived_websocket_adapter_class():
-    """Test 19b (review round 2, Blocker 1): the outbound checkpoint is a CLASS seam.
+    """The outbound checkpoint is a CLASS seam.
 
     ``AsyncBaseHTTPView.run`` instantiates ``self.websocket_adapter_class(...)`` by
     name, per connection, so deriving one adapter and installing it on the
@@ -1183,7 +1185,7 @@ def test_the_generated_consumer_installs_a_derived_websocket_adapter_class():
 
 
 def test_only_information_bearing_frames_reach_the_outbound_checkpoint():
-    """Test 19c: the gated frame set is exactly the payload-carrying frames.
+    """The gated frame set is exactly the payload-carrying frames.
 
     The structural half of "connection-control frames retain upstream behavior".
     ``next`` / ``data`` carry results, and an operation-scoped ``error`` can still
@@ -1207,7 +1209,7 @@ def test_only_information_bearing_frames_reach_the_outbound_checkpoint():
 
 
 def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers():
-    """Test 20 (spec-046 row 28): injection opts out of revalidation, not of the wrappers.
+    """Spec-046 row 28: injection opts out of revalidation, not of the wrappers.
 
     ``DjangoWebSocketHostValidator``, ``AllowedHostsOriginValidator`` and
     ``AuthMiddlewareStack`` are applied by the ROUTER around whatever is injected,
@@ -1247,13 +1249,13 @@ async def _valid_asgi_application(scope, receive, send):
 
 
 def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
-    """Test 21 (spec-046 Decision 11): the factory shape's calling convention.
+    """Spec-046 Decision 11: the factory shape's calling convention.
 
     A non-class callable is a factory, invoked as ``factory(schema=schema)``, and
     whatever it returns is what gets mounted - by identity, so the router adds no
     ``as_asgi`` hop of its own.
 
-    Also the ACCEPTED half of review High 3's validation matrix: a synchronous
+    Also the ACCEPTED half of the validation matrix: a synchronous
     factory returning an async ASGI callable still passes, and it passes
     *unwrapped* - ``_mounted_ws_callback`` asserts ``AllowedHostsOriginValidator``
     and ``AuthMiddlewareStack`` are still the two layers above the route, so the
@@ -1283,7 +1285,7 @@ def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
     ],
 )
 def test_a_factory_returning_a_non_application_fails_at_construction(returned, expected_tail):
-    """Test 21b (review High 3): the factory's RESULT is validated before mounting.
+    """The factory's RESULT is validated before mounting.
 
     Before this row the router mounted whatever the factory handed back, so a
     ``None`` or a scalar became a URL route callback and the first matching
@@ -1311,11 +1313,11 @@ def test_a_factory_returning_a_non_application_fails_at_construction(returned, e
 
 
 def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
-    """Test 21c (review High 3): a coroutine is not an ASGI application.
+    """A coroutine is not an ASGI application.
 
     An ``async def`` factory returns a coroutine object, which is not callable and
-    can never serve a handshake. Two shapes are covered: the literal one the
-    review names (an ``async def`` passed straight in), and a synchronous wrapper
+    can never serve a handshake. Two shapes are covered: the literal one (an
+    ``async def`` passed straight in), and a synchronous wrapper
     that hands the SAME coroutine object to the router while keeping a reference
     to it - the only way a test can inspect what the router did with it.
 
@@ -1350,7 +1352,7 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
 
 
 def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction():
-    """Test 21d (review High 3): the calling convention is a construction error too.
+    """The calling convention is a construction error too.
 
     ``factory(schema=schema)`` is the seam's one calling convention, so a factory
     that cannot bind it is a configuration error naming the convention, with the
@@ -1370,7 +1372,7 @@ def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction()
 
 
 def test_a_factory_that_raises_from_its_body_is_not_normalized():
-    """Test 21e (review High 3): only the CONVENTION is normalized, never the body.
+    """Only the CONVENTION is normalized, never the body.
 
     The convention check binds the call with ``inspect.signature`` *before*
     invoking the factory, precisely so that a ``TypeError`` raised inside a
@@ -1387,7 +1389,7 @@ def test_a_factory_that_raises_from_its_body_is_not_normalized():
 
 
 def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
-    """Test 21f (review High 3): an un-introspectable callable is not pre-rejected.
+    """An un-introspectable callable is not pre-rejected.
 
     ``inspect.signature`` raises for a callable it cannot describe (a C callable,
     or - as here - an object carrying a lying ``__signature__``). That is not
@@ -1416,7 +1418,7 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
     ],
 )
 def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable):
-    """Test 22 (spec-046 Decision 11): neither accepted shape, so ConfigurationError.
+    """Spec-046 Decision 11: neither accepted shape, so ConfigurationError.
 
     A class that is not a ``GraphQLWSConsumer`` subclass must NOT be quietly
     routed into the factory branch (a class is callable, so the ordering is
@@ -1445,7 +1447,7 @@ def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable):
     ],
 )
 def test_the_revalidation_window_rejects_unusable_values(unusable):
-    """Test 23 (spec-046 Decision 11): the window's construction-time domain.
+    """Spec-046 Decision 11: the window's construction-time domain.
 
     ``bool`` is rejected explicitly (``isinstance(True, int)`` is ``True``), and
     both non-finite values are rejected because neither is a usable number of
@@ -1456,7 +1458,7 @@ def test_the_revalidation_window_rejects_unusable_values(unusable):
     failure is ``ConfigurationError`` at construction, never a per-operation
     surprise.
 
-    The two huge-integer rows are review's enormous-window finding. An ``int``
+    The two huge-integer rows cover the enormous-window case. An ``int``
     with no ``float`` image passes every ``isinstance`` check, so the validator
     used to hand it to ``math.isfinite`` and escape the typed boundary with a raw
     ``OverflowError``; rendering it into the rejection then raised ``ValueError``
@@ -1469,10 +1471,11 @@ def test_the_revalidation_window_rejects_unusable_values(unusable):
 
 
 def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
-    """Test 23c (review): the enormous-window rejection is complete, not just typed.
+    """The enormous-window rejection is complete, not just typed.
 
-    Two properties one row cannot infer from Test 23's ``pytest.raises``: the
-    ``OverflowError`` that detected the value survives as ``__cause__`` (so the
+    Two properties the parametrized rejection row's ``pytest.raises`` cannot
+    infer: the ``OverflowError`` that detected the value survives as ``__cause__``
+    (so the
     traceback still says *why* the number is unusable), and the message renders at
     all - the value degrades to its type instead of raising ``ValueError`` while
     the rejection is being formatted.
@@ -1496,13 +1499,13 @@ def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
     ],
 )
 def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected):
-    """Test 23b: the accepted half, including the int -> float coercion.
+    """The accepted half, including the int -> float coercion.
 
     The consumer receives a ``float`` whatever the caller passed, so the window
     comparison never mixes numeric types.
 
-    The last two rows are the honest boundary of the rejection above (spec-046
-    review W3-4). A ``1e300``-second window is operationally "never revalidate
+    The last two rows are the honest boundary of the rejection above. A
+    ``1e300``-second window is operationally "never revalidate
     again", and it is **accepted**: the package rejects values it cannot *use*, not
     values it disapproves of, and it imposes no ceiling for the same reason it
     imposes no maximum connection lifetime (Decision 12) - there is no correct
@@ -1519,7 +1522,7 @@ def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected)
 
 
 def test_injecting_a_consumer_class_with_a_window_is_a_construction_error():
-    """Test 24 (spec-046 row 29): a knob that does nothing is worse than an error.
+    """Spec-046 row 29: a knob that does nothing is worse than an error.
 
     The window configures the PACKAGE consumer, so a positive value alongside an
     injected class is rejected instead of silently ignored. An explicit ``0.0``
@@ -1539,9 +1542,9 @@ def test_injecting_a_consumer_class_with_a_window_is_a_construction_error():
 
 
 def test_the_two_new_websocket_keywords_are_keyword_only():
-    """Test 25: all three WebSocket keywords are KEYWORD_ONLY, with their defaults.
+    """All three WebSocket keywords are KEYWORD_ONLY, with their defaults.
 
-    The sibling of Test 5b, whose subject is the ``url_pattern`` rename: this one
+    The sibling of the row whose subject is the ``url_pattern`` rename: this one
     extends the keyword-only contract to the two parameters Slice 4 adds, so a
     later convenience edit that relaxes one of them into a positional has to fail
     loudly. Read off ``inspect.signature`` rather than probed with a call, so the
@@ -1567,7 +1570,7 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: execution through communicators (Tests 7-10)
+# Channels-present: execution through communicators
 # ---------------------------------------------------------------------------
 
 
@@ -1582,7 +1585,7 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
 
 @pytest.mark.django_db
 async def test_http_branch_delegates_every_path_to_the_supplied_application():
-    """Test 7 (spec-046 Decision 13): HTTP is delegation, for GraphQL paths too.
+    """Spec-046 Decision 13: HTTP is delegation, for GraphQL paths too.
 
     The merge of the old GraphQL-round-trip and non-GraphQL-fallback tests. Both
     a well-formed GraphQL POST at ``/graphql`` and an unrelated ``/admin/login/``
@@ -1614,7 +1617,7 @@ async def test_http_branch_delegates_every_path_to_the_supplied_application():
 )
 @pytest.mark.django_db
 async def test_websocket_handshake_origin_directions(headers, expected_connected):
-    """Test 9: the three origin directions (match / mismatch / missing) on the WS branch.
+    """The three origin directions (match / mismatch / missing) on the WS branch.
 
     pytest-django's environment appends ``"testserver"`` to ``ALLOWED_HOSTS``,
     so ``http://testserver`` is the matching origin; a handshake with NO
@@ -1654,7 +1657,7 @@ async def test_websocket_handshake_origin_directions(headers, expected_connected
 )
 @pytest.mark.django_db
 async def test_default_websocket_url_pattern_matches_exactly(path, expected_connected):
-    """Test 8 (spec-046 row 11, behavioral half): the default pattern is exact.
+    """Spec-046 row 11, behavioral half: the default pattern is exact.
 
     ``r"^graphql/?$"`` is anchored at both ends, so - with Channels' leading-slash
     strip - only ``/graphql`` and ``/graphql/`` reach the consumer; every prefix
@@ -1684,7 +1687,7 @@ async def test_default_websocket_url_pattern_matches_exactly(path, expected_conn
 
 @pytest.mark.django_db
 async def test_schema_object_passes_through_unchanged_with_extensions_intact():
-    """Test 10 (spec-046 row 12): the consumer holds the exact schema; extensions execute.
+    """Spec-046 row 12: the consumer holds the exact schema; extensions execute.
 
     Subject preserved from the ``0.0.14`` test, transport moved: the HTTP
     consumer no longer exists to interrogate, so the structural half reads the
@@ -1712,7 +1715,7 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
 
 # ---------------------------------------------------------------------------
 # Channels-present: the WebSocket Host boundary (spec-046 Decision 19, Test plan
-# rows 43-47). ``spec-046-transport_security-0_0_15`` Medium 4: Channels'
+# rows 43-47). Channels'
 # ``OriginValidator.__call__`` reads the ``Origin`` header and nothing else, so a
 # handshake with an allowed ``Origin`` and a hostile ``Host`` connected - while
 # ``routers.py`` promised an injected consumer "cannot escape Host/Origin
@@ -1900,7 +1903,7 @@ async def _ws_handshake(
     ],
 )
 def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(headers, server):
-    """Tests 44c-44i (review round 2, M4): each projection item, its own row.
+    """Each projection item, its own row.
 
     ``consumers.py::_host_validation_request`` promises to reproduce
     ``ASGIRequest.__init__`` item by item, and the items are separable, so they get
@@ -1957,7 +1960,7 @@ async def test_the_websocket_host_and_origin_checks_are_independent(
     origin,
     expected_connected,
 ):
-    """Test 43 (review Medium 4): the direction the shipped suite never supplied.
+    """The direction the shipped suite never supplied.
 
     An allowed ``Origin`` with a hostile ``Host`` is the row that was missing, and
     it is the row that failed before Decision 19: ``OriginValidator`` loops the
@@ -1994,7 +1997,7 @@ async def test_the_websocket_host_and_origin_checks_are_independent(
 )
 @pytest.mark.django_db
 async def test_django_owns_the_websocket_host_matching(allowed_hosts, host, origin):
-    """Test 44: the verdict IS Django's verdict, asserted by delegation.
+    """The verdict IS Django's verdict, asserted by delegation.
 
     Wildcards, leading-dot subdomain patterns, an explicit port, an IPv6 literal, a
     trailing dot, an underscore that RFC 1034/1035 forbids, and an empty header -
@@ -2019,7 +2022,7 @@ async def test_django_owns_the_websocket_host_matching(allowed_hosts, host, orig
 
 @pytest.mark.django_db
 async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
-    """Test 44b: ``DEBUG`` + empty ``ALLOWED_HOSTS`` is Django's decision too.
+    """``DEBUG`` + empty ``ALLOWED_HOSTS`` is Django's decision too.
 
     The one arm of ``get_host()`` that consults a setting other than
     ``ALLOWED_HOSTS``, and the shape fakeshop itself ships (``DEBUG = True``,
@@ -2043,7 +2046,7 @@ async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
 
 @pytest.mark.django_db
 async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form():
-    """Test 45: ambiguity fails closed, in Django's own comma-joined form.
+    """Ambiguity fails closed, in Django's own comma-joined form.
 
     Two ``Host`` headers are not a host, and the projection must not silently pick
     one. The joined form is not invented here either: Django's ASGI request adapter
@@ -2071,7 +2074,7 @@ async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form()
 
 @pytest.mark.django_db
 async def test_an_odd_cased_host_header_still_reaches_the_boundary():
-    """Test 45b: header-name casing is normalized, not trusted (review round 2, M4).
+    """Header-name casing is normalized, not trusted.
 
     Its own row rather than a tail on the duplicate-header row, which is where it
     used to live: casing normalization and duplicate reduction are two independent
@@ -2095,7 +2098,7 @@ async def test_an_odd_cased_host_header_still_reaches_the_boundary():
 
 @pytest.mark.django_db
 async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
-    """Test 45c (review round 2, M3): the fallback arm's verdict, pinned behaviorally.
+    """The fallback arm's verdict, pinned behaviorally.
 
     No ``Host``, no ``X-Forwarded-Host``, no ``scope["server"]`` - which is exactly
     what ``channels.testing.WebsocketCommunicator`` synthesizes by default, and what
@@ -2128,7 +2131,7 @@ async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
 
 @pytest.mark.django_db
 async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
-    """Test 45d (review round 2, M4): the transport codec, on the one input that shows it.
+    """The transport codec, on the one input that shows it.
 
     ``b"caf\\xe9.example"`` is valid Latin-1 and invalid UTF-8, so it is the only
     kind of value that can tell the projection's codec apart from a plausible
@@ -2136,8 +2139,8 @@ async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
     (``ASGIRequest.__init__`` and ``OriginValidator`` both use it), and the
     consequence of getting it wrong is not a different verdict but a raised
     ``UnicodeDecodeError`` - which the validator deliberately does NOT convert into a
-    denial (Test 47), so the handshake would fail with a traceback out of the ASGI
-    application instead of a verdict.
+    denial - only a disallowed host becomes one - so the handshake would fail with
+    a traceback out of the ASGI application instead of a verdict.
 
     The verdict itself is a denial either way, because ``split_domain_port``'s
     ``host_validation_re`` admits only ``[a-z0-9.-]`` - so this row's subject is that
@@ -2159,7 +2162,7 @@ async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
 @pytest.mark.parametrize("use_x_forwarded_host", [True, False])
 @pytest.mark.django_db
 async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(use_x_forwarded_host):
-    """Test 46: ``USE_X_FORWARDED_HOST`` behaves identically to HTTP.
+    """``USE_X_FORWARDED_HOST`` behaves identically to HTTP.
 
     ``X-Forwarded-Host`` is projected unconditionally and consulted only by
     ``HttpRequest._get_raw_host``, so the setting stays Django's decision and the
@@ -2194,7 +2197,7 @@ async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(use_x_
 
 @pytest.mark.django_db
 async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host():
-    """Test 46c (review round 2, M4): the forwarded header's DENY direction.
+    """The forwarded header's DENY direction.
 
     The row above proves ``X-Forwarded-Host`` can rescue a hostile ``Host`` when the
     setting is on. This one proves the converse, which is the security-relevant half:
@@ -2224,7 +2227,7 @@ async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host
 
 @pytest.mark.django_db
 async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
-    """Test 46b: ``scope["server"]`` is Django's normal no-host-header fallback.
+    """``scope["server"]`` is Django's normal no-host-header fallback.
 
     ``_get_raw_host``'s third option reconstructs the host from ``SERVER_NAME`` /
     ``SERVER_PORT``, so the projection supplies them from the ASGI ``server`` key
@@ -2232,7 +2235,8 @@ async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
     default, which is what every other row in this module exercises by carrying no
     ``server`` at all. Without this the boundary would raise ``KeyError`` on a
     handshake that omits ``Host``, and an unexpected exception is deliberately NOT
-    a denial (Test 47), so the socket would fail with a traceback instead of a
+    a denial - only a disallowed host becomes one - so the socket would fail with
+    a traceback instead of a
     verdict.
     """
     with override_settings(ALLOWED_HOSTS=["fallback.example"]):
@@ -2257,7 +2261,7 @@ async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
 
 @pytest.mark.django_db
 async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch):
-    """Test 47: an unexpected exception propagates instead of being reported as a host.
+    """An unexpected exception propagates instead of being reported as a host.
 
     The worst available failure mode for a check whose whole value is that it
     rejects: a projection bug that denied every handshake would be
@@ -2288,7 +2292,7 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch):
 
 @pytest.mark.django_db
 async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
-    """Test 47c (review round 2, M4): the same contract, with nothing monkeypatched.
+    """The same contract, with nothing monkeypatched.
 
     The row above injects the failure; this one is the naturally occurring shape, and
     the two fail independently. ASGI requires ``scope["headers"]`` to be a sequence
@@ -2316,7 +2320,7 @@ async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
 @pytest.mark.parametrize("subdomain", ["sub.localhost", "deep.sub.localhost"])
 @pytest.mark.django_db
 async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdomain(subdomain):
-    """Test 44j (review round 2, L5): the one configuration where the two lists differ.
+    """The one configuration where the two lists differ.
 
     ``DEBUG`` with an empty ``ALLOWED_HOSTS`` is the only case where either check
     consults a list other than ``ALLOWED_HOSTS``, and the two lists are NOT the same:
@@ -2375,7 +2379,7 @@ def _recording_websocket_application(reached):
 
 @pytest.mark.django_db
 async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(monkeypatch):
-    """Test 47b (Decision 19 #"before authentication"): the ordering, with two sentinels.
+    """Decision 19 #"before authentication": the ordering, with two sentinels.
 
     "Outermost" is a structural claim; this is the behavioral one. Two sentinels
     that MUST fire on an allowed ``Host`` and MUST NOT fire on a hostile one:
@@ -2422,7 +2426,7 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(m
 
 @pytest.mark.django_db
 async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
-    """Test 43b (spec-046 row 28 + Decision 19): injection opts out of neither check.
+    """Spec-046 row 28 + Decision 19: injection opts out of neither check.
 
     The behavioral half of the structural row above. Both wrappers are the ROUTER's,
     so a consumer injected through the seam is inside both by construction - and
@@ -2450,7 +2454,7 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
 
 # ---------------------------------------------------------------------------
 # Channels-absent + degraded installs: the eviction-simulated states
-# (Tests 11-15, 17). Absence is SIMULATED with the shared ``None`` sentinel +
+# Absence is SIMULATED with the shared ``None`` sentinel +
 # strict ``sys.modules`` eviction/restore, two-sided (the parent package's
 # ``routers`` attribute is restored to the SAME original module object as
 # ``sys.modules``, because a retried import re-executes ``routers.py`` and rebinds
@@ -2480,7 +2484,7 @@ def _simulate_channels_absent():
 
 
 def test_root_package_and_star_import_stay_channels_free(_simulate_channels_absent):
-    """Test 11: the root package never touches the guard; the SUBMODULE star opts in."""
+    """The root package never touches the guard; the SUBMODULE star opts in."""
     mod = importlib.import_module("django_strawberry_framework")
     assert mod is django_strawberry_framework
     namespace = {}
@@ -2493,20 +2497,20 @@ def test_root_package_and_star_import_stay_channels_free(_simulate_channels_abse
 
 
 def test_routers_module_import_succeeds_without_channels(_simulate_channels_absent):
-    """Test 12: ``import django_strawberry_framework.routers`` itself pays no import."""
+    """``import django_strawberry_framework.routers`` itself pays no import."""
     mod = importlib.import_module("django_strawberry_framework.routers")
     assert mod.__name__ == "django_strawberry_framework.routers"
 
 
 def test_symbol_access_raises_the_install_hint_without_channels(_simulate_channels_absent):
-    """Test 13: the ``from ... import`` line raises ``ImportError`` naming the floor."""
+    """The ``from ... import`` line raises ``ImportError`` naming the floor."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING) as exc_info:
         exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
 def test_restore_is_two_sided_and_the_present_path_works_again():
-    """Test 14: after teardown the attribute path and import path hold ONE module object.
+    """After teardown the attribute path and import path hold ONE module object.
 
     The blocked-then-retried import re-executes ``routers.py`` and rebinds the
     parent attribute to a fresh module; a one-sided restore would leave two live
@@ -2534,7 +2538,7 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
 
 
 def test_consumers_module_imports_with_channels_absent():
-    """Test 15b (spec-046 Decision 11): ``consumers.py`` is channels-free at import.
+    """Spec-046 Decision 11: ``consumers.py`` is channels-free at import.
 
     Load-bearing rather than incidental: ``routers.py`` imports ``consumers.py``
     at MODULE level, above its own ``require_channels()`` guard, and that is only
@@ -2572,7 +2576,7 @@ def test_consumers_module_imports_with_channels_absent():
 
 
 def test_unrelated_attribute_miss_stays_a_plain_attribute_error(_simulate_channels_absent):
-    """Test 15: a non-router attribute miss raises ``AttributeError``, never the hint."""
+    """A non-router attribute miss raises ``AttributeError``, never the hint."""
     mod = importlib.import_module("django_strawberry_framework.routers")
     with pytest.raises(AttributeError, match="DefinitelyNotARouter"):
         _ = mod.DefinitelyNotARouter
@@ -2597,11 +2601,11 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
     broken_submodule,
     expected_substrings,
 ):
-    """Test 17: present-but-incompatible installs name WHICH half is broken.
+    """Present-but-incompatible installs name WHICH half is broken.
 
     Same eviction + two-sided-restore discipline as the absent path (so the
     re-executed module has no cached ``_ROUTER_CLASS`` and the builder import
-    actually fires, order-independence finding P1.2), but here the top-level
+    actually fires), but here the top-level
     ``channels`` re-imports cleanly and only one builder SUBMODULE is a ``None``
     sentinel: a failing ``channels.*`` import names the channels floor; a failing
     ``strawberry.channels`` consumer import names BOTH halves, so a broken
@@ -2623,7 +2627,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: the package request contract over WebSocket (Tests 16 and 18)
+# Channels-present: the package request contract over WebSocket
 #
 # The HTTP colour of the request-adapter contract is gone with the transport
 # (spec-046 Decision 2 - "the Channels request adapter is now a WebSocket-only
@@ -2635,7 +2639,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
 
 @pytest.mark.django_db
 async def test_request_contract_resolves_over_the_websocket_branch():
-    """Test 16: a framework-shaped resolver works under the Channels context.
+    """A framework-shaped resolver works under the Channels context.
 
     The WebSocket consumer is the context request, with scope directly on it.
     The router's ``AuthMiddlewareStack`` populates that scope, so
@@ -2650,7 +2654,7 @@ async def test_request_contract_resolves_over_the_websocket_branch():
 
 @pytest.mark.django_db(transaction=True)
 async def test_authenticated_session_round_trip_reaches_the_resolver():
-    """Test 18: a real session cookie flows through ``AuthMiddlewareStack`` to the actor.
+    """A real session cookie flows through ``AuthMiddlewareStack`` to the actor.
 
     Subject preserved from the ``0.0.14`` test, transport moved: the cookie used
     to traverse the HTTP branch's ``AuthMiddlewareStack``, which the protocol
@@ -2660,7 +2664,7 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
     The user + session rows are created async-safely (``database_sync_to_async``,
     since ``AuthMiddlewareStack`` resolves the user on the event loop's executor
     thread); the resolver then sees the AUTHENTICATED user, not ``AnonymousUser``
-    - what actually earns the "session user on the scope" claim (finding P1.4).
+    - what actually earns the "session user on the scope" claim.
     The mint itself now lives at module level (``_make_user_and_session``), where
     the Slice-4 revalidation rows share it; the assertions are unchanged.
     """
@@ -2671,17 +2675,17 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: per-operation actor revalidation (Tests 26-34; spec-046
-# Decision 11, Test plan rows 25-27 and 30). Every row drives a REAL socket
-# through the package's own mount.
+# Channels-present: per-operation actor revalidation (spec-046 Decision 11,
+# Test plan rows 25-27 and 30). Every row drives a REAL socket through the
+# package's own mount.
 #
-# The spec's "separate request" is covered from both directions. The
-# out-of-band mutators (Test 26) are precise unit controls - one revocation
-# shape each, no HTTP lifecycle in the way - and Test 34 is the real thing: a
-# second HTTP request, made while the socket stays open, that runs Django's own
-# logout against the same session. Neither subsumes the other: the mutators
-# would stay green if the logout path broke, and the logout row alone could not
-# isolate the disabled-user or password-rotation shapes.
+# The spec's "separate request" is covered from both directions. The out-of-band
+# mutators are precise unit controls - one revocation shape each, no HTTP
+# lifecycle in the way - and the logout row is the real thing: a second HTTP
+# request, made while the socket stays open, that runs Django's own logout
+# against the same session. Neither subsumes the other: the mutators would stay
+# green if the logout path broke, and the logout row alone could not isolate the
+# disabled-user or password-rotation shapes.
 # ---------------------------------------------------------------------------
 
 
@@ -2698,7 +2702,7 @@ async def test_a_revoked_session_closes_the_socket_on_the_next_operation_without
     revoke,
     monkeypatch,
 ):
-    """Test 26 (spec-046 row 25): one socket, three revocation shapes, no reconnect.
+    """Spec-046 row 25: one socket, three revocation shapes, no reconnect.
 
     Operation 1 executes as the authenticated actor. The session is then revoked
     out of band - its row deleted, the user disabled, or the password rotated,
@@ -2748,7 +2752,7 @@ async def test_a_revoked_session_closes_the_socket_on_the_next_operation_without
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_refreshed_actor():
-    """Test 27 (spec-046 row 26): the refreshed actor is what the next operation observes.
+    """Spec-046 row 26: the refreshed actor is what the next operation observes.
 
     A valid session keeps executing, and the actor the second operation reads at
     ``request_from_info`` is the REFRESHED one, not the connect-time object: two
@@ -2775,7 +2779,7 @@ async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_r
 
 @pytest.mark.django_db(transaction=True)
 async def test_the_revalidation_window_defers_the_denial_until_it_expires(monkeypatch):
-    """Test 28 (spec-046 row 27): inside the window a revoked session still executes.
+    """Spec-046 row 27: inside the window a revoked session still executes.
 
     With ``websocket_revalidation_window=3600.0`` the accepted revocation delay
     is an hour, so operation 2 executes on the cached actor even though the
@@ -2822,7 +2826,7 @@ async def test_the_revalidation_window_defers_the_denial_until_it_expires(monkey
 
 @pytest.mark.django_db(transaction=True)
 async def test_the_legacy_graphql_ws_protocol_is_revalidated_at_handle_start():
-    """Test 29: the SECOND protocol's admission is revalidated too.
+    """The SECOND protocol's admission is revalidated too.
 
     ``graphql-ws`` is live on the package's mount (upstream's default
     ``subscription_protocols`` carries both), so its per-operation entry -
@@ -2856,7 +2860,7 @@ async def test_a_revalidation_store_failure_denies_the_operation_and_is_logged(
     monkeypatch,
     caplog,
 ):
-    """Test 30 (spec-046 row 30): a failed revalidation read fails CLOSED, and is logged.
+    """Spec-046 row 30: a failed revalidation read fails CLOSED, and is logged.
 
     The fresh-store resolver raises, so the revalidation cannot answer. The
     connection is revoked and closed with the same reason a revoked session gets
@@ -2901,7 +2905,7 @@ async def test_a_revalidation_store_failure_denies_the_operation_and_is_logged(
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_failing_auth_backend_load_also_fails_closed(monkeypatch, caplog):
-    """Test 30b (review round 2, M4): the same degrade, a second failure shape.
+    """The same degrade, a second failure shape.
 
     The row above is the whole fail-closed contract resting on ONE injection point -
     ``utils/sessions.py::session_store_class``. The property is not "that resolver
@@ -2943,7 +2947,7 @@ async def test_a_failing_auth_backend_load_also_fails_closed(monkeypatch, caplog
 
 @pytest.mark.django_db
 async def test_an_anonymous_socket_is_not_revalidated(monkeypatch, caplog):
-    """Test 31: the anonymous carve-out really skips the session read.
+    """The anonymous carve-out really skips the session read.
 
     No cookie, so ``scope["user"]`` is anonymous and there is no session actor to
     revalidate. The fresh-store resolver is poisoned for the whole row: if the
@@ -2967,7 +2971,7 @@ async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_
     monkeypatch,
     caplog,
 ):
-    """Test 32: an unacknowledged connection is upstream's 4401, not our rejection.
+    """An unacknowledged connection is upstream's 4401, not our rejection.
 
     The pre-hook's first decision is to pass an unacknowledged connection
     straight through, so what the client sees is upstream's own
@@ -2998,7 +3002,7 @@ async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_
 
 @pytest.mark.django_db(transaction=True)
 async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_package():
-    """Test 33 (review Medium 4): the revalidation does not import the auth subsystem.
+    """The revalidation does not import the auth subsystem.
 
     ``auth/__init__.py`` eagerly imports ``.mutations`` and ``.queries``, so the
     old ``from .auth.sessions import session_store_class`` made the FIRST
@@ -3009,15 +3013,15 @@ async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_p
     Strict eviction is what makes the row provable rather than incidental: under
     ``--dist loadscope`` a worker that already ran ``tests/auth/`` has those
     modules cached, so a plain ``not in sys.modules`` assertion would pass no
-    matter what the production import does (the exact masking the review found in
-    this module, which imported ``auth.sessions`` at collection time). Evicting
+    matter what the production import does - the exact masking this module used
+    to suffer when it imported ``auth.sessions`` at collection time. Evicting
     the whole ``django_strawberry_framework.auth`` prefix - with the shared
     two-sided restore - means a re-pointed import would have to re-import it,
     which the assertion then sees.
 
     The operation round trip is the other half of the proof. Window ``0.0`` and an
     authenticated actor mean the revalidation MUST run, and a failed resolver
-    fails closed (Test 30), so ``next`` with the real username is only reachable
+    fails closed, so ``next`` with the real username is only reachable
     if the store resolved through the new module - which the positive assertion on
     ``utils.sessions`` pins by name.
     """
@@ -3047,11 +3051,11 @@ async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_p
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_real_second_request_logout_denies_the_next_operation_on_the_open_socket():
-    """Test 34 (spec-046 row 25, review Medium 5): the separate request is a REAL request.
+    """Spec-046 row 25: the separate request is a REAL request.
 
-    Test 26's three revocations are direct ORM / session-store mutations - precise
-    unit controls that stay - but none of them exercises a second HTTP request's
-    own session lifecycle. This row does: while the socket stays open, an
+    The direct-ORM revocation rows - session flushed, user disabled, password
+    rotated - mutate the store in place: precise unit controls that stay, but none
+    of them exercises a second HTTP request's own session lifecycle. This row does: while the socket stays open, an
     ``AsyncClient`` posts to a probe URLConf view that calls Django's own
     ``django.contrib.auth.logout``, so ``SessionMiddleware`` loads the session
     from the cookie, the engine flushes the record, and the response expires the
@@ -3082,9 +3086,8 @@ async def test_a_real_second_request_logout_denies_the_next_operation_on_the_ope
 
 
 # ---------------------------------------------------------------------------
-# Channels-present: the OUTBOUND checkpoint (Tests 35-41; review round 2,
-# Blocker 1). Admission cannot see an operation twice - both protocols park an
-# admitted operation in their own result loop - so these rows drive operations
+# Channels-present: the OUTBOUND checkpoint. Admission cannot see an operation
+# twice - both protocols park an admitted operation in their own result loop - so these rows drive operations
 # that are still in flight when the session is revoked, and assert what the
 # socket refuses to emit.
 #
@@ -3102,10 +3105,11 @@ async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
     subprotocol,
     monkeypatch,
 ):
-    """Test 35 (review round 2, Blocker 1): the finding itself, on both protocols.
+    """A revoked session cannot emit a result on an already-running
+    subscription, on both protocols.
 
-    The exact sequence the review names: authenticate, start a multi-yield
-    subscription while the session is valid, receive result 1, log out through a
+    The sequence: authenticate, start a multi-yield subscription while the
+    session is valid, receive result 1, log out through a
     **real second HTTP request** while the subscription stays open, then release
     result 2. Result 2 is produced by the resolver and never reaches the wire;
     the whole socket closes with ``4403`` instead.
@@ -3160,7 +3164,7 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
     subprotocol,
     monkeypatch,
 ):
-    """Test 36 (review round 2, the required control): the gate is not a mute button.
+    """The required control: the gate is not a mute button.
 
     The same socket, the same controlled subscription, and no revocation: both
     results arrive, in order, and the connection stays open. Without this row the
@@ -3209,7 +3213,7 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_delayed_query_revoked_after_admission_never_sends_its_response(monkeypatch):
-    """Test 37: the outbound checkpoint covers non-subscription operations too.
+    """The outbound checkpoint covers non-subscription operations too.
 
     A query is admitted, its resolver holds, the session is revoked, and the
     resolver then returns a perfectly good value. Upstream sends a query's single
@@ -3249,7 +3253,7 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
     subprotocol,
     monkeypatch,
 ):
-    """Test 38: an operation-scoped ``error`` frame is gated like a payload.
+    """An operation-scoped ``error`` frame is gated like a payload.
 
     Runtime resolver errors ride inside ``next`` / ``data``, but a pre-execution
     error travels as its own ``error`` frame - ``Operation.send_initial_errors`` on
@@ -3288,7 +3292,7 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
 async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revocation(
     monkeypatch,
 ):
-    """Test 39 (Decision 11, the lock held through the send): the sibling race.
+    """Decision 11, the lock held through the send: the sibling race.
 
     The race the design exists to close: two operations on one socket, both
     authorized when they started. Operation ``a`` reaches the outbound checkpoint
@@ -3363,7 +3367,7 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
 async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_checkpoint(
     monkeypatch,
 ):
-    """Test 40 (Decision 11, the accepted idle consequence): event-driven, not polled.
+    """Decision 11, the accepted idle consequence: event-driven, not polled.
 
     The contract's honest limit, pinned so it stays a decision rather than an
     accident. Detection is event-boundary-driven: nothing polls, so a revoked
@@ -3408,7 +3412,7 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
 
 @pytest.mark.django_db(transaction=True)
 async def test_the_connection_lock_never_serializes_a_second_connection(monkeypatch):
-    """Test 41 (Decision 16, the lock's blast radius): one socket, not the process.
+    """Decision 16, the lock's blast radius: one socket, not the process.
 
     The other half of the head-of-line tradeoff, and the half that makes it
     acceptable. While socket 1 is parked INSIDE its critical section - holding its
@@ -3467,7 +3471,7 @@ async def test_the_connection_lock_never_serializes_a_second_connection(monkeypa
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_positive_window_defers_the_close_on_a_running_subscription(monkeypatch):
-    """Test 42 (Decision 16, the window at the frame checkpoint): one read per window.
+    """Decision 16, the window at the frame checkpoint: one read per window.
 
     The window's expanded meaning, measured where it is hardest to get right - a
     subscription that is already running. Result 1 goes out on the read its
@@ -3517,7 +3521,7 @@ async def test_a_positive_window_defers_the_close_on_a_running_subscription(monk
 
 @pytest.mark.django_db(transaction=True)
 async def test_connection_control_frames_never_reach_the_outbound_checkpoint(monkeypatch):
-    """Test 43 (Decision 16, frame-type discrimination): the negative half, on a valid socket.
+    """Decision 16, frame-type discrimination: the negative half, on a valid socket.
 
     The fixture is deliberately a **valid** connection with a read counter, not a
     revoked one: on a revoked connection every frame is refused for a reason that
@@ -3573,7 +3577,7 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     subprotocol,
     monkeypatch,
 ):
-    """Test 44 (review round 2, M2): the outbound checkpoint reached from ``run_task``.
+    """The outbound checkpoint reached from ``run_task``.
 
     ``send_revalidated_operation_frame``'s tail branches on whether the current task is
     the connection's own message-loop task, and this is the ONE production path that

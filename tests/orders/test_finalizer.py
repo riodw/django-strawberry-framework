@@ -7,7 +7,7 @@ Covers:
   materialize. Subpass 1 completes across all owners before subpass 2 runs;
   subpass 3 runs BEFORE subpass 4 so an orphan failure leaves no partial
   state.
-- First-bind model compatibility per spec-028 Revision 4 H2 (rejects orderset
+- First-bind model compatibility per spec-028 (rejects orderset
   wired to unrelated owner model; message names all four entities).
 - Multi-owner reuse: identical-target accepted; diverging-target rejected;
   idempotent re-bind of the same ``(orderset, definition)`` pair accepted.
@@ -109,7 +109,7 @@ def test_meta_orderset_class_rejects_non_order_set():
 def test_validate_orderset_class_uses_local_import():
     """``_validate_orderset_class`` keeps ``OrderSet`` out of ``types.base`` module globals.
 
-    Pins the spec-028 N3-of-rev1 / DoD item 9 contract: the import lives
+    Pins the spec-028 contract: the import lives
     inside the function so the ``types -> orders -> types`` module-load
     cycle stays inert.
     """
@@ -429,12 +429,12 @@ def test_phase_2_5_subpass_4_materializes_input_classes_as_module_globals():
 
 
 # ---------------------------------------------------------------------------
-# H2 of rev3 / Decision 6 -- first-bind model compatibility
+# Decision 6 -- first-bind model compatibility
 # ---------------------------------------------------------------------------
 
 
 def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
-    """Mandatory H2-of-rev3 test: rejects an orderset wired to an unrelated model.
+    """Rejects an orderset wired to an unrelated model.
 
     The error message names ALL FOUR entities: owner type, owner model,
     orderset class, and orderset model.

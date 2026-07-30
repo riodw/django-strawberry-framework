@@ -46,8 +46,8 @@ class BranchOrder(OrderSet):
     def check_name_permission(cls, request: Any) -> None:
         """Active-input-only scalar gate fired by Test 9 (denies) + quiet for Test 10.
 
-        Spec-028 M6-rev1 split-pair: the gate fires ONLY when the
-        consumer's input names ``name`` (Test 9's input is
+        The split-pair gate fires ONLY when the consumer's input names
+        ``name`` (Test 9's input is
         ``orderBy: [{ name: ASC }]``); the input ``orderBy: [{ city:
         ASC }]`` (Test 10) does NOT fire this gate.
         """
@@ -62,13 +62,11 @@ class BranchOrder(OrderSet):
     def check_shelves_permission(cls, request: Any) -> None:
         """Active-related-branch gate fired by Test 11 (denies).
 
-        Spec-028 H3-rev3 active-branch dispatch: the gate fires ONLY
-        when the consumer's input names the ``shelves`` RelatedOrder
-        branch (Test 11 first-half input ``orderBy: [{ shelves: { code:
-        ASC } }]``). Test 11's second-half input uses ``city`` (an
-        unguarded scalar) so it does NOT fire this gate or the
-        ``check_name_permission`` gate -- per Worker 1's spec
-        reconciliation note for Spec line 1041.
+        Active-branch dispatch: the gate fires ONLY when the consumer's
+        input names the ``shelves`` RelatedOrder branch (Test 11 first-half
+        input ``orderBy: [{ shelves: { code: ASC } }]``). Test 11's
+        second-half input uses ``city`` (an unguarded scalar) so it does NOT
+        fire this gate or the ``check_name_permission`` gate.
         """
         user = getattr(request, "user", None)
         if user is None or not getattr(user, "is_staff", False):

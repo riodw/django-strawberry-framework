@@ -160,7 +160,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         """Async execution: open / close the transaction in the ``thread_sensitive`` worker.
 
         The ORM pipeline runs in ``sync_to_async(thread_sensitive=True)`` (the
-        spec-036 AR-M4 one-worker boundary), and asgiref serializes every
+        spec-036 one-worker boundary), and asgiref serializes every
         ``thread_sensitive`` call from this async context onto the SAME thread -
         so ``__enter__`` here, the pipeline's queries, and ``__exit__`` below all
         share one thread and one Django connection. The completion ``await``

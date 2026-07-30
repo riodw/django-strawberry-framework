@@ -46,7 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .sets import OrderSet
 
 # Domain-local aliases for the shared generated-input substrate (the mechanics
-# are single-sited in ``utils/inputs.py`` per the 0.0.9 DRY pass). Tests and
+# are single-sited in ``utils/inputs.py``). Tests and
 # ``factories.py`` import these spec-028 Decision 9 names from this module, so
 # they stay addressable here.
 FieldSpec = GeneratedInputFieldSpec
@@ -167,7 +167,7 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     """Return every column-backed field name for ``model``.
 
     Backs ``OrderSet._expand_meta_fields`` when ``Meta.fields = "__all__"``
-    per spec-028 Decision 3 line 452 + spec-028 Revision 4 B4. The
+    per spec-028 Decision 3 line 452. The
     cookbook's ``get_concrete_field_names`` at
     ``django_graphene_filters/mixins.py`` uses ``hasattr(f, "column")``
     alone, but empirically against Django 6.0.5 ``ManyToManyField``
@@ -250,7 +250,7 @@ def _build_input_fields(
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref with the ``RelatedOrder(None, ...)``
     # placeholder skip vs leaf -> triple + ``FieldSpec``) is single-sited in
-    # ``utils/inputs.py::emit_set_input_field_triples`` (DRY review A4); the
+    # ``utils/inputs.py::emit_set_input_field_triples``; the
     # closures carry the order-family semantics (fixed ``Ordering | None``
     # leaves, ``field_name or top_name`` related source paths).
     return emit_set_input_field_triples(
@@ -300,7 +300,7 @@ def normalize_input_value(
     The dataclass-vs-dict walk, the top-level ``list[<T>]`` flattening, the
     ``None`` active-input skip, the ``_field_specs`` lookup, and the
     leaf-vs-related classification are the shared traversal mechanics owned by
-    ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass). This function
+    ``utils/input_values.py::iter_active_fields``. This function
     keeps only the order-side leaf semantics: a ``RelatedOrder`` branch recurses into
     the target orderset with the django source path as a prefix (e.g. ``shelf`` ->
     ``shelf__code``); a leaf appends ``(django_source_path, Ordering | None)``.
@@ -367,7 +367,7 @@ def clear_order_input_namespace() -> None:
     scratch against the freshly-cleared registry.
 
     **Materialized class objects are intentionally left parked in
-    ``orders.inputs.__dict__``** per spec-028 Revision 4 B2.
+    ``orders.inputs.__dict__``** per spec-028.
     ``materialize_input_class`` already overwrites the module global
     via ``setattr`` on the next finalize pass, so the parked class is
     replaced in place once the rebuild runs. Stripping the class via

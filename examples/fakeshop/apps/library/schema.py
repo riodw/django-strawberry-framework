@@ -10,7 +10,7 @@ from strawberry.types import Info
 from apps.library import filters, filters_genre, forms, models, orders, orders_genre, serializers
 
 # ``SerializerMutation`` is imported BY NAME (never via star import): the root ``__all__``
-# omits it while DRF is a soft dependency (F1), so the root ``__getattr__`` resolves it on
+# omits it while DRF is a soft dependency, so the root ``__getattr__`` resolves it on
 # demand. DRF is present in the test context, so this import succeeds.
 from django_strawberry_framework import (
     DjangoConnection,
@@ -36,7 +36,7 @@ from django_strawberry_framework.orders import order_input_type
 # The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-
-# wrapper's coercion fires per rev4 M1. The async equivalent
+# wrapper's coercion fires. The async equivalent
 # (the same ``normalize_query_source`` line reached via
 # ``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async``) is genuinely unreachable from the sync ``GraphQLView``
 # mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
@@ -183,10 +183,9 @@ class ShelfType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset: Any, info: Info) -> Any:
-        """Hide ``topic="secret"`` shelves from non-staff requests (H1-rev4).
+        """Hide ``topic="secret"`` shelves from non-staff requests.
 
-        Spec-021 L1053: the nested-``RelatedFilter`` visibility-scoping
-        contract relies on the target type's ``get_queryset`` hiding
+        The nested-``RelatedFilter`` visibility-scoping contract relies on the target type's ``get_queryset`` hiding
         sensitive rows before the filter clause sees them. Staff requests
         bypass the gate.
         """
@@ -237,9 +236,9 @@ class BranchType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset: Any, info: Info) -> Any:
-        """Hide ``city="restricted"`` branches from anonymous requests (M1-rev8).
+        """Hide ``city="restricted"`` branches from anonymous requests.
 
-        Spec-021 L1056: the root-resolver ordering contract relies on
+        The root-resolver ordering contract relies on
         ``BranchType.get_queryset(queryset, info)`` running BEFORE
         ``BranchFilter.apply_sync(...)``. Staff requests bypass the gate.
         """
@@ -408,7 +407,7 @@ class Query:
         (already materialized), so it is outside the optimizer's queryset fast path.
 
         Each model's rows are routed through its primary type's ``get_queryset``
-        visibility hook before materializing (feedback #3) - the SAME hook every other
+        visibility hook before materializing - the SAME hook every other
         Branch resolver applies (e.g. ``all_library_branches``). A materialized list has
         no downstream queryset re-execution, so reading ``Branch.objects`` directly here
         would leak ``city="restricted"`` rows ``BranchType.get_queryset`` hides from
@@ -437,7 +436,7 @@ class Query:
 
     @strawberry.field
     def all_library_branches_eager_eval(self, info: strawberry.Info) -> list[BranchType]:
-        # G1 (spec-035): the evaluated-queryset guard, dogfooded. A consumer that
+        # The evaluated-queryset guard (spec-035), dogfooded. A consumer that
         # evaluates its queryset before returning it - here an ``if not queryset``
         # empty-guard whose ``bool(...)`` populates ``_result_cache`` - must NOT be
         # re-executed by the optimizer. ``DjangoOptimizerExtension._optimize`` sees
@@ -452,12 +451,12 @@ class Query:
 
     @strawberry.field
     def all_library_cards_projected(self) -> list[MembershipCardType]:
-        """B8 dogfood: consumer ``.only()`` vs a planned ``select_related``.
+        """Dogfood: consumer ``.only()`` vs a planned ``select_related``.
 
         ``PatronType`` has NO visibility hook, so selecting ``patron`` under
         this field plans a real ``select_related("patron")`` - which Django
         refuses to apply over the ``.only("barcode")`` projection (a field
-        cannot be both deferred and traversed). B8's relation-aware prune
+        cannot be both deferred and traversed). The relation-aware prune
         must drop the path (and its strictness metadata) live. Pinned in
         ``test_query/test_library_api.py``
         (``test_library_card_projection_survives_select_related_relation``).
@@ -466,7 +465,7 @@ class Query:
 
     @strawberry.field
     def all_library_cards_deferred(self) -> list[MembershipCardType]:
-        """B8 dogfood, defer flavor: ``.defer("patron")`` blocks the same join.
+        """Dogfood, defer flavor: ``.defer("patron")`` blocks the same join.
 
         Django raises the same deferred-and-traversed ``FieldError`` for a
         ``defer()`` projection, and the prune's defer-mode rules (exact
@@ -513,7 +512,7 @@ class Query:
 
     @strawberry.field
     def all_library_genres_consumer_descendant_prefetch(self) -> list[GenreType]:
-        # B8 collision surface: a consumer descendant prefetch
+        # Collision surface: a consumer descendant prefetch
         # (``books__loans``) overlaps the optimizer's own Genre -> books ->
         # loans prefetch plan. The optimizer must reconcile the two rather than
         # raise "'books' lookup was already seen with a different queryset".
@@ -521,7 +520,7 @@ class Query:
 
     @strawberry.field
     def all_library_genres_consumer_exact_plus_descendant_prefetch(self) -> list[GenreType]:
-        # B8 follow-up: the consumer declares BOTH the exact relation
+        # The consumer declares BOTH the exact relation
         # (``books``) and a descendant (``books__loans``); both must reconcile
         # with the optimizer plan without colliding.
         return models.Genre.objects.prefetch_related("books", "books__loans").order_by("id")
@@ -789,8 +788,8 @@ class CreateBranchPair(DjangoFormMutation):
 
 # --------------------------------------------------------------------------- #
 # Serializer-mutation surface (spec-039): the get_serializer_for_schema() schema
-# hook + subclass validation, earned live over /graphql/ per the README live-first
-# mandate. Each opens the write to any caller via ``permission_classes = []`` (the
+# hook + subclass validation, earned live over /graphql/ per the README
+# coverage rule. Each opens the write to any caller via ``permission_classes = []`` (the
 # allow-any opt-out) so these isolate the hook / subclass behavior, not write-auth.
 # --------------------------------------------------------------------------- #
 
@@ -1007,13 +1006,13 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
 
 
 class CreateShelfViaHookNonNullNote(SerializerMutation):
-    """One half of a same-serializer pair whose hooks differ ONLY in a field's ``allow_null`` (spec-039 High / M2 + rev6 #1).
+    """One half of a same-serializer pair whose hooks differ ONLY in a field's ``allow_null``.
 
     Shares ``NoteShelfSerializer`` with ``CreateShelfViaHookNullableNote``; both override
     ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
     (the per-request construction) to build the SAME serializer with a different
     ``note_allow_null``, so the schema-time ``note`` shape and the runtime ``note`` field AGREE
-    (rev6 #1 - the agreement guard now forbids a schema-only decode-then-drop field). This half
+    (the agreement guard forbids a schema-only decode-then-drop field). This half
     is ``allow_null=False``, so ``note`` is a non-null ``String!`` in the generated input; the
     twin's is a nullable, omittable ``String``. Before the descriptor-identity fix both shapes
     compared EQUAL (the descriptor recorded the base annotation, NOT the emitted nullability),
@@ -1040,18 +1039,18 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
         hook_context,
     ):
         # Construct the runtime serializer with the SAME note_allow_null the schema hook used,
-        # so the schema-time ``note`` shape and the runtime ``note`` field agree (rev6 #1).
+        # so the schema-time ``note`` shape and the runtime ``note`` field agree.
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["note_allow_null"] = False
         return kwargs
 
 
 class CreateShelfViaHookNullableNote(SerializerMutation):
-    """The nullability pair's twin: the same ``note`` field but ``allow_null=True`` (spec-039 High / M2 + rev6 #1).
+    """The nullability pair's twin: the same ``note`` field but ``allow_null=True``.
 
     Same shared ``NoteShelfSerializer`` and same ``code`` + ``branch`` + ``note`` hook shape as
     ``CreateShelfViaHookNonNullNote``, with ``note`` ``allow_null=True`` - so ``note`` is a
-    nullable, OMITTABLE, null-ACCEPTING ``String`` (M2 - GraphQL cannot express
+    nullable, OMITTABLE, null-ACCEPTING ``String`` (GraphQL cannot express
     required-AND-nullable, so the key is omittable and an explicit ``null`` is a valid value).
     Its generated input must take a name DISTINCT from the non-null twin's (the
     emitted-annotation descriptor identity), not silently reuse it. Its ``get_serializer_kwargs``
@@ -1080,7 +1079,7 @@ class CreateShelfViaHookNullableNote(SerializerMutation):
 
 
 class CreateShelfViaBlankCodeSerializer(SerializerMutation):
-    """Create a ``Shelf`` whose ``code`` is an ``allow_blank=True`` required ``CharField`` (spec-039 M2 - allow_blank pinned).
+    """Create a ``Shelf`` whose ``code`` is an ``allow_blank=True`` required ``CharField``.
 
     ``BlankCodeShelfSerializer`` constructs no-arg (default discovery works), so its input is
     the canonical ``BlankCodeShelfSerializerInput``. ``allow_blank`` is absent from the SDL:
@@ -1097,7 +1096,7 @@ class CreateShelfViaBlankCodeSerializer(SerializerMutation):
 
 
 class UpdateBookViaSerializerWithLock(SerializerMutation):
-    """Update a ``Book`` with an opt-in ``SELECT ... FOR UPDATE`` row lock (spec-039 rev6 #14).
+    """Update a ``Book`` with an opt-in ``SELECT ... FOR UPDATE`` row lock.
 
     ``BookType`` is Relay-Node, so the update ``id`` is a decodable ``GlobalID`` (payload slot
     ``node``). ``Meta.select_for_update = True`` locks the located row inside the pipeline
@@ -1221,7 +1220,7 @@ class CreateShelfWithModelFieldSaveKwargs(SerializerMutation):
 
 
 class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
-    """Prove save kwargs cannot replace a renamed serializer input (spec-039 rev6 #12).
+    """Prove save kwargs cannot replace a renamed serializer input.
 
     ``RenamedShelfSerializer.shelf_code`` writes through ``source="code"``. Returning a
     server-side ``code`` kwarg would make DRF merge it over the client's validated value, so the
@@ -1244,7 +1243,7 @@ class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
 
 
 class CreateShelfViaAltBranchesSerializer(SerializerMutation):
-    """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input - the batched multi-relation visibility path (spec-039 rev6 #3).
+    """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input - the batched multi-relation visibility path.
 
     ``alt_branches`` targets the non-Relay ``BranchType``, so the input is a raw-pk list; the
     serializer decode confirms the whole list's visibility in ONE batched ``pk__in`` query
@@ -1261,7 +1260,7 @@ class CreateShelfViaAltBranchesSerializer(SerializerMutation):
 
 
 class CreateShelfWithInjectedTopic(SerializerMutation):
-    """Create a ``Shelf`` narrowing away a REQUIRED ``topic`` and INJECTING it via ``Meta.injected_fields`` (spec-039 rev6 #2, hardened).
+    """Create a ``Shelf`` narrowing away a REQUIRED ``topic`` and INJECTING it via ``Meta.injected_fields``.
 
     ``OwnerStampShelfSerializer`` declares ``topic`` ``required=True``; this mutation narrows
     the input to ``("code", "branch")`` (dropping ``topic``), declares
@@ -1294,7 +1293,7 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
 
 
 class CreateBranchWithNestedShelves(SerializerMutation):
-    """Create a ``Branch`` with an EXPLICIT opt-in nested writable ``shelves`` list (spec-039 rev6 #17).
+    """Create a ``Branch`` with an EXPLICIT opt-in nested writable ``shelves`` list.
 
     ``BranchWithShelvesSerializer`` declares a nested ``shelves = NestedShelfSerializer(many=True)``;
     the mutation opts it in with ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}`` and
@@ -1321,7 +1320,7 @@ class CreateBranchWithNestedShelves(SerializerMutation):
 
 
 class CreateShelfViaMetadataSerializer(SerializerMutation):
-    """Create a ``Shelf`` via ``ShelfMetadataSerializer`` - the live type-system matrix (spec-039 rev6 #6 / #7 / #11).
+    """Create a ``Shelf`` via ``ShelfMetadataSerializer`` - the live type-system matrix.
 
     The input carries a serializer-only ``ChoiceField`` -> a GENERATED enum (``priority``), a
     ``DictField`` -> ``JSON`` (``attributes``), and a custom ``HexColorField`` mapped via the

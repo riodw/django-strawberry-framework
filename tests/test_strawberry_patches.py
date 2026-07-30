@@ -431,7 +431,7 @@ def test_apply_no_ops_when_toggle_disabled(settings):
 def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
     """``{"strawberry": False}`` disables only this module; ``{"django": False}`` does not.
 
-    The production half of the rev-apps.md Medium-2 scenario: opting out of
+    The production half of the per-dependency opt-out contract: opting out of
     the test-only Django patch alone leaves this request hardening
     installing normally (each gate reads its own dependency name).
     """

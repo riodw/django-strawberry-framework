@@ -15,20 +15,19 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
   resolution (``session_store_class``), shared by the ``auth`` session
   boundary and by the WebSocket consumer's per-operation actor revalidation.
   It lives out here precisely so the transport layer can reach the resolver
-  without importing the structurally opt-in ``auth`` package (spec-046
-  review, the import-boundary finding).
+  without importing the structurally opt-in ``auth`` package.
 - ``inputs`` / ``permissions`` - the generated-input and active-input
   permission substrates shared by the filter / order families.
 - ``input_values`` - the neutral set-input traversal substrate
   (``iter_active_fields`` / ``is_inactive_value`` / ``iter_input_items``)
   the filter / order normalizers and the permission walkers all consume. It
-  landed in the 0.0.9 DRY pass, single-siting the dict-vs-dataclass walk, the
+  single-sites the dict-vs-dataclass walk, the
   ``None`` / ``UNSET`` active-input rule, and the leaf / related / logic
   classification each surface previously spelled inline.
 - ``querysets`` - the query-source + ``DjangoType.get_queryset`` visibility
   contract (``initial_queryset`` / ``normalize_query_source`` /
-  ``apply_type_visibility_*`` / ``SyncMisuseError``). It landed in the 0.0.9
-  DRY pass, consolidating the Manager-coercion and sync/async visibility routing
+  ``apply_type_visibility_*`` / ``SyncMisuseError``). It consolidates the
+  Manager-coercion and sync/async visibility routing
   each resolver surface previously spelled inline (so each subsystem no longer
   keeps its own).
 """

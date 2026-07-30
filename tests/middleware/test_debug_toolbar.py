@@ -99,7 +99,7 @@ def middleware(toolbar_leaf):
 
 
 # ---------------------------------------------------------------------------
-# Toolbar-absent (Tests 9-12, 11a): eviction + two-sided restore + the
+# Toolbar-absent: eviction + two-sided restore + the
 # importlib-compatible None sentinel. Unmarked - pure import machinery.
 # ---------------------------------------------------------------------------
 
@@ -128,7 +128,7 @@ def _simulated_toolbar_absence():
 
 
 def test_package_and_middleware_imports_stay_clean_without_toolbar():
-    """Test 9: root + parent-package imports succeed; star import binds no toolbar name."""
+    """Root + parent-package imports succeed; star import binds no toolbar name."""
     with _simulated_toolbar_absence():
         root = importlib.import_module("django_strawberry_framework")
         assert root is django_strawberry_framework
@@ -142,7 +142,7 @@ def test_package_and_middleware_imports_stay_clean_without_toolbar():
 
 
 def test_leaf_import_raises_install_hint_when_toolbar_absent():
-    """Test 10: the leaf import raises the HINT-carrying ImportError, cause chained.
+    """The leaf import raises the HINT-carrying ImportError, cause chained.
 
     The hint (not a bare ``ModuleNotFoundError``) proves ``require_debug_toolbar()``
     wrapped the absence - which the ``None`` sentinel makes possible and a
@@ -155,7 +155,7 @@ def test_leaf_import_raises_install_hint_when_toolbar_absent():
 
 
 def test_leaf_reimports_after_restore(toolbar_leaf):
-    """Test 11: after restore the leaf imports again and both sides hold ONE object."""
+    """After restore the leaf imports again and both sides hold ONE object."""
     with _simulated_toolbar_absence():
         with pytest.raises(ImportError, match=_HINT_SUBSTRING):
             importlib.import_module(_LEAF)
@@ -169,15 +169,15 @@ def test_leaf_reimports_after_restore(toolbar_leaf):
 
 
 def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf):
-    """Test 11a: a present-but-broken install propagates the RAW ImportError, unwrapped.
+    """A present-but-broken install propagates the RAW ImportError, unwrapped.
 
     The guard imports only the TOP-LEVEL package, so with ``debug_toolbar``
     importable but its ``middleware`` submodule broken,
     ``require_debug_toolbar()`` passes and the leaf's own statement import
     fails - naming the real missing module, WITHOUT the install hint (a broken
     install is never misreported as "not installed"). The raw statement-import
-    error propagates unwrapped, so - unlike Test 10's guarded raise - it chains
-    no ``__cause__`` of its own.
+    error propagates unwrapped, so - unlike the absent-install guarded raise - it
+    chains no ``__cause__`` of its own.
     """
     assert toolbar_leaf is not None  # leaf (and debug_toolbar) preimported for the save/restore
     with evicted_modules(
@@ -195,9 +195,10 @@ def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf):
 
 
 def test_leaf_import_requires_debug_toolbar_in_installed_apps():
-    """Test 11b: toolbar importable but app absent from INSTALLED_APPS -> package ImproperlyConfigured.
+    """Toolbar importable but app absent from INSTALLED_APPS -> package ImproperlyConfigured.
 
-    The distinct-from-11a misconfiguration (spec-042 Error shapes): the package
+    The misconfiguration distinct from a broken install (spec-042 Error shapes):
+    the package
     imports, but the leaf's ``debug_toolbar.middleware`` import defines the
     ``HistoryEntry`` model, which Django refuses (a cryptic app-label
     ``RuntimeError``) unless the app is registered. The leaf's second wiring gate
@@ -215,7 +216,7 @@ def test_leaf_import_requires_debug_toolbar_in_installed_apps():
 
 
 def test_require_debug_toolbar_guard_unit(toolbar_leaf):
-    """Test 12: the thin-wrapper contract - module identity when present, hint when absent."""
+    """The thin-wrapper contract - module identity when present, hint when absent."""
     assert toolbar_leaf.require_debug_toolbar() is sys.modules["debug_toolbar"]
     with _simulated_toolbar_absence():
         with pytest.raises(ImportError, match=_HINT_SUBSTRING) as excinfo:
@@ -224,7 +225,7 @@ def test_require_debug_toolbar_guard_unit(toolbar_leaf):
 
 
 # ---------------------------------------------------------------------------
-# Coverage-only targeted units (Tests 8, 13-15, 14a): branches the real toolbar
+# Coverage-only targeted units: branches the real toolbar
 # lifecycle does not naturally expose. Unmarked, no database.
 # ---------------------------------------------------------------------------
 
@@ -263,7 +264,7 @@ class _FakeToolbar:
 
 
 def test_streaming_response_gets_no_package_mutation(middleware):
-    """Test 13: streaming early-out - no package-specific mutation after the stock pass.
+    """Streaming early-out - no package-specific mutation after the stock pass.
 
     Not "returns untouched" in the absolute sense: the stock postprocess runs
     first and may legitimately generate stats and headers before
@@ -281,13 +282,13 @@ def test_streaming_response_gets_no_package_mutation(middleware):
 
 
 def test_unrelated_json_view_body_is_never_mutated(middleware):
-    """Test 8 (unit): an untagged JSON response passes through unmutated - the leak guard.
+    """An untagged JSON response passes through unmutated - the leak guard (unit).
 
     The live counterpart in
     ``examples/fakeshop/test_query/test_debug_toolbar_api.py`` drives fakeshop's
     real Strawberry ``/graphql/`` traffic, but fakeshop ships no NON-Strawberry
     JSON endpoint to prove the guard against - and an implementation injecting into
-    EVERY JSON response would still pass the live HTML negatives (Test 7). Driving
+    EVERY JSON response would still pass the live HTML negatives. Driving
     ``_postprocess`` with an untagged response (``_is_graphiql`` False, the state
     ``process_view`` sets for any non-``BaseView``) pins the ``not is_graphiql``
     early return on the JSON branch: the body round-trips exactly, no
@@ -302,14 +303,16 @@ def test_unrelated_json_view_body_is_never_mutated(middleware):
 
 
 def test_get_payload_bails_without_request_id(toolbar_leaf):
-    """Test 14: no ``request_id`` -> ``None`` (the real toolbar always assigns one)."""
+    """No ``request_id`` -> ``None`` (the real toolbar always assigns one)."""
     request = RequestFactory().post("/graphql/")
     response = HttpResponse(b"{}", content_type="application/json")
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id=None)) is None
 
 
 def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
-    """Test 14 sibling: ``has_content``-false -> ``title`` None; callables are called."""
+    """Sibling of the missing-``request_id`` row: ``has_content``-false -> ``title``
+    None; callables are called.
+    """
     request = RequestFactory().post("/graphql/")
     response = HttpResponse(b"{}", content_type="application/json")
     toolbar = _FakeToolbar(
@@ -334,7 +337,7 @@ def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
 
 
 def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
-    """Test 14 sibling: a non-object JSON body -> ``None`` (the P2.3 guard).
+    """A non-object JSON body yields ``None``.
 
     A valid single GraphQL response is always a JSON object, so this branch is
     unreachable through the real-request tests; without the guard the
@@ -368,9 +371,9 @@ def test_malformed_json_body_gets_no_package_rewrite(middleware, content):
 
 
 def test_process_view_tolerates_non_class_view_class(middleware):
-    """Test 14a: a non-class ``view_class`` -> ``False``, no ``TypeError`` (the P2.1 guard).
+    """A non-class ``view_class`` -> ``False``, no ``TypeError``.
 
-    The live Test 7 only drives real class/function views; this guard matters
+    The live tests only drive real class/function views; this guard matters
     precisely because the middleware runs for ALL global traffic.
     """
     request = RequestFactory().get("/")
@@ -384,7 +387,7 @@ def test_process_view_tolerates_non_class_view_class(middleware):
 
 
 def test_html_content_length_refresh_branch(middleware):
-    """Test 15 (HTML): a pre-set ``Content-Length`` is refreshed after the append.
+    """HTML: a pre-set ``Content-Length`` is refreshed after the append.
 
     The pre-set header is the point: a real Strawberry ``HttpResponse`` may
     reach the middleware without it (Django computes it at serialization
@@ -400,7 +403,7 @@ def test_html_content_length_refresh_branch(middleware):
 
 
 def test_json_content_length_refresh_branch(middleware):
-    """Test 15 (JSON): a pre-set ``Content-Length`` is refreshed after the re-encode."""
+    """JSON: a pre-set ``Content-Length`` is refreshed after the re-encode."""
     request = RequestFactory().post(
         "/graphql/",
         data='{"query": "query Q { x }"}',
@@ -417,12 +420,12 @@ def test_json_content_length_refresh_branch(middleware):
 
 
 # ---------------------------------------------------------------------------
-# Template-port guard (Test 16): mechanical, no JS runtime.
+# Template-port guard: mechanical, no JS runtime.
 # ---------------------------------------------------------------------------
 
 
 def test_template_port_invariants_and_robustness_divergence():
-    """Test 16: the copied-asset invariants + the JSON.parse robustness divergence.
+    """The copied-asset invariants + the JSON.parse robustness divergence.
 
     The suite has no JS runtime, so this does not prove the script WORKS - it
     turns the template-port checklist's by-eye diff into a mechanical guard that
@@ -471,7 +474,7 @@ def test_template_port_invariants_and_robustness_divergence():
     # 7. Scrubbing is mandatory, DOM updates are best-effort: the server-only
     #    ``debugToolbar`` key is deleted BEFORE the null-handle bail, so the
     #    toolbar-DOM-absent path still returns a clean GraphQL payload instead of
-    #    leaking the key back to GraphiQL (the P2.1 ordering fix must not drift).
+    #    leaking the key back to GraphiQL; this ordering must not drift.
     assert template.index("delete data.debugToolbar") < template.index(
         "if (djDebug === null) return data;",
     )

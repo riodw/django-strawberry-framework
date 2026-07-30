@@ -1,10 +1,10 @@
 """Tests for the shared generated-input substrate (``utils/inputs.py``).
 
-The 0.0.9 DRY pass single-sited the neutral generated-input mechanics that the
-filter and order families had grown as parallel copies. These tests pin the
-substrate directly and assert that BOTH families route through the one builder /
+This module single-sites the neutral generated-input mechanics that the filter
+and order families had grown as parallel copies. These tests pin the substrate
+directly and assert that BOTH families route through the one builder /
 field-spec / camel-name path, so a future re-divergence is caught here rather
-than via a silently drifted second copy (that pass's Major 1).
+than via a silently drifted second copy.
 """
 
 import sys
@@ -277,7 +277,7 @@ def test_safe_import_returns_none_for_missing_attribute_on_importable_module():
 
 
 def test_input_field_spec_carries_five_axes_and_optional_source():
-    """``InputFieldSpec`` (P2.1) carries the five axes + the optional ``source`` (default ``None``)."""
+    """``InputFieldSpec`` carries the five axes + the optional ``source`` (default ``None``)."""
     # Default source is None (the form-symmetric shape, no source axis).
     no_source = InputFieldSpec(
         input_attr="name",
@@ -305,7 +305,7 @@ def test_input_field_spec_carries_five_axes_and_optional_source():
 
 
 def test_make_input_namespace_returns_ledger_materialize_clear_trio():
-    """``make_input_namespace`` (P2.2) returns ``(ledger, materialize, clear)``; clear empties the ledger.
+    """``make_input_namespace`` returns ``(ledger, materialize, clear)``; clear empties the ledger.
 
     ``materialize`` writes a real module global; ``clear`` empties only the ledger
     (the one-ledger shape, NOT the heavy ``clear_generated_input_namespace``). Uses
@@ -340,7 +340,7 @@ def test_make_input_namespace_returns_ledger_materialize_clear_trio():
 
 
 def test_make_shape_build_cache_returns_dict_and_clear():
-    """``make_shape_build_cache`` (P1.3) returns a ``(dict, clear)`` pair; clear empties the dict."""
+    """``make_shape_build_cache`` returns a ``(dict, clear)`` pair; clear empties the dict."""
     cache, clear = make_shape_build_cache()
     assert cache == {}
     cache[("Model", "create", frozenset({"a"}))] = object()

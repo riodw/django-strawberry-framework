@@ -9,8 +9,8 @@ recognized shape synthesizes the same ``_dst_row_number`` / probe / nested-prefe
 contract the windowed body would, and that a refused shape still returns correct
 rows via that body.
 
-``_parent_in_values`` carries the keyword ``column=`` / ``table=`` signature
-(feedback2 Step 1); its defensive matrix is owned by
+``_parent_in_values`` carries the keyword ``column=`` / ``table=`` signature;
+its defensive matrix is owned by
 ``test_lateral_fetch.py::test_parent_in_values_guards_target_and_rhs_shapes`` (one
 owner), as is the unhashable/NULL ``_deduplicate_parent_ids`` TypeError arm
 (``test_parent_id_deduplication_handles_hashable_and_unhashable_values``). Both are
@@ -179,7 +179,7 @@ def test_fetch_returns_none_when_the_setting_is_disabled(settings):
 def test_fetch_returns_none_for_unrecognized_shapes(mutate, reason):
     """Every unrecognized fetch-time mutation falls back to the windowed body.
 
-    Includes the shared window-predicate-signature guard (P2): the plain re-query
+    Includes the shared window-predicate-signature guard: the plain re-query
     applies ``spec.fetch_limit``, so an altered row-number bound that
     ``_single_parent_where_ids`` would skip as a window qual must be caught by the
     signature comparison, or the fast path would silently ignore it and serve the

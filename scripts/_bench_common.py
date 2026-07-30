@@ -4,7 +4,7 @@ Single-sites the fakeshop Django bring-up both benches spelled separately
 (``bench_plan_cache.py`` / ``bench_nested_fetch.py``): the example-project
 ``sys.path`` seam, settings module, ``django.setup()``, and the
 ``migrate --run-syncdb`` pass. Only the database TAIL differs per bench and
-is selected by ``mode`` (the 0.0.13 fetch-strategy DRY pass, T6).
+is selected by ``mode``.
 """
 
 from __future__ import annotations

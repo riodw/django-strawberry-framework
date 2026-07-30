@@ -19,7 +19,7 @@ phase-2.5 bind is the only caller of ``materialize_mutation_input_class`` and
 ``registry.clear()`` is the only caller of ``clear_mutation_input_namespace``.
 
 The materialize / build / camel-name / collision mechanics are single-sited in
-``utils/inputs.py`` (the 0.0.9 DRY pass); this module is a thin domain wrapper,
+``utils/inputs.py``; this module is a thin domain wrapper,
 in the spirit of ``orders/inputs.py`` (the ``mutations/`` module names differ
 from ``orders/`` per spec-036 Decision 4). The divergence from the set families:
 mutation inputs derive from one model's editable columns, not a related-set BFS,
@@ -70,7 +70,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.mutations.inputs"
 # (multi-field-constraint) errors (Django's ``"__all__"`` sentinel). Pinned here
 # as the single source of truth so Slice 3's resolver keys a
 # multi-field-constraint ``ValidationError`` to the same sentinel the read of
-# ``error_dict`` produces (spec-036 AR-M3).
+# ``error_dict`` produces.
 NON_FIELD_ERROR_KEY: str = NON_FIELD_ERRORS
 
 # Operation kinds the input GENERATOR understands. ``CREATE`` honors the
@@ -94,7 +94,7 @@ class FieldError:
     the form-based (0.0.12) and DRF-serializer / auth (0.0.13) flavor cards
     reuse the byte-identical type. Mirrors graphene-django's ``ErrorType``.
 
-    **Additive client-ergonomics fields (spec-039 rev6 #4 / #13).** Two optional,
+    **Additive client-ergonomics fields.** Two optional,
     default-empty lists sit alongside the legacy ``field`` / ``messages`` (both kept
     intact for compatibility), so a client can branch WITHOUT parsing localized human
     text or the dotted ``field`` string:
@@ -155,7 +155,7 @@ def materialize_mutation_input_class(name: str, input_cls: type) -> None:
     are visible together. It then delegates to the ``make_input_namespace``
     materializer. See that helper for the ``LazyType.resolve_type`` contract, the
     idempotent ``(name, input_cls)`` clause, and the distinct-class name collision
-    raise (spec-036 AR-H1 / AR-M6).
+    raise.
 
     Defined here; called only by Slice 2's phase-2.5 bind.
     """
@@ -186,7 +186,7 @@ def clear_mutation_input_namespace() -> None:
 
 
 # Register the mutation input-namespace clear as a canonical PRE-BIND clear
-# (spec-039 P1.6): the ``finalize_django_types`` pre-bind reset AND
+#: the ``finalize_django_types`` pre-bind reset AND
 # ``TypeRegistry.clear()`` both iterate ``registry.iter_subsystem_clears()``.
 # This owner registers the executable callback once; the stable owner key makes
 # reload replace it without a central attribute lookup that can drift.
@@ -203,7 +203,7 @@ def editable_input_fields(
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
 ) -> list[models.Field]:
-    """Return the model's editable, settable input columns (spec-036 Decision 6 / Medium-4).
+    """Return the model's editable, settable input columns (spec-036 Decision 6).
 
     The write-side counterpart to ``orders/inputs.py::_get_concrete_field_names_for_order``
     - deliberately the OPPOSITE selection: writes EXCLUDE read-only timestamps
@@ -273,7 +273,7 @@ def editable_input_fields(
 
 
 def input_field_required(field: models.Field) -> bool:
-    """Return whether a create-input field is required (spec-036 Major-1 rule).
+    """Return whether a create-input field is required (spec-036 rule).
 
     A field is required **only when it has no usable default**: no Django
     ``default`` (``field.has_default()`` is ``False``), ``null=False``, and -
@@ -311,7 +311,7 @@ def relation_input_annotation(
 
     The python attr is ``<field.name>_id`` for FK / OneToOne so Slice 3's
     resolver maps it back to the column with no per-field declaration (and a
-    custom ``input_class`` must follow the same scheme - spec-036 AR-M2). The
+    custom ``input_class`` must follow the same scheme - spec-036). The
     GraphQL alias camel-cases that attr (``category_id`` -> ``categoryId``). M2M
     keeps the plain field name (``genres``) - it is already a collection of ids.
 
@@ -366,7 +366,7 @@ def mutation_input_type_name(
     *,
     full_field_names: tuple[str, ...],
 ) -> str:
-    """Return the generated input-class name for a shape (spec-036 AR-H1 / AR-M6).
+    """Return the generated input-class name for a shape.
 
     The canonical full editable shape takes the stable ``<Model>Input`` /
     ``<Model>PartialInput`` name; a narrowed shape (``Meta.fields`` /
@@ -388,7 +388,7 @@ def mutation_input_type_name(
     column still resolves to the canonical name.
 
     The ``PartialInput`` / ``Input`` suffix rule + the full-vs-narrowed branching are
-    single-sited in ``utils/inputs.py::generated_input_type_name`` (spec-039 M6); this
+    single-sited in ``utils/inputs.py::generated_input_type_name``; this
     flavor supplies only its own token (the sorted-name ``pascalize_token``
     concatenation) and full-shape decision.
     """
@@ -402,13 +402,13 @@ def mutation_input_type_name(
 
 
 class MutationInputShape(NamedTuple):
-    """The single derived identity of a generated input shape (spec-036 Decision 6 / DRY-1).
+    """The single derived identity of a generated input shape (spec-036 Decision 6).
 
     Bundles every value that derives from the shape identity tuple ``(model,
     operation_kind, frozenset(effective field names))`` so the generator, the
     bind cache, and the merge path all read ONE computation instead of each
     re-walking ``editable_input_fields`` and reassembling the name / key
-    independently (the DRY-1 drift point: a divergent re-spelling could make the
+    independently (the drift point: a divergent re-spelling could make the
     bind cache key disagree with the generated type name).
 
     - ``selected`` - the selected editable ``models.Field`` objects (narrowed by
@@ -439,7 +439,7 @@ def mutation_input_shape(
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
 ) -> MutationInputShape:
-    """Compute the one shape descriptor the generator + bind + merge all consume (DRY-1).
+    """Compute the one shape descriptor the generator + bind + merge all consume.
 
     Single-sources the editable-field walk (``editable_input_fields`` for the
     selected set AND the full set), the effective-name frozenset, the generated
@@ -524,9 +524,9 @@ def build_mutation_input(
     honored, not clobbered. ``mutations/sets.py`` wires it from
     ``Meta.input_class`` / ``Meta.partial_input_class``; a direct caller may pass
     it explicitly. File/image columns now participate in this skip like any
-    scalar (spec-037 lifted the spec-036 CR-6 carve-out).
+    scalar (spec-037 lifted the spec-036 carve-out).
 
-    ``shape`` is the precomputed ``MutationInputShape`` (DRY-1): the bind passes
+    ``shape`` is the precomputed ``MutationInputShape``: the bind passes
     the one it already computed for the cache key so the selected fields + type
     name are not re-walked; a direct caller omits it and it is derived from
     ``(model, operation_kind, fields, exclude)``. Either way the selected set and
@@ -559,7 +559,7 @@ def build_mutation_input(
             # SCALAR input, so the python attr is the plain field name (never
             # ``<name>_id`` - that is the FK relation scheme). The triple falls
             # through to the SAME override-skip / requiredness / ``| None``-widening
-            # machinery the scalar branch uses below, which lifts the spec-036 CR-6
+            # machinery the scalar branch uses below, which lifts the spec-036
             # carve-out (the old ``NotImplementedError`` preceded the override skip,
             # so file columns could not participate in the ``Meta.input_class`` merge
             # override; now they do, like any scalar).
@@ -578,7 +578,7 @@ def build_mutation_input(
 
         # M2M is ALWAYS optional, even in the create input: a parent row cannot
         # carry M2M rows until it has a pk, and Slice 3's resolver contract is
-        # "replace-on-provide / clear-on-empty / unchanged-on-omit" (AR-M1) -
+        # "replace-on-provide / clear-on-empty / unchanged-on-omit" -
         # which requires the M2M input to be omittable. The per-field required
         # rule (``input_field_required``) is meaningless for M2M (a forward M2M
         # always reports ``null=False, blank=False, has_default()=False``), so it
@@ -632,7 +632,7 @@ def build_mutation_input(
 
 
 def payload_object_slot(primary_type: type) -> str:
-    """Return the uniform payload object-slot name for a primary type (spec-036 AR-H5).
+    """Return the uniform payload object-slot name for a primary type.
 
     ``"node"`` for a Relay-Node-shaped primary type, ``"result"`` otherwise.
     Single-sited so the payload builder and Slice 3's resolver agree on the slot
@@ -654,7 +654,7 @@ def build_payload_type(
 
     - **model-backed** (``object_type`` is non-``None``): ``object_slot`` is the
       UNIFORM object-field name from ``payload_object_slot(primary_type)`` -
-      ``"node"`` for a Relay-Node target, ``"result"`` otherwise (AR-H5). It is
+      ``"node"`` for a Relay-Node target, ``"result"`` otherwise. It is
       NEVER model-derived, so a ``Property`` payload exposes ``node`` / ``result``,
       never a ``property``-named field. Fields: ``<object_slot>: object_type | None``
       (nullable - ``null`` on a validation failure) and ``errors:

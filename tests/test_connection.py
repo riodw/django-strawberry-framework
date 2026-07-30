@@ -179,8 +179,7 @@ def test_connection_type_for_generates_named_subclass_when_opted_in():
 def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     """Generated ``<Type>Connection`` names derive from ``graphql_type_name``, not ``__name__``.
 
-    P1 (``spec-030-connection_field-0_0_9`` review): two DjangoType classes can share a
-    Python ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
+    Two DjangoType classes can share a Python ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
     generated connection from ``__name__`` produces two classes with the SAME
     SDL type name, which Strawberry collapses into one - corrupting both root
     fields' ``edges`` / node types. Deriving from ``graphql_type_name`` (the
@@ -322,12 +321,11 @@ def test_total_count_requested_false_when_absent():
 
 
 def test_total_count_requested_scoped_to_direct_children():
-    """A ``totalCount`` nested in ``edges { node { ... } }`` does NOT fire the predicate (P2).
+    """A ``totalCount`` nested in ``edges { node { ... } }`` does NOT fire the predicate.
 
     ``_total_count_requested`` checks only the connection's DIRECT children, so a
     (future) node-level ``totalCount`` deep in the subtree must not make the OUTER
-    connection count spuriously (``spec-030-connection_field-0_0_9`` P2). A
-    direct-child ``totalCount`` still counts.
+    connection count spuriously. A direct-child ``totalCount`` still counts.
     """
     # Direct-child ``totalCount`` still counts.
     assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
@@ -348,7 +346,7 @@ def test_total_count_requested_scoped_to_direct_children():
 
 
 def test_total_count_requested_recurses_through_fragments():
-    """``_total_count_requested`` recurses THROUGH fragment wrappers to find ``totalCount`` (P2).
+    """``_total_count_requested`` recurses THROUGH fragment wrappers to find ``totalCount``.
 
     A ``totalCount`` reached only via a ``FragmentSpread`` / ``InlineFragment`` on
     the connection's direct selection set still counts -- the predicate descends
@@ -611,10 +609,9 @@ def test_connection_field_accepts_direct_relay_node_inheritance():
 
 
 def test_connection_type_for_generates_total_count_for_direct_relay_inheritance():
-    """Direct ``relay.Node`` inheritance can use the per-type ``totalCount`` opt-in (P2).
+    """Direct ``relay.Node`` inheritance can use the per-type ``totalCount`` opt-in.
 
-    ``spec-030-connection_field-0_0_9`` P2: once ``Meta.connection`` validation
-    accepts direct inheritance, the ``totalCount`` surface works for it too -
+    Once ``Meta.connection`` validation accepts direct inheritance, the ``totalCount`` surface works for it too -
     ``_connection_type_for`` generates the concrete ``<Name>Connection`` carrying
     ``total_count`` exactly as it does for the ``Meta.interfaces`` spelling.
     """
@@ -758,7 +755,7 @@ def test_consumer_resolver_iterable_with_sidecar_input_raises():
 
 @pytest.mark.django_db
 def test_consumer_resolver_iterable_with_total_count_selected_raises():
-    """M1: selecting ``totalCount`` over a non-queryset consumer return raises a package error.
+    """Selecting ``totalCount`` over a non-queryset consumer return raises a package error.
 
     NOT the engine's ``Cannot return null for non-nullable field ...totalCount``
     violation - the count helper raises a clear ``GraphQLError`` because a plain
@@ -782,7 +779,7 @@ def test_consumer_resolver_iterable_with_total_count_selected_raises():
 
 
 async def test_attach_count_async_awaits_before_guard_raises():
-    """``_attach_count_async`` awaits the connection coroutine BEFORE the M1 guard can raise.
+    """``_attach_count_async`` awaits the connection coroutine BEFORE the non-queryset guard can raise.
 
     Regression guard for the await-before-raise discipline (Decision 10, mirroring
     ``utils/querysets.py::apply_type_visibility_sync``'s close-before-raise). With the
@@ -818,7 +815,7 @@ async def test_attach_count_async_awaits_before_guard_raises():
 
 @pytest.mark.django_db(transaction=True)
 async def test_async_consumer_resolver_iterable_with_total_count_selected_raises():
-    """M1 end-to-end on the async path: a clear package error, NOT the engine non-null violation.
+    """End-to-end on the async path: a clear package error, NOT the engine non-null violation.
 
     An ``async def`` consumer ``resolver=`` returning a non-queryset iterable while
     ``totalCount`` is selected drives ``_attach_count_async`` through the real
@@ -1237,7 +1234,7 @@ def test_nested_connection_unplanned_raises_under_strictness():
 
 
 # =============================================================================
-# Deterministic-total-order tiebreaker (P1 - ``spec-030-connection_field-0_0_9``)
+# Deterministic-total-order tiebreaker (``spec-030-connection_field-0_0_9``)
 # =============================================================================
 
 
@@ -1251,7 +1248,7 @@ def _node_over(model: type, name: str, *, fields: tuple[str, ...] = ("id", "name
 
 
 def test_ends_in_unique_column_recognizes_unique_and_non_unique_terminals():
-    """Pin ``_ends_in_unique_column`` across ref shapes (P1)."""
+    """Pin ``_ends_in_unique_column`` across ref shapes."""
     # Unique-by-pk and unique-field string refs.
     assert _ends_in_unique_column(("id",), Category) is True
     assert _ends_in_unique_column(("pk",), Category) is True
@@ -1271,7 +1268,7 @@ def test_ends_in_unique_column_recognizes_unique_and_non_unique_terminals():
 
 
 def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
-    """A queryset ordered by a NON-UNIQUE column gets the pk appended (P1).
+    """A queryset ordered by a NON-UNIQUE column gets the pk appended.
 
     Otherwise the connection's positional offset cursors are unstable across
     requests when ties exist (rows silently skipped / duplicated across pages).
@@ -1284,7 +1281,7 @@ def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
 
 
 def test_finalize_queryset_skips_pk_when_terminal_already_unique():
-    """An ordering already ending in a UNIQUE column is left alone (no double pk, P1)."""
+    """An ordering already ending in a UNIQUE column is left alone (no double pk)."""
     node = _node_over(Category, "P1CatNode")
     # Category.name is unique=True -> already a deterministic total order.
     by_name = _finalize_queryset(node, Category.objects.order_by("name"), SimpleNamespace())
@@ -1295,13 +1292,13 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
 
 
 def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
-    """A model ``Meta.ordering`` is PRESERVED + pk appended, not clobbered to pk-only (P1).
+    """A model ``Meta.ordering`` is PRESERVED + pk appended, not clobbered to pk-only.
 
     ``qs.query.order_by`` is empty when the order comes from ``Meta.ordering``
     even though ``qs.ordered`` is True; ``_finalize_queryset`` resolves the
     effective ordering from ``_meta.ordering`` so ``ORDER BY order`` becomes
     ``ORDER BY order, pk`` rather than dropping to ``ORDER BY pk``
-    (``spec-030-connection_field-0_0_9`` P1 correction). ``Status`` (kanban)
+    (``spec-030-connection_field-0_0_9``). ``Status`` (kanban)
     declares ``Meta.ordering = ["order"]`` over a non-unique ``PositiveIntegerField``.
     """
     node = _node_over(Status, "P1StatusNode", fields=("id",))
@@ -1313,12 +1310,12 @@ def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
 
 
 # =============================================================================
-# Optimizer cooperation short-circuit (P3a) + connection-type-cache reset (P3b)
+# Optimizer cooperation short-circuit + connection-type-cache reset
 # =============================================================================
 
 
 def test_apply_connection_optimization_short_circuits_without_optimizer():
-    """With no optimizer installed, the cooperation point returns the qs unchanged (P3a).
+    """With no optimizer installed, the cooperation point returns the qs unchanged.
 
     The connection field does NOT fabricate a throwaway optimizer to
     self-optimize; outside an execution the ``_active_optimizer`` ``ContextVar``
@@ -1332,7 +1329,7 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
 
 
 def test_apply_connection_optimization_short_circuits_when_target_has_no_model():
-    """An unregistered target type has no model to plan, so the qs is returned (P3a).
+    """An unregistered target type has no model to plan, so the qs is returned.
 
     Hits the ``target_model is None`` guard before the optimizer lookup: a type the
     registry does not know maps to no Django model, so there is nothing to optimize.
@@ -1347,7 +1344,7 @@ def test_apply_connection_optimization_short_circuits_when_target_has_no_model()
 
 
 def test_ends_in_unique_column_false_for_unnameable_terminal():
-    """A terminal order expression with no resolvable column name is treated as non-unique (P1).
+    """A terminal order expression with no resolvable column name is treated as non-unique.
 
     ``_ends_in_unique_column`` can only certify uniqueness when it can read a column
     name (a string ref or an ``OrderBy(F(...))``). A bare function expression (e.g.
@@ -1409,7 +1406,7 @@ async def test_connection_async_pipeline_applies_filter_and_order():
 
 
 def test_clear_connection_type_cache_empties_the_cache():
-    """``clear_connection_type_cache`` drops the generated-connection-class cache (P3b)."""
+    """``clear_connection_type_cache`` drops the generated-connection-class cache."""
     _connection_type_for(_make_node_type("P3bDirectNode", total_count=True))
     assert _connection_type_cache
     clear_connection_type_cache()
@@ -1417,7 +1414,7 @@ def test_clear_connection_type_cache_empties_the_cache():
 
 
 def test_registry_clear_also_clears_connection_type_cache():
-    """``registry.clear()`` resets the connection-type cache too (P3b wiring)."""
+    """``registry.clear()`` resets the connection-type cache too."""
     _connection_type_for(_make_node_type("P3bRegistryNode", total_count=True))
     assert _connection_type_cache
     registry.clear()
@@ -1429,7 +1426,7 @@ def test_registry_clear_also_clears_connection_type_cache():
 # / Prefetch on the pre-slice queryset) must stay GREEN UNMODIFIED through the
 # helper consolidation (Decision 9) and the fast-path addition (Decision 5) --
 # this card touches only the NESTED half. No new tests required here; this marker
-# records the fence (DoD item 12 / "No B1-B8 regression").
+# records the fence (DoD item 12, "no root-connection regression").
 
 
 # =============================================================================

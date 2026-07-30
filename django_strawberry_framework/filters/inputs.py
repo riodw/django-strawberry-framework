@@ -56,7 +56,7 @@ from .base import (
 )
 
 # Domain-local aliases for the shared generated-input substrate (the mechanics
-# are single-sited in ``utils/inputs.py`` per the 0.0.9 DRY pass). Tests and
+# are single-sited in ``utils/inputs.py``). Tests and
 # ``factories.py`` import these spec-027 Decision 9 names from this module, so
 # they stay addressable here.
 FieldSpec = GeneratedInputFieldSpec
@@ -86,7 +86,7 @@ LOOKUP_PREFIXES: dict[str, str] = {
 
 
 # `django-filter` lookup -> (python_attr, graphql_name) pair per spec-027
-# Decision 3 Layer 5 / H3 of rev4 feedback. Strawberry's auto-camel-case
+# Decision 3 Layer 5. Strawberry's auto-camel-case
 # cannot transform `icontains` to `iContains` (no underscore to split on),
 # and the Python keyword `in` cannot be a dataclass field - both are pinned
 # here. Consumed by `FilterSet._normalize_input` (mapping Strawberry-input
@@ -163,8 +163,8 @@ _materialized_names: dict[str, type] = {}
 
 # Pascal-case helper for input-class names. The conversion AND the
 # no-word-character emptiness check both live in the shared
-# ``utils.strings.pascal_case_or_raise`` (feedback P2.2 single-siting, shared
-# with ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for``); this wrapper
+# ``utils.strings.pascal_case_or_raise`` (single-sited, shared with
+# ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for``); this wrapper
 # only supplies the ``RangeFilter``-specific error.
 def _pascal_case(name: str) -> str:
     """Return ``name`` converted to ``PascalCase``, raising on a token-less input.
@@ -639,7 +639,7 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]
     Names come from ``_LOGIC_KEYS`` (the same pairing ``FilterSet._normalize_input``
     consumes) so a new logical operator cannot land in the runtime map without
     also being emitted on the generated input. The annotations follow the
-    H2-of-rev4 INSIDE-list shape: the ``Annotated[...]`` wraps the
+    INSIDE-list shape: the ``Annotated[...]`` wraps the
     forward-reference string directly, and the ``list[...]`` (for ``and_`` /
     ``or_``) wraps the ``Annotated[...]`` -- NOT the other way around.
     ``not_`` is a single self-ref. GraphQL surface names ride through
@@ -786,8 +786,8 @@ def _build_input_fields(
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is
-    # single-sited in ``utils/inputs.py::emit_set_input_field_triples`` (DRY
-    # review A4); the closures above carry the filter-family semantics.
+    # single-sited in ``utils/inputs.py::emit_set_input_field_triples``; the
+    # closures above carry the filter-family semantics.
     return emit_set_input_field_triples(
         filterset_cls,
         _visible_entries(),

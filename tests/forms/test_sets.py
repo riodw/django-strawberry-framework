@@ -184,7 +184,7 @@ def test_modelform_with_plain_form_raises():
 def test_plain_base_with_modelform_raises_naming_modelform_base():
     """A ``ModelForm`` on the plain ``DjangoFormMutation`` base raises naming the ModelForm base.
 
-    The ``issubclass(form_class, forms.ModelForm)``-first check (Edge case P2): the
+    The ``issubclass(form_class, forms.ModelForm)``-first check: the
     targeted message names ``DjangoModelFormMutation`` as the correct base, not a
     generic "not a Form" message.
     """
@@ -229,7 +229,7 @@ def test_modelform_with_no_resolvable_model_raises():
 
 
 # ---------------------------------------------------------------------------
-# Meta validation matrix - operation rules (P2 split)
+# Meta validation matrix - operation rules
 # ---------------------------------------------------------------------------
 
 
@@ -268,7 +268,7 @@ def test_modelform_missing_operation_rejected():
     ],
 )
 def test_plain_base_rejects_any_operation(operation):
-    """The plain ``DjangoFormMutation`` base rejects ANY ``Meta.operation`` (P2 / Decision 10)."""
+    """The plain ``DjangoFormMutation`` base rejects ANY ``Meta.operation`` (Decision 10)."""
     form_cls = _contact_form()
     declared_operation = operation  # bind to a local: a class body cannot read the param name.
     with pytest.raises(ConfigurationError, match="operation is not supported"):
@@ -680,7 +680,7 @@ def test_plain_form_bind_materializes_input_and_ok_errors_payload():
 
 
 def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
-    """A plain-form re-finalize after a fixable post-bind failure succeeds, not a masked collision (feedback #6).
+    """A plain-form re-finalize after a fixable post-bind failure succeeds, not a masked collision.
 
     The plain-form sibling of the mutation retry-idempotency guard. ``bind_form_mutations``
     materializes ``ContactFormInput`` (form ledger) and ``SubmitPayload`` (the
@@ -716,9 +716,9 @@ def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeyp
 def test_plain_form_input_dedupes_via_form_sentinel():
     """Two plain mutations over the SAME form + effective set dedupe to one input class.
 
-    The ``"form"`` sentinel shape identity (Decision 7 P2): both build the same
+    The ``"form"`` sentinel shape identity (Decision 7): both build the same
     ``<FormClass>Input`` shape, so the materialize ledger dedupes to one class
-    object (idempotent re-materialize, no AR-M6 collision raise).
+    object (idempotent re-materialize, no collision raise).
     """
     form_cls = _contact_form()
 

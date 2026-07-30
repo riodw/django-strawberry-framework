@@ -54,7 +54,7 @@ def test_bigint_serializes_signed_int64_max():
 
 
 # ---------------------------------------------------------------------------
-# Strict serializer - negative cases (B2)
+# Strict serializer - negative cases
 # ---------------------------------------------------------------------------
 
 
@@ -237,7 +237,7 @@ def test_bigint_is_importable_from_top_level():
 
 
 # ---------------------------------------------------------------------------
-# Deprecation-suppression regression (B1)
+# Deprecation-suppression regression
 # ---------------------------------------------------------------------------
 
 

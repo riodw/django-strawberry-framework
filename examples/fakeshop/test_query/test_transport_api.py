@@ -1,6 +1,6 @@
 """Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-3).
 
-The S1 HTTP-boundary tier: every proof that Django's real request lifecycle
+The HTTP-boundary tier: every proof that Django's real request lifecycle
 executes on the package's GraphQL HTTP route now that ``routers.py`` no longer
 serves HTTP at all (Decision 2). Fakeshop mounts
 ``django_strawberry_framework.views.DjangoGraphQLView`` at ``/graphql/``
@@ -16,7 +16,7 @@ authenticated GET (row 5), Django's own exact routing policy including the
 ``allow_queries_via_get=False`` on a second mount of the package view (row 7).
 An async probe adds the ``AsyncDjangoGraphQLView`` colour of row 1 + row 2.
 
-Test plan rows 13-17 - the whole S2 body-cap matrix (Decision 7) - land here
+Test plan rows 13-17 - the whole body-cap matrix (Decision 7) - land here
 too, against three more mounts of the package view that differ only in their
 ``max_request_body_bytes``: the below / at / above boundary trio, what an absent
 or understated ``Content-Length`` can and cannot do on each transport, a
@@ -33,15 +33,15 @@ the async transport must reject UTF-16 and a leading UTF-8 BOM exactly as the sy
 those rows because this module already owns the ``/async-graphql/`` mount and the
 ``AsyncClient`` scaffolding it needs.
 
-The final section is the review's High-2 remediation: the wire contract is package
-policy on the *view*, not one of the upstream-bug patches, so it is asserted on
-both transports with ``APPLY_UPSTREAM_PATCHES = {"strawberry": False}`` in effect -
+The final section pins the strict UTF-8 wire contract as package policy on the
+*view*, not as one of the upstream-bug patches, so it is asserted on both
+transports with ``APPLY_UPSTREAM_PATCHES = {"strawberry": False}`` in effect -
 and the workaround the switch really does own is asserted to be genuinely off in
 the same state, so the ownership split cannot be satisfied by moving everything
 somewhere ungated. Its last rows take the switch off entirely
-(``APPLY_UPSTREAM_PATCHES = False``, both patch modules un-installed), which is the
-state the round-1 review found the sync transport answering ``500`` in: it is now
-the same controlled ``400``, and one row reads all four answers across two mounts
+(``APPLY_UPSTREAM_PATCHES = False``, both patch modules un-installed) - the state
+in which the sync transport used to answer ``500``. It is now the same controlled
+``400``, and one row reads all four answers across two mounts
 and two patch states so that constancy is attributable to the package view rather
 than to a patch that was quietly still installed.
 
@@ -131,8 +131,8 @@ class _SentinelMiddleware:
 class _LatinOneEncodingMiddleware:
     """Assign ``request.encoding``, which is Django's documented per-request override.
 
-    Review round 2 M1's deployment, as one line of consumer middleware - the exact
-    shape the encoding gate's docstring cites as the reason it consults
+    The deployment the encoding gate exists for, as one line of consumer
+    middleware - the exact shape its docstring cites as the reason it consults
     ``request.encoding`` at all. ``HttpRequest.encoding``'s setter is public API and
     ``HttpRequest.parse_file_upload`` hands ``MultiPartParser`` nothing but this
     value, so a project can legitimately install this and every multipart form on
@@ -513,8 +513,8 @@ def _asgi_post(path_, fragments, extra_headers=()):
 
 
 # ---------------------------------------------------------------------------
-# Review High 2 / High 3 scaffolding: hand-built multipart requests, a CSRF
-# token round trip, and an upload-handler sentinel.
+# Wire-contract and cap-ordering scaffolding: hand-built multipart requests, a
+# CSRF token round trip, and an upload-handler sentinel.
 #
 # Neither ``Client.post`` nor ``AsyncClient.post`` can present these bodies:
 # both run the payload through ``_encode_data``, which re-encodes it with the
@@ -527,9 +527,8 @@ def _asgi_post(path_, fragments, extra_headers=()):
 _MULTIPART_BOUNDARY = "BoUnDaRyFoRtHeWiReRoWs"
 
 #: Every upload-handler and parser call the sentinel handler saw, newest last.
-#: The High-3 ordering witness: a ``413`` that leaves this EMPTY is a ``413``
-#: raised before Django's multipart parser ran at all. A status alone cannot say
-#: that, which is exactly the review's point.
+#: The ordering witness: a ``413`` that leaves this EMPTY is a ``413`` raised
+#: before Django's multipart parser ran at all. A status alone cannot say that.
 _UPLOAD_EVENTS: list[str] = []
 
 
@@ -1038,7 +1037,7 @@ def test_the_package_view_serves_an_ordinary_graphql_response():
 
 
 # ===========================================================================
-# Slice 2 (S2): the cumulative request-body cap. Test-plan rows 13-18.
+# Slice 2: the cumulative request-body cap. Test-plan rows 13-18.
 # ===========================================================================
 
 
@@ -1230,7 +1229,7 @@ def test_a_multipart_request_over_the_declared_cap_is_refused():
     """Row 14: multipart gets the declared-size gate (Decision 7 step 3).
 
     The declared gate is the whole of this card's multipart contract: per-file
-    count, per-file size, and aggregate size are audit S4's. What the view must
+    count, per-file size, and aggregate size are a later card's. What the view must
     NOT do is read ``request.body`` to measure a multipart payload - that would
     defeat Django's streaming upload handlers and break the ``Upload``-scalar
     path - so the un-broken direction of this row is earned by
@@ -1441,14 +1440,14 @@ async def test_the_async_package_view_enforces_the_same_body_cap():
 
 
 # ===========================================================================
-# Review High 2: the strict UTF-8 wire contract is the package VIEW's policy,
+# The strict UTF-8 wire contract is the package VIEW's policy,
 # so it does not share the ``APPLY_UPSTREAM_PATCHES`` lifecycle. These rows
 # mount the package view with the Strawberry patch opted out and assert the
 # policy still holds - and, separately, that the upstream-bug workaround the
 # switch really does own is genuinely off in the same state.
 # ===========================================================================
 
-#: The three shapes the review names, as real request bodies. Two fail at the
+#: The three non-UTF-8 shapes, as real request bodies. Two fail at the
 #: view's strict decode (a BOM'd multi-byte form's leading byte is not valid
 #: UTF-8) and the third decodes cleanly and is refused by ``json.loads`` for its
 #: leading U+FEFF - so the trio covers both mechanisms, which matters because
@@ -1557,8 +1556,7 @@ def _every_upstream_patch_opted_out():
 
     The sibling helper simulates ``{"strawberry": False}`` and deliberately leaves
     the ``cross_web`` half installed. This one takes both halves out, which is a
-    materially different state and the one the review's residual finding was
-    measured in: with ``cross_web`` un-installed, upstream's sync
+    materially different state: with ``cross_web`` un-installed, upstream's sync
     ``DjangoHTTPRequestAdapter.body`` decodes inside its own *property* again, so a
     property - not ``parse_json`` - is where an undecodable body raises. That is
     why the package view mounts its own request adapter
@@ -1605,7 +1603,7 @@ def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body):
     ``{"strawberry": False}`` leaves the ``cross_web`` half routing the sync
     transport's bytes into ``parse_json``; ``False`` does not, and in that state
     the two BOM'd multi-byte bodies used to come back as an unhandled ``500``
-    (review W3-2, measured) because upstream's adapter decoded them inside a
+    because upstream's adapter decoded them inside a
     property before the view's ``parse_json`` was reached. The success set was
     never wider - a ``500`` is not an acceptance - but the *controlled 400* and
     the "``__cause__`` is the only discriminator" half of Decisions 9 and 10 were
@@ -1651,7 +1649,7 @@ def test_only_the_package_mount_answers_the_same_way_in_both_patch_states():
       longer narrows encodings, so ``json.loads`` applies RFC 8259 auto-detection
       to the raw bytes and *accepts* the UTF-16 document. A consumer who
       deliberately mounts Strawberry's own view keeps Strawberry's own semantics -
-      the deliberate scope of the ownership split (spec-046 review High 2), pinned
+      the deliberate scope of the ownership split (spec-046), pinned
       at the patch tier by
       ``test_patched_parse_json_leaves_upstreams_bytes_semantics_alone`` and
       recorded here as live behavior.
@@ -1714,7 +1712,7 @@ def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
 
 
 # ===========================================================================
-# Review High 2: the multipart control documents. ``parse_json``'s strict decode
+# The multipart control documents. ``parse_json``'s strict decode
 # only ever sees the ``application/json`` body; ``operations`` and ``map`` reach
 # the package as ``str``, already decoded by Django's own multipart parser with
 # ``errors="replace"``. These rows are the wire proof of the two checks that
@@ -1723,7 +1721,7 @@ def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
 # ``parse_json(str)`` call cannot express a wire boundary at all.
 # ===========================================================================
 
-#: The four control documents the review names, as raw bytes, each paired with
+#: The four lossy control documents, as raw bytes, each paired with
 #: the field it rides in. ``0x80`` is a lone continuation byte - never valid
 #: UTF-8 - and ``0xEF 0xBF 0xBD`` is a genuine, well-formed encoding of U+FFFD,
 #: which is the harder case: it decodes cleanly, so only the marker check
@@ -1751,10 +1749,10 @@ def _multipart_fields(field, raw):
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
 @pytest.mark.django_db
 def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(field, raw):
-    """Review High 2: the probes that used to answer ``200`` now answer ``400``.
+    """The bodies that used to answer ``200`` now answer ``400``.
 
-    The review posted an ``operations`` field carrying a malformed UTF-8 byte and
-    watched Django replacement-decode it into something that parsed and executed -
+    An ``operations`` field carrying a malformed UTF-8 byte used to be
+    replacement-decoded by Django into something that parsed and executed -
     a byte sequence the package calls invalid UTF-8, accepted on one GraphQL body
     shape. Both control documents are covered, and both directions of the same
     detector: the malformed byte Django *converts* into U+FFFD, and a literal
@@ -1806,9 +1804,9 @@ _NON_UTF8_FORM_CHARSETS = (
 @pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
 @pytest.mark.django_db
 def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset):
-    """Review High 2's other probe: an explicit ``charset`` the package will not honour.
+    """An explicit ``charset`` the package will not honour.
 
-    The review's Latin-1 probe executed with ``200``, and Django's behaviour is why:
+    A Latin-1 form declaration used to execute with ``200``, and Django's behaviour is why:
     ``_set_content_type_params`` copies a usable declared charset onto
     ``request.encoding``, which is the encoding ``MultiPartParser`` then decodes
     every field with. So the declaration is honoured - just not with the UTF-8 the
@@ -1930,7 +1928,8 @@ def test_the_marker_check_is_scoped_to_the_two_control_documents():
     assert response.json()["data"] == {"__typename": "Query"}
 
 
-#: The exploit body of review round 2 M1: a raw Latin-1 ``0xe9``, which is not
+#: The exploit body for a middleware-forced form encoding: a raw Latin-1
+#: ``0xe9``, which is not
 #: valid UTF-8 on its own. Under the Latin-1 decode the middleware forces it
 #: becomes an ordinary character with **no** replacement marker, so the loss
 #: detector is structurally blind to it and the control document reaches
@@ -1942,9 +1941,9 @@ _LATIN1_CONTROL_DOCUMENT = _operations_bytes(note=b"\xe9")
 
 @pytest.mark.django_db
 def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_charset():
-    """Review round 2 M1: the deployment the gate exists for, on the shipped mount.
+    """The deployment the gate exists for, on the shipped mount.
 
-    The round's own High 2 was re-achievable behind one line of consumer
+    The wire contract is re-breakable behind one line of consumer
     middleware. ``HttpRequest.parse_file_upload`` hands ``MultiPartParser`` nothing
     but ``request.encoding``, and ``content_params`` is never re-read at parse
     time - so a client declaring ``charset=utf-8`` while a middleware has assigned
@@ -1959,7 +1958,7 @@ def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_char
       control below - so only the effective-encoding condition can be refusing it;
     * the same request with the middleware removed, ``200``. That is what stops the
       first answer from passing for the wrong reason;
-    * the review's actual probe: a raw Latin-1 byte in ``operations``, refused. It
+    * the exploit body itself: a raw Latin-1 byte in ``operations``, refused. It
       is the shape the marker check cannot see, because a Latin-1 decode never
       fails (proved at the package tier in
       ``tests/test_views.py::test_a_declared_utf8_charset_does_not_mask_a_middleware_set_request_encoding``).
@@ -1985,7 +1984,7 @@ def test_a_middleware_set_request_encoding_is_not_masked_by_a_declared_utf8_char
 
 
 async def test_the_async_view_is_not_masked_by_a_declared_utf8_charset_either():
-    """The async colour of review round 2 M1, from the one shared mixin method.
+    """The async colour of the encoding gate, from the one shared mixin method.
 
     The gate lives on ``_RequestBodyBoundaryMixin`` and is called from each
     transport's own ``run``, so it is a seam where a fix can silently apply to one
@@ -2053,7 +2052,7 @@ def test_a_project_that_reconfigured_default_charset_is_refused_unless_the_clien
 
 @pytest.mark.django_db
 def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
-    """Review round 2 L1: the encoding gate is scoped to the forms Django decodes.
+    """The encoding gate is scoped to the forms Django decodes.
 
     ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
     parsing anything unless the method is ``POST``, so a stale
@@ -2080,9 +2079,9 @@ def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
 
 
 # ===========================================================================
-# Review High 3: the declared multipart cap now runs BEFORE Django's CSRF
-# middleware reads ``request.POST``. Every row here uses
-# ``Client(enforce_csrf_checks=True)`` - the review's own requirement - so
+# The declared multipart cap runs BEFORE Django's CSRF middleware reads
+# ``request.POST``. Every row here uses
+# ``Client(enforce_csrf_checks=True)`` - so
 # ``CsrfViewMiddleware`` is live rather than short-circuited, and the ordering
 # witness is the upload-handler sentinel rather than the status code.
 # ===========================================================================
@@ -2090,7 +2089,7 @@ def test_a_get_carrying_a_stray_multipart_content_type_still_serves_the_query():
 
 @pytest.mark.django_db
 def test_an_over_cap_multipart_request_is_refused_before_djangos_parser_runs():
-    """Review High 3: the ``413`` precedes ``MultiPartParser`` and every upload handler.
+    """The ``413`` precedes ``MultiPartParser`` and every upload handler.
 
     The defect this closes is an ordering one, not a status one.
     ``CsrfViewMiddleware.process_view`` reads
@@ -2160,7 +2159,7 @@ async def test_the_async_view_also_refuses_before_djangos_parser_runs():
     have failed rather than answered ``200``.
 
     **A known asymmetry with its sync twin, recorded rather than left to be
-    discovered** (review round 2 L7). The sync row drives fakeshop's real
+    discovered.** The sync row drives fakeshop's real
     ``/graphql/`` mount; this one drives ``_async_cap_tiny_multipart_view``, a probe
     mount decorated with ``_carrying_the_packages_csrf_mark`` - i.e. exactly the
     hand-written, non-``functools.wraps`` wrapper shape that DROPS the mark and

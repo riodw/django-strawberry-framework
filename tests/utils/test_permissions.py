@@ -1,9 +1,9 @@
 """Tests for input permissions, relation-path gates, and Django/Channels request decoding.
 
-The 0.0.9 DRY pass single-sited the active-input permission traversal that the
-filter and order families had grown as parallel copies (that pass's
-Major 3 -- an authorization surface where a divergence between the two copies is
-a real bug class). These tests pin the shared mechanics directly and the
+This module single-sites the active-input permission traversal that the filter
+and order families had grown as parallel copies; on an authorization surface a
+divergence between two copies is a real bug class. These tests pin the shared
+mechanics directly and the
 configuration points (the family label, the ``unset_sentinel``) that keep the
 two families distinct; the deep behavioral coverage (dedup, double-dispatch,
 logic recursion, list aggregation) lives in the family ``test_sets`` suites.
@@ -94,7 +94,7 @@ def test_channels_context_resolves_to_a_wrapping_adapter():
 
 
 def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
-    """Non-scope attributes fall through to the original ``ChannelsRequest`` (finding P1.1)."""
+    """Non-scope attributes fall through to the original ``ChannelsRequest``."""
     scope = {"user": object()}
     info = _channels_info(scope)
     adapter = request_from_info(info, family_label="OrderSet")
@@ -550,7 +550,7 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
         @classmethod
         def _active_permission_targets(cls, input_value):
             # The fused single-pass contract ``run_active_input_permission_checks``
-            # now consumes (feedback H3): one call yields BOTH the per-field gate
+            # consumes: one call yields BOTH the per-field gate
             # paths (repeated ``name`` -> must dedup) and the related branches.
             return ["name", "name"], [("child", related_obj, {"x": 1})]
 

@@ -22,7 +22,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
-# The serializer-field converter-registry surface (spec-039 rev6 #11) is resolved by
+# The serializer-field converter-registry surface is resolved by
 # NAME through the root ``__getattr__`` (the DRF soft-dependency guard), like
 # ``SerializerMutation``.
 from django_strawberry_framework import (
@@ -212,20 +212,20 @@ def shelf_collision_schema_field_map(target_model):
 
 
 class NoteShelfSerializer(serializers.ModelSerializer):
-    """``Shelf`` serializer with a serializer-only ``note`` whose ``allow_null`` is RUNTIME-supplied (spec-039 High / M2 + rev6 #1).
+    """``Shelf`` serializer with a serializer-only ``note`` whose ``allow_null`` is RUNTIME-supplied.
 
     ONE serializer class backs TWO ``SerializerMutation`` declarations; each constructs it with
     a different ``note_allow_null`` via BOTH ``get_serializer_for_schema()`` (the schema-time
     field map) AND ``get_serializer_kwargs`` (the per-request construction), so the schema-time
-    ``note`` shape and the runtime ``note`` field AGREE (rev6 #1 - no schema-only
-    decode-then-drop the agreement guard now forbids). The only descriptor axis differing
+    ``note`` shape and the runtime ``note`` field AGREE (no schema-only
+    decode-then-drop, which the agreement guard forbids). The only descriptor axis differing
     between the two generated inputs is ``note``'s EMITTED nullability: ``required=True,
     allow_null=False`` is a non-null ``String!``, while ``required=True, allow_null=True`` is a
-    nullable, OMITTABLE ``String`` (M2 - GraphQL cannot express required-AND-nullable, so it is
+    nullable, OMITTABLE ``String`` (GraphQL cannot express required-AND-nullable, so it is
     omittable and null-accepting, DRF enforcing presence/validity in-band). The descriptor
     identity + the descriptor-derived name must capture that EMITTED nullability, or the second
     declaration silently reuses the first's cached input class (giving one mutation the other's
-    nullability - the High bug this pins).
+    nullability).
 
     ``note`` is a serializer-only WRITE-ONLY field (no backing ``Shelf`` column), decoded +
     validated then popped in ``create()``. ``note_allow_null=None`` (the no-arg DEFAULT
@@ -259,21 +259,21 @@ class NoteShelfSerializer(serializers.ModelSerializer):
 
 
 def nullability_schema_field_map(*, allow_null):
-    """Schema-time field map of ``code`` + ``branch`` + a ``note`` differing ONLY in ``allow_null`` (spec-039 High / M2).
+    """Schema-time field map of ``code`` + ``branch`` + a ``note`` differing ONLY in ``allow_null``.
 
     The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with
     ``allow_null=False`` vs ``allow_null=True`` over the SAME ``NoteShelfSerializer``; each
     mutation's ``get_serializer_kwargs`` constructs the runtime serializer with the SAME
     ``note_allow_null``, so the schema-time ``note`` shape and the runtime ``note`` field AGREE
-    (rev6 #1). Returns the BOUND ``.fields`` of a ``NoteShelfSerializer(note_allow_null=...)``.
+    Returns the BOUND ``.fields`` of a ``NoteShelfSerializer(note_allow_null=...)``.
     """
     return dict(NoteShelfSerializer(note_allow_null=allow_null).fields)
 
 
 class BlankCodeShelfSerializer(serializers.ModelSerializer):
-    """``Shelf`` serializer with an ``allow_blank=True`` required ``code`` (spec-039 M2 - allow_blank pinned).
+    """``Shelf`` serializer with an ``allow_blank=True`` required ``code``.
 
-    ``allow_blank`` is NOT a GraphQL concern (spec-039 Decision 7 / M2): a required
+    ``allow_blank`` is NOT a GraphQL concern (spec-039 Decision 7): a required
     ``allow_blank=True`` ``CharField`` is still a non-null ``String!`` in the generated SDL
     (``allow_blank`` is absent from the schema), and the empty-string acceptance is enforced
     by the serializer at runtime. The live test introspects the ``code`` input as a non-null
@@ -318,7 +318,7 @@ class HookNarrowedShelfSerializer(serializers.ModelSerializer):
 
 
 class HexColorField(serializers.Field):
-    """A custom DRF field with NO supported converter ancestor (spec-039 rev6 #11 - live proof).
+    """A custom DRF field with NO supported converter ancestor.
 
     A bare ``serializers.Field`` subclass, so ``convert_serializer_field`` would FAIL LOUD on
     it (no base-``Field`` catch-all) - UNTIL ``register_serializer_field_converter`` maps it
@@ -337,7 +337,7 @@ class HexColorField(serializers.Field):
         return value
 
 
-# spec-039 rev6 #11: register the converter for the custom ``HexColorField`` -> ``str`` at
+# Register the converter for the custom ``HexColorField`` -> ``str`` at
 # import time (before ``finalize_django_types`` builds the schema), so the MRO walk in
 # ``convert_serializer_field`` resolves it and ``ShelfMetadataSerializer`` below can use it.
 register_serializer_field_converter(
@@ -347,22 +347,22 @@ register_serializer_field_converter(
 
 
 class ShelfMetadataSerializer(serializers.ModelSerializer):
-    """A ``Shelf`` serializer exercising the rev6 type-system improvements live (spec-039 rev6 #6 / #7 / #11).
+    """A ``Shelf`` serializer exercising the expanded input type system live.
 
     Three serializer-only WRITE-ONLY fields prove the expanded input type system over
     ``/graphql/``:
 
-    * ``priority`` - a serializer-only ``ChoiceField`` -> a GENERATED GraphQL enum (rev6 #6),
+    * ``priority`` - a serializer-only ``ChoiceField`` -> a GENERATED GraphQL enum,
       not the graphene-django ``String``;
-    * ``attributes`` - a ``DictField`` -> ``strawberry.scalars.JSON`` (rev6 #7);
+    * ``attributes`` - a ``DictField`` -> ``strawberry.scalars.JSON``;
     * ``accent_color`` - a custom ``HexColorField`` mapped ONLY via the public converter
-      registry (rev6 #11) -> ``String``.
+      registry -> ``String``.
 
     All three are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
     column), decoded + validated then popped in ``create()`` (``Shelf`` has no such columns);
     the resolved ``priority`` is stamped into ``topic`` so the live test can read the effect.
-    ``code`` + ``branch`` are the ordinary model-backed columns (auto-generated, so the rev6
-    #8 conflict policy leaves them alone).
+    ``code`` + ``branch`` are the ordinary model-backed columns (auto-generated, so the
+    declared-field conflict policy leaves them alone).
     """
 
     priority = serializers.ChoiceField(
@@ -372,7 +372,7 @@ class ShelfMetadataSerializer(serializers.ModelSerializer):
     )
     attributes = serializers.DictField(required=False, write_only=True)
     accent_color = HexColorField(required=False, write_only=True)
-    # rev6 #9: ``help_text`` + validation constraints thread into the input field's SDL
+    # ``help_text`` + validation constraints thread into the input field's SDL
     # description (documentation only - DRF still enforces ``max_length`` at runtime).
     label = serializers.CharField(
         help_text="A short human label for the shelf.",
@@ -407,7 +407,7 @@ class ShelfMetadataSerializer(serializers.ModelSerializer):
 
 
 class OwnerStampShelfSerializer(serializers.ModelSerializer):
-    """A ``Shelf`` serializer with a REQUIRED ``topic`` a mutation narrows away + INJECTS (spec-039 rev6 #2).
+    """A ``Shelf`` serializer with a REQUIRED ``topic`` a mutation narrows away + INJECTS.
 
     ``topic`` is declared ``required=True`` (the ``Shelf.topic`` column is ``blank=True,
     default=""``, so DRF would otherwise make it optional). A ``SerializerMutation`` can then
@@ -427,7 +427,7 @@ class OwnerStampShelfSerializer(serializers.ModelSerializer):
 
 
 class AltBranchesShelfSerializer(serializers.ModelSerializer):
-    """A ``Shelf`` serializer exposing the raw-pk M2M ``alt_branches`` (spec-039 rev6 #3 - batched multi-relation visibility).
+    """A ``Shelf`` serializer exposing the raw-pk M2M ``alt_branches``.
 
     ``alt_branches`` is auto-generated by ``ModelSerializer`` as a
     ``PrimaryKeyRelatedField(many=True)`` over the non-Relay ``BranchType`` primary, so the
@@ -444,7 +444,7 @@ class AltBranchesShelfSerializer(serializers.ModelSerializer):
 
 
 class BookSerializer(serializers.ModelSerializer):
-    """A ``Book`` (Relay-Node) serializer backing the UPDATE + row-lock live matrix (spec-039 rev6 #14).
+    """A ``Book`` (Relay-Node) serializer backing the UPDATE + row-lock live matrix.
 
     ``BookType`` is Relay-Node, so an update mutation's ``id`` is a decodable ``GlobalID`` and its
     payload slot is ``node``. A ``SerializerMutation`` with ``operation="update"`` +
@@ -500,7 +500,7 @@ class AliasValidatedBookSerializer(serializers.ModelSerializer):
 
 
 class NestedShelfSerializer(serializers.ModelSerializer):
-    """A nested ``Shelf`` serializer for the opt-in nested-write matrix (spec-039 rev6 #17).
+    """A nested ``Shelf`` serializer for the opt-in nested-write matrix.
 
     Backs the nested ``shelves`` field of ``BranchWithShelvesSerializer``: scalar ``code`` /
     ``topic`` plus the raw-pk M2M ``alt_branches`` (auto-generated as a
@@ -524,7 +524,7 @@ class NestedShelfSerializer(serializers.ModelSerializer):
 
 
 class BranchWithShelvesSerializer(serializers.ModelSerializer):
-    """A ``Branch`` serializer with an EXPLICIT opt-in nested writable ``shelves`` list (spec-039 rev6 #17).
+    """A ``Branch`` serializer with an EXPLICIT opt-in nested writable ``shelves`` list.
 
     The fail-loud opt-in nested-write demonstration: the mutation declares
     ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}``, and THIS serializer implements

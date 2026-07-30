@@ -5,6 +5,9 @@ Target release: `0.0.15`
 Date created: 2026-07-25
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.
 DRY rule: every slice must justify shared/duplicated patterns before merging.
+Ownership partition: declared per phase below (`## Ownership partition`).
+Hot-path declaration: **open escalation** — see `## Open maintainer decisions`.
+Floor-verification scope: **open escalation** — see `## Open maintainer decisions`.
 
 Pre-flight: passed on 2026-07-25; baseline: dirty with unrelated concurrent work (recorded
 below, NOT in scope); cleanup: no prior `build-*.md` / `bld-*.md` artifacts existed (clean
@@ -103,8 +106,15 @@ between modules, and repeated string/key/tuple literals are build-time defects.
 - `docs/builder/bld-review-2-http_boundary.md`
 - `docs/builder/bld-review-2-ws_host_boundary.md`
 - `docs/builder/bld-review-2-w3_review.md`
+- `docs/builder/bld-review-2-w3_residual.md`
 - `docs/builder/bld-slice-5-docs_foldin.md`
 - `docs/builder/bld-integration.md`
+- `docs/builder/bld-custodian-3-claim_audit.md` — the concurrent spec-custodian cohort's
+  artifact (nine corrections from the out-of-band claim audit). Declared here after the fact:
+  W3's integration review found it absent from this list (its B-L2), and the name predates the
+  finding, so the list is corrected rather than the file renamed.
+- `docs/builder/bld-review-3-integration.md` — W3's adversarial review of the integration +
+  custodian cohorts.
 - `docs/builder/bld-final.md`
 
 ## Checklist
@@ -114,10 +124,11 @@ between modules, and repeated string/key/tuple literals are build-time defects.
 - [x] Slice 3: S9 — one UTF-8 wire contract -> `docs/builder/bld-slice-3-utf8_wire.md`
 - [x] Slice 4: S11 — WebSocket actor revalidation through an injection seam -> `docs/builder/bld-slice-4-ws_revalidation.md`
 - [x] **Review round 1** (maintainer review of slices 1-4) -> see below
-- [ ] **Review round 2** (maintainer review of the round-1 tree) -> see below
-- [ ] Slice 5: S12 transport slice — migration note, deployment guidance, doc fold-in -> `docs/builder/bld-slice-5-docs_foldin.md`
-- [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [x] **Review round 2** (maintainer review of the round-1 tree) -> see below
+- [x] Round-2 residual review of the M1/M2/M3 remediation -> `docs/builder/bld-review-2-w3_residual.md`
+- [x] Slice 5: S12 transport slice — migration note, deployment guidance, doc fold-in -> `docs/builder/bld-slice-5-docs_foldin.md`
+- [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`
+- [x] Final test-run gate -> `docs/builder/bld-final.md`
 
 ## Review round 1 — maintainer adversarial review of slices 1-4
 
@@ -289,3 +300,395 @@ Grouped by **file ownership** again, so workers cannot collide:
 Process correction carried into every round-2 prompt: builders must write their
 `## Required spec amendments` list **into their artifact on disk**, not only into their report to
 Worker 0. Round 1's custodian had to re-derive that list because the detail never reached disk.
+
+### W3 adversarial review of round 2, and the custodian pass that followed
+
+`docs/builder/bld-review-2-w3_review.md` returned **revision-needed** with five Medium findings.
+M1 / M2 / M3 were remediated in source and tests and committed (`10c50722`); M4 and M5 are process
+calibrations escalated to the maintainer and are recorded under `## Open maintainer decisions`.
+
+**A custodian pass ran on 2026-07-28 and closed a real spec/code divergence** that the round-2
+amendment pass had left open. It is recorded here because the *code* was already right and only
+the contract document was wrong — the failure mode a `Status:` chain does not catch:
+
+- **Decision 17's condition 1 still stated a fallback chain** (`declared charset, else
+  request.encoding, else DEFAULT_CHARSET`), which is precisely the reading M1 identified as the
+  bypass and which the W3 review's `## Notes for Worker 1` item 1 warned must not land. The spec
+  therefore documented the bug as the contract while `views.py::_form_encoding_is_utf8` implemented
+  the correct **conjunctive** form. Now stated as three independent requirements, explicitly "not
+  rungs of a fallback chain", with the outcome table extended 6 rows -> 10 to cover the
+  unusable-declared-codec case and both `DEFAULT_CHARSET` directions.
+- **The `"unknown"` / `"0"` host fallback is now named** in Decision 19 and test-plan row 46,
+  with the `"unknown:0"` denial verdict it produces (W3 note 3). Code and a behavioral row already
+  pinned it; only the spec left it underivable.
+- **Five further falsified sentences** were found that no dispatched finding named, one of them
+  **inverted**: the edge-case bullet claimed the guard *accepts* a document containing a literal
+  `U+FFFD` where Decision 17 refuses it. Also a "two refusal causes" count that is three, a
+  "must declare an effective UTF-8 encoding" that requires no declaration, a DoD box carrying the
+  same understatement, and test-plan row 39's 5 live shapes against the shipped 9.
+- Decision 12's "Why not enforce it" paragraph moved to the rationale companion; the `why not`
+  blocks at Decision 7, Decision 11 and Decision 19 were ruled **implementation-relevant and stay**,
+  per `worker-1.md` `### Performing the rationale move`'s load-bearing carve-out.
+
+Spec `219,609 -> 224,788` bytes; rationale companion `57,694 -> 63,520`.
+`check_spec_glossary.py` holds at `OK: 37 terms`, exit 0. The spec contains **zero** references to
+review rounds, passes, or workers — `BUILD.md` `## Spec rationale extraction`'s "the spec never
+narrates its own history" verified by grep, not by assertion.
+
+**Worker 0 ruling on the one item the custodian escalated.** The Slice-checklist sub-bullet at
+`:203-208` still says the multipart helper "accepts only an effective form encoding that
+canonicalizes to UTF-8" — incomplete against requirement 2, but not false, and it is copied
+verbatim into the closed Slice 3 artifact's `### Spec slice checklist (verbatim)`. It **stays**:
+Slice 3 is built, reviewed and committed, and its artifact is the record of what was built against.
+Editing a closed slice's checklist to chase a non-falsified sentence desyncs the evidence for no
+correctness gain. Decision 17 now carries the full contract two hundred lines away, and the
+checklist points at it.
+
+## Ownership partition
+
+Declared before dispatch, per `worker-0.md` `### Ownership partition`. Each file belongs to exactly
+one concurrent cohort; a cohort may read anything.
+
+**Phase R2-close + Slice 5 planning (concurrent, disjoint):**
+
+| Cohort | May write |
+|---|---|
+| Round-2 residual review (Worker 3) | `docs/builder/bld-review-2-w3_residual.md`, `docs/builder/worker-memory/worker-3.md`, `docs/builder/temp-tests/` |
+| Slice 5 planning (Worker 1) | `docs/builder/bld-slice-5-docs_foldin.md`, `docs/builder/worker-memory/worker-1.md` |
+
+Neither cohort writes source, tests, or the spec. The spec is **frozen** for the duration of both
+passes: the custodian pass above is complete, and rewriting a contract under a worker reading it is
+a recognized defect class in this build. Slice 5's own doc fold-in is a later, serialized phase —
+it owns `README.md`, `docs/README.md`, `docs/TREE.md`, the glossary DB and the kanban DB, and it
+runs alone because those are generated or concurrent-writable surfaces.
+
+### Three Worker-0 dispatch findings the Slice 5 planning pass refuted
+
+Recorded because the correction matters more than the findings did. Worker 0 pre-verified a set of
+facts into the Slice 5 planning prompt to save the planner re-deriving them; **three were wrong**,
+and the planner caught all three by re-verifying rather than trusting them. Each has been
+re-confirmed by Worker 0 against the tree.
+
+- **`TODAY.md` is NOT concurrent maintainer work — it is this slice's own unfinished work.**
+  `git diff -- TODAY.md` is exactly two hunks: the `**Channels ASGI router**` bullet at `:384`
+  rewritten to the post-Slice-1 shape (naming `django_application`, `websocket_url_pattern`,
+  `r"^graphql/?$"`, `websocket_consumer_class=`), plus one added `[readme-docs]` link definition.
+  That is verbatim the "`README.md` / `TODAY.md` transport wording" sub-check. It had been carried
+  on the baseline-dirty do-not-touch list since pre-flight, which is where the misclassification
+  came from. It is Worker 2's to complete — and the rewritten bullet still describes the
+  **two-wrapper** composition, so it is wrong for the same round-2 reason as the two READMEs.
+- **`docs/TREE.md` is missing four rows, not two-and-a-half.** `docs/TREE.md:214` / `:324` are
+  `auth/sessions.py` inside the `auth/` block, not `utils/sessions.py`; the `utils/` blocks at
+  `:280-293` list 13 modules and `sessions.py` is not among them; and `views.py` at `:75` belongs to
+  a `graphene_django` comparison tree, not the package. `build_tree_md.py --check` **fails today**,
+  which is the slice's own work and not a pre-existing defect to report.
+- **Seven net-new glossary terms ARE required; the DB insertion work is not skippable.** Worker 0's
+  "seeding is a no-op" finding was true only of the terms CSV's 37 anchors, all of which do exist as
+  `GlossaryTerm` rows. The spec's `## Doc updates` separately requires the seven terms *this card
+  authors* — the package Django view, the body cap, the UTF-8 wire contract, the consumer-injection
+  seam, the revalidation window, the connection-scoped revocation contract, and the WebSocket Host
+  boundary — and none of the seven exists in `docs/GLOSSARY.md` today.
+
+**Retrospective candidate for closeout:** a finding stated in a dispatch prompt is a *hypothesis to
+re-verify*, exactly like a review's prescribed remediation. `BUILD.md` already says a worker may not
+treat a review's prescription as authority; it does not say the same of Worker 0's own pre-verified
+findings, and it should. The saving grace here was that pre-verification is offered to save
+re-derivation, not to forbid it.
+
+### Round 2 is CLOSED — `bld-review-2-w3_residual.md` reads `final-accepted`
+
+The closing sequence, for the record: Worker 3 residual review (`revision-needed`, new finding M6)
+-> Worker 2 apply-changes (`built`) -> Worker 3 pass 2 (`review-accepted`) -> Worker 1 final
+verification (`final-accepted`). Suite **5202 passed, 40 skipped**; the +3 over 5199 is exactly M6's
+three parametrized rows.
+
+- **M6** — `views.py::_canonicalizes_to_utf8`'s `except (LookupError, TypeError)` had its `TypeError`
+  half pinned by **zero** rows. `codecs.lookup` raises `TypeError` for every non-`str` including
+  `bytes`, and `HttpRequest.encoding` is publicly settable, so `b"utf-8"` from consumer middleware
+  reached it. Direction was fail-**closed** (removal turns the controlled `400` into an unhandled
+  `500`), so it was a missing row, not a reopened bypass — closed with three test rows and **no
+  production change**, `views.py` proved byte-identical to `HEAD` by sha256.
+- **Worker 1's final verification earned its keep**, finding a divergence two prior passes had no
+  reason to look for because it was outside the decisions the round amended: **Decision 7 step 3**
+  claimed a `MultiPartParser` hand-off for "a multipart request", which is false for any method
+  other than POST — `_is_multipart_form_post` is POST-scoped by design, so a stray multipart
+  `Content-Type` on a GET takes the **counted** path, and the spec never said GET sits outside the
+  multipart carve-out at all. Decision 17 was likewise unscoped. Both now state the method scoping;
+  spec 224,788 -> 226,343 bytes, glossary still `OK: 37 terms`.
+- **Nine builder amendments were enrichments that had never landed and carried no disposition.**
+  Now each has one: A3/A4/A5/A11 declined with reasons, A6/A7/A9 recommended as one short custodian
+  pass (three test-plan sentences, no code), A10 folded into M5's substance. Recording the
+  disposition is what discharges the obligation — `revision-needed` would have routed to Worker 2,
+  which cannot edit the spec.
+
+**Two prose corrections are routed into Slice 5** rather than a spawn of their own, because Slice 5
+already owns prose edits in both files: a false claim in the M6 row's docstring in
+`tests/test_views.py` ("a row asserting only `is False` would still pass" — measured false, since
+removing the arm makes the helper *raise*), and the first Worker 3 pass's open nit on
+`views.py::_form_encoding_is_utf8`'s docstring numbering its conditions in the reverse of the code's
+evaluation order. **Worker 1's caveat on that routing is load-bearing and Slice 5's dispatch must
+carry it:** the Slice 5 plan scopes `views.py` to "the one authorized docstring re-word" and
+`tests/test_views.py` to "the docstring first line", so each of these is a *second* edit in its
+file — this round's builder correctly declined the `views.py` nit on exactly that ground. Naming
+both edits explicitly in the build dispatch is what makes the routing real.
+
+## Slice 5 and the integration pass — closed, and what they routed forward
+
+Slice 5 is `final-accepted` (plan -> build -> review -> final verification, every `Status:` a single
+bare legal value). All ten sub-checks landed or were legitimately verify-only; ten of them were
+verify-only or partially satisfied on disk before the pass began, six beyond the four Worker 0
+pre-verified. `DONE-065-0.0.15` renders in `## Done` and is absent from `## In progress`;
+`import_spec_terms --check` moved `OK: 45` -> `OK: 46 done cards`; all four generated docs proved
+byte-stable across two consecutive regenerates; `build_tree_md.py --check` now passes, having failed
+before the slice. The version quintet is untouched and `pyproject.toml` correctly still reads
+`0.0.14` — card 045 is still `todo` at `0.0.15`, so the joint cut owns it (Decision 15).
+
+`bld-integration.md` is `planned` with a nine-box checklist for a Worker 2 consolidation loop.
+
+**Two inherited items were larger than routed, which is the argument for the pass existing:**
+
+- The inline-`post` DRY item was routed as **6** sites; there are **8**. The routed count was measured
+  mid-Slice-3 and a fourth async row landed afterwards.
+- **M1's routing record carried a false constraint.** It said the two `websocket_revalidation_window`
+  sentences following the false clause were "true and must survive". They carry the same drift:
+  `routers.py:409` "revalidates every operation" against `consumers.py:81-83` "every admission **and**
+  every frame", and `:411` "per authenticated **operation**" against `consumers.py:269` "per
+  authenticated **checkpoint**". The fix spans `:404-411`, four corrections rather than one. A routing
+  record is a hypothesis too.
+
+### Seven further spec/code divergences, from a corroborating sweep that returned late
+
+A background sweep dispatched by Slice 5's final verification returned **after** that pass closed, so
+it contributed nothing to it — correctly recorded as such at the time. Its findings are real. Worker 0
+verified the two substantive ones **by execution**, not by reading:
+
+- **Decision 9 `:1300` overstates, and it is that decision's load-bearing ownership sentence.** It
+  calls Strawberry's own view "the only mount the gate can still reach". False:
+  `_strawberry_patches.py:594` assigns `BaseView.parse_json = _patched_parse_json`, and
+  `views.py:590`'s mixin delegates through `super().parse_json(data)` to that exact attribute — so a
+  **package** view rides `APPLY_UPSTREAM_PATCHES` for the body-envelope guard. Executed on a real
+  `DjangoGraphQLView(schema=None)`: `parse_json(b"42")` and `parse_json(b"[1,2]")` both raise
+  `HTTPException 400`, and under `{"strawberry": False}` they return `42` / `[1, 2]`, which upstream's
+  unguarded `data.get("query")` at 0.316.0 turns into an unhandled `500` **on the package view**. The
+  narrower claim two paragraphs earlier — that the *wire contract* does not ride the kill switch —
+  does hold. The same false scoping is mirrored in `_strawberry_patches.py`'s own docstring and in
+  `conf.py`'s `UPSTREAM_PATCH_DEPENDENCIES` comment.
+- **Decision 6 `:1015` names a kwarg that does not exist.** It lists `subscriptions_enabled` among
+  upstream kwargs that "keep working, unchanged". `grep` over the installed strawberry-graphql
+  0.316.0: **zero** occurrences. Executed: `hasattr` is `False` on both views, and
+  `DjangoGraphQLView.as_view(schema=None, subscriptions_enabled=True)` raises `TypeError`, while the
+  other three are `True`. `views.py`'s own docstring gets this right and lists only the three.
+
+The remaining five are over- or under-statements, all with cited source lines, none behavioral: the
+DoD's `limit + 1` allocation bound stated without the already-documented `request._body` carve-out;
+the Edge-cases description of the cap branching on `content_type` alone when
+`_is_multipart_form_post` is method-**and**-content-type (the same family as L3, different line and
+subject); the probe's guarded surface enumerated as four calls where the code guards five, with the
+word "Every" making it a factual error rather than shorthand; the cap's own per-request
+`ConfigurationError` — the card's only one that surfaces as a `500` rather than a construction
+failure, and which rejects `0` rather than reading it as "unlimited" — absent from `### Error shapes`;
+and the `DEBUG=True` / empty-`ALLOWED_HOSTS` accepted set given as `localhost` / `127.0.0.1` only,
+where Django's `[".localhost", "127.0.0.1", "[::1]"]` accepts every `*.localhost` subdomain and
+`[::1]` (a reader designing a hostile-`Host` row from that sentence would pick a host that is
+actually accepted).
+
+**Routing.** The source-side halves (`_strawberry_patches.py`'s docstring) join the integration
+cohort, which already owns the same defect class — a contract told in several places where one telling
+drifted. `conf.py`'s comment is the maintainer's concurrent dirty file: **never edited, never
+reverted**, routed as a maintainer item. The seven spec-side corrections are a **custodian pass after
+the consolidation**, so the spec reconciles to the settled tellings rather than to a moving target.
+
+**Ownership declaration for the consolidation cohort**, per `worker-0.md` `### Ownership partition`:
+`docs/README.md` is declared **into** the cohort. It was closed as Slice 5's, and Slice 5's own final
+verification routed one of its lines here; without the declaration the builder would have no
+authority over a file its checklist names.
+
+### Six further spec divergences from an out-of-band adversarial claim audit
+
+An independent auditor (not a build worker, no stake in the spec passing) was dispatched **outside**
+the `Status:` chain to verify every falsifiable claim in the spec against source, against installed
+strawberry `0.316.0` / Django / channels, and against the `strawberry_django` and `graphene_django`
+reference checkouts. Two rounds. Worker 0 re-verified **all six** findings independently, by execution
+where execution settles it, before recording any of them here. One site the auditor missed is folded
+into F3; one severity assessment is overridden with the reason stated.
+
+The audit's own negative results are recorded too, because a verified-clean decision is a build asset:
+**Decision 7** (the counted body cap) and **Decision 18** (CSRF re-entry ordering) both came back clean
+under executable probes, including the counterfactual for 18 (a non-exempt callback, proving Django's
+multipart parser really does run pre-view) and a lying / garbage `Content-Length` matrix for 7.
+
+- **F6 (high) — `## Edge cases` `:2354-2373` and test-plan row 15 `:2548-2552` state the *superseded*
+  behavior for an over-reported stream position.** Both say the incoherent pair "in either direction"
+  is refused a measurement and falls to the bounded read, and that the over-reporting direction hands
+  Strawberry an **empty** body for a `400` at the parse. The built contract refuses that shape as
+  `_Probe.CORRUPTED` — `_request_body.py:333-336` verifies the restore **before** the subtraction ever
+  runs, so the bullet's "probed difference zero or negative" is unreachable for it — and
+  `body_exceeds_limit:229-231` answers the package's own `413` plus an operator WARNING with **nothing
+  read**. Worker-0 verification: a purpose-built over-reporting-`tell()` stand-in returns
+  `_Probe.CORRUPTED` with `reads performed by probe: []`. `tests/test_views.py:1077-1116` asserts
+  exactly that (`413`, `requested == []`, `delivered == 0`, the log record) and its own docstring names
+  the Edge bullet's behavior as "what the two-state version did". Only the under-reported-end direction
+  behaves as the spec's sentences describe. Row 15's third-outcome list also narrows the refused set to
+  a restoring seek that *raises*, excluding the verified-failed restore `_position_restored:373-377`
+  refuses identically. **This is the inversion class the round-2 custodian pass already hit once**: an
+  edge bullet elaborating a decision it contradicts.
+- **F1 (medium) — Decision 16 `:1869-1871` and DRY `:2222-2224` name the wrong owner for the revocation
+  state, and it holds none of it.** Both say the lock, the revoked flag and the last-validated timestamp
+  are "one set of state on the **adapter** instance". `consumers.py:656-657` puts the lock and the flag
+  on the **consumer** (`GraphQLWebSocketConsumer.__init__`; its own docstring at `:610-614` says
+  "per-INSTANCE"), and the timestamp is on the **scope** (`_REVALIDATED_AT_SCOPE_KEY`, `:214, 453, 485`).
+  Every read reaches them through `consumer.`; nothing is on the adapter. The soundness argument
+  survives — the parenthetical's reason ("upstream constructs exactly one per connection") is equally
+  true of the consumer — so this is a description defect, not a hole.
+- **F3 (low) — "two-line delegate" is wrong at three sites and contradicts the spec's own DRY bullet.**
+  `:207`, `:1974` and `:1421` all say two-line; `:2233-2234` says "the sync one two statements, the
+  async one three", which matches `views.py:879-888`. `:1421`'s "two two-line subclasses" is the third
+  site, found by Worker 0 and missed by the audit: `consumers.py:561-579` shows each admission override
+  body is three lines. The rationale's change record at `-rationale.md:124-126` **claims this wording
+  was already corrected for both colours**. It was not — which is precisely how F3 came to exist, and
+  the reason this correction must land at all three sites in one edit.
+- **F5 (low, severity raised by Worker 0) — `AllowedHostsOriginValidator` is not "only a factory for
+  `OriginValidator(settings.ALLOWED_HOSTS)`"** (`:420-421`, `:2154-2156`). channels `4.3.2` substitutes
+  `["localhost", "127.0.0.1", "[::1]"]` under `DEBUG` with an empty list. Raised above the auditor's
+  "low" because the substituted list **differs from Django's** (`"localhost"` vs `".localhost"`, so no
+  subdomain match) — a divergence that is *evidence for* Decision 19's premise. Flattening the
+  validator to a factory discards a fact that argues for the boundary this card adds. The operative
+  claim (Origin-only, never Host) is confirmed **true**.
+- **F4 (low) — `:2415-2416` says `DEBUG` + empty `ALLOWED_HOSTS` accepts "`localhost` / `127.0.0.1`
+  only".** Django substitutes `[".localhost", "127.0.0.1", "[::1]"]` (`http/request.py::get_host`,
+  identical on 5.2 and 6.0): leading dot ⇒ every `*.localhost` subdomain, plus IPv6 loopback. The
+  bullet's own remediation (set `ALLOWED_HOSTS` explicitly with `override_settings`) is unaffected.
+- **F2 (low) — `:653-655` says the upstream views' imports are "`django`, `cross_web`, and `strawberry`
+  only, verified in the installed 0.316.0".** `strawberry/django/views.py:10` imports
+  `asgiref.sync.markcoroutinefunction` at module level, and the list also omits the standard library.
+  The package's own `views.py:58-62` docstring gets this **right**, so the spec contradicts the code it
+  describes. The conclusion (no optional-import guard) survives: `asgiref` is Django's own hard dep.
+- **F7 (low, Worker 0's own, promoted from the audit's sub-threshold note) — the `APPEND_SLASH` bullet
+  `:2300-2304` is unqualified where Django's behavior is not.** It states flatly that "a `POST` to
+  `/graphql` also gets a `301`". Under `DEBUG=True` Django raises `RuntimeError` instead
+  (`middleware/common.py::get_full_path_with_slash`). The auditor left this sub-threshold as deployment
+  guidance; overridden because the reader most likely to *test* the claim is running `DEBUG=True`, would
+  get a `500`, and would conclude the spec is wrong. One qualifying clause closes it.
+
+**F8 (medium) — Worker 0's own, found while applying the fixes: Decision 6 carried a *sixth* site of
+the hook-count defect, and got the placement wrong too.** `### Decision 6` read "That subject is two
+questions and **two overridden hooks, both on one shared private mixin**". There are **four**
+(`views.py`: `as_view` and `parse_json` on `_RequestBodyBoundaryMixin`; `run` and `parse_multipart`
+declared per concrete view), and the two hooks belonging to the two questions the sentence names split
+across the boundary it denies — Decision 9's `parse_json` is on the mixin, Decision 7's `run` is not.
+So "both on one shared private mixin" was false for one of the two it named. This is the strongest
+evidence yet for the F3 lesson: **a count stated in prose replicates, and a correction that fixes the
+authoritative telling without sweeping for siblings leaves the falsity alive elsewhere.** The DRY
+section had already been corrected to "Four overridden hooks"; Decision 6 was never swept.
+
+**Routing — superseded by the maintainer.** These were recorded as belonging to a custodian pass
+**after** the consolidation, so the spec would reconcile to settled tellings. The maintainer directed
+both to run **now**, so they run **concurrently** under a declared ownership partition instead:
+
+| Cohort | Owns (writes) | Never writes |
+|---|---|---|
+| **Worker 1** — spec custodian, nine corrections | the spec, the `-rationale.md`, `bld-custodian-3-claim_audit.md` | all production code, all tests, `docs/README.md`, the DB |
+| **Worker 2** — integration consolidation, nine boxes | `routers.py`, `_strawberry_patches.py`, `views.py`, `exceptions.py`, `test_transport_api.py`, `docs/README.md`, the glossary DB rows + regenerated `GLOSSARY.md`, `bld-integration.md` | the spec, the rationale, `conf.py`, `tests/test_views.py` |
+
+The partition is what makes concurrency safe here, because **every spec correction lives in one file** and
+`BUILD.md` names *rewriting a contract under a worker reading it* as a recognized defect class. Two
+consequences were pushed into the dispatches rather than left to discovery: Worker 1 is told to verify
+facts by **anchor string or execution, never by line number**, since Worker 2's edits shift lines in the
+very files it reads for evidence; and each is told the other exists, so a wrong sentence found outside
+its own cohort is **recorded for the other worker** rather than fixed across the boundary.
+
+Two corrections were applied directly by Worker 0 before dispatch and are excluded from Worker 1's
+list: Decision 6's phantom `subscriptions_enabled` kwarg, and F8 above.
+
+F6 remains the one to verify first — a test written from row 15's words fails against the built code.
+Worker 2 was also given two **corrections to its own routing record**, because the record understated
+the work: the inline-`post` DRY item is **eight** sites rather than six, and M1's record asserts two
+neighbouring `routers.py` sentences are "true and must survive" when they carry the same drift, making
+it four sentences rather than one. Both were passed as *hypotheses to re-verify*, with the count it
+actually finds requested back — per `### Three Worker-0 dispatch findings the Slice 5 planning pass
+refuted`, a finding stated in a dispatch prompt is not evidence.
+Two audit items stay **open and are not findings**: the Uvicorn and Hypercorn thirds of Decision 8's
+"no mainstream ASGI server bounds the total body" (absent from the venv; installing is barred, and the
+error direction is safe — if either *did* cap, the spec would be understating protection). Daphne's
+third is **closed as true** by Worker 0: `daphne/http_protocol.py:200-210` uses `request_buffer_size`
+purely to chunk reads into `more_body` fragments, with no total accumulation bound.
+
+**Process note for the closeout.** This audit ran entirely outside the `Status:` chain and found a
+high-severity inversion in a spec that had already passed two review rounds, a custodian pass, and a
+Slice 5 final verification. That is the third independent confirmation of `worker-0.md`'s standing
+pattern — *a green `Status:` chain does not prove the spec matches the code* — and the first evidence
+that an auditor with **no stake in the artifact passing** finds a class of defect the in-flow reviewers
+did not. Worth a `BUILD.md` consideration: an out-of-flow claim audit before the final gate.
+
+### W3 adversarial review of the integration + custodian cohorts -> `bld-review-3-integration.md`
+
+Both cohorts' substance verified correct end to end — by execution where execution settles it,
+including AST identity (docstrings normalised) of all four production files against `git show
+HEAD:`, proving zero executable production change. Both verdicts were nonetheless
+`revision-needed`, each resting only on Low findings the acceptance gate cannot wave through:
+
+- **A-L1** (W2 artifact) — "Net -49 lines" for `test_transport_api.py`; measured `-21`
+  (39 insertions, 60 deletions).
+- **A-L2** (W2 source) — the landed L-A comment in `exceptions.py` self-contradicts within six
+  lines ("the spelling its two siblings use" vs "Three spellings of one placeholder"); measured
+  three sites, **two** spellings. Inherited from finding L-A's own wording; W2 had in fact landed
+  the *correct* site (`_safe_arg_repr`) where the plan mis-attributed `_safe_type_name`.
+- **B-L1** (W1 artifact) — not-fixed item 1's "each in its own `try`": six guarded calls,
+  **five** `try` blocks (`_position_restored` guards two in one).
+- **B-L2** (Worker 0's, closed above) — the custodian artifact was absent from `## Artifact list`.
+
+Two Worker-0 flags were **refuted** and are withdrawn: W1's "zero chronology phrases" claim is
+phrase-specific and grep-true (the single hit is `pytest-xdist` in a test-plan row), and
+not-fixed item 7's two phrases legitimately describe shipped 0.0.14 behavior — W3 recommends W1
+close item 7 as no-change. The partition held; `conf.py:117` remains genuinely open as the
+maintainer's; `bld-slice-4-ws_revalidation.md:9`'s `Status: planned` lapse was left alone as
+recorded. W3 flagged for the final verification: W2's tenth box (`### Item C`) sits in its build
+report rather than the dispatched checklist and should be audited as a tenth tick.
+
+Remediation was dispatched as two concurrent single-finding fixes (disjoint files: W2 owns
+`bld-integration.md` + `exceptions.py`; W1 owns its own artifact only).
+
+## Open maintainer decisions (do not let a worker re-litigate these)
+
+Both were escalated by `bld-review-2-w3_review.md` as **process calibrations, not review findings**,
+and neither blocks Slice 5. Workers are told they are pending so they do not re-raise them.
+
+- **M5 — the plan carries no hot-path declaration, and the round owes a number.** The WS-revocation
+  design holds one connection-local lock **through** the outbound send, which meets `BUILD.md`
+  `## Hot-path budget`'s definition ("per outbound message", "per connection"), and the spec itself
+  calls it a hot path. Options: (a) declare the slice hot-path and re-loop the cohort for a
+  before/after number — `_instrument_revalidation`'s `probe.reads` is already the instrument, so it
+  is cheap; or (b) an explicit maintainer waiver naming the number as not required for this card.
+- **M4 — whether the weakly-pinned rule is applied literally.** Twelve boundaries in round 2 fail
+  the 0-1-row test. The reviewer's own merit ruling: M2 and M3 were genuine gaps (both since
+  remediated), four more deserve a second row on merit, and the remaining six are adequate on merit
+  and fail only the rule as written. Applying it literally re-loops all twelve. Related: the rule
+  says "never a recorded exception" while `bld-review-2-w3_review.md` Q7 records one
+  ("weakly pinned but adequate"), so the rule needs either a narrow carve-out or that entry
+  becomes `revision-needed`.
+- **`AGENTS.md:15` vs. scoped `ruff`.** All four role files now tell workers to scope `ruff format`
+  / `ruff check --fix` to their own files, because this tree carries concurrent uncommitted work and
+  a repo-wide write-mode run reformats it. `AGENTS.md:15` mandates the repo-wide form and the role
+  files defer to `AGENTS.md` on conflict, so **the scoping instruction is inert until this is
+  reconciled.** Recorded in commit `84c6075b`'s message as well.
+
+### Artifact `Status:` hygiene lapse in round 2 — recorded, not silently repaired
+
+`worker-0.md` `## Slice status legend` requires exactly one of five legal values, and Worker 0 may
+never write the field itself. Round 2 shipped with **four** violations, all of which reached the
+maintainer's commit (this section said three until Worker 1's final verification found the fourth —
+the count was itself an instance of the record reading cleaner than the run):
+
+- `bld-review-2-ws_revocation.md` — **no `Status:` line at all**
+- `bld-review-2-ws_host_boundary.md` — **no `Status:` line at all**
+- `bld-review-2-http_boundary.md` — `Status: built (pass 2), dirty, uncommitted.`, the exact
+  illegal shape `worker-0.md` names as an example off which no dispatch decision can be read
+- `bld-review-2-w3_review.md:8` — a legal value with commentary appended
+  (`Status: **revision-needed** — five Medium findings …`), which the legend forbids as explicitly
+  as it forbids two values or a paraphrase
+
+The dispatch chain was therefore driven off worker reports rather than off the artifacts, which is
+the courier failure the artifact contract exists to prevent. Not retro-fixed: Worker 0 writing those
+lines now would be writing `Status:`, and the passes that owed them are closed and committed. The
+round is instead closed forward, through the residual review and Worker 1's final verification,
+which sets `final-accepted` on its own artifact legitimately.

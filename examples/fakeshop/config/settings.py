@@ -159,8 +159,8 @@ if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
 # (and any other ``connection.vendor``-sensitive behavior) is verified on.
 # Local: ``docker compose -f docker-compose.postgres.yml up -d`` then
 # ``FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop uv run pytest``.
-# CI: the ``test-postgres`` job in ``.github/workflows/django.yml`` provides the
-# server via a GitHub Actions service container.
+# CI: the ``test-postgres`` job in ``.github/workflows/postgres.yml`` provides
+# the server via a tuned throwaway Docker container.
 # Requires the ``pg`` dependency group (``uv sync --group pg`` installs
 # psycopg); the DSN is parsed with the stdlib so the default sqlite install
 # carries no Postgres dependency.

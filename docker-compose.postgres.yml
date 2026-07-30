@@ -1,6 +1,6 @@
 # Local Postgres for the FAKESHOP_PG_DSN test tier (see
 # examples/fakeshop/config/settings.py "Postgres tier" and the
-# test-postgres job in .github/workflows/django.yml).
+# test-postgres job in .github/workflows/postgres.yml).
 #
 # Usage:
 #   docker compose -f docker-compose.postgres.yml up -d

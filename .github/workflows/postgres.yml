@@ -127,7 +127,7 @@ jobs:
         #    covered on the sqlite tier. Audited: every DB test carries the
         #    django_db or pg marker (including tests that also take DB access
         #    from a fixture), so nothing DB-touching is dropped. Cuts the tier
-        #    from ~3000 tests to ~900.
+        #    down to roughly a third of the suite.
         env:
           FAKESHOP_PG_DSN: postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop
         run: |

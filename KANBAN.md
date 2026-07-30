@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-29
+Last refreshed: 2026-07-30
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-ALPHA-047-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-062-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-ALPHA-052-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-067-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.14` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -95,8 +95,8 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md) |
-| `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-064-visibility_boundary-0_0_14.md](docs/spec-064-visibility_boundary-0_0_14.md) |
+| `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_15.md](docs/spec-046-transport_security-0_0_15.md) |
+| `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-045-visibility_boundary-0_0_14.md](docs/spec-045-visibility_boundary-0_0_14.md) |
 | `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
 | `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
@@ -144,16 +144,188 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+
+<a id="execution_resource_policy_central_budget_object_value_cardinality_walker"></a>
+### [TODO-ALPHA-047-0.0.16 - Execution resource policy: central budget object + value-cardinality walker](KANBAN.html#execution_resource_policy_central_budget_object_value_cardinality_walker)
+
+- Priority: High
+- Status: To Do
+- Relative size: L
+
+#### Planning note
+
+Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
+
+#### Dependencies
+
+- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- New immutable resource-policy object + schema-construction normalization + context threading.
+- Value-budget walker over coerced inputs (iterative, cycle-safe, py3.10).
+- types/base.py DEFAULT_RELATION_SHAPE 'both' -> 'connection'; DjangoListField bound.
+
+#### Definition of done
+
+- [ ] Immutable resource policy consumed by schema/fields/optimizer/transports; per-field narrowing only.
+- [ ] Value-budget walker rejects before ORM access; DEFAULT_RELATION_SHAPE default is 'connection'; raw lists bounded.
+- [ ] Full suite green at 100% coverage; hygiene clean; docs fold-in.
+
+#### Architectural posture
+
+- One immutable resource-policy object consumed by DjangoSchema, collection fields, the optimizer, and the transports: max document tokens, max selection/alias count after fragment expansion, max depth, max page size, max raw-list rows, max aggregate collection cost, optional execution deadline. Normalize and validate once at schema construction; thread the immutable result through request context (mirror the optimizer's DST_OPTIMIZER_* context seam). Per-field overrides may only narrow unless an explicit trusted-schema declaration widens.
+- Extend the policy with one iterative, cycle-safe value-budget walker charging total input nodes, container width, membership-list items, node-refetch ids, relation ids per mutation and in aggregate, nested serializer rows, upload count / per-file bytes / aggregate bytes, and scalar byte size where a parser/validator is nonlinear. Stop before decoding ids or touching the ORM once the budget is exhausted.
+- Change the secure default for many-side relations from 'both' to 'connection'. A raw list requires explicit opt-in and an enforced maximum; DjangoListField gets a required/effective bound (documenting it as dangerous is not enough).
+
+#### Why it matters
+
+- S3 (High): neither the package nor the example installs a token / query-depth / complexity / selection-count limiter, and there is no page-size / raw-list-row / aggregate-row budget. DjangoListField evaluates an unbounded queryset, and DEFAULT_RELATION_SHAPE='both' exposes a raw many-side list alongside the bounded connection, so a client bypasses the connection cap via the list sibling.
+- S4 (High): document limits do not constrain variable-supplied values. A tiny query can carry an unlimited ids list (DjangoNodesField preserves duplicates positionally), unlimited in-lookup values, an and/or filter tree of unbounded width/node count, unlimited M2M ids, wide nested serializer lists, and uploads with no aggregate byte / file-count / per-file cap.
+
+#### Dependencies
+
+- Depends on card 046: the resource policy is consumed by the transports fixed there, and the program is staged transport-first.
+
+#### Test plan
+
+- Token / expanded-selection / alias / depth / aggregate-cost boundaries; fragments and directives cannot evade accounting; the same field under many aliases is charged many times.
+- A connection's relay_max_results cannot be bypassed through a generated list sibling; raw root and relation lists stop at the configured maximum.
+- Each input family under/at/over boundary, including a tiny query with a large variable payload; duplicate ids; empty lists; multiple bounded fields whose aggregate exceeds the request budget; proof of zero ORM work after rejection; sync/async parity with one typed error code.
+
+#### Open question
+
+- Default budget values (token/selection/depth/page/rows/cost) and which are settings-overridable vs schema-construction-only: the spec pins concrete numbers.
+- Whether 'both'->'connection' needs a one-release deprecation shim or is a clean alpha break like card 046: the spec decides.
+
+#### Card references
+
+- Dependency: Depends on card 046: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+<a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
+### [TODO-ALPHA-048-0.0.17 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
+
+- Priority: High
+- Status: To Do
+- Relative size: M
+
+#### Planning note
+
+Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
+
+#### Dependencies
+
+- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- converters.py: remove DjangoFileType.path from the default field set (name/size/url remain; opt-in path).
+- extensions/debug.py: settings.DEBUG fail-closed gate + allow_unsafe_production ack + payload caps.
+- schema.py: DjangoSchema production error policy (log + correlation id + stable message under DEBUG=False).
+
+#### Definition of done
+
+- [ ] path removed from the safe default; debug extension fails closed under DEBUG=False with an explicit ack; DjangoSchema has a production error policy.
+- [ ] Full suite green at 100% coverage; hygiene clean; migration note + docs fold-in.
+
+#### Architectural posture
+
+- Remove path from the public generated type's safe default (default output limited to name/size/url). A filesystem path requires an explicit server-owned field or a loud Meta opt-in; do not mask path failures while still exposing successful absolute paths. Justified pre-1.0 compatibility break + migration note.
+- DjangoDebugExtension fails closed when settings.DEBUG is false unless an explicit constructor acknowledgement (DjangoDebugExtension(allow_unsafe_production=True)); add the __init__ it currently lacks and preserve fresh-per-operation instances. Cap the number and serialized byte size of SQL and exception rows.
+- DjangoSchema gets a first-class production error policy: under DEBUG=False, unexpected exceptions log server-side with a correlation identifier and return a stable, non-sensitive message; deliberate client-facing framework errors (validation envelopes, audited GraphQLError codes) retain their contract; consumer code may explicitly opt out.
+
+#### Why it matters
+
+- S5 (High): DjangoFileType.path returns FieldFile.path and its description says 'the absolute filesystem path'; DjangoImageType inherits it. Every generated file/image output offers clients a server-internal path (usernames, release dirs, container mounts, tenant layout) whenever the storage backend supports one.
+- S8 (Medium): DjangoDebugExtension returns interpolated SQL values, exception messages/types, and traceback paths, and operates independently of settings.DEBUG -- a single production schema-list entry silently activates the disclosure. It has no __init__ today.
+- S10 (Medium): DjangoSchema centralizes mutation integrity but offers no production error policy; unhandled resolver/hook exceptions return their literal message to clients unless the consumer adds MaskErrors or overrides process_errors.
+
+#### Dependencies
+
+- Sequenced behind card 046 in the staged security program (independent code).
+
+#### Test plan
+
+- Default SDL lacks path; remote-storage failures still degrade safely for retained fields; any explicit path opt-in is absent unless deliberately declared.
+- DEBUG=False rejects the debug extension by default; the explicit acknowledgement works; fresh-instance isolation intact; payload limits truncate deterministically; the aggregate fakeshop schema stays debug-free.
+- Error policy distinguishes parse/validation errors, audited client-safe GraphQL errors, permission denials, and unexpected resolver/hook exceptions; sync/async parity; the correlation id (not the sensitive original message) reaches the client.
+
+#### Open question
+
+- The opt-in shape for an explicit filesystem-path field (Meta key vs server-only field): the spec decides.
+- Correlation-id format + where it is logged, and whether the stable client message is configurable: the spec pins it.
+
+#### Card references
+
+- Dependency: Sequenced behind card 046 in the staged security program (independent code). -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+<a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
+### [TODO-ALPHA-049-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
+
+- Priority: High
+- Status: To Do
+- Relative size: M
+
+#### Planning note
+
+Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
+
+#### Dependencies
+
+- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
+- Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
+- .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
+
+#### Definition of done
+
+- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
+- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
+
+#### Architectural posture
+
+- Refresh uv.lock to at least Django 5.2.16 and 6.0.7 for their respective Python markers. KEEP the exact Django 5.2.0 compatibility CI cell but label it compatibility-only and never use it for deployment examples or security assertions -- compatibility support and secure-deployment support are different contracts.
+- Add an automated dependency audit on pull requests and a scheduled run (audit the production resolution + optional extras; handle the intentional 5.2.0 compatibility environment separately); add automated update coverage for Python dependencies and GitHub Actions. State that production users must install the newest patch in their supported Django series; the Django>=5.2 floor is not a secure-version recommendation.
+- CI least privilege: top-level permissions: contents: read, with only the exact additional grant to the one step/job that needs it; persist-credentials: false on every non-pushing checkout; pin every action to a reviewed full commit SHA (keep the readable version comment); pin the Postgres image by digest; add timeout-minutes to every networked/test job.
+
+#### Why it matters
+
+- S6 (High): uv.lock resolves Django 5.2.14 (py<3.12) and 6.0.5 (py>=3.12), but the Django project shipped security releases 5.2.16 and 6.0.7 (CVE-2026-48588, a shared-cache private-data exposure) plus 5.2.15/6.0.6 fixing five more issues in the currently locked versions. No dependency-audit command, scheduled security workflow, or update configuration exists.
+- S7 (Medium): the test job grants contents: write though only the Coveralls upload consumes the token (which does not need repo-write); checkout persists its credential by default; first-party actions use mutable major tags and Postgres uses postgres:16; networked/test jobs have no timeout-minutes.
+
+#### Dependencies
+
+- Sequenced behind card 046 in the staged security program; S6 independently urgent.
+
+#### Test plan
+
+- The dependency audit runs on the production resolution + extras and handles the 5.2.0 environment separately; the refreshed lock still resolves the whole matrix.
+- CI permission and pin assertions where mechanically testable; the exact 5.2.0 compatibility cell still proves API compatibility with the advertised floor.
+
+#### Open question
+
+- pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
+
+#### Card references
+
+- Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package"></a>
-### [TODO-ALPHA-045-0.0.15 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
+### [TODO-ALPHA-050-0.0.19 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
 
 - Priority: Medium
 - Status: To Do
 - Relative size: M
 - Labels: `internal`
-- Spec: [spec-045-debug_extraction-0_0_15.md](docs/spec-045-debug_extraction-0_0_15.md)
+- Spec: [spec-050-debug_extraction-0_0_19.md](docs/spec-050-debug_extraction-0_0_19.md)
 
 #### Dependencies
 
@@ -163,7 +335,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 - Slice 1 - the new package: brand-new standalone repo riodw/django-strawberry-debug; pyproject (deps Django>=5.2 + strawberry-graphql>=0.316.0, NO dependency on django-strawberry-framework), src layout, MIT, README ported from spec-044's user-facing API (posture, wire contract, graphene narrowing table, async boundary); debug.py moved VERBATIM except the single logger swap (logging.getLogger("django_strawberry_debug")); the 1,019-line suite moved onto a self-contained harness; CI matrix green; 0.1.0 published to PyPI.
 - Slice 2 - the framework seam: delete extensions/debug.py + tests/extensions/test_debug.py; rewrite extensions/__init__.py as the require_optional_module-guarded PEP 562 lazy re-export; add [project.optional-dependencies] debug = ["django-strawberry-debug>=0.1.0"] (+ dev-group pin); absence test on the None-sentinel shape; ONE live-tier re-export + optimizer-composability proof; the probe scaffold slims to that seam test; fail_under = 100 re-verified.
-- Slice 3 - docs fold-in (GLOSSARY via DB, README, TREE regen, dry-file doc retired), the 0.0.15 version-quintet cut (lone card owns it), CHANGELOG entry, card wrap.
+- Slice 3 - docs fold-in (GLOSSARY via DB, README, TREE regen, dry-file doc retired), the 0.0.19 version-quintet cut (lone card owns it), CHANGELOG entry, card wrap.
 
 #### Definition of done
 
@@ -171,7 +343,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - [ ] This repo: extensions/debug.py and its package-tier suite deleted; extensions/__init__.py is the guarded lazy re-export; [debug] extra added; absence sentinel test + one live seam/composability test in place; probe scaffold slimmed.
 - [ ] pip install django-strawberry-framework[debug] resolves in an isolated venv and `from django_strawberry_framework.extensions import DjangoDebugExtension` works; with the extra absent, import-innocence + the install-hint error hold.
 - [ ] Full suite green under fail_under = 100 after the deletion.
-- [ ] Version quintet at 0.0.15, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, import_spec_terms green.
+- [ ] Version quintet at 0.0.19, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, import_spec_terms green.
 
 #### Files likely touched
 
@@ -200,23 +372,19 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
 <a id="boundary_hardening_and_system_wide_dry_squeeze"></a>
-### [TODO-ALPHA-046-0.0.16 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
+### [TODO-ALPHA-051-0.0.20 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
 
 - Priority: High
 - Status: To Do
 - Relative size: XL
 - Labels: `internal`
-- Spec: [spec-046-boundary_dry_squeeze-0_0_16.md](docs/spec-046-boundary_dry_squeeze-0_0_16.md)
+- Spec: [spec-051-boundary_dry_squeeze-0_0_20.md](docs/spec-051-boundary_dry_squeeze-0_0_20.md)
 
 #### Dependencies
 
 - `DONE-044-0.0.14` - Response-extensions debug middleware
-- `TODO-ALPHA-045-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
+- `TODO-ALPHA-050-0.0.19` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 #### Scope
 
@@ -224,7 +392,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - WP-B mechanical DRY batch (~450-550 lines): query-side delegate absorption into `sets_mixins.py`, write-side `PermissionClassesMixin` + metaclass merge, inputs micro-hoists, resolvers micro batch, root/optimizer/types small batch.
 - WP-C structural DRY batch (~500-600 lines): fold `_run_delete` and the plain-form pipeline onto the shared write skeleton, filter converter/normalizer dispatch table, `install_input_namespace()`, bind-drain merge, connection dispatch tails, `slot_child_selections()`, `iter_relation_path()`, budgeted-walk primitive, column-backed conversion sharing (mutations+forms only), finalizer error formatters, underscore alias deletion, `editable_input_fields` onto `resolve_effective_fields`.
 - WP-D contract-level DRY (~150 lines + doc debt): single-window planner scheme through `_divergent_key_windows`, walker `_resolve_field_map` dual-contract retirement (FieldMeta fallback), model relation decoder over the shared spine.
-- Slice 5: docs fold-in, the `0.0.16` version cut (lone card at this patch version owns the quintet), CHANGELOG entry, card wrap.
+- Slice 5: docs fold-in, the `0.0.20` version cut (lone card at this patch version owns the quintet), CHANGELOG entry, card wrap.
 
 #### Definition of done
 
@@ -233,7 +401,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - [ ] Every WP-B/C/D candidate landed or recorded rejected-with-reason in the spec; the deliberate-duplication ledger preserved.
 - [ ] Plain-form mutations run inside `pipeline_alias_guard` + `authorization_phase` with live coverage (approved behavior change); `editable_input_fields` strictness tightening covered (approved behavior change).
 - [ ] Full suite green under `fail_under = 100`; zero error-string assertion edits outside the two approved behavior changes; optimizer bench deltas at noise level.
-- [ ] Version quintet at `0.0.16`, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, `import_spec_terms` green.
+- [ ] Version quintet at `0.0.20`, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, `import_spec_terms` green.
 
 #### Files likely touched
 
@@ -257,15 +425,15 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 #### Dependencies
 
 - Sequenced behind DONE-044-0.0.14: card 044 owns the `0.0.14` joint cut and its TODO anchors sit on the version-quintet sites; this card's Slice 5 (and its quintet anchors) wait until that cut lands.
-- Also sequenced behind TODO-ALPHA-045-0.0.15: the debug extraction ships `0.0.15` first and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
+- Also sequenced behind TODO-ALPHA-050-0.0.19: the debug extraction ships `0.0.19` first and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
 
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
-- Dependency: `TODO-ALPHA-045-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
+- Dependency: `TODO-ALPHA-050-0.0.19` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
-### [TODO-ALPHA-047-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
+### [TODO-ALPHA-052-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
 - Status: To Do
@@ -279,7 +447,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -312,191 +480,23 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Card references
 
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts
-
-<a id="execution_resource_policy_central_budget_object_value_cardinality_walker"></a>
-### [TODO-ALPHA-066-0.0.16 - Execution resource policy: central budget object + value-cardinality walker](KANBAN.html#execution_resource_policy_central_budget_object_value_cardinality_walker)
-
-- Priority: High
-- Status: To Do
-- Relative size: L
-
-#### Planning note
-
-Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
-
-#### Dependencies
-
-- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-#### Scope
-
-- New immutable resource-policy object + schema-construction normalization + context threading.
-- Value-budget walker over coerced inputs (iterative, cycle-safe, py3.10).
-- types/base.py DEFAULT_RELATION_SHAPE 'both' -> 'connection'; DjangoListField bound.
-
-#### Definition of done
-
-- [ ] Immutable resource policy consumed by schema/fields/optimizer/transports; per-field narrowing only.
-- [ ] Value-budget walker rejects before ORM access; DEFAULT_RELATION_SHAPE default is 'connection'; raw lists bounded.
-- [ ] Full suite green at 100% coverage; hygiene clean; docs fold-in.
-
-#### Architectural posture
-
-- One immutable resource-policy object consumed by DjangoSchema, collection fields, the optimizer, and the transports: max document tokens, max selection/alias count after fragment expansion, max depth, max page size, max raw-list rows, max aggregate collection cost, optional execution deadline. Normalize and validate once at schema construction; thread the immutable result through request context (mirror the optimizer's DST_OPTIMIZER_* context seam). Per-field overrides may only narrow unless an explicit trusted-schema declaration widens.
-- Extend the policy with one iterative, cycle-safe value-budget walker charging total input nodes, container width, membership-list items, node-refetch ids, relation ids per mutation and in aggregate, nested serializer rows, upload count / per-file bytes / aggregate bytes, and scalar byte size where a parser/validator is nonlinear. Stop before decoding ids or touching the ORM once the budget is exhausted.
-- Change the secure default for many-side relations from 'both' to 'connection'. A raw list requires explicit opt-in and an enforced maximum; DjangoListField gets a required/effective bound (documenting it as dangerous is not enough).
-
-#### Why it matters
-
-- S3 (High): neither the package nor the example installs a token / query-depth / complexity / selection-count limiter, and there is no page-size / raw-list-row / aggregate-row budget. DjangoListField evaluates an unbounded queryset, and DEFAULT_RELATION_SHAPE='both' exposes a raw many-side list alongside the bounded connection, so a client bypasses the connection cap via the list sibling.
-- S4 (High): document limits do not constrain variable-supplied values. A tiny query can carry an unlimited ids list (DjangoNodesField preserves duplicates positionally), unlimited in-lookup values, an and/or filter tree of unbounded width/node count, unlimited M2M ids, wide nested serializer lists, and uploads with no aggregate byte / file-count / per-file cap.
-
-#### Dependencies
-
-- Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first.
-
-#### Test plan
-
-- Token / expanded-selection / alias / depth / aggregate-cost boundaries; fragments and directives cannot evade accounting; the same field under many aliases is charged many times.
-- A connection's relay_max_results cannot be bypassed through a generated list sibling; raw root and relation lists stop at the configured maximum.
-- Each input family under/at/over boundary, including a tiny query with a large variable payload; duplicate ids; empty lists; multiple bounded fields whose aggregate exceeds the request budget; proof of zero ORM work after rejection; sync/async parity with one typed error code.
-
-#### Open question
-
-- Default budget values (token/selection/depth/page/rows/cost) and which are settings-overridable vs schema-construction-only: the spec pins concrete numbers.
-- Whether 'both'->'connection' needs a one-release deprecation shim or is a clean alpha break like card 065: the spec decides.
-
-#### Card references
-
-- Dependency: Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-<a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
-### [TODO-ALPHA-067-0.0.17 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
-
-- Priority: High
-- Status: To Do
-- Relative size: M
-
-#### Planning note
-
-Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
-
-#### Dependencies
-
-- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-#### Scope
-
-- converters.py: remove DjangoFileType.path from the default field set (name/size/url remain; opt-in path).
-- extensions/debug.py: settings.DEBUG fail-closed gate + allow_unsafe_production ack + payload caps.
-- schema.py: DjangoSchema production error policy (log + correlation id + stable message under DEBUG=False).
-
-#### Definition of done
-
-- [ ] path removed from the safe default; debug extension fails closed under DEBUG=False with an explicit ack; DjangoSchema has a production error policy.
-- [ ] Full suite green at 100% coverage; hygiene clean; migration note + docs fold-in.
-
-#### Architectural posture
-
-- Remove path from the public generated type's safe default (default output limited to name/size/url). A filesystem path requires an explicit server-owned field or a loud Meta opt-in; do not mask path failures while still exposing successful absolute paths. Justified pre-1.0 compatibility break + migration note.
-- DjangoDebugExtension fails closed when settings.DEBUG is false unless an explicit constructor acknowledgement (DjangoDebugExtension(allow_unsafe_production=True)); add the __init__ it currently lacks and preserve fresh-per-operation instances. Cap the number and serialized byte size of SQL and exception rows.
-- DjangoSchema gets a first-class production error policy: under DEBUG=False, unexpected exceptions log server-side with a correlation identifier and return a stable, non-sensitive message; deliberate client-facing framework errors (validation envelopes, audited GraphQLError codes) retain their contract; consumer code may explicitly opt out.
-
-#### Why it matters
-
-- S5 (High): DjangoFileType.path returns FieldFile.path and its description says 'the absolute filesystem path'; DjangoImageType inherits it. Every generated file/image output offers clients a server-internal path (usernames, release dirs, container mounts, tenant layout) whenever the storage backend supports one.
-- S8 (Medium): DjangoDebugExtension returns interpolated SQL values, exception messages/types, and traceback paths, and operates independently of settings.DEBUG -- a single production schema-list entry silently activates the disclosure. It has no __init__ today.
-- S10 (Medium): DjangoSchema centralizes mutation integrity but offers no production error policy; unhandled resolver/hook exceptions return their literal message to clients unless the consumer adds MaskErrors or overrides process_errors.
-
-#### Dependencies
-
-- Sequenced behind card 065 in the staged security program (independent code).
-
-#### Test plan
-
-- Default SDL lacks path; remote-storage failures still degrade safely for retained fields; any explicit path opt-in is absent unless deliberately declared.
-- DEBUG=False rejects the debug extension by default; the explicit acknowledgement works; fresh-instance isolation intact; payload limits truncate deterministically; the aggregate fakeshop schema stays debug-free.
-- Error policy distinguishes parse/validation errors, audited client-safe GraphQL errors, permission denials, and unexpected resolver/hook exceptions; sync/async parity; the correlation id (not the sensitive original message) reaches the client.
-
-#### Open question
-
-- The opt-in shape for an explicit filesystem-path field (Meta key vs server-only field): the spec decides.
-- Correlation-id format + where it is logged, and whether the stable client message is configurable: the spec pins it.
-
-#### Card references
-
-- Dependency: Sequenced behind card 065 in the staged security program (independent code). -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-<a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
-### [TODO-ALPHA-068-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
-
-- Priority: High
-- Status: To Do
-- Relative size: M
-
-#### Planning note
-
-Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
-
-#### Dependencies
-
-- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-#### Scope
-
-- uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
-- Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
-- .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
-
-#### Definition of done
-
-- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
-- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
-
-#### Architectural posture
-
-- Refresh uv.lock to at least Django 5.2.16 and 6.0.7 for their respective Python markers. KEEP the exact Django 5.2.0 compatibility CI cell but label it compatibility-only and never use it for deployment examples or security assertions -- compatibility support and secure-deployment support are different contracts.
-- Add an automated dependency audit on pull requests and a scheduled run (audit the production resolution + optional extras; handle the intentional 5.2.0 compatibility environment separately); add automated update coverage for Python dependencies and GitHub Actions. State that production users must install the newest patch in their supported Django series; the Django>=5.2 floor is not a secure-version recommendation.
-- CI least privilege: top-level permissions: contents: read, with only the exact additional grant to the one step/job that needs it; persist-credentials: false on every non-pushing checkout; pin every action to a reviewed full commit SHA (keep the readable version comment); pin the Postgres image by digest; add timeout-minutes to every networked/test job.
-
-#### Why it matters
-
-- S6 (High): uv.lock resolves Django 5.2.14 (py<3.12) and 6.0.5 (py>=3.12), but the Django project shipped security releases 5.2.16 and 6.0.7 (CVE-2026-48588, a shared-cache private-data exposure) plus 5.2.15/6.0.6 fixing five more issues in the currently locked versions. No dependency-audit command, scheduled security workflow, or update configuration exists.
-- S7 (Medium): the test job grants contents: write though only the Coveralls upload consumes the token (which does not need repo-write); checkout persists its credential by default; first-party actions use mutable major tags and Postgres uses postgres:16; networked/test jobs have no timeout-minutes.
-
-#### Dependencies
-
-- Sequenced behind card 065 in the staged security program; S6 independently urgent.
-
-#### Test plan
-
-- The dependency audit runs on the production resolution + extras and handles the 5.2.0 environment separately; the refreshed lock still resolves the whole matrix.
-- CI permission and pin assertions where mechanically testable; the exact 5.2.0 compatibility cell still proves API compatibility with the advertised floor.
-
-#### Open question
-
-- pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
-
-#### Card references
-
-- Dependency: Sequenced behind card 065 in the staged security program; S6 independently urgent. -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts
 
 ## To Do - Beta (1.0.0)
 
 Cards that complete the django-graphene-filters Layer-3 richness on top of parity (`fields_class`, `aggregate_class`, `search_fields`, plus pre-stable cleanup). Each card targets its own `0.1.x` patch within the road to **1.0.0**. The final card in this column is the `1.0.0` release itself (API freeze, cleanup, verification, beta → stable cut-over). Cards in NNN order = planned ship order.
 
 <a id="fieldset"></a>
-### [TODO-BETA-048-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
+### [TODO-BETA-053-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
 
 - Priority: High
 - Status: To Do
 - Relative size: M
 - Labels: `fieldsets`, `layer-3`, `public-api`
-- Spec: [spec-048-fieldset-0_1_1.md](docs/spec-048-fieldset-0_1_1.md)
+- Spec: [spec-053-fieldset-0_1_1.md](docs/spec-053-fieldset-0_1_1.md)
 
 #### Predicted files
 
@@ -525,7 +525,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 - [ ] Implement `django_strawberry_framework/fieldset/` (package, mirroring the `filters/` shape) with `base.py` (FieldSet class + metaclass), `factories.py` (resolver-binding factory), and a per-fieldset finalizer hook in `types/finalizer.py` phase 2.5.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` only; field declarations are method-based (`resolve_<field>`, `check_<field>_permission`) plus class-level computed-field annotations. No `Meta.fields` on the FieldSet itself — the owning `DjangoType.Meta.fields` is the single source of truth for the model-field surface.
 - [ ] Optimizer `Meta.depends_on` contract: when a `resolve_<field>` reads model columns the owning type's `Meta.fields` does not surface, the FieldSet declares them via `Meta.depends_on`; the optimizer adds those columns to the `only_fields` projection.
-- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end (per `TODO-BETA-052-0.1.3`).
+- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end (per `TODO-BETA-057-0.1.3`).
 - [ ] Tests under `tests/fieldset/` mirror the source one-to-one. Live HTTP coverage under `examples/fakeshop/test_query/` exercises tiered visibility (staff vs perm-holder vs authenticated vs anonymous), redaction (non-staff sees `is_private = False`), denial (anonymous raises on `updated_date`), and a computed field (`display_name` resolves only for authenticated users).
 - [ ] Composability tests: `FieldSet` + `FilterSet` (a field with a `check_<field>_permission` gate is still filterable by an authorized user); `FieldSet` + `OrderSet` (same for ordering); `FieldSet` + `apply_cascade_permissions` (cascade narrows first, then field gates run — no existence leak).
 
@@ -533,14 +533,14 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
 - `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
-- Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-052-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
+- Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-057-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
 - Per-field resolver attachment: the existing `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; FieldSet-bound `resolve_<field>` extends that skip-set so the FieldSet's resolver wins over the auto-generated scalar resolver.
 - Custom Strawberry field class — django-graphene-filters' `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
 - Slot realized in `DONE-034-0.0.10`: `DjangoTypeDefinition.fields_class` is now declared as an inert `type | None = None` sidecar (spec-034 Decision 2 — the structural mirror of the shipped `filterset_class` / `orderset_class` slots). It has no populator yet and stays `None`; `Meta.fields_class` remains in `DEFERRED_META_KEYS` (still rejected at validation). This card's `_bind_fieldsets` is what populates the slot and promotes the key end-to-end.
 
 #### Architectural posture
 
-- Non-goal — node-level sentinel redaction. The upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel` (`is_redacted=True`) masks a hidden non-null FK target in place instead of dropping the row. The package deliberately did **not** adopt this tier (spec-034 Decision 6 chose row-exclusion), and `FieldSet` does **not** revive it. The redaction taxonomy is two-tier: relation/row visibility = queryset narrowing (`apply_cascade_permissions`, which is why the fakeshop `view_<model>` hooks cascade rather than keep a row with a sentinel FK), field visibility = `FieldSet` (redact value / deny). There is no third node-sentinel tier — `FieldSet` redaction runs only on fields of rows that already survived the cascade; it never masks a relation target to keep an otherwise-hidden row visible. It is now tracked as an explicit, opt-in tier — `TODO-BETA-053-0.1.4` (`Meta.redaction_mode`) — for consumers who explicitly want strict django-graphene-filters node-sentinel parity; it stays opt-in (not the default) because it conflicts with the row-narrowing model.
+- Non-goal — node-level sentinel redaction. The upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel` (`is_redacted=True`) masks a hidden non-null FK target in place instead of dropping the row. The package deliberately did **not** adopt this tier (spec-034 Decision 6 chose row-exclusion), and `FieldSet` does **not** revive it. The redaction taxonomy is two-tier: relation/row visibility = queryset narrowing (`apply_cascade_permissions`, which is why the fakeshop `view_<model>` hooks cascade rather than keep a row with a sentinel FK), field visibility = `FieldSet` (redact value / deny). There is no third node-sentinel tier — `FieldSet` redaction runs only on fields of rows that already survived the cascade; it never masks a relation target to keep an otherwise-hidden row visible. It is now tracked as an explicit, opt-in tier — `TODO-BETA-058-0.1.4` (`Meta.redaction_mode`) — for consumers who explicitly want strict django-graphene-filters node-sentinel parity; it stays opt-in (not the default) because it conflicts with the row-narrowing model.
 
 #### Why it matters
 
@@ -561,17 +561,17 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 - Dependency: `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: `DONE-034-0.0.10` - Permissions subsystem
-- Related: `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
-- Related: `TODO-BETA-053-0.1.4` - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)
+- Related: `TODO-BETA-057-0.1.3` - Layer 3 Meta key promotion
+- Related: `TODO-BETA-058-0.1.4` - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)
 
 <a id="metasearch_fields_support"></a>
-### [TODO-BETA-049-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
+### [TODO-BETA-054-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
 
 - Priority: High
 - Status: To Do
 - Relative size: M
 - Labels: `connections`, `filters`, `public-api`, `search`
-- Spec: [spec-049-search_fields-0_1_2.md](docs/spec-049-search_fields-0_1_2.md)
+- Spec: [spec-054-search_fields-0_1_2.md](docs/spec-054-search_fields-0_1_2.md)
 
 #### Predicted files
 
@@ -583,7 +583,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked. To-many relation paths compile row-preserving: a correlated EXISTS branch through the shared predicate compiler (optimizer/predicates.py, pre-card groundwork), never a search-driven .distinct() — the root query keeps no membership join and totalCount stays a flat COUNT(*). Second adversarial review (2026-07-22) hardened the contracts: one strict finalize-time plan builder (the utils/relations.py classifier + lookup validator is the only path acceptance oracle; no get_model_field second oracle); the runtime entry point is a queryset compiler (apply_search_sync/_async), not a Q builder; relational search is visibility-aware (every to-many hop composes the hop target type's visibility queryset into the EXISTS body, so a hidden related row never qualifies a visible root — the step is sync/async twinned, not colorless); search honors the declaring type's FilterSet check_<field>_permission gates (a viewer may search a path exactly when they could filter by it — the fakeshop Category name gate is the live proof); a documented SEARCH_MAX_LENGTH=256 input cap with a typed error; duplicate/padded declarations rejected; Slice 4 adds the library to-many live surface (GenreType search_fields=("name", "books__title") over allLibraryGenresConnection) because all four staged products declarations are forward-only; Slice 5 moves the GLOSSARY entry to "implemented on main; release pending the joint 0.1.2 cut" instead of leaving it falsely planned.
 
-Second Part 1 adversarial review (2026-07-22) formalized the groundwork as this spec's pre-card Slice 0 (docs/row-preserving-predicates-part1-plan.md Rev 4) with card-049-owned completion bookkeeping (GLOSSARY/TREE/KANBAN fold-in + OptimizerError raise-site docs), adopted the compositional multiset contract (framework predicates are pure selections: never multiply rows, never collapse consumer duplicates; global distinct removed), refined Decision 12 (direct relational branches carry per-branch hop visibility themselves, AND'd only into their own OR arm - never delegated to cascade) and Decision 13 (active search fires every APPLICABLE FilterSet gate; Meta.search_fields is the grant for ungated paths; alias/prefix/HIDE_FLAT_FILTERS gate semantics pinned).
+Second Part 1 adversarial review (2026-07-22) formalized the groundwork as this spec's pre-card Slice 0 (docs/row-preserving-predicates-part1-plan.md Rev 4) with card-054-owned completion bookkeeping (GLOSSARY/TREE/KANBAN fold-in + OptimizerError raise-site docs), adopted the compositional multiset contract (framework predicates are pure selections: never multiply rows, never collapse consumer duplicates; global distinct removed), refined Decision 12 (direct relational branches carry per-branch hop visibility themselves, AND'd only into their own OR arm - never delegated to cascade) and Decision 13 (active search fires every APPLICABLE FilterSet gate; Meta.search_fields is the grant for ungated paths; alias/prefix/HIDE_FLAT_FILTERS gate semantics pinned).
 
 Cross-spec Medtrics-reproduction review (2026-07-22): part1-plan is Rev 5 and this spec gained Decision 14. Enacted: (a) the multiset contract is anchored to GOAL.md (predicates are selections over consumer-shaped querysets, never a normalization boundary; the DRF endpoint response is never the multiset oracle); (b) reverse-FK-after-to-one (forward FK -> reverse FK -> forward FK) is a named classifier/adapter category, separate from M2M; (c) one shared Medtrics reproduction fixture (Loan.book -> Book.loans -> Loan.patron -> Patron.email, four named loans, ordered-sequence oracle incl. the duplicated pre-rewrite sequence) consumed at three levels: Part 1 adapter test, this card's live LoanType search integration test (acceptance-only DjangoConnectionField(LoanType), search_fields = (note, book__loans__patron__email), exact ordered IDs + totalCount + page boundaries), and package SQL-shape tests (correlated EXISTS, not JOIN+DISTINCT or a scalar aggregate); (d) Decision 14: search scope is type-definition-wide and immutable (no request/resolver/connection mutation of the tuple; different surfaces use distinct DjangoTypes; no field-level override without a demonstrated use case); (e) row-boundary phrase oracle (red/dwarf vs red dwarf) making StringAgg observably wrong, live + SQL-shape; (f) borrowing/migration docs state both intentional DRF SearchFilter divergences together (phrase semantics, static scope). The Medtrics StringAgg patch is explicitly NOT prior art to adopt.
 
@@ -597,7 +597,7 @@ Implementation-gate review enacted (2026-07-22): five blockers folded into the s
 (5) P1-5 active_search canonical home moved to utils/connections.py with filters/search.py re-export, lazy-subpackage import pin extended.
 Plus Decision 14 multi-type migration mechanics (Meta.primary, separate FilterSets, GlobalID strategy) and a DoD gate bullet. Part 1 plan unchanged (review: ready in principle).
 
-Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Part 1 plan bumped to Rev 7 — prior-art statement corrected (admin lookup_spawns_duplicates DOES detect reverse FK via PathInfo.m2m; old "misses reverse FK" reading was false), PathInfo named Slice A SQL-multiplicity authority beside relation_kind() semantic topology (many_side = any(path_info.m2m), target from path_infos[-1].to_opts; frozen plan keeps package-owned values only), admin helper banned from production (test differential oracle only, valid paths, never sole oracle), reverse-FK category rationale recast detection->compilation, exact acceptance floor Python 3.10 + Django==5.2.0 in sequencing steps 4/9. Spec-049: Decision 7 gains the finding-4 rationale (fixture exists because detection is insufficient; runtime consumes frozen plan, never calls admin helper, never a search_requires_distinct boolean); Test plan + DoD gain the exact-floor live reproduction requirement. Architecture unchanged per review verdict.
+Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Part 1 plan bumped to Rev 7 — prior-art statement corrected (admin lookup_spawns_duplicates DOES detect reverse FK via PathInfo.m2m; old "misses reverse FK" reading was false), PathInfo named Slice A SQL-multiplicity authority beside relation_kind() semantic topology (many_side = any(path_info.m2m), target from path_infos[-1].to_opts; frozen plan keeps package-owned values only), admin helper banned from production (test differential oracle only, valid paths, never sole oracle), reverse-FK category rationale recast detection->compilation, exact acceptance floor Python 3.10 + Django==5.2.0 in sequencing steps 4/9. Spec-054: Decision 7 gains the finding-4 rationale (fixture exists because detection is insufficient; runtime consumes frozen plan, never calls admin helper, never a search_requires_distinct boolean); Test plan + DoD gain the exact-floor live reproduction requirement. Architecture unchanged per review verdict.
 
 #### Dependencies
 
@@ -616,7 +616,7 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 - [ ] Add `docs/spec-search_fields.md`.
 - [ ] Search-fields argument generation lives in `django_strawberry_framework/filters/` and reuses the same DRF-style Meta surface and argument-factory machinery as `filterset_class`.
 - [ ] Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path, compiled row-preserving: direct paths as plain Q predicates, to-many paths as correlated EXISTS branches via the shared predicate compiler; no search-driven `.distinct()`; root `alias_map` free of membership joins; `totalCount` counts the row-preserving queryset directly.
-- [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-052-0.1.3`).
+- [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-057-0.1.3`).
 - [ ] Tests under `tests/filters/test_search_fields.py` covering single-field, relation-path, and combined-with-filterset cases.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising a search across at least one relation path. Includes the library to-many proof: GenreType search over allLibraryGenresConnection (one genre, two matching books -> one edge, totalCount == 1, EXISTS in the emitted SQL, no search-driven SELECT DISTINCT).
 - [ ] SQL-shape regression tests pin the row-preserving compilation: root query `alias_map` excludes membership/child tables, `query.distinct is False`, EXISTS present exactly when a declared path is to-many, and the `totalCount` SQL has no distinct-wrapper subquery.
@@ -640,7 +640,7 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 #### Why it matters
 
 - `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`][goal] alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
-- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.
+- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-060-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.
 
 #### Dependencies
 
@@ -654,13 +654,13 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 #### Card references
 
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-027-0.0.8` - Filtering subsystem
-- Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-052-0.1.3`). -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
+- Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-057-0.1.3`). -> `TODO-BETA-057-0.1.3` - Layer 3 Meta key promotion
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-060-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them. -> `TODO-BETA-060-0.1.5` - Fakeshop GraphQL schema activation
 - Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="postgres_full_text_search_filter_primitives"></a>
-### [TODO-BETA-050-0.1.2 - Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
+### [TODO-BETA-055-0.1.2 - Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
 
 - Priority: Medium
 - Status: To Do
@@ -676,12 +676,12 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 
 #### Planning note
 
-Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-049-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
+Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-054-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
 
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem
-- `TODO-BETA-049-0.1.2` - `Meta.search_fields` support
+- `TODO-BETA-054-0.1.2` - `Meta.search_fields` support
 
 #### Scope
 
@@ -691,7 +691,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
 - Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
-- Prefix-shortcut operators are owned by this card. Card 049 deliberately ships only unprefixed OR-of-`icontains` search and rejects declarations beginning with `^`, `=`, `@`, or `$`. This card decides which shortcuts enter the ported surface and must pin a clear fail-closed non-Postgres contract for `@`; none of the four is considered shipped by card 049.
+- Prefix-shortcut operators are owned by this card. Card 054 deliberately ships only unprefixed OR-of-`icontains` search and rejects declarations beginning with `^`, `=`, `@`, or `$`. This card decides which shortcuts enter the ported surface and must pin a clear fail-closed non-Postgres contract for `@`; none of the four is considered shipped by card 054.
 
 #### Definition of done
 
@@ -716,11 +716,11 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 #### Why it matters
 
 - The Postgres full-text family is part of django-graphene-filters' shipped filter surface; recreating it is in scope for cookbook parity (`GOAL.md` "Working reference").
-- `Meta.search_fields` (`TODO-BETA-049-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not.
+- `Meta.search_fields` (`TODO-BETA-054-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not.
 
 #### Dependencies
 
-- `TODO-BETA-049-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface.
+- `TODO-BETA-054-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface.
 - `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared.
 
 #### Note
@@ -729,13 +729,13 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 
 #### Card references
 
-- Dependency: `TODO-BETA-049-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-049-0.1.2` - `Meta.search_fields` support
-- Related: `Meta.search_fields` (`TODO-BETA-049-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not. -> `TODO-BETA-049-0.1.2` - `Meta.search_fields` support
+- Dependency: `TODO-BETA-054-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-054-0.1.2` - `Meta.search_fields` support
+- Related: `Meta.search_fields` (`TODO-BETA-054-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not. -> `TODO-BETA-054-0.1.2` - `Meta.search_fields` support
 - Dependency: `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: The only cookbook filter-surface gap found in the 0.0.7 DRY-cycle kwarg-parity audit; every other `django_graphene_filters` filter primitive is already shipped in `DONE-027-0.0.8`. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="aggregation_subsystem"></a>
-### [TODO-BETA-051-0.1.3 - Aggregation subsystem](KANBAN.html#aggregation_subsystem)
+### [TODO-BETA-056-0.1.3 - Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
 - Status: To Do
@@ -802,7 +802,7 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 - Related: `DONE-034-0.0.10` - Permissions subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
-### [TODO-BETA-052-0.1.3 - Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
+### [TODO-BETA-057-0.1.3 - Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
 - Status: To Do
@@ -818,7 +818,7 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 - Optional: fold the finalizer's per-key binding (`_bind_filtersets` / `_bind_ordersets` / `_bind_fieldsets`) into one dispatched, table-driven form so promoting a Meta key is a data change rather than a new helper per key.
 
 <a id="opt_in_node_sentinel_redaction_tier_metaredaction_mode"></a>
-### [TODO-BETA-053-0.1.4 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)](KANBAN.html#opt_in_node_sentinel_redaction_tier_metaredaction_mode)
+### [TODO-BETA-058-0.1.4 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)](KANBAN.html#opt_in_node_sentinel_redaction_tier_metaredaction_mode)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required)
@@ -833,7 +833,7 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 
 #### Planning note
 
-Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-048-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
+Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-053-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
 
 #### Dependencies
 
@@ -856,7 +856,7 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 - [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
 - [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
 - [ ] Composability tests: `"sentinel"` mode + `apply_cascade_permissions` — the top-level cascade still narrows rows; sentinels appear only for relation targets of surviving rows (no row resurrection, no double counting).
-- [ ] Amend the `FieldSet` (`TODO-BETA-048-0.1.1`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
+- [ ] Amend the `FieldSet` (`TODO-BETA-053-0.1.1`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
 
 #### Verified in upstream
 
@@ -880,10 +880,10 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 - Dependency: `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing. -> `DONE-034-0.0.10` - Permissions subsystem
 - Dependency: `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-048-0.1.1`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-053-0.1.1`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-053-0.1.1` - `FieldSet`
 
 <a id="stable_choice_enum_naming_override"></a>
-### [TODO-BETA-054-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
+### [TODO-BETA-059-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Status: To Do
@@ -928,7 +928,7 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
 <a id="fakeshop_graphql_schema_activation"></a>
-### [TODO-BETA-055-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
+### [TODO-BETA-060-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Status: To Do
@@ -959,10 +959,10 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 #### Card references
 
 - Dependency: The product-catalog root schema is already live; the remaining node / nodes entry points and totalCount opt-in build on the shipped Relay story (`DONE-032-0.0.9`). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Related: Historical gate, retyped related: the recut scope (node / nodes + totalCount) does not depend on Layer 3 Meta key promotion. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
+- Related: Historical gate, retyped related: the recut scope (node / nodes + totalCount) does not depend on Layer 3 Meta key promotion. -> `TODO-BETA-057-0.1.3` - Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
-### [TODO-BETA-056-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
+### [TODO-BETA-061-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Status: To Do
@@ -971,7 +971,7 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 #### Dependencies
 
-- `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+- `TODO-BETA-060-0.1.5` - Fakeshop GraphQL schema activation
 
 #### Definition of done
 
@@ -996,10 +996,10 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 #### Card references
 
-- Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+- Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-060-0.1.5` - Fakeshop GraphQL schema activation
 
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-057-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-062-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Status: To Do
@@ -1056,7 +1056,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 <a id="mutation_idempotency_keys"></a>
-### [TODO-BETA-058-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
+### [TODO-BETA-063-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
 
 - Priority: High
 - Status: To Do
@@ -1125,7 +1125,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key"></a>
-### [TODO-BETA-059-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
+### [TODO-BETA-064-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1189,7 +1189,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-060-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-065-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Status: To Do
@@ -1198,7 +1198,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Dependencies
 
-- `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- `TODO-BETA-064-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 #### Scope
 
@@ -1226,10 +1226,10 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Card references
 
-- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-059-0.1.6`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-064-0.1.6`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-064-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-061-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-066-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Status: To Do
@@ -1243,7 +1243,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Dependencies
 
-- `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- `TODO-BETA-064-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 #### Scope
 
@@ -1277,10 +1277,10 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Card references
 
 - Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
-- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-059-0.1.6`) must ship first so the adversarial suite exercises the released public surface before the stable gate. -> `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-064-0.1.6`) must ship first so the adversarial suite exercises the released public surface before the stable gate. -> `TODO-BETA-064-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-062-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-067-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Status: To Do
@@ -1298,7 +1298,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-066-0.1.7`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1329,20 +1329,20 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-061-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-066-0.1.7`) is in `DONE`. -> `TODO-BETA-053-0.1.1` - `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-066-0.1.7`) is in `DONE`. -> `TODO-BETA-066-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
 
 ## Done
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
 <a id="transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation"></a>
-### [DONE-065-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
+### [DONE-046-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
 
 - Priority: Critical
 - Status: Done
 - Relative size: L
-- Spec: [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md)
+- Spec: [spec-046-transport_security-0_0_15.md](docs/spec-046-transport_security-0_0_15.md)
 
 #### Glossary terms
 
@@ -1442,13 +1442,13 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 - UTF-8 BOM: accept-and-strip vs reject (RFC 8259 permits either): the spec picks one and documents it.
 
 <a id="sealed_get_queryset_visibility_boundary_policy_artifacts"></a>
-### [DONE-064-0.0.14 - Sealed get_queryset visibility-boundary policy artifacts](KANBAN.html#sealed_get_queryset_visibility_boundary_policy_artifacts)
+### [DONE-045-0.0.14 - Sealed get_queryset visibility-boundary policy artifacts](KANBAN.html#sealed_get_queryset_visibility_boundary_policy_artifacts)
 
 - Priority: High
 - Status: Done
 - Relative size: S
 - Labels: `docs`, `permissions`, `security`
-- Spec: [spec-064-visibility_boundary-0_0_14.md](docs/spec-064-visibility_boundary-0_0_14.md)
+- Spec: [spec-045-visibility_boundary-0_0_14.md](docs/spec-045-visibility_boundary-0_0_14.md)
 
 #### Glossary terms
 
@@ -1472,7 +1472,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 #### Definition of done
 
 - [x] Numbered security decisions authored covering the changed contract: untrusted-object rebuild, prove-then-clone AST trust, identity-fast-path removal, Prefetch rebuild + alias threading, queryset-shape rejections, and the typed error contract.
-- [x] Spec docs/spec-064-visibility_boundary-0_0_14.md authored with its companion *-terms.csv.
+- [x] Spec docs/spec-045-visibility_boundary-0_0_14.md authored with its companion *-terms.csv.
 - [x] GLOSSARY entries imported for the five new terms via the fakeshop glossary DB and docs/GLOSSARY.md regenerated.
 - [x] KANBAN.md / KANBAN.html regenerated from the kanban DB with this card in Done.
 - [x] The [P2] policy residual in docs/feedback.md recorded as closed.
@@ -1833,7 +1833,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 - [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [x] Migration guide (`TODO-BETA-060-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [x] Migration guide (`TODO-BETA-065-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -1843,7 +1843,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-060-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-065-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -1857,7 +1857,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 
 #### Card references
 
-- Related: Migration guide (`TODO-BETA-060-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-060-0.1.7` - Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-065-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-065-0.1.7` - Migration and adoption guides
 
 <a id="auth_mutations_login_logout_register"></a>
 ### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
@@ -2501,7 +2501,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Planning note
 
-Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-048-0.1.1`), not shipped in this card.
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-053-0.1.1`), not shipped in this card.
 
 #### Dependencies
 
@@ -2510,7 +2510,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 #### Scope
 
 - `apply_cascade_permissions`
-- reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-048-0.1.1`), not in this card
+- reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-053-0.1.1`), not in this card
 - Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
 - composable permission rules that remain visible from the owning type/query surface
 - Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.
@@ -2561,7 +2561,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
 - Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
 - Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
-- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-048-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
+- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-053-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
 
 #### Note
 
@@ -2570,7 +2570,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 #### Card references
 
 - Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: `TODO-BETA-053-0.1.1` - `FieldSet`
 
 <a id="connection_aware_optimizer_planning"></a>
 ### [DONE-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
@@ -2765,7 +2765,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - [x] Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
 - [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
-- [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-055-0.1.5`.
+- [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-060-0.1.5`.
 - [x] 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 
 #### Files likely touched
@@ -2807,7 +2807,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
 - `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`)
 - `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`)
-- `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-049-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
+- `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-054-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
 - decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
 - dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
 - return `null` for rows the user can't see (not an error — the Relay spec requires `null`, not an exception)
@@ -2843,11 +2843,11 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Dependency: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-049-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-049-0.1.2` - `Meta.search_fields` support
+- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-054-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-054-0.1.2` - `Meta.search_fields` support
 - Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-055-0.1.5`. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-060-0.1.5`. -> `TODO-BETA-060-0.1.5` - Fakeshop GraphQL schema activation
 
 <a id="django_model_based_globalid_encoding"></a>
 ### [DONE-031-0.0.9 - Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
@@ -3043,7 +3043,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-049-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-048-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
+Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-054-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-053-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
 
 #### Dependencies
 
@@ -3092,12 +3092,12 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - `FilterSet` (`DONE-027-0.0.8`)
 - `OrderSet` (`DONE-028-0.0.8`)
 - Relay/interface decisions
-- `FieldSet` — **deferred to `TODO-BETA-048-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
+- `FieldSet` — **deferred to `TODO-BETA-053-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
 - `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern.
 
 #### Note
 
-- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-048-0.1.1`; the `search:` arg activates when `TODO-BETA-049-0.1.2` lands.
+- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-053-0.1.1`; the `search:` arg activates when `TODO-BETA-054-0.1.2` lands.
 - the central read-side primitive — the Relay surface and all Layer-3 arguments compose through it.
 - central Relay-shaped connection field plus cursor-pagination math; the integration point that filters / orders / aggregation / field-selection / optimizer all compose through. New `connection.py` + `docs/spec-030-connection_field-0_0_9.md` + tests.
 
@@ -3106,9 +3106,9 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Dependency: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: Connection-aware optimizer planning is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Dependency: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-048-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-053-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-053-0.1.1` - `FieldSet`
 - Dependency: `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern. -> `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass
-- Related: `TODO-BETA-049-0.1.2` - `Meta.search_fields` support
+- Related: `TODO-BETA-054-0.1.2` - `Meta.search_fields` support
 
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
 ### [DONE-029-0.0.9 - `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)

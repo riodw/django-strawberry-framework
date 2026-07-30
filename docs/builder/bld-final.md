@@ -1,8 +1,8 @@
-# Build: final test-run gate — card 065 (transport_security / 0.0.15)
+# Build: final test-run gate — card 046 (transport_security / 0.0.15)
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` (whole file; rationale companion
-`docs/spec-065-transport_security-0_0_15-rationale.md`)
-Build plan: `docs/builder/build-065-transport_security-0_0_15.md`
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` (whole file; rationale companion
+`docs/spec-046-transport_security-0_0_15-rationale.md`)
+Build plan: `docs/builder/build-046-transport_security-0_0_15.md`
 Status: built
 
 This is the `BUILD.md` `## Final test-run gate` pass. Every prior box in the plan's
@@ -28,7 +28,7 @@ so every `exit 0` below is the command's own status.
 | 4a | `uv run ruff format --check .` | `405 files already formatted` exit **0** (plus the standing `COM812`-vs-formatter advisory warning, which is configuration, not a finding) |
 | 4b | `uv run ruff check .` | `All checks passed!` exit **0** |
 | 5 | `git diff --check` | no output, exit **0** |
-| 6 | `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit **0** |
+| 6 | `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit **0** |
 | 7a | ASCII-only scan of this build's six dirty `.py` files | **0** non-ASCII lines in each: `routers.py`, `views.py`, `exceptions.py`, `_strawberry_patches.py`, `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py` (`LC_ALL=C grep -c -P '[^\x00-\x7F]'` -> `0` per file) |
 | 7b | `uv run python scripts/check_trailing_commas.py --check <those six exact paths>` | no output, exit **0** |
 | 8a | `docs/GLOSSARY.md` two-consecutive-regenerate byte-stability, rendered to scratch | `build_glossary_md.py --md <scratch>/g1.md` and `--md <scratch>/g2.md`, both exit 0; `cmp g1 g2` **identical**; `cmp g1 docs/GLOSSARY.md` **identical** |
@@ -82,7 +82,7 @@ re-derives it.
 ### From `bld-slice-5-docs_foldin.md` `### For bld-final.md's Deferred work catalog`
 
 1. **2d — the seven glossary `status_text` stamps, at the joint `0.0.15` cut.** Owner: the joint
-   `0.0.15` cut (card 045). Evidence: `bld-slice-5-docs_foldin.md` `### Rulings on 2b, 2c, 2d, 2e`
+   `0.0.15` cut (card 050). Evidence: `bld-slice-5-docs_foldin.md` `### Rulings on 2b, 2c, 2d, 2e`
    #"2d — `status_text = \"shipped\"`". The exact instruction, carried: set
    `GlossaryTerm.status_text` to ``shipped (`0.0.15`).`` on the seven anchors
    `djangographqlview`, `request-body-cap`, `utf-8-wire-contract`,
@@ -94,7 +94,7 @@ re-derives it.
    a version that exists in no released artifact (the quintet reads `0.0.14`) and would take a
    step Decision 15 assigns to the cut.
 2. **The terms CSV stays at 37 rows.** Owner: the maintainer. Evidence: same section, plus
-   `### Ruling 3`. If the maintainer wants card 065's link set to include the seven terms it
+   `### Ruling 3`. If the maintainer wants card 046's link set to include the seven terms it
    authored, that is one Worker-1 pass editing the CSV **and** the spec's
    `## Key glossary references` + link-def block together, then re-running `import_spec_terms`
    and `build_glossary_md.py`. Gate 6 and gate 9a are both green at 37 / 46 as it stands.
@@ -112,7 +112,7 @@ re-derives it.
    the "Shipped today" move. Chosen framing on record: lead with the marker, the shape
    `docs/README.md:128` and `TODAY.md:384` already use.
 6. **L5 — `BACKLOG.md:1616` / `:1661` describe the router as serving HTTP + WebSocket in the
-   present tense.** Owner: a future spec author. Deliberately outside spec-065's `## Doc updates`
+   present tense.** Owner: a future spec author. Deliberately outside spec-046's `## Doc updates`
    set.
 7. **Do not act — closed `docs/review/`, `docs/dry/` and `docs/bug_hunt/` scratchpads still
    assert the old "UTF-16 succeeds" contract.** Owner: nobody; **leave them.** They are closed
@@ -268,10 +268,10 @@ shipped `0.0.14` behavior, which the spec is entitled to state.
   1 is the assertion of that pairing)
 - `CHANGELOG.md` — no `0.0.15` entry, and no slice in this build edited it
 
-Card `TODO-ALPHA-045-0.0.15` (Extract `DjangoDebugExtension` into the standalone
+Card `TODO-ALPHA-050-0.0.19` (Extract `DjangoDebugExtension` into the standalone
 `django-strawberry-debug` package) is still `todo` on the `0.0.15` line — `KANBAN.md:150` renders
-it under a `TODO-ALPHA-` id. Per `docs/SPECS/NEXT.md` Step 3 and **spec-065 Decision 15**, the
-version quintet is owned by the **last card of the `0.0.15` line to land**, which is card 045.
+it under a `TODO-ALPHA-` id. Per `docs/SPECS/NEXT.md` Step 3 and **spec-046 Decision 15**, the
+version quintet is owned by the **last card of the `0.0.15` line to land**, which is card 050.
 **Card 045 owns the joint cut.** Catalog items 1, 3 and 5 are the work that travels with it.
 
 ## Verdict

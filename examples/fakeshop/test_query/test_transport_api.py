@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-3).
+"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-3).
 
 The S1 HTTP-boundary tier: every proof that Django's real request lifecycle
 executes on the package's GraphQL HTTP route now that ``routers.py`` no longer
@@ -1651,7 +1651,7 @@ def test_only_the_package_mount_answers_the_same_way_in_both_patch_states():
       longer narrows encodings, so ``json.loads`` applies RFC 8259 auto-detection
       to the raw bytes and *accepts* the UTF-16 document. A consumer who
       deliberately mounts Strawberry's own view keeps Strawberry's own semantics -
-      the deliberate scope of the ownership split (spec-065 review High 2), pinned
+      the deliberate scope of the ownership split (spec-046 review High 2), pinned
       at the patch tier by
       ``test_patched_parse_json_leaves_upstreams_bytes_semantics_alone`` and
       recorded here as live behavior.

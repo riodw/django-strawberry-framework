@@ -1,4 +1,4 @@
-"""Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
+"""Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
 
 ``DjangoGraphQLProtocolRouter`` is the package's Channels transport helper - a
 ``channels.routing.ProtocolTypeRouter`` subclass whose ``"http"`` value IS the
@@ -8,22 +8,22 @@ Every HTTP request therefore traverses the project's real ``MIDDLEWARE`` - the
 consumer-authored middleware - exactly as it does under WSGI. The router does
 not serve GraphQL over HTTP at all: the GraphQL HTTP endpoint is
 ``views.py::DjangoGraphQLView``, declared in the consumer's own URLconf
-(spec-065 Decisions 2, 3 and 6).
+(spec-046 Decisions 2, 3 and 6).
 
 The ``"websocket"`` value is the package's Channels composition:
 ``consumers.py::DjangoWebSocketHostValidator`` (the Host check, which calls
-Django's own ``HttpRequest.get_host()``; spec-065 Decision 19) wrapping
+Django's own ``HttpRequest.get_host()``; spec-046 Decision 19) wrapping
 ``AllowedHostsOriginValidator`` (the Origin check) wrapping
 ``AuthMiddlewareStack`` (sessions + ``scope["user"]``) wrapping a ``URLRouter``
 holding one ``re_path`` onto a GraphQL WebSocket consumer, matched by
-``websocket_url_pattern`` - exact at both ends by default (spec-065 Decision 4;
+``websocket_url_pattern`` - exact at both ends by default (spec-046 Decision 4;
 spec-041 Decisions 3 and 5). This module composes those wrappers and names them;
 it implements no transport policy of its own - the Host validator lives in
 ``consumers.py`` beside the consumer factory, which is the package's WebSocket
 module.
 
 Which consumer sits at the end of that chain is the ``websocket_consumer_class``
-seam (spec-065 Decision 11): by default ``consumers.py``'s revalidating
+seam (spec-046 Decision 11): by default ``consumers.py``'s revalidating
 ``GraphQLWSConsumer`` subclass, otherwise a consumer class or factory the
 project injects. All three wrappers are the ROUTER's either way, so an injected
 consumer cannot escape the Host check, the Origin check, or authentication - and
@@ -87,7 +87,7 @@ _STRAWBERRY_CHANNELS_BROKEN_HINT = (
     "`strawberry.channels` consumer (GraphQLWSConsumer) importable."
 )
 
-# The construction-time failure for an unusable ``django_application`` (spec-065
+# The construction-time failure for an unusable ``django_application`` (spec-046
 # Decision 3 / Error shapes). Names all three facts a migrant needs: what the
 # removed mode was actually doing, that it is REMOVED rather than flagged, and
 # the two-place repair (the asgi.py argument AND the URLconf entry - migration is
@@ -106,7 +106,7 @@ _MISSING_DJANGO_APPLICATION_HINT = (
 )
 
 # The construction-time failure for an unusable ``websocket_consumer_class``
-# (spec-065 Decision 11). Names both accepted shapes and their calling
+# (spec-046 Decision 11). Names both accepted shapes and their calling
 # conventions, because the seam's whole safety argument is that the router - not
 # the consumer - applies the Host/Origin and auth wrappers around whatever is
 # injected. The received value is appended at the raise site.
@@ -123,7 +123,7 @@ _UNUSABLE_WEBSOCKET_CONSUMER_HINT = (
 # The factory half of that seam, spelled once and shared by BOTH of its
 # construction-time rejections (the calling convention and the returned object) -
 # a consumer who got one of them wrong needs the same whole contract restated
-# either way (spec-065 Decision 11; review High 3).
+# either way (spec-046 Decision 11; review High 3).
 _FACTORY_CONTRACT_HINT = (
     "A websocket_consumer_class factory is invoked ONCE, at router construction, as "
     "`factory(schema=schema)`, and must return the ASGI application the WebSocket route "
@@ -142,7 +142,7 @@ _ASYNC_FACTORY_HINT = (
 )
 
 # Rejecting the combination rather than ignoring the window: a knob that does
-# nothing is worse than an error (spec-065 Edge cases
+# nothing is worse than an error (spec-046 Edge cases
 # #"``websocket_revalidation_window`` is meaningless when a custom class is
 # injected"). An explicit ``0.0`` alongside an injected class stays legal - it
 # configures nothing either way.
@@ -263,7 +263,7 @@ def _websocket_application(
 ) -> Any:
     """Resolve the WebSocket branch's ASGI application from the injection seam.
 
-    Exactly three accepted shapes (spec-065 Decision 11): ``None`` selects the
+    Exactly three accepted shapes (spec-046 Decision 11): ``None`` selects the
     package's own revalidating consumer and hands it the validated window; a
     ``GraphQLWSConsumer`` subclass is mounted through its own
     ``as_asgi(schema=schema)``; any other callable is a factory, invoked as
@@ -331,7 +331,7 @@ def _build_router_class() -> type[Any]:
     class DjangoGraphQLProtocolRouter(ProtocolTypeRouter):
         """GraphQL over WebSocket, with the consumer's Django application owning HTTP.
 
-        The ASGI entrypoint, which now pairs with one URLconf entry (spec-065
+        The ASGI entrypoint, which now pairs with one URLconf entry (spec-046
         Decisions 2, 3, 4 and 6)::
 
             # myproject/asgi.py
@@ -382,14 +382,14 @@ def _build_router_class() -> type[Any]:
         which denies cross-origin - and missing-``Origin`` - handshakes against
         ``ALLOWED_HOSTS``, inside ``consumers.py::DjangoWebSocketHostValidator``,
         which denies a handshake whose ``Host`` Django's own
-        ``HttpRequest.get_host()`` refuses (spec-065 Decision 19). Those are two
+        ``HttpRequest.get_host()`` refuses (spec-046 Decision 19). Those are two
         separate questions - which server authority the client addressed, and
         which browser origin initiated the socket - so both run and neither
         substitutes for the other. ``schema`` passes through untouched, extensions
         intact.
 
         ``websocket_consumer_class`` is the WebSocket consumer injection seam
-        (spec-065 Decision 11), accepting either a
+        (spec-046 Decision 11), accepting either a
         ``strawberry.channels.GraphQLWSConsumer`` subclass - mounted through its
         own ``as_asgi(schema=schema)`` - or a factory callable invoked as
         ``factory(schema=schema)`` that returns the ASGI application to mount.
@@ -455,7 +455,7 @@ def _build_router_class() -> type[Any]:
             super().__init__(
                 {
                     "http": django_application,
-                    # Host OUTSIDE Origin (spec-065 Decision 19): the Host check
+                    # Host OUTSIDE Origin (spec-046 Decision 19): the Host check
                     # answers which server authority was addressed, so it runs
                     # before Channels' Origin check, before the session
                     # middleware, and before any consumer is constructed. The

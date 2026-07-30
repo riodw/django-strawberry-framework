@@ -7,12 +7,12 @@ applied at app-load time by
 The patch replaces the **sync** ``DjangoHTTPRequestAdapter.body`` so it
 always returns the raw request bytes (the async ``get_body`` contract)
 instead of UTF-8-decoding first. That return contract is unchanged by
-spec-065; what changed is where the bytes go next. Handing them over raw
+spec-046; what changed is where the bytes go next. Handing them over raw
 stops an undecodable body from raising ``UnicodeDecodeError`` inside a
 *property*, where no ``except`` can translate it, and delivers them to
 whichever ``parse_json`` the mounted view resolves - on a package view
 ``views.py::_RequestBodyBoundaryMixin.parse_json``, which decodes them once
-with strict UTF-8 (spec-065 Decision 9).
+with strict UTF-8 (spec-046 Decision 9).
 
 The adapter's own contract is one half of a joint one, so the rows below
 are written as two: the adapter hands the bytes over unexamined, and the
@@ -112,7 +112,7 @@ def test_body_returns_raw_bytes_for_utf8_bom():
 
     Two halves of one joint contract. The adapter's half is unchanged - raw
     bytes, no inspection. The rejection belongs to the view boundary, and
-    spec-065 Decision 10 chose it over stripping the BOM; it costs no branch,
+    spec-046 Decision 10 chose it over stripping the BOM; it costs no branch,
     because the bytes decode cleanly and upstream's own ``json.loads`` refuses the
     leading U+FEFF.
 

@@ -116,7 +116,7 @@ already upstream. The real drift was incomplete adoption of
 
 Rejected / deferred candidates:
 
-1. **Plain-form / delete fold onto `run_write_pipeline_sync` (spec-046 C2 /
+1. **Plain-form / delete fold onto `run_write_pipeline_sync` (spec-051 C2 /
    C1)** — skeleton generalization owned by `mutations/resolvers.py`; forms
    review already deferred. Serializer create/update already rides the
    skeleton. Forward.
@@ -174,7 +174,7 @@ every deferred / rejected candidate.
    the correct source of truth if they ever diverge.
 3. **Deferred C2 / C1 (plain-form / delete onto skeleton)?** **Correct to keep deferred.**
    Serializer create/update already rides `run_write_pipeline_sync`. Fold ownership is
-   `mutations/resolvers.py` + forms plain-form body (spec-045); verified on those items.
+   `mutations/resolvers.py` + forms plain-form body (spec-050); verified on those items.
    Implementing here would be out-of-scope half-fold.
 4. **Rejected multi-decode / flattener / generic walker / hook_context /
    `save_or_field_errors` unify?** **All hold.** `write_values.py` documents multi strategy at

@@ -1,6 +1,6 @@
 """The one place the package touches Django's private request-body internals.
 
-``views.py``'s cumulative body cap (spec-065 Decision 7) needs an answer to
+``views.py``'s cumulative body cap (spec-046 Decision 7) needs an answer to
 exactly one question - "is this request body larger than ``limit`` bytes?" - and
 it must obtain that answer *without* first materializing the body it may be
 about to refuse. :func:`body_exceeds_limit` is that answer, and this module is
@@ -96,7 +96,7 @@ which limit applies, and what the ``413`` says - stays in
 this module cannot turn a hostile or unusual stream into an unrelated ``500``. It
 also never touches a multipart request; ``views.py`` returns before calling here,
 because reading a multipart body would defeat Django's streaming upload handlers
-(spec-065 Decision 7 step 3).
+(spec-046 Decision 7 step 3).
 
 The one thing it does emit is a single ``WARNING`` record on the
 :attr:`_Probe.CORRUPTED` verdict (see :data:`_CORRUPTED_PROBE_LOG_MESSAGE`),
@@ -185,7 +185,7 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
        rung used to be reached by Django's own ``CsrfViewMiddleware``, which
        reads ``request.POST`` for every cookie-bearing POST; it no longer is,
        because ``views.py`` re-enters CSRF from *inside* the view, after this
-       measurement (spec-065 Decision 18). What remains reachable is a
+       measurement (spec-046 Decision 18). What remains reachable is a
        consumer's own inbound body read, which no application-level ordering can
        precede.
     2. **Measurable without reading** (a seekable stream, which is what ASGI's

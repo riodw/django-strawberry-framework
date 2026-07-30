@@ -1,9 +1,9 @@
-# Build: custodian pass 3 — the nine-claim audit (card 065, transport_security / 0.0.15)
+# Build: custodian pass 3 — the nine-claim audit (card 046, transport_security / 0.0.15)
 
 Status: final-accepted
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` (whole file) and its rationale
-companion `docs/spec-065-transport_security-0_0_15-rationale.md`. Both are the only files this
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` (whole file) and its rationale
+companion `docs/spec-046-transport_security-0_0_15-rationale.md`. Both are the only files this
 pass wrote, plus this artifact.
 
 ## Scope and ownership
@@ -16,7 +16,7 @@ Worker 2 was editing `routers.py`, `_strawberry_patches.py`, `views.py`, `except
 throughout this pass. Those files were read, never written. `git status --short` was **28** rows
 at the end of the pass (23 modified, 5 untracked); the two spec files are the only rows this pass
 put there, and `_strawberry_patches.py`, `exceptions.py`, `routers.py`, `test_transport_api.py`
-and `build-065-…md` appeared under Worker 2 while it ran.
+and `build-046-…md` appeared under Worker 2 while it ran.
 
 Already applied by Worker 0 in Decision 6 (the phantom `subscriptions_enabled` kwarg; four hooks
 with the placement split delegated to the DRY section) was **verified present and left exactly as
@@ -304,11 +304,11 @@ split per colour. The verification is the product; no character of that bullet c
 
 ## Verification run
 
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
   -> `OK: 37 terms` — **exit 0**.
 - **No glossary anchor changed.** The set of `[glossary-…]` reference ids in the spec is
   bit-identical to `git show HEAD:…` (37 in, 37 out, added `set()`, removed `set()`), so
-  `docs/spec-065-transport_security-0_0_15-terms.csv` needs no edit and was not touched.
+  `docs/spec-046-transport_security-0_0_15-terms.csv` needs no edit and was not touched.
 - Every `](#anchor)` in both files resolves to a heading in that file (GitHub slug rules: keep
   `_`, strip backticks, one `-` per space, fences stripped line-by-line). Zero missing.
 - Every `][ref]` has a definition and every definition is used, in both files. Zero orphans, zero

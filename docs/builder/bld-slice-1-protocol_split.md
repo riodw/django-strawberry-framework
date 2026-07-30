@@ -1,6 +1,6 @@
 # Build: Slice 1 — S1: the protocol split (Django owns HTTP)
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Slice 1 checklist lines 112-133;
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Slice 1 checklist lines 112-133;
 Decision 2 (lines 593-645), Decision 3 (647-689), Decision 4 (691-722), Decision 5 (724-762),
 Decision 6 (764-815), Decision 13 (1078-1123); User-facing API lines 430-576; Helper-reuse
 obligations lines 1211-1247; Edge cases lines 1249-1305; Test plan S1 rows 1-12 (lines 1311-1337).
@@ -95,7 +95,7 @@ Status: final-accepted
      shapes require the package to hold and the docs to name.
   3. **Pre-building the Slice 2 body cap.** Slice 1 adds **no** cap logic, **no**
      `max_request_body_bytes` class attribute, **no** `conf.py` key, and **no** `dispatch`
-     override. The seam is named by a `TODO(spec-065 Slice 2)` anchor on each view class (exact
+     override. The seam is named by a `TODO(spec-046 Slice 2)` anchor on each view class (exact
      content in step 1) and removed by Slice 2.
   4. **Eight copies of `django_application=`** across `tests/test_routers.py` → the single
      `_router(...)` helper.
@@ -160,7 +160,7 @@ editing.
    - Module docstring is **mandatory** — `scripts/build_tree_md.py` fails its render on a missing
      module docstring, and Slice 5 regenerates `docs/TREE.md`. It must state: the package's Django
      GraphQL HTTP endpoint, declared in the consumer's URLconf; that it is `channels`-free so a
-     WSGI-only project can adopt it without the soft dependency; and cite `spec-065` Decision 6.
+     WSGI-only project can adopt it without the soft dependency; and cite `spec-046` Decision 6.
      Do **not** use staging language ("planned", "Slice N") in the docstring prose — that would
      render into `TREE.md` as unbuilt (BUILD.md documentation-sanity rule). The Slice-2 anchor
      below is a `#` comment, not docstring prose.
@@ -177,7 +177,7 @@ editing.
    - `__all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")` — module-level, alphabetical,
      tuple form matching `routers.py::__all__`.
    - The staging anchor, one per class, verbatim intent (wording is Worker 2's):
-     `# TODO(spec-065 Slice 2): the cumulative request-body cap overrides ``dispatch`` here
+     `# TODO(spec-046 Slice 2): the cumulative request-body cap overrides ``dispatch`` here
      (Decision 7). It needs a ``max_request_body_bytes`` CLASS attribute -- Django's
      ``View.as_view`` rejects any kwarg that is not already a class attribute.`
      **No `NotImplementedError`**: no call path must fail loudly, because the view is fully
@@ -258,7 +258,7 @@ editing.
      (sessions + `scope[\"user\"]` on both)") is now false. Rewrite: the WebSocket branch is the
      package's Channels composition; HTTP is the consumer's Django ASGI application, dispatched
      directly, so it traverses the project's real `MIDDLEWARE`; the GraphQL HTTP endpoint is
-     `views.py::DjangoGraphQLView` in the consumer's URLconf. Cite `spec-065` Decisions 2 / 3 / 4
+     `views.py::DjangoGraphQLView` in the consumer's URLconf. Cite `spec-046` Decisions 2 / 3 / 4
      alongside the surviving `spec-041` Decisions 3 and 5.
    - Class docstring: replace the example block with the spec's own two-file shape (`## The
      consumer's asgi.py` and `## The consumer's URLconf`, lines 432-468) — required
@@ -281,7 +281,7 @@ editing.
    - `from strawberry.django.views import GraphQLView` → `from django_strawberry_framework.views
      import DjangoGraphQLView`; `GraphQLView.as_view(...)` → `DjangoGraphQLView.as_view(...)`.
      Keep `ensure_csrf_cookie`, `graphql_ide="graphiql"`, `multipart_uploads_enabled=True`, and the
-     entire existing explanatory comment block **verbatim**; append one sentence naming `spec-065`
+     entire existing explanatory comment block **verbatim**; append one sentence naming `spec-046`
      Decision 6 as the reason the mount is the package view.
    - **Why this belongs to Slice 1** (the spec's Slice-1 checklist does not name this file, so the
      reasoning is recorded rather than assumed): the slice's own live-tier bullet requires the S1
@@ -430,7 +430,7 @@ editing.
    `test_products_api.py`, so Slice 3's inverted encoding tests and this slice's transport proofs
    never collide on one file. Module docstring: the S1 HTTP-boundary acceptance tier — every proof
    that Django's real request lifecycle executes on the package's GraphQL HTTP route now that
-   `routers.py` no longer serves HTTP; cite `spec-065` Slice 1 / Decision 2 / Decision 6 and Test
+   `routers.py` no longer serves HTTP; cite `spec-046` Slice 1 / Decision 2 / Decision 6 and Test
    plan rows 1-7. First line of every DB-touching test is `seed_data(N)` or `create_users(N)`
    (AGENTS.md rule 7).
    Module-level scaffolding:
@@ -642,13 +642,13 @@ final-verification pass decides whether any of these warrants a spec edit.
    `test_transport_api.py` instead, and recommends Slice 2's cap matrix join it. The sequencing
    *conclusion* — land Slice 3 after Slice 2 — is unaffected either way, since Slice 3's inverted
    encoding tests genuinely live in `test_products_api.py` today.
-6. **Spec status line re-verified** (`docs/spec-065-transport_security-0_0_15.md` lines 37-43):
+6. **Spec status line re-verified** (`docs/spec-046-transport_security-0_0_15.md` lines 37-43):
    "Status: **PLANNED — no slice built yet.**" is accurate at the start of this planning pass. It
    will need Worker 1's edit once Slice 1 is `final-accepted`.
 
 ### Spec slice checklist (verbatim)
 
-Copied byte-for-byte from `docs/spec-065-transport_security-0_0_15.md` lines 113-133 (the six
+Copied byte-for-byte from `docs/spec-046-transport_security-0_0_15.md` lines 113-133 (the six
 sub-bullets of the Slice 1 block), preserving text, nesting, em-dashes, and inline citations. The
 reference-style `[glossary-configurationerror]` link is verbatim from the spec and intentionally
 has no definition in this scratchpad artifact.
@@ -687,7 +687,7 @@ Slice-intended, from `git status --short` (not memory):
   endpoint. Module docstring (mandatory for `build_tree_md.py`; no staging language),
   `from __future__ import annotations`, one import (`strawberry.django.views`), module-level
   `__all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")`, one shared
-  `TODO(spec-065 Slice 2)` anchor comment, and two thin subclasses that override nothing.
+  `TODO(spec-046 Slice 2)` anchor comment, and two thin subclasses that override nothing.
   No `channels`, no `.routers`, no `require_*` guard, no cap, no `max_request_body_bytes`,
   no `dispatch` override.
 - `django_strawberry_framework/routers.py` — Decision 2/3/4 landed: `GraphQLHTTPConsumer`
@@ -2034,7 +2034,7 @@ GraphQLView]`, `Assign __all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
 `ClassDef`s (`DjangoGraphQLView(GraphQLView)`, `AsyncDjangoGraphQLView(AsyncGraphQLView)`)
 whose entire bodies are a single docstring `Expr` each. Zero statements of logic, zero
 branches, zero calls - identical to the inventory pass 1 recorded for the same file, and the
-`TODO(spec-065 Slice 2)` `#` anchor is still present and still a comment. **Caveat stated
+`TODO(spec-046 Slice 2)` `#` anchor is still present and still a comment. **Caveat stated
 plainly:** `views.py` is untracked, so there is no git baseline for a pass-1-vs-pass-2 byte
 diff; "byte-identical apart from the docstring" is verified at AST/statement-inventory level
 plus the pass-1 review's own recorded inventory and its pinned `__all__` tuple, not by a byte
@@ -2266,8 +2266,8 @@ pyproject.toml uv.lock tests/base/test_init.py` -> empty, so the version quintet
 One forward-facing check, since Slice 5 regenerates `docs/TREE.md` from module docstrings and
 pass 2 rewrote one: `views.py`'s module docstring carries **no staging language** - programmatic
 scan for `planned`, `Slice`, `TODO(`, `coming soon`, `will be`, `future` returns all False. Its
-`spec-065 Decision 6` mention is a provenance citation (keep, per `AGENTS.md`), and the
-`TODO(spec-065 Slice 2)` anchor is a `#` comment outside the docstring, so it will not render.
+`spec-046 Decision 6` mention is a provenance citation (keep, per `AGENTS.md`), and the
+`TODO(spec-046 Slice 2)` anchor is a `#` comment outside the docstring, so it will not render.
 
 ### What looks solid
 
@@ -2389,7 +2389,7 @@ with zero production statements changed.
 ## Final verification (Worker 1)
 
 Read end-to-end before acting: the plan, both Worker 2 build reports, both Worker 3
-reviews, `docs/spec-065-transport_security-0_0_15.md`, the build plan, `CHANGELOG.md`
+reviews, `docs/spec-046-transport_security-0_0_15.md`, the build plan, `CHANGELOG.md`
 (read-only, unedited), and `docs/builder/worker-memory/worker-1.md`. The working-tree diff
 was obtained independently (`git status --short`, `git diff`, `git diff --stat`) and is
 exactly the seven paths the reports claim -- `django_strawberry_framework/views.py` (new),
@@ -2498,7 +2498,7 @@ backstop.
 
 ### Staged-anchor check
 
-`django_strawberry_framework/views.py` carries one `TODO(spec-065 Slice 2)` anchor. That is
+`django_strawberry_framework/views.py` carries one `TODO(spec-046 Slice 2)` anchor. That is
 a **correctly staged** anchor for a not-yet-shipped slice and must survive until Slice 2
 ships the body cap; it is not an undischarged obligation for this slice. No anchor naming
 Slice 1 exists anywhere in the tree.
@@ -2507,8 +2507,8 @@ Slice 1 exists anywhere in the tree.
 
 **Clean.** Scanned the module docstring and both class docstrings via `ast.get_docstring`
 for `planned`, `Slice`, `TODO(`, `coming soon`, `not yet`, `will be`, `future`, `unbuilt`
--> **zero hits in all three**. The `spec-065 Decision 6` mention is a provenance citation
-(`AGENTS.md` keeps those). The `TODO(spec-065 Slice 2)` anchor is a `#` comment *outside*
+-> **zero hits in all three**. The `spec-046 Decision 6` mention is a provenance citation
+(`AGENTS.md` keeps those). The `TODO(spec-046 Slice 2)` anchor is a `#` comment *outside*
 every docstring, confirmed by regex, so `scripts/build_tree_md.py` will not render it.
 **Slice 5 needs no docstring scrub for this file, and must not delete the anchor.**
 
@@ -2573,9 +2573,9 @@ live coverage at all.
 
 ### Spec changes made (Worker 1 only)
 
-Six edits to `docs/spec-065-transport_security-0_0_15.md`, all triggered by Slice 1. The
+Six edits to `docs/spec-046-transport_security-0_0_15.md`, all triggered by Slice 1. The
 glossary checker passes after every one:
-`uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
 -> **`OK: 37 terms - all have glossary entries and at least one spec link.` (exit 0)**. No
 new glossary term was introduced, so `-terms.csv` is unchanged (still untracked-as-authored,
 not in the diff). All 17 in-page anchors were re-verified to resolve to real headings, and

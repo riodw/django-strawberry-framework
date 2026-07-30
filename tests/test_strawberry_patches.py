@@ -36,7 +36,7 @@ the shield's parse semantics, the pair install lifecycle, and the
 reimplementer's body pin.
 
 **What is deliberately absent here.** The strict UTF-8 wire contract
-(spec-065 Decision 9) used to live in this module and no longer does: it
+(spec-046 Decision 9) used to live in this module and no longer does: it
 is package *policy* with no upstream lifecycle, so gating it on
 ``APPLY_UPSTREAM_PATCHES`` meant a consumer disabling temporary
 bug workarounds silently lost a security contract. It now belongs to
@@ -174,7 +174,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     """A ``str`` input reaches the delegate as the **same object**, not a round trip.
 
     The GET query-param and multipart form-field paths arrive already decoded,
-    and spec-065 Decision 9 passes them through untouched. Asserting object
+    and spec-046 Decision 9 passes them through untouched. Asserting object
     identity rather than equality is what rules out an incidental
     encode-then-decode cycle being introduced on those paths.
     """

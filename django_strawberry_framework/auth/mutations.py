@@ -593,7 +593,7 @@ def _login_resolve_body(
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
     a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
     one permitted sync->async hop; an async Channels consumer instead awaits the
-    native async body). Since spec-065 the package router serves no HTTP at all, so
+    native async body). Since spec-046 the package router serves no HTTP at all, so
     a Channels HTTP scope reaches here only from a consumer the project mounted
     itself. The success payload is constructed BEFORE the session is
     mutated (step 6) so a payload-construction failure cannot create a session the
@@ -776,7 +776,7 @@ def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
     a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
     one permitted sync->async hop; an async Channels consumer instead awaits the
-    native async body). Since spec-065 the package router serves no HTTP at all, so
+    native async body). Since spec-046 the package router serves no HTTP at all, so
     a Channels HTTP scope reaches here only from a consumer the project mounted
     itself. ``ok`` retains the shipped meaning: it is ``true`` only
     when an authenticated actor existed under the lock before teardown, and an

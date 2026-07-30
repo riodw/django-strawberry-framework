@@ -77,7 +77,7 @@ Compared contracts:
   rejects null (`_relation_null_error`). Documented divergence.
 - Plain form vs `run_write_pipeline_sync` — shared locate/refetch/slot
   skeleton cannot absorb `{ ok, errors }` without a model-less seam (owned by
-  `mutations/resolvers.py`; planned as spec-046 C2). Local body stays; phase
+  `mutations/resolvers.py`; planned as spec-051 C2). Local body stays; phase
   helpers are called.
 
 Focused proof (`--no-cov`):
@@ -90,7 +90,7 @@ Focused proof (`--no-cov`):
 Rejected / deferred candidates:
 
 1. **Fold `_run_plain_form_pipeline_sync` onto `run_write_pipeline_sync`** —
-   true consolidation of orchestration (spec-046 C2). Owner is
+   true consolidation of orchestration (spec-051 C2). Owner is
    `mutations/resolvers.py` (skeleton generalization for model-less / ok
    payload). Concurrent dirty on that file; assignment forbids consolidating
    sibling-owned pieces here. Forward.
@@ -212,7 +212,7 @@ plain-form phase adoption + the two package tests claimed.
 3. **Deferred fold onto `run_write_pipeline_sync`?** **Correct to keep deferred.**
    The skeleton is scoped to model-backed create/update (locate / refetch /
    object-slot `build_payload`); absorbing `{ ok, errors }` needs a model-less
-   seam owned by `mutations/resolvers.py` (spec-046 C2). Local atomic +
+   seam owned by `mutations/resolvers.py` (spec-051 C2). Local atomic +
    `_error_payload(ok=False)` stay. Note: Decision 6's *behavior* (close the
    alias-guard gap) landed early via call-site helper adoption; C2's remaining
    work is the structural fold, not re-closing the security gap.
@@ -236,7 +236,7 @@ plain-form phase adoption + the two package tests claimed.
   `utils/write_transaction.py`, not a forms/resolvers behavioral gap.
 - **No plain-form-specific auth-alias divergent-router test:** helpers are shared
   and covered elsewhere; O1 wiring is proven by the phase write-window tests.
-  Live-tier Decision 6 coverage remains a spec-046 C2 concern.
+  Live-tier Decision 6 coverage remains a spec-051 C2 concern.
 - **Rejected O2–O7** (batched M2M, M2M-null unify, get_form glue,
   `_form_errors_to_field_errors` relocate, `_to_form_key_value` extract):
   contracts still intentionally diverge or have a single caller family.

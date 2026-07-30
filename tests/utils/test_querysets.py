@@ -12,7 +12,7 @@ surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
 ``tests/test_relay_node_field.py``, ``tests/filters/test_sets.py``).
 
 Visibility-boundary decision references below resolve to
-``docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
+``docs/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
 
 ``coerce_field_value_or_none`` (the 0.0.13 DRY pass) is the sibling "raw
 literal -> Django field value, or nothing" primitive shared by the Relay id
@@ -1073,7 +1073,7 @@ async def test_instance_shadowed_all_hook_serves_only_visible_rows_async():
 
 
 def test_query_chain_shadow_hook_fails_closed_sync():
-    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (spec-064 Decision 2).
+    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (spec-045 Decision 2).
 
     ``sql.Query.clone`` shallow-copies the source ``Query.__dict__``, so an
     instance ``chain`` shadow would ride into the sealed query and dispatch on the
@@ -1093,7 +1093,7 @@ def test_query_chain_shadow_hook_fails_closed_sync():
 def test_query_shadow_defect_is_name_agnostic():
     """The no-shadow check rejects any shadowed ``sql.Query`` method, not just ``chain``.
 
-    Proves the fix is structural (spec-064 Decision 2: "do not fix only the
+    Proves the fix is structural (spec-045 Decision 2: "do not fix only the
     literal ``chain`` name") -- a shadowed ``get_compiler`` fails closed identically.
     """
     source = Category.objects.filter(is_private=False)
@@ -1330,7 +1330,7 @@ def test_seal_copies_hints_into_a_fresh_dict():
 def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
     """A hook that mutates the received source's ``_result_cache`` and returns it is re-sealed.
 
-    Object identity is not immutability (spec-064 Decision 3): the removed
+    Object identity is not immutability (spec-045 Decision 3): the removed
     identity fast path let a hook inject a synthetic unsaved row into the sealed
     source's ``_result_cache`` and return the SAME object, serving that row with
     zero SQL. The result is now ALWAYS re-sealed, so the returned queryset has
@@ -1444,7 +1444,7 @@ def test_clean_annotation_and_select_related_seal_fine():
 
 
 # ---------------------------------------------------------------------------
-# The hardened visibility boundary -- under spec-064 Decision 5 a model-less select
+# The hardened visibility boundary -- under spec-045 Decision 5 a model-less select
 # query escapes as malformed SQL, so it must fail closed as a table defect.
 # ---------------------------------------------------------------------------
 

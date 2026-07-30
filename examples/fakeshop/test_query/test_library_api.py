@@ -862,14 +862,14 @@ def test_library_branches_filter_by_name_icontains():
 
 @pytest.mark.django_db
 def test_library_loans_filter_by_deep_to_many_email_is_row_preserving_over_http():
-    """The Medtrics deep to-many leaf is row-preserving over ``/graphql/`` (spec-049 Part 1).
+    """The Medtrics deep to-many leaf is row-preserving over ``/graphql/`` (spec-054 Part 1).
 
     ``LoanFilter`` gained the generated deep path ``book__loans__patron__email``
     (spelled ``bookLoansPatronEmail`` on the wire). Filtering the loans list on
     ``iContains: "Cardio"`` returns exactly the two loans on the shared book
     whose patrons carry "Cardio" emails - ordered, each once, with no framework
     fan-out. ``direct_only`` (a "Cardio" note but a "Neurology" patron on a book
-    with no Cardio-patron loan) is excluded: the note-OR belongs to card 049's
+    with no Cardio-patron loan) is excluded: the note-OR belongs to card 054's
     search, not this relational filter.
     """
     branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")

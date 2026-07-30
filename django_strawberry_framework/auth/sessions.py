@@ -34,7 +34,7 @@ The module also owns:
   below: the engine expression stays single-sited, but it is single-sited
   OUTSIDE this package, because its other caller
   (``consumers.py::_refreshed_actor``, which reloads a WebSocket connection's
-  session during the per-operation actor revalidation - spec-065 Decision 11)
+  session during the per-operation actor revalidation - spec-046 Decision 11)
   must not import ``auth`` at all. ``auth/__init__.py`` eagerly imports
   ``.mutations`` / ``.queries``, so an ``auth``-hosted resolver would have made
   the first authenticated WebSocket operation register the whole opt-in auth

@@ -1,12 +1,12 @@
 # Spec: Transport security — Django-owned HTTP, a bounded request body, one UTF-8 wire, and WebSocket actor revalidation
 
-Planned for `0.0.15` (card [`DONE-065-0.0.15`][kanban]). This is **card 1 of a
+Planned for `0.0.15` (card [`DONE-046-0.0.15`][kanban]). This is **card 1 of a
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's two Blockers (**S1**, **S2**),
 two Mediums (**S9**, **S11**), and the **transport slice of S12**. Cards
-[`TODO-ALPHA-066-0.0.16`][kanban] (request resource policy),
-[`TODO-ALPHA-067-0.0.17`][kanban] (secure defaults), and
-[`TODO-ALPHA-068-0.0.18`][kanban] (dependency / CI hygiene) each depend on this one:
+[`TODO-ALPHA-047-0.0.16`][kanban] (request resource policy),
+[`TODO-ALPHA-048-0.0.17`][kanban] (secure defaults), and
+[`TODO-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) each depend on this one:
 the program is staged transport-first because every later bound is consumed by the
 transports corrected here.
 
@@ -51,7 +51,7 @@ actor revalidation at both the admission and the outbound-frame checkpoint), Sli
 
 **Version boundary** (see
 [Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)): this
-card **shares the `0.0.15` patch line** with [`TODO-ALPHA-045-0.0.15`][kanban], so the
+card **shares the `0.0.15` patch line** with [`TODO-ALPHA-050-0.0.19`][kanban], so the
 version bump is owned by the [joint version cut][glossary-joint-version-cut] — the last
 `0.0.15` card to land — and **no slice here moves any part of the version quintet**.
 
@@ -526,7 +526,7 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   `SINGLE_PARENT_FAST_PATH`, `TESTING_ENDPOINT`, `HIDE_FLAT_FILTERS`, and
   `RELAY_GLOBALID_STRATEGY`. Per [`AGENTS.md`][agents] #"Add settings keys only when the
   feature that needs them lands", this card adds exactly one.
-- **The `0.0.15` line has two non-Done cards.** [`TODO-ALPHA-045-0.0.15`][kanban] (the
+- **The `0.0.15` line has two non-Done cards.** [`TODO-ALPHA-050-0.0.19`][kanban] (the
   debug extraction) and this one, so the
   [joint version cut][glossary-joint-version-cut] rule applies
   ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
@@ -572,14 +572,14 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
 
 - **A central request resource-policy object.** Query depth / complexity / cost budgets,
   variable cardinality, collection bounds, and per-file upload limits are
-  [`TODO-ALPHA-066-0.0.16`][kanban] (audit S3 / S4). This card ships exactly one
+  [`TODO-ALPHA-047-0.0.16`][kanban] (audit S3 / S4). This card ships exactly one
   transport bound — the cumulative body cap — and deliberately does not invent the policy
   object that later card owns.
 - **Secure defaults for the IDE, GET, introspection, and error masking.** The card's
   regressions *prove* `graphql_ide=None` and `allow_queries_via_get=False` are supported
   on the new view; *changing the shipped defaults*, plus `DjangoSchema`-level production
   error policy and the [`DjangoDebugExtension`][glossary-djangodebugextension] disclosure
-  gate (audit S8 / S10), belongs to [`TODO-ALPHA-067-0.0.17`][kanban].
+  gate (audit S8 / S10), belongs to [`TODO-ALPHA-048-0.0.17`][kanban].
 - **The full deployment contract.** The `SECURITY.md` production-security profile and the
   mechanical `check --deploy`-style checklist (the rest of audit S12) belong to the later
   cards' doc slices; this card ships only the transport slice
@@ -869,11 +869,11 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-065-transport_security-0_0_15.md`: card NNN `065`, topic
+This spec lives at `docs/spec-046-transport_security-0_0_15.md`: card NNN `046`, topic
 slug `transport_security`, target version `0.0.15` with dots as underscores, per the
 [`docs/SPECS/NEXT.md`][next] Step 6 convention. The companion term ledger is
-`docs/spec-065-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
-[`spec-065-transport_security-0_0_15-rationale.md`][rationale], carrying the rejected
+`docs/spec-046-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
+[`spec-046-transport_security-0_0_15-rationale.md`][rationale], carrying the rejected
 alternatives, the derivations, and the change record for every decision below, keyed to the
 decision it belongs to — is where this spec's deliberative layer lives. This document is the
 contract and states only what is currently true; it never narrates its own history.
@@ -1050,7 +1050,7 @@ request-body ceiling before `parse_json` and before schema execution:
    `MultiPartParser` rather than reading `request.body` — reading it would force the whole
    payload into memory and defeat Django's streaming upload handlers, breaking the
    [`Upload` scalar][glossary-upload-scalar] path this package ships. Per-file count,
-   per-file size, and aggregate size are [`TODO-ALPHA-066-0.0.16`][kanban] (audit S4);
+   per-file size, and aggregate size are [`TODO-ALPHA-047-0.0.16`][kanban] (audit S4);
    this card's contract for multipart is the declared-size gate plus an explicit
    statement of what it does and does not bound. **That gate really does run before
    Django's parser**, which is a property of the view's ordering rather than of this step
@@ -1810,7 +1810,7 @@ disagree.
 `django_strawberry_framework/__init__.py`, `tests/base/test_init.py::test_version`, the
 [`docs/GLOSSARY.md`][glossary] package-version line, or the root package `version` entry
 in `uv.lock`. This card **shares the `0.0.15` patch line** with
-[`TODO-ALPHA-045-0.0.15`][kanban] (both non-Done at authoring time), so the bump from
+[`TODO-ALPHA-050-0.0.19`][kanban] (both non-Done at authoring time), so the bump from
 `0.0.14` to `0.0.15` is owned by the [joint version cut][glossary-joint-version-cut] —
 the last `0.0.15` card to land — exactly as [`spec-041`][spec-041] Decision 10 pinned for
 the joint `0.0.14` cut.
@@ -2220,7 +2220,7 @@ independent of all of them and could land in parallel, but its inverted live tes
 avoids a merge on that file. Slice 5 last, because it documents what the first four
 actually did.
 
-Staged-but-unbuilt slices carry `TODO(spec-065 Slice N)` source anchors at the sites they
+Staged-but-unbuilt slices carry `TODO(spec-046 Slice N)` source anchors at the sites they
 will change, paired with `NotImplementedError` where a call path must fail loudly, and
 removed in the change that ships the slice — the repo's standing staging discipline.
 
@@ -2455,7 +2455,7 @@ removed in the change that ships the slice — the repo's standing staging disci
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
   It must not be written as a `bytes` decode, because there are no bytes left to decode.
 - **GET requests carry no body.** The cap is a no-op on GET; the `variables` /
-  `extensions` query-param size is a `TODO-ALPHA-066-0.0.16` concern (S4), and the
+  `extensions` query-param size is a `TODO-ALPHA-047-0.0.16` concern (S4), and the
   existing `_patched_parse_query_params` shield keeps the body contract off those parses.
 - **`ALLOWED_HOSTS = []` with `DEBUG=True`** (fakeshop's shape) makes Django substitute
   `[".localhost", "127.0.0.1", "[::1]"]` — so every `*.localhost` subdomain is accepted, by
@@ -2883,16 +2883,16 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 ## Risks and open questions
 
-- **`spec-045` Decision 7 is now factually stale, and the joint cut needs one owner.**
-  [`spec-045`][spec-045] Decision 7 asserts it is "the **only** card at `0.0.15`" and
-  therefore owns the version cut. Card `065` has since joined that patch line, so the
+- **`spec-050` Decision 7 is now factually stale, and the joint cut needs one owner.**
+  [`spec-050`][spec-050] Decision 7 asserts it is "the **only** card at `0.0.15`" and
+  therefore owns the version cut. Card `046` has since joined that patch line, so the
   premise no longer holds and two specs would both claim the quintet. Preferred answer:
-  `spec-045` Decision 7 is amended to the joint-cut deferral shape, and whichever of
-  `045` / `065` lands **last** carries the quintet plus the `CHANGELOG.md` entry — the
+  `spec-050` Decision 7 is amended to the joint-cut deferral shape, and whichever of
+  `050` / `046` lands **last** carries the quintet plus the `CHANGELOG.md` entry — the
   [joint version cut][glossary-joint-version-cut] rule as written. Fallback: the
   maintainer nominates the cut owner explicitly in the card body, and both specs cite that
   nomination. This spec is written for the deferral either way, so it needs no change
-  under either resolution. **Flagged for the maintainer** because amending `spec-045`
+  under either resolution. **Flagged for the maintainer** because amending `spec-050`
   is outside this card's boundary and that spec anchors in-flight work.
 - **Whether the required `urlpatterns` entry should be a package-provided
   `include()`.** A `path("graphql/", include("django_strawberry_framework.urls"))` would
@@ -2921,7 +2921,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   per-result cost explicitly in that sentence, and let a measured deployment price it.
   Fallback:
   if a later benchmark shows the read dominating a subscription-heavy workload, a
-  session-store-level cache belongs to [`TODO-ALPHA-066-0.0.16`][kanban]'s resource
+  session-store-level cache belongs to [`TODO-ALPHA-047-0.0.16`][kanban]'s resource
   policy, not to a second knob here. **Flagged for the maintainer** rather than settled:
   whether a subscription-heavy deployment should be steered toward a non-zero default window
   in the docs is a product judgement, not a spec one.
@@ -2967,26 +2967,26 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 - **Audit S3 / S4 — the request resource policy.** Query depth / complexity / cost
   budgets, variable cardinality, collection bounds, per-file and aggregate upload limits,
-  and bounded Relay many-side defaults: [`TODO-ALPHA-066-0.0.16`][kanban]. This card
+  and bounded Relay many-side defaults: [`TODO-ALPHA-047-0.0.16`][kanban]. This card
   ships one transport bound and hands that card the view seam to hang the rest on.
 - **Audit S5 — `DjangoFileType.path` in the safe generated output.**
-  [`TODO-ALPHA-066-0.0.16`][kanban] / [`TODO-ALPHA-067-0.0.17`][kanban] per the program's
+  [`TODO-ALPHA-047-0.0.16`][kanban] / [`TODO-ALPHA-048-0.0.17`][kanban] per the program's
   staging; the [`DjangoFileType`][glossary-djangofiletype] /
   [`DjangoImageType`][glossary-djangoimagetype] output shape is untouched here.
 - **Audit S8 / S10 — debug and unexpected-error disclosure failing closed under
-  `DEBUG=False`.** [`TODO-ALPHA-067-0.0.17`][kanban]. The
+  `DEBUG=False`.** [`TODO-ALPHA-048-0.0.17`][kanban]. The
   [developer-only debug posture][glossary-developer-only-debug-posture] and the
   [debug-toolbar middleware][glossary-debug-toolbar-middleware] gating are named in this
   card's transport guidance but not changed by it.
 - **Audit S6 / S7 — stale Django resolutions and CI authority / supply-chain pins.**
-  [`TODO-ALPHA-068-0.0.18`][kanban].
+  [`TODO-ALPHA-049-0.0.18`][kanban].
 - **The rest of audit S12 — the full deployment contract.** The `SECURITY.md`
   production-security profile, the mechanical `check --deploy`-style checklist, the
   GlobalID-is-not-a-capability statement, upload-safety guidance beyond body size, and the
   "fakeshop must never be deployed" conspicuous notice: the later cards' doc slices. This
   card ships **only** the migration note plus transport deployment guidance.
 - **Secure-default changes to `graphql_ide` / `allow_queries_via_get` / introspection.**
-  [`TODO-ALPHA-067-0.0.17`][kanban]. This card proves the knobs work; it does not move
+  [`TODO-ALPHA-048-0.0.17`][kanban]. This card proves the knobs work; it does not move
   their defaults.
 - **A fakeshop ASGI surface and live Channels acceptance tier.** The
   fakeshop-activation card, if the maintainer wants it at all.
@@ -3138,27 +3138,27 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 [glossary-strawberry_config]: GLOSSARY.md#strawberry_config
 [glossary-testclient]: GLOSSARY.md#testclient
 [glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[rationale-d10]: spec-065-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
-[rationale-d11]: spec-065-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
-[rationale-d12]: spec-065-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
-[rationale-d13]: spec-065-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
-[rationale-d14]: spec-065-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
-[rationale-d15]: spec-065-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
-[rationale-d16]: spec-065-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
-[rationale-d17]: spec-065-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[rationale-d18]: spec-065-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
-[rationale-d19]: spec-065-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
-[rationale-d1]: spec-065-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
-[rationale-d2]: spec-065-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
-[rationale-d3]: spec-065-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
-[rationale-d4]: spec-065-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
-[rationale-d5]: spec-065-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
-[rationale-d6]: spec-065-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
-[rationale-d7]: spec-065-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
-[rationale-d8]: spec-065-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
-[rationale-d9]: spec-065-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
-[rationale]: spec-065-transport_security-0_0_15-rationale.md
-[spec-045]: spec-045-debug_extraction-0_0_15.md
+[rationale-d10]: spec-046-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
+[rationale-d11]: spec-046-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[rationale-d12]: spec-046-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[rationale-d13]: spec-046-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[rationale-d14]: spec-046-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[rationale-d15]: spec-046-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
+[rationale-d16]: spec-046-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[rationale-d17]: spec-046-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[rationale-d18]: spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[rationale-d19]: spec-046-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[rationale-d1]: spec-046-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d2]: spec-046-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[rationale-d3]: spec-046-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[rationale-d4]: spec-046-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[rationale-d5]: spec-046-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[rationale-d6]: spec-046-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[rationale-d7]: spec-046-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[rationale-d8]: spec-046-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[rationale-d9]: spec-046-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[rationale]: spec-046-transport_security-0_0_15-rationale.md
+[spec-050]: spec-050-debug_extraction-0_0_19.md
 [tree]: TREE.md
 
 <!-- docs/SPECS/ -->

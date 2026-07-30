@@ -1,6 +1,6 @@
 # Build: Slice 4 — S11: WebSocket actor revalidation through an injection seam
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Slice 4 checklist lines 171-181;
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Slice 4 checklist lines 171-181;
 Decision 11 (lines 1156-1235), Decision 12 (1237-1256), Decision 13 #"Placement" (1351-1361);
 User-facing API #"The constructor" (565-576) + #"Consumer-visible behavior" (605-638) +
 #"Error shapes" (640-673); Helper-reuse obligations (1449-1485, WS bullets 1464-1471); Edge
@@ -623,14 +623,14 @@ Everything architectural is fixed above. Nothing in this list changes a contract
 9. **No version quintet movement, no `CHANGELOG.md`, no `conf.py` key, no public export.**
    `django_strawberry_framework/__init__.py` is untouched; `routers.py::__all__` stays
    `("DjangoGraphQLProtocolRouter",)` (a test pins it); `views.py` is untouched.
-10. **Spec status line re-verified** (`docs/spec-065-transport_security-0_0_15.md` lines 37-44):
+10. **Spec status line re-verified** (`docs/spec-046-transport_security-0_0_15.md` lines 37-44):
     "Status: **IN BUILD — Slices 1-3 (S1, S2, S9) are built and accepted; Slices 4-5 remain.**"
     is accurate at the start of this planning pass; it needs Worker 1's edit once Slice 4 is
     `final-accepted`.
 
 ### Spec changes made (Worker 1 only)
 
-1. **`docs/spec-065-transport_security-0_0_15.md` Decision 11, lines 1158-1163** (the
+1. **`docs/spec-046-transport_security-0_0_15.md` Decision 11, lines 1158-1163** (the
    `**Decision.**` paragraph) — added the calling convention for both injected shapes: a class
    must subclass `GraphQLWSConsumer` and is mounted through its own `as_asgi(schema=schema)`; a
    factory is called as `factory(schema=schema)` and must return the ASGI application; anything
@@ -662,13 +662,13 @@ Everything architectural is fixed above. Nothing in this list changes a contract
    out-of-band change to the user row that the next operation reads back proves a genuine
    re-read, which asserting "a permission gate returned True" would not. Triggered by Slice 4.
 
-`uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
 → `OK: 37 terms` after all four edits (unchanged count; every term added by the edits reuses an
 existing linked form and no `-terms.csv` row is owed).
 
 ### Spec slice checklist (verbatim)
 
-Copied byte-for-byte from `docs/spec-065-transport_security-0_0_15.md` lines 172-181 (the four
+Copied byte-for-byte from `docs/spec-046-transport_security-0_0_15.md` lines 172-181 (the four
 sub-bullets of the Slice 4 block), preserving text, nesting, em-dashes, and inline citations;
 verified with `diff` against the spec extract. The in-page `(#decision-11--…)` / `(#decision-12--…)`
 anchors are verbatim from the spec and resolve there, not in this scratchpad artifact.

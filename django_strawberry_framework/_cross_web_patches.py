@@ -21,7 +21,7 @@ the Strawberry half a scalar or non-object-batch body is an unhandled
 ``500``.
 
 The gate covers upstream *defects* only, and a **package** view does not
-consult it. The strict UTF-8 wire contract (spec-065 Decision 9) is
+consult it. The strict UTF-8 wire contract (spec-046 Decision 9) is
 package policy, and the package view owns both halves of it: the decode,
 in ``views.py::_RequestBodyBoundaryMixin.parse_json``, and its own sync
 body source, in ``views.py::_RawBodyRequestAdapter`` - a one-property
@@ -30,7 +30,7 @@ that decode with undecoded bytes whatever this setting says. That second
 half is not redundant with this patch; it is what made the claim true. With
 this half opted out and only the decode view-owned, upstream's property
 decoded first and the mounted sync view answered ``500`` instead of the
-contract's ``400`` (spec-065 review W3-2). See
+contract's ``400`` (spec-046 review W3-2). See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -233,7 +233,7 @@ def _validate_upstream_shape() -> None:
 def _patched_body(self: Any) -> bytes:
     """Return raw ``self.request.body`` bytes - the async adapter's contract.
 
-    The return contract is unchanged by spec-065: raw bytes, never a
+    The return contract is unchanged by spec-046: raw bytes, never a
     decoded ``str``. What changed is what happens to them next, so the
     reason for the raw bytes is worth stating exactly.
 
@@ -255,7 +255,7 @@ def _patched_body(self: Any) -> bytes:
     view, and a consumer who chose it is entitled to its semantics. A
     **package** view never reaches this getter, because it installs
     ``views.py::_RawBodyRequestAdapter`` instead, and strict-UTF-8-decodes
-    in its own ``parse_json`` (spec-065 Decision 9) - so UTF-16 / UTF-32
+    in its own ``parse_json`` (spec-046 Decision 9) - so UTF-16 / UTF-32
     (BOM or BOM-less) and a leading UTF-8 BOM are ``400``s there on both
     transports, in every state of this patch's own setting. Keeping the
     wire contract out of this getter is what makes those two answers

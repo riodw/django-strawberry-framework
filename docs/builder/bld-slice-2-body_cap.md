@@ -1,6 +1,6 @@
 # Build: Slice 2 — S2: the cumulative request-body cap
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Slice 2 checklist lines 143-154;
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Slice 2 checklist lines 143-154;
 Decision 7 (lines 850-911), Decision 8 (913-934), Decision 6 (797-848, the seam Slice 1 created),
 Decision 13 Placement (1204-1214); User-facing API — the view block lines 501-516, the setting
 517-526, Error shapes 563-594; Current state's Django-body bullet 278-290; Helper-reuse obligations
@@ -28,7 +28,7 @@ Status: final-accepted
   - `uv run python scripts/review_inspect.py django_strawberry_framework/views.py --output-dir
     docs/shadow` → `docs/shadow/django_strawberry_framework__views.overview.md`. Quick scan: 2
     imports, 2 symbols, 0 hotspots, 0 Django/ORM markers, 0 calls of interest, **1 TODO** (the
-    `TODO(spec-065 Slice 2)` anchor this slice must remove), 0 repeated literals.
+    `TODO(spec-046 Slice 2)` anchor this slice must remove), 0 repeated literals.
   - `uv run python scripts/review_inspect.py django_strawberry_framework/conf.py --output-dir
     docs/shadow` → `docs/shadow/django_strawberry_framework__conf.overview.md`. Quick scan: 5
     imports, 13 symbols, 2 hotspots (`Settings.user_settings`, `upstream_patches_enabled` — both
@@ -213,7 +213,7 @@ editing.
    - After `RELAY_GLOBALID_STRATEGY_KEY` (`conf.py:108`), add `MAX_REQUEST_BODY_BYTES_KEY =
      "MAX_REQUEST_BODY_BYTES"` with the `#` comment block every sibling key carries. The comment
      must state: it is the cumulative request-body ceiling **in bytes** for the GraphQL HTTP path
-     served by `views.py`'s two views (spec-065 Decision 7); it is **counted, not declared**; the
+     served by `views.py`'s two views (spec-046 Decision 7); it is **counted, not declared**; the
      default is `1_048_576`; `None` disables the package cap and leaves only Django's
      `DATA_UPLOAD_MAX_MEMORY_SIZE` **and the deployment-layer cap, which the package requires
      rather than suggests** (Decision 8 — see step 4 for the surface split); and that a GraphQL
@@ -228,11 +228,11 @@ editing.
    - **Nothing else in `conf.py` changes.** No new validation branch, no `Settings` change.
 
 2. **`django_strawberry_framework/views.py` — the cap.**
-   - **Delete the `TODO(spec-065 Slice 2)` anchor** (`views.py:46-49`, a four-line `#` block above
+   - **Delete the `TODO(spec-046 Slice 2)` anchor** (`views.py:46-49`, a four-line `#` block above
      the classes) **in this same change**. This slice ships the work it names, so `AGENTS.md`
      #"removed in the same change that ships the slice" applies, and BUILD.md's integration pass
      greps for survivors. Do **not** replace it with another `TODO(`; the new docstrings carry
-     `spec-065 Decision 7` / `Decision 8` provenance instead, which `AGENTS.md` keeps.
+     `spec-046 Decision 7` / `Decision 8` provenance instead, which `AGENTS.md` keeps.
    - Imports: add `from cross_web import HTTPException`, `from django.http import HttpRequest`
      (typing only — keep it under `TYPE_CHECKING` only if `from __future__ import annotations`
      makes it unused at runtime, which it does), `from django_strawberry_framework.conf import
@@ -274,7 +274,7 @@ editing.
           including GET.
        2. `if limit is None or request.method == "GET": return` — the cap is disabled, or the
           request carries no body the view will read (spec Edge cases lines 1362-1364; the
-          query-param size is card 066 / audit S4, and `_patched_parse_query_params` already
+          query-param size is card 047 / audit S4, and `_patched_parse_query_params` already
           shields those parses).
        3. `declared = _declared_content_length(request)`; `if declared is not None and declared >
           limit: raise HTTPException(413, _BODY_LIMIT_REASON)` — Decision 7 step 1, rejecting
@@ -333,7 +333,7 @@ editing.
      - `views.py::_RequestBodyLimitMixin`'s class docstring — the full contract: the
        constructor > setting > default precedence; that the count is of received bytes, not of
        `Content-Length`; the multipart bound (declared size plus Django's `MultiPartParser`, and
-       explicitly *not* per-file or aggregate limits, which are card 066 / audit S4); that the GET
+       explicitly *not* per-file or aggregate limits, which are card 047 / audit S4); that the GET
        path is a no-op; **and the honest boundary** — the view guarantees the application never
        parses, allocates a document from, or executes a schema against an over-limit body, while
        `django.core.handlers.asgi.ASGIHandler.read_body` has already drained the whole request into
@@ -481,7 +481,7 @@ is `>`; multipart never reads `request.body`; the reason string is the spec's ve
 `413` comes from `HTTPException` through upstream's `dispatch`; the setting key is exactly
 `MAX_REQUEST_BODY_BYTES` and it is the **only** settings key this card adds; `None` at the setting
 rung disables and `None` at the kwarg rung defers; validation raises `ConfigurationError`; the
-`TODO(spec-065 Slice 2)` anchor is deleted in this slice; no `__init__.py` change, no `.md` edits,
+`TODO(spec-046 Slice 2)` anchor is deleted in this slice; no `__init__.py` change, no `.md` edits,
 no version-quintet or `CHANGELOG.md` movement, no `channels` import in `views.py`, no fakeshop
 `asgi.py`.
 
@@ -529,7 +529,7 @@ final-verification pass decides whether any of these warrants a spec edit.
    Slice 5 by Decision 8 itself and by the spec's Doc updates; only the code-level statement is
    in scope here. Step 4 fixes the split explicitly, and Worker 2 must record the Slice-5 hand-off
    in its build report so Worker 1's box audit sees it rather than inferring a silent deferral.
-6. **Spec status line re-verified** (`docs/spec-065-transport_security-0_0_15.md` lines 37-44):
+6. **Spec status line re-verified** (`docs/spec-046-transport_security-0_0_15.md` lines 37-44):
    "Status: **IN BUILD — Slice 1 (S1) is built and accepted; Slices 2-5 remain.**" is accurate at
    the start of this planning pass. It will need Worker 1's edit once Slice 2 is `final-accepted`.
 7. **No spec-vs-codebase gap in the symbols this slice names.** Verified on disk:
@@ -542,7 +542,7 @@ final-verification pass decides whether any of these warrants a spec edit.
 
 ### Spec slice checklist (verbatim)
 
-Copied byte-for-byte from `docs/spec-065-transport_security-0_0_15.md` lines 144-154 (the four
+Copied byte-for-byte from `docs/spec-046-transport_security-0_0_15.md` lines 144-154 (the four
 sub-bullets of the Slice 2 block), preserving text, nesting, em-dashes, and inline citations. The
 anchor links are verbatim from the spec and intentionally resolve only there.
 
@@ -582,7 +582,7 @@ and the build is uncommitted), so they show as `??` rather than `M`.
   not inherit Django's upload-shaped knob), plus the one-line thin reader
   `max_request_body_bytes_setting()` beside `relay_globalid_strategy_setting`. No `Settings` change,
   no validation branch.
-- `django_strawberry_framework/views.py` — **deleted** the four-line `TODO(spec-065 Slice 2)` `#`
+- `django_strawberry_framework/views.py` — **deleted** the four-line `TODO(spec-046 Slice 2)` `#`
   anchor; added `_BODY_LIMIT_REASON`, `_MULTIPART_CONTENT_TYPE`,
   `_resolved_max_request_body_bytes`, `_declared_content_length`, `_RequestBodyLimitMixin` (the cap
   contract in one docstring, including the honest `read_body` boundary), and the two ~3-line `run`
@@ -704,12 +704,12 @@ override plus `max_request_body_bytes_setting() == 1_048_576` after the `del`, i
    - *Slice-1 intended, still uncommitted:* `django_strawberry_framework/routers.py`,
      `examples/fakeshop/config/urls.py`, `tests/test_routers.py`, `tests/auth/test_mutations.py`,
      `docs/builder/bld-slice-1-protocol_split.md`,
-     `docs/builder/build-065-transport_security-0_0_15.md`.
+     `docs/builder/build-046-transport_security-0_0_15.md`.
    - *Baseline-dirty / concurrent, untouched:* `django_strawberry_framework/filters/sets.py`,
      `tests/filters/test_sets.py`, `docs/feedback.md`,
      `docs/row-preserving-predicates-part1-plan.md`, `docs/GLOSSARY.md`,
      `examples/fakeshop/db.sqlite3`, `KANBAN.md`, `KANBAN.html`, `drys.md`, `vulns.md`,
-     `docs/spec-065-transport_security-0_0_15.md` + `-terms.csv`.
+     `docs/spec-046-transport_security-0_0_15.md` + `-terms.csv`.
    - *Tool churn:* **none.** No `git checkout --` was run.
 5. Focused scope (the plan's, no `--cov*` anywhere):
    `uv run pytest tests/test_views.py tests/base/test_conf.py
@@ -755,7 +755,7 @@ override plus `max_request_body_bytes_setting() == 1_048_576` after the `del`, i
      malformed-over vs malformed-under, the at-limit boundary, the multipart and GET no-ops, the
      ASGI fragment and understated-`Content-Length` shapes) produced identical output on
      `Django 6.0.5 / py3.14.2` and `Django 5.2 / py3.10.19`.
-9. **TODO-anchor sweep:** `grep -rn "TODO(spec-065" --include='*.py' --include='*.md' .` returns no
+9. **TODO-anchor sweep:** `grep -rn "TODO(spec-046" --include='*.py' --include='*.md' .` returns no
    hit in shipped source or tests — only the spec's generic staging-discipline sentence and the
    per-cycle `bld-*.md` narrative. `grep -rn "TODO("` across all five touched files: no match.
 
@@ -928,7 +928,7 @@ the report's inventory. `views.py`, `tests/test_views.py`, and
 uncommitted), so they have no git baseline and were read in full; `conf.py` and
 `tests/base/test_conf.py` were read as diffs. The inventory is accurate and complete: no
 sixth file carries slice content. Every other dirty entry matches
-`build-065-transport_security-0_0_15.md`'s baseline-dirty list and was neither read as
+`build-046-transport_security-0_0_15.md`'s baseline-dirty list and was neither read as
 in-scope nor touched.
 
 **Static inspection helper — run, as required** (logic added to two files under
@@ -1092,7 +1092,7 @@ re-export list are unchanged. `views.__all__` is still exactly
 `_resolved_max_request_body_bytes`, `_declared_content_length`, `_BODY_LIMIT_REASON`, and
 `_MULTIPART_CONTENT_TYPE` are all private and unexported.
 
-Per `build-065-transport_security-0_0_15.md` #"Worker 3's public-surface check must measure
+Per `build-046-transport_security-0_0_15.md` #"Worker 3's public-surface check must measure
 the diff against **spec Decision 5**": Slice 2 breaks nothing. Both additions are strictly
 additive - one optional `as_view(max_request_body_bytes=...)` keyword defaulting to `None`
 (defer), and one settings key defaulting to `1_048_576`. Verified by probe that upstream's
@@ -1133,8 +1133,8 @@ Not applicable; slice did not modify `CHANGELOG.md`.
   so no body-cap term leaked in. `KANBAN.md` / `KANBAN.html` /
   `examples/fakeshop/db.sqlite3` likewise carry only the concurrent + card-authoring state
   named in the build plan. Nothing was touched or reverted.
-- **`TODO(spec-065 Slice 2)` anchor is gone with no replacement.**
-  `grep -rn "TODO(spec-065" --include='*.py' .` -> no hit anywhere in shipped source or
+- **`TODO(spec-046 Slice 2)` anchor is gone with no replacement.**
+  `grep -rn "TODO(spec-046" --include='*.py' .` -> no hit anywhere in shipped source or
   tests; `grep -n "TODO(" ` across all five touched files -> no match; the shadow overview
   independently reports **TODO comments: none** for `views.py` (the plan's own scan had
   found 1 there before the edit). `AGENTS.md` #"removed in the same change that ships the
@@ -1490,8 +1490,8 @@ venv.
 ## Final verification (Worker 1)
 
 Read end-to-end before acting: this artifact in full (plan, Worker 2's build report, Worker 3's
-review), `docs/spec-065-transport_security-0_0_15.md`,
-`docs/builder/build-065-transport_security-0_0_15.md`,
+review), `docs/spec-046-transport_security-0_0_15.md`,
+`docs/builder/build-046-transport_security-0_0_15.md`,
 `docs/builder/bld-slice-1-protocol_split.md` (the accepted prior slice, for the cross-slice DRY
 check and its still-open wording items), `CHANGELOG.md` (read-only, unedited), and
 `docs/builder/worker-memory/worker-1.md`. The diff was obtained independently
@@ -1648,12 +1648,12 @@ corrects a factual claim must not itself be hearsay:
 
 ### Staged-anchor check
 
-`grep -rn "TODO(spec-065" --include='*.py' --include='*.md' .` and
-`grep -rEn 'TODO-(ALPHA|BETA|STABLE)-065' --include='*.py' .` -> **no hit in any shipped source
+`grep -rn "TODO(spec-046" --include='*.py' --include='*.md' .` and
+`grep -rEn 'TODO-(ALPHA|BETA|STABLE)-046' --include='*.py' .` -> **no hit in any shipped source
 or test**. The only survivors are the spec's own generic staging-discipline sentence and the
-per-cycle `bld-*.md` narrative. Slice 1's `TODO(spec-065 Slice 2)` anchor was this slice's to
+per-cycle `bld-*.md` narrative. Slice 1's `TODO(spec-046 Slice 2)` anchor was this slice's to
 discharge and is gone with no replacement -- `views.py`'s provenance is now
-`spec-065 Decision 6/7/8` citations, which `AGENTS.md` keeps.
+`spec-046 Decision 6/7/8` citations, which `AGENTS.md` keeps.
 
 ### How Worker 3's three Lows and Slice 1's L2 are routed
 
@@ -1677,7 +1677,7 @@ pass inherits them as contract items instead of finding them in `bld-final.md`'s
   test. Routed as a deletion, with the reason stated in the spec so a future slice does not later
   weaken the exact-`__all__` test believing this one covers privacy.
 - **Slice 1's L2 (the three now-wrong `auth/` transport strings)** -- **still contractually owned
-  by Slice 5**, unchanged from my Slice-1 pass: `docs/spec-065-transport_security-0_0_15.md`
+  by Slice 5**, unchanged from my Slice-1 pass: `docs/spec-046-transport_security-0_0_15.md`
   Slice-5 checklist, the sub-bullet naming `sessions.py::classify_transport`'s
   unrecognized-scope-type message and both `mutations.py` resolve-body docstrings. I re-read the
   bullet in place; it survives my edits intact and is now one of five prose obligations Slice 5
@@ -1721,9 +1721,9 @@ green.
 
 ### Spec changes made (Worker 1 only)
 
-Six edits to `docs/spec-065-transport_security-0_0_15.md`, all triggered by Slice 2. Verified
+Six edits to `docs/spec-046-transport_security-0_0_15.md`, all triggered by Slice 2. Verified
 after the last one:
-`uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
 -> **`OK: 37 terms - all have glossary entries and at least one spec link.` (exit 0)**. Term count
 unchanged at 37, so **no new glossary term and no `-terms.csv` row** is owed and
 `docs/GLOSSARY.md` is untouched. All **19** in-page anchors re-verified to resolve to real

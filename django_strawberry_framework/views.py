@@ -5,7 +5,7 @@ subclasses of Strawberry's Django views. Mounting one of them in the project's
 ``urlpatterns`` is what puts GraphQL HTTP inside Django's real request
 lifecycle - the whole ``MIDDLEWARE`` stack, the ``ALLOWED_HOSTS`` host check,
 CSRF, security headers, cache policy, and every consumer-authored middleware
-(spec-065 Decision 6)::
+(spec-046 Decision 6)::
 
     # myproject/urls.py
     from django.urls import path
@@ -25,7 +25,7 @@ declaration is independent of ``routers.py``'s ``websocket_url_pattern``, which
 governs the WebSocket branch alone.
 
 The module also owns the package's whole raw-request-body boundary on this path -
-the cumulative body cap (spec-065 Decision 7) and the strict UTF-8 wire contract
+the cumulative body cap (spec-046 Decision 7) and the strict UTF-8 wire contract
 (Decision 9). Both are properties of the bytes this endpoint is willing to
 process, so both decisions land on one mixin, ``_RequestBodyBoundaryMixin``: see
 it for the contract, including the honest statement of what an application-level
@@ -94,7 +94,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 __all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
 
 
-#: The wire reason for an over-limit body, verbatim from spec-065's Error
+#: The wire reason for an over-limit body, verbatim from spec-046's Error
 #: shapes. Named once so the package tier can import the exact bytes the live
 #: tier reads off the response.
 _BODY_LIMIT_REASON = "Request body exceeded the configured GraphQL request-body limit."
@@ -105,7 +105,7 @@ _BODY_LIMIT_REASON = "Request body exceeded the configured GraphQL request-body 
 #: coincidence: a body rejected by the package's strict decode and a body
 #: rejected by upstream's ``json.loads`` must be indistinguishable on the wire,
 #: so one byte sequence has one interpretation at every hop and no caller can
-#: attribute a rejection by message (spec-065 Decision 9). ``__cause__`` is the
+#: attribute a rejection by message (spec-046 Decision 9). ``__cause__`` is the
 #: only discriminator. ``_strawberry_patches.py`` reproduces the same literal for
 #: its own upstream-bug translation, and
 #: ``tests/test_views.py::test_the_wire_reason_is_upstreams_own_parse_json_literal``
@@ -147,7 +147,7 @@ def _resolved_max_request_body_bytes(value: object) -> int | None:
     1 MiB package default - this module never restates that number). ``None``
     from the *setting* is the documented way to disable the package cap
     entirely, which is why the two rungs read the same sentinel differently
-    (spec-065 Decision 7 step 4).
+    (spec-046 Decision 7 step 4).
 
     Validation lives here rather than in ``conf.py``, which stays a thin reader
     - the same split ``optimizer/nested_fetch.py::resolve_strategy`` uses for
@@ -212,7 +212,7 @@ def _form_encoding_is_utf8(request: HttpRequest) -> bool:
 
     Two INDEPENDENT conditions, joined with ``and``. They are deliberately not a
     fallback chain: Django applies no such order, and reading them as one was a
-    bypass (spec-065 review round 2, M1). What Django actually does, read out of
+    bypass (spec-046 review round 2, M1). What Django actually does, read out of
     ``django/http/request.py`` and ``django/http/multipartparser.py`` and
     confirmed by execution at both supported versions:
 
@@ -277,7 +277,7 @@ def _is_multipart_form_post(request: HttpRequest) -> bool:
     ``parse_file_upload``. So a stray multipart ``Content-Type`` on a GET - a
     client reusing a previous request's headers - is not a multipart form at all:
     Django decodes no field, the view reads no body, and refusing it would be the
-    package inventing a rejection for bytes nobody parses (spec-065 review round
+    package inventing a rejection for bytes nobody parses (spec-046 review round
     2, L1).
 
     Naming the discrimination once is also what keeps the two guards below from
@@ -302,7 +302,7 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
     ``parse_json`` is never entered with bytes at all, so the decode below it
     cannot run.
 
-    The strict UTF-8 wire contract (spec-065 Decision 9) therefore needs two
+    The strict UTF-8 wire contract (spec-046 Decision 9) therefore needs two
     things from the sync transport, not one: a strict decode
     (``_RequestBodyBoundaryMixin.parse_json``) *and* the bytes arriving there
     undecoded. ``request_adapter_class`` is upstream's own per-view seam for the
@@ -321,7 +321,7 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
     stops decoding eagerly. This class is the package view's own body source, and
     it is what makes the wire contract hold on a package mount in **every** patch
     state - including the broad ``APPLY_UPSTREAM_PATCHES = False``, where the sync
-    transport used to answer ``500`` for a BOM'd UTF-16 / UTF-32 body (spec-065
+    transport used to answer ``500`` for a BOM'd UTF-16 / UTF-32 body (spec-046
     review W3-2). Ownership follows lifecycle here exactly as it does for the
     decode itself: permanent package policy must not be reachable only through a
     switchable workaround.
@@ -351,7 +351,7 @@ class _RequestBodyBoundaryMixin:
     anything.
 
     1. **How many of them will be processed** - the cumulative request-body cap
-       (spec-065 Decision 7), enforced from ``run`` on both views through
+       (spec-046 Decision 7), enforced from ``run`` on both views through
        :meth:`_enforce_request_boundary`.
     2. **How they become text** - the strict UTF-8 wire contract (Decision 9),
        enforced by overriding ``parse_json`` for a ``bytes`` body and, for the
@@ -425,7 +425,7 @@ class _RequestBodyBoundaryMixin:
     ``_strawberry_patches.py::_patched_parse_query_params`` already shields
     those parses.
 
-    **The honest boundary** (spec-065 Decisions 7 and 8). What this guarantees
+    **The honest boundary** (spec-046 Decisions 7 and 8). What this guarantees
     is that the application never parses, allocates a document from, or executes
     a schema against an over-limit body, that it never allocates or reads more
     than ``limit + 1`` bytes of one - except where an earlier middleware already
@@ -465,7 +465,7 @@ class _RequestBodyBoundaryMixin:
     def as_view(cls, **initkwargs: Any) -> Any:  # noqa: N805 - Django's own signature
         """Return upstream's view callback, marked ``csrf_exempt``.
 
-        The ordering half of the body boundary (spec-065 Decision 18), stamped
+        The ordering half of the body boundary (spec-046 Decision 18), stamped
         once, here, so both views get it and a URLconf author cannot forget it.
         ``CsrfViewMiddleware.process_view`` reads ``csrf_exempt`` off the callback
         the URL resolver holds - so the callback is where it is put, rather than on
@@ -524,7 +524,7 @@ class _RequestBodyBoundaryMixin:
     def _enforce_multipart_form_encoding(self, request: HttpRequest) -> None:
         """Refuse a multipart request whose form fields will not be decoded as UTF-8.
 
-        Half of the multipart wire contract (spec-065 Decision 9, review High 2),
+        Half of the multipart wire contract (spec-046 Decision 9, review High 2),
         and the half that can be answered from headers alone - so it runs in
         ``run``, before the form is parsed at all, and an unhonourable
         declaration costs nothing to refuse.
@@ -593,7 +593,7 @@ class _RequestBodyBoundaryMixin:
     def parse_json(self, data: str | bytes) -> Any:
         """Decode a ``bytes`` request body as strict UTF-8, then delegate upstream.
 
-        The strict UTF-8 wire contract (spec-065 Decision 9): the success set for
+        The strict UTF-8 wire contract (spec-046 Decision 9): the success set for
         a GraphQL-over-HTTP body is UTF-8, and UTF-8 only. Because the delegate
         never sees ``bytes``, ``json.loads``'s RFC 8259 encoding auto-detection
         cannot run, so UTF-16 / UTF-32 (BOM or BOM-less) and a leading UTF-8 BOM
@@ -662,7 +662,7 @@ def _run_after_csrf_check(
 ) -> Any:
     """Call ``delegate`` - and be the function ``csrf_protect`` wraps.
 
-    The whole ordering fix for the multipart declared cap (spec-065 Decision 7,
+    The whole ordering fix for the multipart declared cap (spec-046 Decision 7,
     review High 3) is which side of this function the CSRF check falls on.
 
     Django's ``CsrfViewMiddleware.process_view`` reads
@@ -785,7 +785,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
 
         A subclass of ``strawberry.django.views.GraphQLView`` that overrides exactly
         one thing - the raw request body: the cumulative cap, enforced at the top of
-        ``run`` (spec-065 Decision 7), and the strict UTF-8 decode of the bytes that
+        ``run`` (spec-046 Decision 7), and the strict UTF-8 decode of the bytes that
         survive it (Decision 9). Everything else is inherited: every upstream
         ``as_view()`` keyword still applies and behaves identically - ``schema``,
         ``graphql_ide``, ``allow_queries_via_get``, and
@@ -797,7 +797,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
         It exists as a package-owned symbol so the URLconf entry, the migration
         note, and the transport bounds the package owns on the HTTP path all name
         one class instead of forking between "upstream's view" and "the package's"
-        (spec-065 Decision 6).
+        (spec-046 Decision 6).
 
         The one other thing it overrides is upstream's ``request_adapter_class``,
         with a subclass that hands the raw body bytes to ``parse_json`` instead of
@@ -820,7 +820,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
     def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
-        The order is the contract (spec-065 Decision 7): nothing here may touch
+        The order is the contract (spec-046 Decision 7): nothing here may touch
         ``request.POST``, so an over-limit multipart request is refused before
         Django's multipart parser or any upload handler is entered, and every
         request that survives the boundary still passes Django's complete CSRF

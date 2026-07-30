@@ -65,8 +65,8 @@ Searches: `run_write_pipeline_sync`, `_run_plain_form_pipeline_sync`,
 `error_payload_builder`, `_run_delete`, `make_resolver_entries`,
 `run_pipeline_async`, `run_in_one_sync_boundary`, `authorize_or_raise`,
 `pipeline_alias_guard`, `authorization_phase`, `open_write_pipeline`,
-`tail_step`, `spec-046` C1/C2 / Decision 6 across package + tests +
-`docs/spec-046-boundary_dry_squeeze-0_0_16.md`.
+`tail_step`, `spec-051` C1/C2 / Decision 6 across package + tests +
+`docs/spec-051-boundary_dry_squeeze-0_0_20.md`.
 
 Compared contracts:
 
@@ -99,7 +99,7 @@ Compared contracts:
   string edit out of this item's ownership.
 
 No scratch under `docs/dry/temp-tests/`: contract comparison + prior focused
-plain-form phase tests + spec-045 sequencing sufficed. Permanent proof of the
+plain-form phase tests + spec-050 sequencing sufficed. Permanent proof of the
 already-landed Decision 6 behavior lives in
 `tests/forms/test_resolvers.py`
 (`test_plain_form_rejects_write_sql_outside_the_write_phase`,
@@ -108,16 +108,16 @@ already-landed Decision 6 behavior lives in
 
 Rejected / deferred candidates:
 
-1. **Fold plain-form onto `run_write_pipeline_sync` (spec-046 C2)** — deferred
+1. **Fold plain-form onto `run_write_pipeline_sync` (spec-051 C2)** — deferred
    (see Opportunities "None" + Judgment). True owner is this file; fold is
    real but premature without C1's `tail_step` / model-less / ok-payload seams
    and B4's `open_write_pipeline`. Decision 6 behavior already closed.
-2. **Fold `_run_delete` onto the skeleton (spec-046 C1)** — deferred with C2;
+2. **Fold `_run_delete` onto the skeleton (spec-051 C1)** — deferred with C2;
    needs the shared `tail_step` design, not a half-baked locate/auth extract.
 3. **Promote ok-envelope builder beside `error_payload_builder` alone** —
    single plain-form caller; consolidating the closure without deleting the
    parallel orchestration moves code without removing a change axis. With C2.
-4. **Extract `open_write_pipeline` now (spec-045 B4)** — mechanical substrate
+4. **Extract `open_write_pipeline` now (spec-050 B4)** — mechanical substrate
    for C1/C2; implementing it here without migrating plain/delete leaves the
    deferred fold unfinished and churns the skeleton surface mid-cycle. Defer
    to the sequenced card.
@@ -137,7 +137,7 @@ single-sited for model-backed create/update (skeleton + entries + auth gate +
 error envelope). The deferred plain-form / delete structural folds are real
 consolidations owned here, but implementing them now would invent mode-flagged
 or half-finished seams ahead of the co-designed C1+C2 surface in
-[spec-045][spec-045] Slice 3 (after B4). Decision 6's behavioral gap is already
+[spec-050][spec-050] Slice 3 (after B4). Decision 6's behavioral gap is already
 closed at `forms/resolvers.py::_run_plain_form_pipeline_sync` without folding.
 
 ## Judgment
@@ -174,7 +174,7 @@ Re-traced `mutations/resolvers.py` as the write-pipeline runtime owner
 decode/write, `_run_delete`, `authorize_or_raise`, `run_pipeline_async` /
 `make_resolver_entries`) against forms / serializer riders, `_run_plain_form_pipeline_sync`,
 `utils/querysets.py::run_in_one_sync_boundary` consumers, and
-[spec-046][spec-046] C1/C2 / Decision 6 / B4 sequencing.
+[spec-051][spec-051] C1/C2 / Decision 6 / B4 sequencing.
 
 **Zero-edit diff confirmed.**
 `git diff f3921b78660e4535c27c2a4e16def96e0c0af25e --
@@ -185,7 +185,7 @@ tree vs HEAD still shows concurrent WIP (`_require_sync_bool_auth_result` +
 
 ### Challenges
 
-1. **Should this item have implemented the plain-form fold (spec-046 C2)?**
+1. **Should this item have implemented the plain-form fold (spec-051 C2)?**
    **No — deferral stands.** Independently compared
    `forms/resolvers.py::_run_plain_form_pipeline_sync` to
    `run_write_pipeline_sync`: shared BETA-055 *helpers* already
@@ -240,7 +240,7 @@ No production edits. Plan item checked.
 
 <!-- docs/ -->
 
-[spec-046]: ../spec-046-boundary_dry_squeeze-0_0_16.md
+[spec-051]: ../spec-051-boundary_dry_squeeze-0_0_20.md
 
 <!-- docs/SPECS/ -->
 

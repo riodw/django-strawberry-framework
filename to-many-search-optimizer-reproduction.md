@@ -44,7 +44,7 @@ acceptance fixture for the implementation.
 
 ## Executive conclusion
 
-The card-049 design as currently written protects result correctness but not database cost:
+The card-054 design as currently written protects result correctness but not database cost:
 
 1. The compiler builds direct Django traversal predicates such as
    `genres__name__icontains=value`.
@@ -77,7 +77,7 @@ The framework currently has two distinct optimization concerns.
 
 Filtering and search decide *which root rows qualify*. The relevant seams are:
 
-- `django_strawberry_framework/filters/search.py` after card 049 lands.
+- `django_strawberry_framework/filters/search.py` after card 054 lands.
 - `django_strawberry_framework/filters/sets.py::FilterSet._apply_related_constraints`.
 - `django_strawberry_framework/utils/relations.py::path_traverses_to_many`.
 - `django_strawberry_framework/connection.py::_pipeline_sync`.
@@ -155,7 +155,7 @@ for execution-plan and CPU comparisons.
 
 ### Temporary schema activation
 
-Once card 049 is implemented, update
+Once card 054 is implemented, update
 `examples/fakeshop/apps/library/schema.py::BookType.Meta`:
 
 ```python
@@ -363,9 +363,9 @@ an outer fan-out from a contained semijoin.
 If a helper returns an expression rather than the final queryset, test the queryset after
 the connection/search application step where aliases and predicates have been attached.
 
-## ORM-only baseline runnable before card 049
+## ORM-only baseline runnable before card 054
 
-The following command recreates the card-049-equivalent SQL without needing the GraphQL
+The following command recreates the card-054-equivalent SQL without needing the GraphQL
 argument to exist:
 
 ```bash
@@ -909,9 +909,9 @@ Responsibilities:
 Keep this module independent of Strawberry AST selections. It is an ORM predicate
 optimization utility consumed by higher-level framework surfaces.
 
-### Phase 4: Integrate card-049 search
+### Phase 4: Integrate card-054 search
 
-Update the card-049 implementation points:
+Update the card-054 implementation points:
 
 - `django_strawberry_framework/filters/search.py`.
 - `django_strawberry_framework/types/definition.py`.
@@ -929,7 +929,7 @@ At finalization:
 
 At runtime:
 
-1. Ignore `None` and whitespace-only values according to card-049 semantics.
+1. Ignore `None` and whitespace-only values according to card-054 semantics.
 2. Bind the raw current request value.
 3. Call the row-preserving compiler.
 4. Do not call `.distinct()`.
@@ -978,7 +978,7 @@ Add acceptance coverage for:
 
 ### Phase 7: Document and benchmark
 
-Update the card-049 spec before implementation is considered complete:
+Update the card-054 spec before implementation is considered complete:
 
 - Replace conditional DISTINCT as the prescribed strategy.
 - Document `EXISTS` compilation.
@@ -1169,7 +1169,7 @@ The work is complete only when all of the following are true:
 13. Selection-driven N+1 optimization remains unchanged and independently testable.
 14. Equivalent generated to-many filter paths use the shared row-preserving machinery
     wherever their semantics are existential.
-15. The card-049 spec no longer promises JOIN-plus-DISTINCT as the implementation strategy.
+15. The card-054 spec no longer promises JOIN-plus-DISTINCT as the implementation strategy.
 
 ## Rejected approaches
 
@@ -1214,7 +1214,7 @@ outer fan-out.
 Before beginning:
 
 - Read this guide.
-- Read the card-049 spec.
+- Read the card-054 spec.
 - Confirm the working tree and preserve unrelated changes.
 - Run the ORM-only baseline and save the SQL.
 
@@ -1243,7 +1243,7 @@ Before review:
 <!-- Root -->
 
 <!-- docs/ -->
-[search-fields-spec]: spec-049-search_fields-0_1_2.md
+[search-fields-spec]: spec-054-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
 

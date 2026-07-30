@@ -1,6 +1,6 @@
 # Spec: Channels ASGI router — `DjangoGraphQLProtocolRouter` in a soft-`channels` `routers.py`, the one-import ASGI / WebSocket migration aid
 
-> **AMENDED by [`spec-065`][spec-065]** (card `065`, transport security). That card
+> **AMENDED by [`spec-046`][spec-046]** (card `046`, transport security). That card
 > **supersedes exactly three items of this spec**:
 >
 > 1. [Decision 6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is)
@@ -27,7 +27,7 @@
 > **Separately, and explicitly NOT a supersession:** the sentences below that described
 > the package's *current* pinned `strawberry-graphql` floor as `>=0.262.0` have been
 > reconciled to the live `>=0.316.0` requirement. Those sentences were factually wrong
-> about live code, not decisions this card made and `spec-065` reversed — the dependency
+> about live code, not decisions this card made and `spec-046` reversed — the dependency
 > floor in [`pyproject.toml`][pyproject] and the minimum CI matrix node already agree on
 > `0.316.0`, and no new Python 3.10 problem is behind it. Sentences that are explicitly
 > historical ("the export's presence at the `0.262.0` floor itself is upstream history,
@@ -88,7 +88,7 @@ by this card — the same shared-cut posture [`spec-039`][spec-039] Decision 14 
 for the joint `0.0.13` cut. No slice below bumps the version.
 
 Status: **COMPLETE** (card `DONE-041-0.0.14`) — both slices built and the card wrap landed;
-the `0.0.14` release rode the joint cut. Amended by [`spec-065`][spec-065]; see the banner
+the `0.0.14` release rode the joint cut. Amended by [`spec-046`][spec-046]; see the banner
 above.
 Two slices (the card is a deliberate S): Slice 1 (**the dependency gate +
 `routers.py` + `tests/test_routers.py`** — the `channels` dev-group add with the
@@ -150,7 +150,7 @@ Revision history (kept inline so the spec is self-contained):
   the package-tests-only placement justified as genuinely-unreachable-live, with
   communicator-driven real execution
   ([Decision 8](#decision-8--test-strategy-package-tests-only-communicator-driven-execution-eviction-simulated-absence));
-  the migration-guide one-row handoff to [`TODO-BETA-060-0.1.7`][kanban]
+  the migration-guide one-row handoff to [`TODO-BETA-065-0.1.7`][kanban]
   ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name));
   and the joint-cut version deferral
   ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
@@ -1376,7 +1376,7 @@ Alternatives considered (and rejected):
 
 ### Decision 9 — Migration ergonomics live in the migration-guide row, not the symbol name
 
-The card's DoD hands [`TODO-BETA-060-0.1.7`][kanban] (Migration and adoption
+The card's DoD hands [`TODO-BETA-065-0.1.7`][kanban] (Migration and adoption
 guides) a one-row entry for its "symbol equivalents" table:
 `strawberry_django.routers.AuthGraphQLProtocolTypeRouter` →
 `django_strawberry_framework.routers.DjangoGraphQLProtocolRouter`, with the note
@@ -2044,7 +2044,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
   fakeshop-activation card [`TODO-BETA-053-0.1.5`][kanban] if ever.
 - **Subscriptions as a package surface** — no card; the router transports whatever
   the consumer's schema defines.
-- **The migration guide itself** — [`TODO-BETA-060-0.1.7`][kanban]; this card only
+- **The migration guide itself** — [`TODO-BETA-065-0.1.7`][kanban]; this card only
   hands it the one-row symbol mapping
   ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name)).
 - **The `0.0.14` version bump and release-status flips** — the joint `0.0.14` cut
@@ -2105,7 +2105,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
       suite and no `channels` import added to `utils/`
       ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
 - [ ] The migration-guide handoff row content is recorded for
-      [`TODO-BETA-060-0.1.7`][kanban]
+      [`TODO-BETA-065-0.1.7`][kanban]
       (`AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, signature
       unchanged) ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name)).
 - [ ] Slice 2 doc updates land per [Doc updates](#doc-updates): the GLOSSARY entry
@@ -2166,7 +2166,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 [glossary-testclient]: ../GLOSSARY.md#testclient
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
 [glossary]: ../GLOSSARY.md
-[spec-065]: ../spec-065-transport_security-0_0_15.md
+[spec-046]: ../spec-046-transport_security-0_0_15.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->

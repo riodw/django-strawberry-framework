@@ -1,7 +1,7 @@
-# Build: Worker 3 adversarial review — the integration consolidation and the concurrent claim-audit custodian pass (card 065, transport_security / 0.0.15)
+# Build: Worker 3 adversarial review — the integration consolidation and the concurrent claim-audit custodian pass (card 046, transport_security / 0.0.15)
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` (whole file) and its rationale
-companion. Build plan: `docs/builder/build-065-transport_security-0_0_15.md`.
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` (whole file) and its rationale
+companion. Build plan: `docs/builder/build-046-transport_security-0_0_15.md`.
 Artifacts reviewed: `docs/builder/bld-integration.md` (cohort A, Worker 2) and
 `docs/builder/bld-custodian-3-claim_audit.md` (cohort B, Worker 1).
 Status: review-accepted
@@ -152,7 +152,7 @@ This is `bld-custodian-3-claim_audit.md` prose only; no spec edit follows from i
 `BUILD.md` `## Build artifact naming` licenses `bld-slice-<N>-…`, `bld-review-<R>-…`,
 `bld-integration.md`, `bld-final.md`, and "The build plan must list every artifact before build
 work starts." `docs/builder/bld-custodian-3-claim_audit.md` matches no form and does not appear
-in the plan's `## Artifact list` (`build-065-…md:98-112`), while every other artifact of this
+in the plan's `## Artifact list` (`build-046-…md:98-112`), while every other artifact of this
 build does. It is nonetheless driven through a legal `Status:` chain and is `Status:`-legible, so
 **CLOSED (pass 2) by Worker 0, along resolution path (a).** The plan's `## Artifact list` now
 carries `docs/builder/bld-custodian-3-claim_audit.md` and
@@ -357,7 +357,7 @@ more careful here than a paraphrase of it would be.
 
 ## Ownership partition — held, verified rather than assumed
 
-The plan's partition (`build-065-…md:582-585`) gives cohort B the spec, the rationale, and its
+The plan's partition (`build-046-…md:582-585`) gives cohort B the spec, the rationale, and its
 own artifact; cohort A `routers.py`, `_strawberry_patches.py`, `views.py`, `exceptions.py`,
 `test_transport_api.py`, `docs/README.md`, the glossary DB rows + regenerated `GLOSSARY.md`, and
 `bld-integration.md`. **No violation found.**
@@ -396,12 +396,12 @@ own artifact; cohort A `routers.py`, `_strawberry_patches.py`, `views.py`, `exce
 | ASCII-only sweep over the 5 `.py` files (`ord(c) > 127`) | **0** in each |
 | `uv run python scripts/build_glossary_md.py --check` | up to date, exit 0 |
 | two-consecutive-regenerate byte-stability (`--md <scratch>/g1.md`, `--md <scratch>/g2.md`) | `cmp g1 g2` identical **and** `cmp g1 docs/GLOSSARY.md` identical — stable, and the tree was not written |
-| `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-…md` | `OK: 37 terms …` exit 0 |
+| `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-…md` | `OK: 37 terms …` exit 0 |
 | `uv run python examples/fakeshop/manage.py import_spec_terms --check` | `OK: 46 done cards have glossary links.` exit 0 |
 | `uv run python examples/fakeshop/manage.py check` (via the ORM shell session) | no issues |
 | `uv run python scripts/build_tree_md.py --check` | `docs/TREE.md is up to date.` exit 0 |
 | `git diff --check` | exit 0 |
-| `git status --short docs/spec-065-…-terms.csv` | clean — the CSV was not touched, as cohort B claims |
+| `git status --short docs/spec-046-…-terms.csv` | clean — the CSV was not touched, as cohort B claims |
 | glossary DB attribution, re-run | `GlossaryTerm` ordered by `-updated_date`: **only two** rows after Slice 5's `2026-07-29T00:37` batch — id 560 `request-body-cap` and id 529 `channels-request-adapter`, both `17:14`. Cohort A's attribution method reproduces exactly |
 | floor venv spot-check | `<scratch>/floor/bin/python -c "import django,sys"` → **3.10.19 / 5.2**, as recorded |
 
@@ -431,7 +431,7 @@ Both cohorts touched documentation surfaces, so read end to end:
   byte-stability plus the DB-row read, never by a clean `git diff` and never hand-edited. Both
   DB writes went through `GlossaryTerm.body`; `title`, `anchor`, and `status_text` are untouched
   (the seven `status_text` stamps remain the joint cut's, per Decision 15).
-- No version string, card id, or shipped/planned status changed; `DONE-065-0.0.15` and
+- No version string, card id, or shipped/planned status changed; `DONE-046-0.0.15` and
   `build_tree_md.py --check` are both still green; no "coming soon" / "planned" residue entered a
   file this round edited.
 - No spec archival, no KANBAN movement.

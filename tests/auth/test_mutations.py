@@ -1449,7 +1449,7 @@ def _channels_router(schema):
     """Compose GraphQL on BOTH Channels protocols - this suite's own transport harness.
 
     Through ``0.0.14`` this borrowed the package's ``DjangoGraphQLProtocolRouter``,
-    whose HTTP branch was exactly the composition below. spec-065 Decision 2 gave
+    whose HTTP branch was exactly the composition below. spec-046 Decision 2 gave
     HTTP to the consumer's own Django ASGI application, so the router no longer
     serves GraphQL over HTTP and cannot be the harness for a Channels-HTTP auth
     round trip.

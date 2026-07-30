@@ -100,14 +100,14 @@ OPERATIONS vocabulary).
 
 ### Rejected / deferred (re-proved)
 
-1. **Fold plain-form onto `run_write_pipeline_sync` (spec-046 C2).** Re-proved:
+1. **Fold plain-form onto `run_write_pipeline_sync` (spec-051 C2).** Re-proved:
    skeleton docstring scopes F6 to model-backed create/update; plain path has
    no locate, no `primary_type`, no object-slot refetch, and builds
    `{ ok, errors }` via `payload_cls(ok=…)` rather than `build_payload(slot, …)`.
    Alias / auth / write-phase invariants already share
    `pipeline_alias_guard` / `authorization_phase` / `pipeline_write_phase`.
    Absorbing the body needs model-less / ok-payload / `tail_step` seams
-   co-designed with C1 (`_run_delete`) under spec-046 Slice 3 — ownership is
+   co-designed with C1 (`_run_delete`) under spec-051 Slice 3 — ownership is
    not clear for a mutations-folder-only change today. Defer.
 
 2. **Package-wide OPERATIONS vocabulary across sets / permissions / fields /
@@ -121,7 +121,7 @@ OPERATIONS vocabulary).
    closure.** Same rollback invariant, different payload constructor. Belongs
    with C2's ok-builder, not a thin relocate. Defer with C2.
 
-4. **Fold `_run_delete` onto the write skeleton (spec-046 C1).** Snapshot-
+4. **Fold `_run_delete` onto the write skeleton (spec-051 C1).** Snapshot-
    before-delete + no decode/write steps; pairs with C2's `tail_step`. Defer.
 
 5. **Merge `bind_mutations` / `bind_form_mutations`.** Plain bind keeps
@@ -135,7 +135,7 @@ remaining three-flavor asymmetry after file-pass consolidations: forms and
 serializer already used `make_shape_build_cache` + subsystem clear; mutations
 did not. That consolidation is implemented. Assignment-named C2 / OPERATIONS
 items stay correctly deferred or rejected — C2 still needs the co-designed
-skeleton surface in spec-045; OPERATIONS remains multi-axis.
+skeleton surface in spec-050; OPERATIONS remains multi-axis.
 
 ## Implementation (Worker 1)
 
@@ -188,7 +188,7 @@ edits.
 Plain `_run_plain_form_pipeline_sync` still differs on locate / `primary_type` /
 object-slot refetch / `{ok, errors}` vs `build_payload`. Alias / auth /
 write-phase helpers are already shared. Folding needs model-less / ok-payload /
-`tail_step` seams with C1 under spec-046 Slice 3 — not a mutations-folder-only
+`tail_step` seams with C1 under spec-051 Slice 3 — not a mutations-folder-only
 owner today. Note: Decision 6's alias-guard behavior is already present on the
 plain path; remaining C2 work is structural. Defer stands.
 
@@ -205,7 +205,7 @@ table would cycle. Reject stands.
 Searched subsystem clears under `mutations.*`, pipeline / bind / OPERATIONS
 sites, and rider consumers. No further folder-owned consolidation warranted
 now. Remaining deferred items (C1 delete fold, error-payload ok-builder with
-C2, bind-drain merge) stay with spec-045 / prior reject reasons.
+C2, bind-drain merge) stay with spec-050 / prior reject reasons.
 
 ### Disposition
 

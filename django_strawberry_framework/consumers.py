@@ -2,7 +2,7 @@
 
 This is the package's WebSocket-transport module, and it owns two independent
 things: the handshake-time **Host** boundary
-(``DjangoWebSocketHostValidator``, spec-065 Decision 19) and the package's
+(``DjangoWebSocketHostValidator``, spec-046 Decision 19) and the package's
 **consumer** with its two actor-revalidation checkpoints (Decisions 11 and 16).
 The consumer is described first; the Host boundary's own section is at the end of
 this docstring.
@@ -10,7 +10,7 @@ this docstring.
 ``build_revalidating_consumer_class(GraphQLWSConsumer)`` returns
 ``GraphQLWebSocketConsumer`` - a thin ``strawberry.channels.GraphQLWSConsumer``
 subclass that revalidates the session actor at **two** security checkpoints and
-writes the refreshed actor back onto ``scope["user"]`` (spec-065 Decision 11):
+writes the refreshed actor back onto ``scope["user"]`` (spec-046 Decision 11):
 
 1. **operation admission** - the two protocol handlers' per-operation entry
    points (``handle_subscribe`` for ``graphql-transport-ws``, ``handle_start``
@@ -26,7 +26,7 @@ admitted operation in their own ``async for result in result_source`` loop
 (upstream's ``run_operation`` / ``handle_async_results``) and keep sending from
 there without returning through the admission method, so an operation admitted
 one second before a logout kept emitting results for as long as it lived
-(spec-065 review round 2, Blocker 1).
+(spec-046 review round 2, Blocker 1).
 
 **The seam, and why it is the right one.** ``AsyncBaseHTTPView.run`` instantiates
 ``self.websocket_adapter_class(self, request, websocket_response)`` **by name**
@@ -128,11 +128,11 @@ The session-store resolver the revalidation reaches is
 (spec-040 Decision 3) and its ``__init__`` eagerly imports ``.mutations`` /
 ``.queries``, so importing that submodule would register the whole GraphQL auth
 subsystem on the event loop the first time an authenticated socket ran an
-operation - for a resolver that only reads ``SESSION_ENGINE`` (spec-065 review,
+operation - for a resolver that only reads ``SESSION_ENGINE`` (spec-046 review,
 the import-boundary finding). Nothing on this module's revalidation path imports
 ``django_strawberry_framework.auth``, and a test asserts exactly that.
 
-**The Host boundary** (spec-065 Decision 19). ``DjangoWebSocketHostValidator`` is
+**The Host boundary** (spec-046 Decision 19). ``DjangoWebSocketHostValidator`` is
 the outermost WebSocket wrapper ``routers.py`` composes, and it exists because
 ``channels.security.websocket.OriginValidator.__call__`` reads the ``Origin``
 header and NOTHING else - ``AllowedHostsOriginValidator`` is only a factory for
@@ -179,7 +179,7 @@ from .exceptions import ConfigurationError, describe_value
 #: The default revalidation window, in seconds: ``0.0`` revalidates at every
 #: security checkpoint. Spelled ONCE here and imported by ``routers.py`` for its
 #: ``websocket_revalidation_window=`` keyword default, so the number cannot
-#: drift between the constructor and the consumer (spec-065 Decision 11).
+#: drift between the constructor and the consumer (spec-046 Decision 11).
 _DEFAULT_REVALIDATION_WINDOW = 0.0
 
 #: The ONE close the package uses for a revoked connection, at BOTH checkpoints
@@ -262,7 +262,7 @@ def resolved_revalidation_window(value: object) -> float:
     What is deliberately NOT rejected, so that rationale is not read as more than
     it is: a finite but astronomical window. ``10**300`` and ``1e308`` are
     accepted, and a window that large is operationally "never revalidate again"
-    (spec-065 review W3-4). The package imposes no upper bound, for the same
+    (spec-046 review W3-4). The package imposes no upper bound, for the same
     reason ``GraphQLWebSocketConsumer`` imposes no maximum connection lifetime
     (Decision 12): there is no correct default, any constant would be invented
     here rather than derived from anything, and a positive window is a deliberate
@@ -277,7 +277,7 @@ def resolved_revalidation_window(value: object) -> float:
     has no ``float`` image: ``math.isfinite`` and ``float()`` both raise
     ``OverflowError`` on it. Reading the domain first would therefore have let a
     hostile or fat-fingered configuration escape the typed boundary with a raw
-    ``OverflowError`` instead of the promised ``ConfigurationError`` (spec-065
+    ``OverflowError`` instead of the promised ``ConfigurationError`` (spec-046
     review, the enormous-window finding). Converting first also means the sign and
     finiteness checks below run on a real ``float``, which is the value the
     consumer will actually compare against.
@@ -308,7 +308,7 @@ async def revalidate_operation_actor(handler: Any) -> bool:
     no operation id, no per-protocol payload shape, and no error message left to
     format (see the module docstring).
 
-    Why here and not elsewhere (spec-065 Decision 11's rejected alternatives):
+    Why here and not elsewhere (spec-046 Decision 11's rejected alternatives):
     ``get_context`` runs once per connection, before either protocol's message
     loop, so it is not a per-operation seam; the consumer's ``receive()`` sees
     every frame including keep-alives and can only close the socket rather than
@@ -320,7 +320,7 @@ async def revalidate_operation_actor(handler: Any) -> bool:
     the ASGI scope is ``handler.view.scope``), and ``websocket`` (the adapter
     instance, which is where the close lives).
 
-    The read is alias-explicit **by delegation** (spec-065 Edge cases): the
+    The read is alias-explicit **by delegation** (spec-046 Edge cases): the
     session load and the user load both resolve their alias through Django's own
     ``router.db_for_read`` - the deployment's explicit routing decision, never a
     hardcoded ``"default"`` - which is the same authority
@@ -413,7 +413,7 @@ async def send_revalidated_operation_frame(
 async def _actor_is_current(consumer: Any) -> bool:
     """Return whether the connection's scope actor is valid **now**.
 
-    The ONE decision both checkpoints await (spec-065 Helper-reuse: "every
+    The ONE decision both checkpoints await (spec-046 Helper-reuse: "every
     decision - window expiry, session reload, actor write-back - lives in the
     shared function"). It never sends, never closes, and never cancels: the two
     callers own the response to a ``False``, which is what keeps admission and
@@ -444,7 +444,7 @@ async def _actor_is_current(consumer: Any) -> bool:
     # refactor did drop the attribute, the default would silently switch the
     # deployment to "revalidate at every checkpoint" (a performance cliff that
     # lives in an expression, where statement coverage cannot see it) instead of
-    # failing loudly (spec-065 review round 2, L4).
+    # failing loudly (spec-046 review round 2, L4).
     window = consumer.revalidation_window
     # ``-inf`` reads as "never revalidated, i.e. infinitely long ago", which
     # keeps the expiry test one comparison with no sentinel branch of its own.
@@ -456,7 +456,7 @@ async def _actor_is_current(consumer: Any) -> bool:
     try:
         refreshed = await _refreshed_actor(scope)
     except Exception:
-        # Fail closed (spec-065 Edge cases #"A revalidation database error must
+        # Fail closed (spec-046 Edge cases #"A revalidation database error must
         # fail closed"): a store or auth failure denies the checkpoint - and so
         # terminates the connection - and is never a fall back to the cached
         # actor. ``Exception``, not ``BaseException`` - an
@@ -472,11 +472,11 @@ async def _actor_is_current(consumer: Any) -> bool:
     if refreshed is None or not refreshed.is_authenticated:
         # The stale actor stays on the scope. Downgrading it to ``AnonymousUser``
         # would let anything still holding this scope read an anonymous session
-        # instead of a revoked one (spec-065 Decision 11); the connection is
+        # instead of a revoked one (spec-046 Decision 11); the connection is
         # about to be closed either way.
         return False
 
-    # The write-back (spec-065 Decision 11): ``channels.auth``'s own ``login`` /
+    # The write-back (spec-046 Decision 11): ``channels.auth``'s own ``login`` /
     # ``logout`` replace ``scope["user"]`` the same way, and the Channels request
     # adapter reads that key - so every surface reached through
     # ``request_from_info`` observes the fresh actor with no new plumbing.
@@ -604,7 +604,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
         decision function. Everything else (the handshake, the subprotocol
         negotiation, the message loop, the operation lifecycle, the teardown) is
         upstream's, unchanged. This is deliberately not a second GraphQL protocol
-        engine (spec-065 Decision 11).
+        engine (spec-046 Decision 11).
 
         ``revalidation_window`` rides as an ``as_asgi()`` initkwarg rather than a
         class attribute, so one cached consumer class serves every router
@@ -613,7 +613,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
         reason: revocation is connection-scoped, and one consumer instance is
         exactly one connection.
 
-        **Maximum connection lifetime** (spec-065 Decision 12). The package
+        **Maximum connection lifetime** (spec-046 Decision 12). The package
         imposes none, and that is a decision rather than an omission: there is no
         correct default - the right lifetime for a dashboard subscription and for
         a short-lived request-response socket differ by orders of magnitude - and
@@ -661,7 +661,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
 
 
 # ---------------------------------------------------------------------------
-# The WebSocket Host boundary (spec-065 Decision 19). Independent of everything
+# The WebSocket Host boundary (spec-046 Decision 19). Independent of everything
 # above: it runs once per handshake, before authentication and before any
 # consumer exists, and knows nothing about GraphQL, sessions or revalidation.
 # ---------------------------------------------------------------------------
@@ -739,7 +739,7 @@ def _host_validation_request(scope: Any) -> HttpRequest:
 class DjangoWebSocketHostValidator:
     """Deny a WebSocket handshake whose ``Host`` Django's own boundary refuses.
 
-    A package-owned, UNSUPPORTED-to-import ASGI middleware (spec-065 Decision 19),
+    A package-owned, UNSUPPORTED-to-import ASGI middleware (spec-046 Decision 19),
     composed by
     ``routers.py`` as the OUTERMOST WebSocket wrapper:
     ``DjangoWebSocketHostValidator(AllowedHostsOriginValidator(AuthMiddlewareStack(
@@ -764,7 +764,7 @@ class DjangoWebSocketHostValidator:
     consumer reads this exact spelling in an error message and must be able to grep
     for it. "Private" here therefore means **unsupported to import or subclass** -
     an ``__all__`` and documentation contract, not an import-time one - and an
-    absent underscore is not a promise of stability (spec-065 review round 2, L6).
+    absent underscore is not a promise of stability (spec-046 review round 2, L6).
 
     It is applied by the router, so an injected ``websocket_consumer_class`` sits
     inside it by construction - which is what finally makes Decision 11's "an
@@ -798,7 +798,7 @@ class DjangoWebSocketHostValidator:
 
             await WebsocketDenier()(scope, receive, send)
             return
-        # Every other exception propagates deliberately (spec-065 Edge cases
+        # Every other exception propagates deliberately (spec-046 Edge cases
         # #"The Host projection must not swallow its own bugs"): a projection bug
         # that denied every handshake would be indistinguishable from correct
         # ``ALLOWED_HOSTS`` enforcement.

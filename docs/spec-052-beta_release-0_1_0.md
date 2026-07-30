@@ -1,11 +1,11 @@
 # Spec: Beta release — cleanup, verification, and the alpha → beta cut-over to `0.1.0`
 
-Planned for `0.1.0` (card `TODO-ALPHA-047-0.1.0`); **this card is the only
+Planned for `0.1.0` (card `TODO-ALPHA-052-0.1.0`); **this card is the only
 card at `0.1.0` and owns the version bump**
 ([Decision 3](#decision-3--lone-card-at-010--the-release-slice-owns-the-version-cut)).
-Number conventions in this spec: bare three-digit numbers (`045` / `046` /
-`047` / `062`) are **kanban card numbers**, dotted numbers (`0.0.15` /
-`0.0.16` / `0.1.0` / `1.0.0`) are **package versions** — card `047` is the
+Number conventions in this spec: bare three-digit numbers (`050` / `051` /
+`052` / `067`) are **kanban card numbers**, dotted numbers (`0.0.19` /
+`0.0.20` / `0.1.0` / `1.0.0`) are **package versions** — card `052` is the
 card that cuts version `0.1.0`.
 This card is a **release / verification card**: it ships no new subsystem and
 no new consumer-facing symbol
@@ -20,8 +20,8 @@ sequence:
    this card's release slice may run — including the two cards the card
    body's stale `DONE-013`–`DONE-044` range predates
    ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)):
-   `TODO-ALPHA-045-0.0.15` ([`spec-045`][spec-045]) and
-   `TODO-ALPHA-046-0.0.16` ([`spec-046`][spec-046]).
+   `TODO-ALPHA-050-0.0.19` ([`spec-050`][spec-050]) and
+   `TODO-ALPHA-051-0.0.20` ([`spec-051`][spec-051]).
 2. **Run the parity audit.** Build a source-complete inventory against pinned
    ⚛️ (`graphene-django`) and 🍓 (`strawberry-graphql-django`) revisions,
    then disposition every finding as `DONE`, explicitly deferred, or
@@ -135,9 +135,9 @@ is a distinct gate.
 - [ ] **Slice 1 — Queue gate + parity audit**
   - [ ] Verify every other Alpha card is `DONE`: the card body's
         `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and
-        the later 0.0.14-line `DONE-064-0.0.14` sealed-visibility-boundary card)
-        AND the later-added `TODO-ALPHA-045-0.0.15` /
-        `TODO-ALPHA-046-0.0.16` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
+        the later 0.0.14-line `DONE-045-0.0.14` sealed-visibility-boundary card)
+        AND the later-added `TODO-ALPHA-050-0.0.19` /
+        `TODO-ALPHA-051-0.0.20` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
         If either is not `DONE`, this card stops here.
   - [ ] Run the parity-disposition audit
         ([Decision 6](#decision-6--the-parity-audit-starts-from-a-source-complete-pinned-inventory)):
@@ -229,14 +229,14 @@ to happen once, in order, with evidence.
 ## Current state
 
 - The package sits at `0.0.14` (the four-card joint alpha cut). Two Alpha
-  cards remain ahead of this one: `TODO-ALPHA-045-0.0.15` (the
+  cards remain ahead of this one: `TODO-ALPHA-050-0.0.19` (the
   [`DjangoDebugExtension`][glossary-djangodebugextension] extraction,
-  [`spec-045`][spec-045]) and `TODO-ALPHA-046-0.0.16` (boundary hardening +
-  DRY squeeze, [`spec-046`][spec-046]). Both are sequenced before this card
+  [`spec-050`][spec-050]) and `TODO-ALPHA-051-0.0.20` (boundary hardening +
+  DRY squeeze, [`spec-051`][spec-051]). Both are sequenced before this card
   and both are lone-card cuts that own their own patch versions.
 - The card body's Definition-of-done range ("every other Alpha card
   `DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`")
-  predates the addition of cards 045 / 046 to the alpha queue — a genuine
+  predates the addition of cards 050 / 051 to the alpha queue — a genuine
   card-text staleness this spec resolves by Decision 2 and records in
   [Risks](#risks-and-open-questions).
 - The supported matrix per `pyproject.toml`: Python `>=3.10,<4.0`
@@ -255,7 +255,7 @@ to happen once, in order, with evidence.
 - `CHANGELOG.md` has never had a minor-version promotion; every entry so far
   is a `0.0.x` patch entry gated behind the maintainer-permission rule.
   One 0.0.14-line hardening — the sealed `get_queryset` visibility boundary
-  (card `DONE-064-0.0.14`) — shipped after the `## [0.0.14]` entry was written
+  (card `DONE-045-0.0.14`) — shipped after the `## [0.0.14]` entry was written
   and has no CHANGELOG coverage yet; the `0.1.0` aggregation is where it lands.
 - The two upstream parity audits (the ⚛️ `graphene-django` audit and the 🍓
   `strawberry-graphql-django` audit) produced the card set that became the
@@ -293,7 +293,7 @@ to happen once, in order, with evidence.
   discovered mid-verification that needs code gets its own card
   ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
 - **No API freeze.** Strict SemVer begins at `1.0.0`
-  (`TODO-STABLE-062-1.0.0`), not here. Beta may still break pre-`1.0`
+  (`TODO-STABLE-067-1.0.0`), not here. Beta may still break pre-`1.0`
   contracts with documented migrations, exactly as alpha did.
 - **No beta-line feature pull-forward.** [`FieldSet`][glossary-fieldset] /
   [`Meta.fields_class`][glossary-metafields_class] (`0.1.1`),
@@ -303,7 +303,7 @@ to happen once, in order, with evidence.
   [`Meta.choice_enum_names`][glossary-metachoice_enum_names] (`0.1.4`) stay
   `planned`; the doc flips must not soften their status.
 - **No migration-guide authoring.** Migration and adoption guides are
-  `TODO-BETA-060-0.1.7`.
+  `TODO-BETA-065-0.1.7`.
 - **No CI matrix redesign.** The matrix is exercised as it exists; adding
   rows or version floors is not this card.
 
@@ -335,7 +335,7 @@ None. The consumer-visible changes are exactly:
   documentation set.
 
 Every import path, symbol, wire format, and error contract is byte-identical
-to the last shipped alpha patch (the 046 cut, planned `0.0.16`).
+to the last shipped alpha patch (the 051 cut, planned `0.0.20`).
 
 ## Architectural decisions
 
@@ -360,19 +360,19 @@ was not actually done.
 ### Decision 2 — The gating set is the whole Alpha queue, not the card's stale `DONE` range
 
 **Decision**: the Slice 1 gate is "**every other non-Done Alpha card is
-`DONE`**" — concretely `TODO-ALPHA-045-0.0.15` and `TODO-ALPHA-046-0.0.16`
+`DONE`**" — concretely `TODO-ALPHA-050-0.0.19` and `TODO-ALPHA-051-0.0.20`
 at authoring time — in addition to the card body's enumerated
 `DONE-013-0.0.4` … `DONE-044-0.0.14` (plus `DONE-024-0.0.7`) range — and the
-later 0.0.14-line `DONE-064-0.0.14`, which shipped after the card body was
+later 0.0.14-line `DONE-045-0.0.14`, which shipped after the card body was
 written — all verified as already satisfied.
 
 **Rationale**: the card's Definition-of-done range was written before cards
-045 / 046 entered the queue (the card predates the renumber that
-[`spec-046`][spec-046]'s Out-of-scope section records: "the beta-release
-cleanup card (now `TODO-ALPHA-047-0.1.0` after the renumbers)"). The board
+050 / 051 entered the queue (the card predates the renumber that
+[`spec-051`][spec-051]'s Out-of-scope section records: "the beta-release
+cleanup card (now `TODO-ALPHA-052-0.1.0` after the renumbers)"). The board
 column's own framing — "The final card in this column is the `0.1.0` release
 itself" — is the intent; a literal reading of the stale range would let this
-card cut `0.1.0` while `0.0.15` / `0.0.16` sit unshipped, which would strand
+card cut `0.1.0` while `0.0.19` / `0.0.20` sit unshipped, which would strand
 two lone-card cuts behind a minor version that already passed them. Per the
 authoring flow's conflict rule the card text is preferred where it decides
 scope, but here the card text and the board column conflict with each other;
@@ -380,7 +380,7 @@ this Decision resolves toward the column and the conflict is recorded in
 [Risks](#risks-and-open-questions).
 
 **Alternative rejected**: cutting `0.1.0` immediately after `0.0.14` and
-re-versioning cards 045 / 046 onto the `0.1.x` line — both are
+re-versioning cards 050 / 051 onto the `0.1.x` line — both are
 maintainability cards, not beta features; renumbering the queue again costs
 more than holding the milestone until the alpha line drains, and the
 maintainer sequenced them into alpha deliberately (extraction before the
@@ -389,10 +389,10 @@ boundary card, both before beta).
 ### Decision 3 — Lone card at `0.1.0` — the release slice owns the version cut
 
 Per the Step 3 scan, this card is the **only** non-Done card at `0.1.0`: its
-alpha-queue neighbors are `0.0.15` (the lone extraction card 045 owns that
-cut) and `0.0.16` (the lone boundary card 046 owns that cut), and the next
+alpha-queue neighbors are `0.0.19` (the lone extraction card 050 owns that
+cut) and `0.0.20` (the lone boundary card 051 owns that cut), and the next
 column starts the `0.1.x` beta line. So this spec mirrors the lone-card
-shape ([`spec-046`][spec-046] Decision 11, spec-038 Decision 14): Slice 5
+shape ([`spec-051`][spec-051] Decision 11, spec-038 Decision 14): Slice 5
 carries the version quintet — `pyproject.toml` `[project].version`,
 `django_strawberry_framework/__init__.py::__version__`,
 `tests/base/test_init.py`, the GLOSSARY package-version row, the root
@@ -497,13 +497,13 @@ existing patch entries (the repo keeps no `[Unreleased]` block), carrying
 package's positioning sentence plus the parity statement — and (b)
 cumulative `Added` / `Changed` / `Fixed` / `Removed` sections covering the
 shipped alpha line **from `0.0.6` through the last alpha patch actually
-shipped** (at authoring time that is expected to be `0.0.16`, after cards
-045 / 046 land). The card text says "covering `0.0.6` through `0.0.14`"
-because it predates the 045 / 046 queue additions — the same staleness
+shipped** (at authoring time that is expected to be `0.0.20`, after cards
+050 / 051 land). The card text says "covering `0.0.6` through `0.0.14`"
+because it predates the 050 / 051 queue additions — the same staleness
 Decision 2 resolves; the extended range is the card's evident intent (the
 cumulative history of the line being released). One 0.0.14-line change never
 received its own CHANGELOG entry — the sealed `get_queryset` visibility
-boundary (card `DONE-064-0.0.14`), which landed after the `## [0.0.14]`
+boundary (card `DONE-045-0.0.14`), which landed after the `## [0.0.14]`
 heading was written — so the aggregation must capture it (in `Changed` /
 `Fixed`) rather than assume the existing patch headings already cover the
 whole line. Breaking wire-format changes
@@ -550,8 +550,8 @@ delta is the quintet):
 | 5 | Version quintet + build + tag + publish + card wrap | `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`, GLOSSARY version row, kanban regen | MEDIUM — the irreversible step is maintainer-executed |
 
 Sequencing constraints: Slice 1 gates everything (Decision 2). Slice 2 runs
-against the tree after the last alpha patch lands (the 046 cut, planned
-`0.0.16`), not before. Slices 3 and 4 may interleave
+against the tree after the last alpha patch lands (the 051 cut, planned
+`0.0.20`), not before. Slices 3 and 4 may interleave
 (both are doc passes) but Slice 4's CHANGELOG entry lands last among the
 doc edits so the release date is real. Slice 5 moves the quintet only after
 Slices 1–4 are green — the version string is the last thing to change, so an
@@ -636,14 +636,14 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 
 - **Card-text staleness (gating range and CHANGELOG range)**: the card's
   DoD names `DONE-013`–`DONE-044` and a CHANGELOG range ending at `0.0.14`,
-  both predating cards 045 / 046. This spec resolves both toward the
+  both predating cards 050 / 051. This spec resolves both toward the
   board-column intent (Decisions 2 and 7) — the conflict is recorded here
   per the authoring flow's prefer-the-card rule, because in this instance
   the card conflicts with the board's own column framing and with
-  [`spec-046`][spec-046]'s sequencing decisions rather than with repo docs.
-  Preferred answer: gate on 045 + 046 and cover the CHANGELOG through the
+  [`spec-051`][spec-051]'s sequencing decisions rather than with repo docs.
+  Preferred answer: gate on 050 + 051 and cover the CHANGELOG through the
   last shipped alpha patch. Fallback: if the maintainer re-orders the queue
-  (e.g. drops 046 from alpha), the gate set follows the queue, not this
+  (e.g. drops 051 from alpha), the gate set follows the queue, not this
   spec's snapshot.
 - **Blocking defects found by verification**: a red matrix row or a parity
   finding with no disposition stops the cut (Decision 1). Preferred answer:
@@ -680,8 +680,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- The debug extraction and the boundary/DRY squeeze — cards 045
-  ([`spec-045`][spec-045]) and 046 ([`spec-046`][spec-046]); this card gates
+- The debug extraction and the boundary/DRY squeeze — cards 050
+  ([`spec-050`][spec-050]) and 051 ([`spec-051`][spec-051]); this card gates
   on them and absorbs none of their scope.
 - The beta feature line: [`FieldSet`][glossary-fieldset] (`0.1.1`),
   [`Meta.search_fields`][glossary-metasearch_fields] + Postgres full-text
@@ -691,7 +691,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   fakeshop activation + Layer-3 HTTP tests + optimizer explain mode
   (`0.1.5`), mutation idempotency + the filter-key namespace (`0.1.6`),
   and migration guides + the adversarial suite (`0.1.7`).
-- The API freeze and stable cut-over — `TODO-STABLE-062-1.0.0`.
+- The API freeze and stable cut-over — `TODO-STABLE-067-1.0.0`.
 - Release-pipeline automation (CI-driven tag/publish) — raised and rejected
   in Decision 8; a future card if the beta cadence warrants it.
 - The [Cross-subsystem invariants][glossary-cross-subsystem-invariants]
@@ -702,8 +702,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 
 - [ ] Every other Alpha card is `DONE` — the card body's
       `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and the
-      later 0.0.14-line `DONE-064-0.0.14`)
-      verified, AND `TODO-ALPHA-045-0.0.15` / `TODO-ALPHA-046-0.0.16`
+      later 0.0.14-line `DONE-045-0.0.14`)
+      verified, AND `TODO-ALPHA-050-0.0.19` / `TODO-ALPHA-051-0.0.20`
       shipped (Decision 2).
 - [ ] The parity artifact pins both upstream revisions and assigns a stable
       ID to every source finding; the one-to-one disposition ledger marks
@@ -794,8 +794,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 [glossary-upload-scalar]: GLOSSARY.md#upload-scalar
 [glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
 [glossary]: GLOSSARY.md
-[spec-045]: spec-045-debug_extraction-0_0_15.md
-[spec-046]: spec-046-boundary_dry_squeeze-0_0_16.md
+[spec-050]: spec-050-debug_extraction-0_0_19.md
+[spec-051]: spec-051-boundary_dry_squeeze-0_0_20.md
 
 <!-- docs/SPECS/ -->
 [spec-038]: SPECS/spec-038-form_mutations-0_0_12.md

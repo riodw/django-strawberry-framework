@@ -23,7 +23,7 @@ Debug-toolbar middleware,debug-toolbar-middleware,0.0.14 joint-cut surface
 `TestClient`,testclient,0.0.14 joint-cut surface
 `GraphQLTestCase`,graphqltestcase,0.0.14 joint-cut surface
 Response-extensions debug middleware,response-extensions-debug-middleware,0.0.14 joint-cut capability name
-`DjangoDebugExtension`,djangodebugextension,extracted by card 045 before this card runs
+`DjangoDebugExtension`,djangodebugextension,extracted by card 050 before this card runs
 Visibility boundary,visibility-boundary,hardened permission seam re-verified by doc cross-check
 Sealed execution queryset,sealed-execution-queryset,hardened permission seam re-verified by doc cross-check
 `apply_cascade_permissions`,apply_cascade_permissions,cascade permissions surface

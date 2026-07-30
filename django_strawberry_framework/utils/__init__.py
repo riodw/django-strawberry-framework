@@ -15,7 +15,7 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
   resolution (``session_store_class``), shared by the ``auth`` session
   boundary and by the WebSocket consumer's per-operation actor revalidation.
   It lives out here precisely so the transport layer can reach the resolver
-  without importing the structurally opt-in ``auth`` package (spec-065
+  without importing the structurally opt-in ``auth`` package (spec-046
   review, the import-boundary finding).
 - ``inputs`` / ``permissions`` - the generated-input and active-input
   permission substrates shared by the filter / order families.

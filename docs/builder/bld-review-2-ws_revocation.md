@@ -244,17 +244,17 @@ exercised, including the two arms that look defensive:
 
 ## Required spec amendments
 
-`docs/spec-065-transport_security-0_0_15.md` was rewritten by the custodian **in parallel with this
+`docs/spec-046-transport_security-0_0_15.md` was rewritten by the custodian **in parallel with this
 build** and already carries Decision 16, so most of what would have been listed here is already
 correct. Everything below is what I found still false, incomplete, or divergent from what I
 actually built, checked against the file as of this writing. I edited none of it.
 
-### A. `docs/spec-065-transport_security-0_0_15.md`
+### A. `docs/spec-046-transport_security-0_0_15.md`
 
 **A1 — the lock's owner is the consumer instance, not the adapter instance.** This is a real
 divergence, not wording.
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2158`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2158`:
   > "**One connection-local lock, held through the send.** A single `asyncio.Lock`, owned by the
   > connection's adapter instance (upstream constructs exactly one per connection, which is what
   > makes "connection-local" structural rather than conventional), spans the whole critical
@@ -270,7 +270,7 @@ divergence, not wording.
 
 **A2 — same divergence in the DRY obligations.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2564`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2564`:
   > "The connection-local lock, the revoked flag and the last-validated timestamp are **one** set of
   > state on the adapter instance upstream already creates per connection — not three parallel
   > caches keyed by protocol."
@@ -285,7 +285,7 @@ divergence, not wording.
 
 **A3 — name the two module-level entry points, so Helper-reuse is checkable.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2556`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2556`:
   > "**The WebSocket revalidation is one function, called from all three seams.**"
 - Recommended: keep the sentence and add the names as shipped:
   `consumers.py::revalidate_operation_actor(handler)` (admission),
@@ -300,7 +300,7 @@ divergence, not wording.
 
 **A4 — the gated-set constant has a name worth pinning.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2108`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2108`:
   > "The gated frame types are deliberately `next` (`graphql-transport-ws`), `data` (legacy
   > `graphql-ws`), and operation-scoped `error` frames."
 - Recommended: add "spelled once as `consumers.py::_INFORMATION_BEARING_FRAME_TYPES`, which
@@ -311,7 +311,7 @@ divergence, not wording.
 **A5 — Test-plan row 27's "idle authenticated socket" clause needs its fixture named, or it reads as
 uncovered.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2947`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2947`:
   > "Plus the property the window exists to buy: an **idle** authenticated socket performs zero
   > session reads however long it sits."
 - Recommended: > "... performs zero session reads however long it sits — measured on a **revoked**
@@ -324,7 +324,7 @@ uncovered.**
 **A6 — Test-plan row 37's serialization half cannot be earned the way the row implies, and the spec
 should say why.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2996`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2996`:
   > "37. Serialization: two concurrent operations on one socket cannot interleave a passed validation
   > with a sibling's revocation — the losing task's payload is never emitted."
 - Recommended: add: > "The *placement* of the lock release is asserted directly, not inferred from
@@ -337,7 +337,7 @@ should say why.**
 
 **A7 — Test-plan row 34's "cancelled or completed" should name the observable.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2984`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2984`:
   > "prove result 2 is **never delivered**, that the operation is cancelled or completed, and that
   > the connection is closed with `4403` / `"Forbidden"` and no operation `error` frame"
 - Recommended: > "... prove result 2 was **produced by the resolver and never delivered**, that the
@@ -451,14 +451,14 @@ Decision 16 requires.
 operation on that socket is denied identically" comment lived in the send branch; the "denied
 identically" mechanism is now the connection-local revoked flag, so the comment says
 > "Downgrading it to `AnonymousUser` would let anything still holding this scope read an anonymous
-> session instead of a revoked one (spec-065 Decision 11); the connection is about to be closed
+> session instead of a revoked one (spec-046 Decision 11); the connection is about to be closed
 > either way."
 
 ## Files I did not touch
 
 Confirmed by `git diff --stat`: the other dirty paths in the tree
 (`_request_body.py`, `views.py`, `conf.py`, `auth/*`, `README.md`, `docs/README.md`,
-`docs/feedback.md`, `docs/spec-065-*`, `docs/builder/build-065-*`, `TODAY.md`,
+`docs/feedback.md`, `docs/spec-046-*`, `docs/builder/build-046-*`, `TODAY.md`,
 `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py`) are concurrent
 maintainer / other-worker work and carry none of my edits.
 
@@ -537,7 +537,7 @@ have exercised this path at all.
 
 ## 3. Hot-path budget
 
-The plan (`docs/builder/build-065-transport_security-0_0_15.md`) predates `BUILD.md`'s
+The plan (`docs/builder/build-046-transport_security-0_0_15.md`) predates `BUILD.md`'s
 `## Hot-path budget` and carries no hot-path declaration, so this number is captured under the
 review's M5 escalation rather than under a plan declaration. `send_revalidated_operation_frame` runs
 **per outbound information-bearing frame** and takes a connection-local lock **held across a
@@ -754,7 +754,7 @@ and the reachable path deserves its own row.** (Review M2 and its note 2 to Work
 statement.** (Review M5.)
 
 - Where it lives: `## Decision 16`, the connection-local-lock paragraph.
-- Current wording, `docs/spec-065-transport_security-0_0_15.md:2166` region:
+- Current wording, `docs/spec-046-transport_security-0_0_15.md:2166` region:
   > "a per-connection serialization point on the outbound hot path"
 - Recommended replacement:
   > "a per-connection serialization point on the outbound hot path. Measured, so the trade is priced

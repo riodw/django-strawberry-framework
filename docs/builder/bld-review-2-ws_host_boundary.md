@@ -16,7 +16,7 @@ gives the **same 104 passed**.
 **Medium 4.** `channels.security.websocket.OriginValidator.__call__` loops `scope["headers"]`
 for `b"origin"` and reads nothing else; `AllowedHostsOriginValidator` is only a factory for
 `OriginValidator(settings.ALLOWED_HOSTS)`. The name was never evidence of behavior. Meanwhile
-`routers.py` and `spec-065` both promised that an injected consumer "cannot escape Host/Origin
+`routers.py` and `spec-046` both promised that an injected consumer "cannot escape Host/Origin
 validation" — so a handshake carrying `Origin: http://testserver` and `Host: evil.example`
 connected, and nothing else in the WebSocket stack owned the question (Django never sees the
 handshake at all, so unlike HTTP there was no second owner).
@@ -203,7 +203,7 @@ under test, so the rows cannot encode one version's answer.
 
 Confirmed with `git diff --stat`. The other dirty paths in the tree — `views.py`,
 `_request_body.py`, `conf.py`, `auth/*`, `README.md`, `docs/README.md`, `docs/feedback.md`,
-`docs/spec-065-*`, `docs/builder/build-065-*`, `TODAY.md`, `drys.md`, `vulns.md`,
+`docs/spec-046-*`, `docs/builder/build-046-*`, `TODAY.md`, `drys.md`, `vulns.md`,
 `tests/test_views.py`, `examples/fakeshop/test_query/test_transport_api.py` — are concurrent
 maintainer / other-builder work and carry none of my edits. I ran no `git` command that writes.
 `docs/GLOSSARY.md` and `docs/TREE.md` are script-generated and were not regenerated (Slice 5's
@@ -225,19 +225,19 @@ and `tests/test_routers.py` accounts for exactly +20 on its own. Skips are uncha
 
 ## Required spec amendments
 
-Checked against `docs/spec-065-transport_security-0_0_15.md` as of this writing. The custodian
+Checked against `docs/spec-046-transport_security-0_0_15.md` as of this writing. The custodian
 had already written Decision 19, its checklist boxes, its edge cases and its test-plan rows
 before I started, and I found **no sentence in the spec that my implementation makes false** —
 everything below is incompleteness, or a divergence between the spec's prose and what the code
 can actually be held to. I edited none of it.
 
-### A. `docs/spec-065-transport_security-0_0_15.md`
+### A. `docs/spec-046-transport_security-0_0_15.md`
 
 **A1 — the projection's item-by-item list is missing the two `META` keys that are deliberately
 NOT projected, and the reason they are verdict-neutral.** The list reads as exhaustive, so a
 later reader "completing" it is the likely next edit.
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2466`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2466`:
   > "- decode header bytes with the **Latin-1** Django/ASGI transport convention, the same codec
   > Django's adapter and Channels' `OriginValidator` both use."
 - Recommended: keep, and add one bullet after it:
@@ -258,7 +258,7 @@ later reader "completing" it is the likely next edit.
 **A2 — "the minimum `META` `get_host()` reads" should say which keys those are**, so the
 projection is checkable against the spec rather than against Django's source.
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2516`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2516`:
   > "The projection supplies the minimum `META` `get_host()` reads, which is a smaller and more
   > auditable compatibility surface than a request object built out of a scope it was not written
   > for."
@@ -272,7 +272,7 @@ projection is checkable against the spec rather than against Django's source.
 **A3 — the "one configuration, one matcher, two transports" claim is true for `ALLOWED_HOSTS`
 and false for the `DEBUG` fallback, where Django's list and Channels' differ.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2748` (Edge cases, `ALLOWED_HOSTS = []`
+- Current, `docs/spec-046-transport_security-0_0_15.md:2748` (Edge cases, `ALLOWED_HOSTS = []`
   with `DEBUG=True`):
   > "which is the point of delegating: one configuration, one matcher, two transports."
 - Recommended: append: > "One caveat, because the two checks are separate and stay separate:
@@ -290,7 +290,7 @@ and false for the `DEBUG` fallback, where Django's list and Channels' differ.**
 Decision 19 should state the choice either way; I did not build a log line because the decision
 did not ask for one.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:2474`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:2474`:
   > "**Only `DisallowedHost` becomes a denial.** The validator catches `DisallowedHost` and
   > denies the handshake **before authentication and before the consumer is constructed**."
 - Recommended: append: > "The denial is not logged, matching Channels' `Origin` denial rather
@@ -307,7 +307,7 @@ did not ask for one.**
 **A5 — the ordering requirement ("before authentication and before the consumer is
 constructed") has no test-plan row, though it is the sharpest half of the decision.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:3043`-`3058` (rows 43-47): rows for the
+- Current, `docs/spec-046-transport_security-0_0_15.md:3043`-`3058` (rows 43-47): rows for the
   direction matrix, delegation, ambiguity, `X-Forwarded-Host` and the propagating exception —
   none for the ordering.
 - Recommended: add a row:
@@ -323,7 +323,7 @@ constructed") has no test-plan row, though it is the sharpest half of the decisi
 **A6 — the injection seam's Host guarantee is listed as structural ("by construction") only;
 name the behavioral row so it is not later deleted as redundant.**
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:237`:
+- Current, `docs/spec-046-transport_security-0_0_15.md:237`:
   > "whatever is injected still sits inside all three router-applied wrappers —
   > `DjangoWebSocketHostValidator`, `AllowedHostsOriginValidator`, and `AuthMiddlewareStack` — by
   > construction"
@@ -338,7 +338,7 @@ name the behavioral row so it is not later deleted as redundant.**
 had to gain a `Host` header**, because that is a change to ~40 existing rows and it is not a
 consequence a reader would predict.
 
-- Current, `docs/spec-065-transport_security-0_0_15.md:1966`-`1973` (the entry for
+- Current, `docs/spec-046-transport_security-0_0_15.md:1966`-`1973` (the entry for
   `test_websocket_branch_wraps_origin_validator_outside_the_auth_stack`, which correctly predicts
   the extra unwrap).
 - Recommended: add a sibling entry:
@@ -443,7 +443,7 @@ revocation builder's amendment A8, so the two edits meet here.)
 **D4 — `docs/README.md:316` and `docs/README.md:398`** both say the WebSocket origin defence "is
 `AllowedHostsOriginValidator`, not a CSRF token — keep `ALLOWED_HOSTS` tight". That is still
 true, and now under-sells the boundary: `ALLOWED_HOSTS` is enforced on the WebSocket **Host** as
-well, by the package's own validator. Recommended: add ", and since spec-065 the handshake's
+well, by the package's own validator. Recommended: add ", and since spec-046 the handshake's
 `Host` is validated against `ALLOWED_HOSTS` too, by the package's own
 `DjangoWebSocketHostValidator` — two separate checks, both reading the same setting."
 
@@ -719,7 +719,7 @@ literals, and the floor run is what confirms 5.2.0 carries them too rather than 
 
 ## Required spec amendments (pass 2)
 
-Checked against `docs/spec-065-transport_security-0_0_15.md` as of this writing. Pass 1's A1-A7
+Checked against `docs/spec-046-transport_security-0_0_15.md` as of this writing. Pass 1's A1-A7
 still stand and are not restated. I edited no spec.
 
 **A8 — Decision 19 should state what "private" means for `DjangoWebSocketHostValidator`, because
@@ -727,7 +727,7 @@ the code cannot carry the stronger reading.** (Review L6, half-accepted.)
 
 - Where it lives: `## Decision 19` (the WebSocket Host boundary), the paragraph introducing the
   validator as package-private.
-- Current wording, `docs/spec-065-transport_security-0_0_15.md:2474` region:
+- Current wording, `docs/spec-046-transport_security-0_0_15.md:2474` region:
   > "**Only `DisallowedHost` becomes a denial.** The validator catches `DisallowedHost` and denies
   > the handshake **before authentication and before the consumer is constructed**."
 - Recommended replacement — keep, and add a new bullet beside it:
@@ -751,7 +751,7 @@ the code cannot carry the stronger reading.** (Review L6, half-accepted.)
 use the `RequestFactory` oracle.** (Review M3, and the review's own note 3 to Worker 1.)
 
 - Where it lives: `## Test plan`, the Decision 19 block (rows 43-47).
-- Current wording, `docs/spec-065-transport_security-0_0_15.md:3043`-`3058`: rows for the direction
+- Current wording, `docs/spec-046-transport_security-0_0_15.md:3043`-`3058`: rows for the direction
   matrix, delegation, ambiguity, `X-Forwarded-Host` and the propagating exception.
 - Recommended replacement — add:
   > "46c. A handshake carrying **no** `Host`, **no** `X-Forwarded-Host` and **no** `scope["server"]`
@@ -771,7 +771,7 @@ produces nothing beyond the four keys.**
 
 - Where it lives: `## Decision 19`, the `_host_validation_request` item list (the bullet A1 also
   amends).
-- Current wording, `docs/spec-065-transport_security-0_0_15.md:2516`:
+- Current wording, `docs/spec-046-transport_security-0_0_15.md:2516`:
   > "The projection supplies the minimum `META` `get_host()` reads, which is a smaller and more
   > auditable compatibility surface than a request object built out of a scope it was not written
   > for."
@@ -790,7 +790,7 @@ side is the permissive one.**
 
 - Where it lives: `## Edge cases`, the `ALLOWED_HOSTS = []` with `DEBUG=True` entry (the same
   passage pass 1's A3 amends).
-- Current wording, `docs/spec-065-transport_security-0_0_15.md:2748`:
+- Current wording, `docs/spec-046-transport_security-0_0_15.md:2748`:
   > "which is the point of delegating: one configuration, one matcher, two transports."
 - Recommended replacement — A3's appended caveat, plus:
   > "The **Host** side is the permissive one there, which is what makes the divergence worth a row

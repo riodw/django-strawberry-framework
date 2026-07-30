@@ -206,7 +206,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
+├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
@@ -319,19 +319,19 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
+├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
 ├── views.py                      # The package's Django GraphQL HTTP endpoint, declared in the consumer's URLconf.
-├── aggregates/    # planned by TODO-BETA-051-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
+├── aggregates/    # planned by TODO-BETA-056-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
 │   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 │   └── sessions.py               # Transport-owned auth session boundary (auth session-lifecycle hardening, Commit 1).
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
-├── fieldset/    # planned by TODO-BETA-048-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
+├── fieldset/    # planned by TODO-BETA-053-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
@@ -374,7 +374,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── permissions/    # planned by TODO-BETA-053-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
+├── permissions/    # planned by TODO-BETA-058-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
 │   ├── hook_context.py           # The frozen serializer-hook context + upload metadata (the hardening pass).
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
@@ -454,7 +454,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
-├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
+├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046 Slices 1-3).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.
@@ -625,7 +625,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
 ├── test_single_parent_fastpath_api.py  # Live GraphQL HTTP tests for the single-parent windowed-prefetch fast path.
-├── test_transport_api.py         # Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-3).
+├── test_transport_api.py         # Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-3).
 └── test_uploads_api.py           # Live GraphQL HTTP tests for the spec-037 file/image wire contract.
 ```
 
@@ -666,7 +666,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
-├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
+├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046 Slices 1-3).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.
@@ -683,8 +683,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
-│   ├── test_pg_full_text.py      # planned by TODO-BETA-050-0.1.2 - Postgres full-text search filter primitives
-│   ├── test_search_fields.py     # planned by TODO-BETA-049-0.1.2 - `Meta.search_fields` support
+│   ├── test_pg_full_text.py      # planned by TODO-BETA-055-0.1.2 - Postgres full-text search filter primitives
+│   ├── test_search_fields.py     # planned by TODO-BETA-054-0.1.2 - `Meta.search_fields` support
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 │   └── fixtures/    # Fixture modules for filter lazy resolution and cyclic input-generation tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.

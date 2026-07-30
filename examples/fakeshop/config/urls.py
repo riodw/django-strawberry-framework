@@ -62,7 +62,7 @@ urlpatterns = [
     # doesn't enforce CSRF). Unlike ``csrf_exempt``, the endpoint stays CSRF-protected.
     #
     # The mount is the package's own ``DjangoGraphQLView`` rather than Strawberry's
-    # (spec-065 Decision 6): it is the package-owned Django view the migration note
+    # (spec-046 Decision 6): it is the package-owned Django view the migration note
     # names, and mounting it here is what makes the transport-boundary regressions
     # earnable over fakeshop's real ``/graphql/``.
     path(

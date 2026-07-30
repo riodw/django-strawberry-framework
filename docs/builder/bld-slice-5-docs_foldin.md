@@ -1,6 +1,6 @@
 # Build: Slice 5 — S12 transport slice: migration note, deployment guidance, doc fold-in
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` (lines 256-341; supporting
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` (lines 256-341; supporting
 Decisions 8 / 12 / 14 / 15 / 16 / 17 / 18 / 19, and `## Doc updates` at lines 2700-2768)
 Status: final-accepted
 
@@ -8,7 +8,7 @@ Status: final-accepted
 
 ### Pass preamble — spec status line, and corrections to the dispatch findings
 
-**Spec status-line re-verification (mandatory per `worker-1.md`).** `docs/spec-065-…md:37-47`
+**Spec status-line re-verification (mandatory per `worker-1.md`).** `docs/spec-046-…md:37-47`
 reads `Status: **IN BUILD — Slices 1-4 (S1, S2, S9, S11) are built … Slice 5 remains.**`
 That is accurate at the start of this pass. **No spec edit made** — the spec and its
 rationale companion are frozen for this planning pass by the build plan's
@@ -23,11 +23,11 @@ work from this section, not from any earlier prose.
 | sub-check fragment | evidence |
 |---|---|
 | `auth/sessions.py::classify_transport` unrecognized-scope-type message | `git diff` shows the new text: `"Serve GraphQL over HTTP through DjangoGraphQLView in your URLconf, and over WebSocket through DjangoGraphQLProtocolRouter, so the scope carries a recognized protocol type."` Satisfies the bullet. |
-| `auth/mutations.py::_login_resolve_body` / `::_logout_resolve_body` docstrings | both now say `an async Channels consumer` and add `Since spec-065 the package router serves no HTTP at all…`. Satisfies the bullet. |
+| `auth/mutations.py::_login_resolve_body` / `::_logout_resolve_body` docstrings | both now say `an async Channels consumer` and add `Since spec-046 the package router serves no HTTP at all…`. Satisfies the bullet. |
 | `conf.py` `MAX_REQUEST_BODY_BYTES` comment multipart carve-out | present at `conf.py #"EXCEPT for a multipart request"`, and it also already carries the Decision-8 co-requirement sentence. Satisfies the bullet. |
 | `tests/test_views.py` mixin-privacy trivially-true assertion dropped | `tests/test_views.py::test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists` now carries three assertions, none about `__all__`, and its docstring records why. Satisfies the Slice-2-prose fragment. |
 | `test_transport_api.py::test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce` docstring | the `"the spec's Edge-case sentence predicting a 413 is inaccurate"` clause is gone; the `400` explanation remains. Satisfies the Slice-2-prose fragment. |
-| `test_transport_api.py` module docstring **first line** | already `"""Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-3).` — **and it is already that way at `HEAD`** (`git show HEAD:examples/fakeshop/test_query/test_transport_api.py \| head -1`). The Slice-3-prose sub-check is satisfied. See `### Notes for Worker 1` — the spec sentence asserting it "still scopes the file to `(spec-065 Slices 1-2)`" is itself falsified. |
+| `test_transport_api.py` module docstring **first line** | already `"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-3).` — **and it is already that way at `HEAD`** (`git show HEAD:examples/fakeshop/test_query/test_transport_api.py \| head -1`). The Slice-3-prose sub-check is satisfied. See `### Notes for Worker 1` — the spec sentence asserting it "still scopes the file to `(spec-046 Slices 1-2)`" is itself falsified. |
 
 **CORRECTION 1 — `docs/TREE.md` is missing FOUR rows, not two-and-a-half.**
 `utils/sessions.py` has **no** row. `docs/TREE.md:214` and `:324` are `auth/sessions.py`
@@ -49,7 +49,7 @@ of the spec's own Slice-5 sub-check. The same is true of `README.md` (one hunk, 
 
 **CORRECTION 3 — seven NET-NEW glossary terms ARE required; the "insertion dance" is
 not skippable.** Worker 0's finding is correct only about the CSV: all 37 anchors in
-`docs/spec-065-transport_security-0_0_15-terms.csv` exist as `GlossaryTerm` rows, and the
+`docs/spec-046-transport_security-0_0_15-terms.csv` exist as `GlossaryTerm` rows, and the
 CSV holds no new-symbol anchor. But the spec's `## Doc updates` GLOSSARY bullet
 (`:2738-2741`) additionally requires **"the new terms this card authors (the package
 Django view, the body cap, the UTF-8 wire contract, the consumer-injection seam, the
@@ -67,11 +67,11 @@ starting at `5`, `index_order` a dense sequence starting at `1`; statuses are
 
 - Card `65` is `status=wip`, milestone `Alpha (pre-0.1.0)`, target version `0.0.15 (alpha)`.
 - Its `SpecDoc` exists **and its `url` is already correct**:
-  `https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-065-transport_security-0_0_15.md`.
+  `https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-046-transport_security-0_0_15.md`.
   Worker 0's step 1 is therefore **verify-only**, not an update. (Worker 0's claim that
   `.save()` "sets `milestone_id`" is also not a thing: the milestone is already set and
-  never changes; `DONE-065-0.0.15` is a *rendering* rule that drops the milestone prefix
-  for done cards — compare `DONE-064-0.0.14`, whose milestone is still `Alpha (pre-0.1.0)`.)
+  never changes; `DONE-046-0.0.15` is a *rendering* rule that drops the milestone prefix
+  for done cards — compare `DONE-045-0.0.14`, whose milestone is still `Alpha (pre-0.1.0)`.)
 - `card.glossary_links.count() == 0` — so the bootstrap link is genuinely required before
   the flip, per `apps/kanban/signals.py` `DONE_CARD_GLOSSARY_ERROR`.
 - `TrackedPath.objects.filter(cards=card_65).count() == 0`. So the card flip has **no**
@@ -154,7 +154,7 @@ to *generate* rather than hand-author a doc section, the renderer would belong b
 - `apps/kanban/services.py::set_card_status` (`services.py:709-749`) is the **sanctioned
   writer** for a status change and is what prior card wraps used — `CardTransition` rows
   exist for `DONE-044-0.0.14` (`note="spec-044 Slice 3 joint 0.0.14 cut + card wrap"`) and
-  `DONE-064-0.0.14` (`note="policy artifacts shipped"`), both `actor="maintainer"` (the
+  `DONE-045-0.0.14` (`note="policy artifacts shipped"`), both `actor="maintainer"` (the
   only `Actor` row). Use the service, **not** a raw
   `card.status = …; card.save()`: it logs the transition atomically and stamps every
   unresolved incoming `blocked_by` edge `resolved_at`, which a bare save silently skips.
@@ -177,7 +177,7 @@ here, so the ownership is fixed now:
 | `README.md` `## Status` | one-clause summary inside the `0.0.14` paragraph | prose only, **cross-references** `docs/README.md` via the existing `[readme]` def. No code block, no directives, no numeric caps beyond naming `MAX_REQUEST_BODY_BYTES` / `413`. |
 | `TODAY.md` capability bullet `:384` | one-bullet summary | prose only, **cross-references** `docs/README.md` via the already-added `[readme-docs]` def. Same restraint. |
 | `examples/fakeshop/test_query/README.md` | acceptance rows + the widened raw-envelope exemption | **not a migration surface.** It must not restate the recipe, the directives, or the caps. |
-| `docs/SPECS/spec-041-…md` amendment banner | names the three superseded items + the `0.262.0`→`0.316.0` reconciliation, and points at `spec-065` | **not a migration surface.** No recipe, no code block. Point at the spec, not at `docs/README.md`. |
+| `docs/SPECS/spec-041-…md` amendment banner | names the three superseded items + the `0.262.0`→`0.316.0` reconciliation, and points at `spec-046` | **not a migration surface.** No recipe, no code block. Point at the spec, not at `docs/README.md`. |
 | `docs/GLOSSARY.md` entries (DB) | self-contained per-term definitions | glossary entries are self-contained **by design** (a reader lands on one anchor), so restating the composition and the constructor there is legitimate, not duplication. Still **no code block** and no proxy directives. |
 | `views.py` / `routers.py` / `consumers.py` module docstrings | in-source reader's view | already written and **out of scope except** the one authorized `views.py` re-word. Legitimately restated for a different audience. |
 
@@ -401,14 +401,14 @@ deferral at final verification; routed to the maintainer as the tick's owner.
 ### Ruling 5 — `spec-041`: the banner, and a per-occurrence ruling on all eleven `0.262.0` mentions
 
 **Banner.** Immediately under `spec-041`'s title (before its opening `Planned for 0.0.14`
-paragraph), naming `spec-065` and listing **exactly** the three superseded items from
+paragraph), naming `spec-046` and listing **exactly** the three superseded items from
 Decision 14 — Decision 6 (constructor parity, superseded in full), Decision 2's **HTTP
 half** (card-scope boundary), and the **Borrowing posture**'s HTTP-branch /
 Django-fallback paragraphs — plus, stated as **explicitly not a supersession**, the
 `0.262.0` → `0.316.0` reconciliation of factually-wrong live-code prose. Decision 14
 requires the banner to say so "rather than listing it beside the three superseded items".
 
-Reference-style per `AGENTS.md`: add `[spec-065]: ../spec-065-transport_security-0_0_15.md`
+Reference-style per `AGENTS.md`: add `[spec-046]: ../spec-046-transport_security-0_0_15.md`
 under `spec-041`'s existing `<!-- docs/ -->` group (alphabetical: after
 `[glossary]` / `[glossary-*]`, before `[tree]`). The 10 canonical group headers are already
 present in that file.
@@ -455,7 +455,7 @@ recorded before Phase B starts.**
    (`build_tree_md.py` rejects a first line that is not a period-terminated sentence).
    `test_transport_api.py`'s first line is already correct at `HEAD` (verify only).
 2. **`tests/test_views.py`'s first docstring line is corrected before the same
-   regenerate.** It reads `(spec-065 Slice 1)` but the file now carries Slice 2's cap
+   regenerate.** It reads `(spec-046 Slice 1)` but the file now carries Slice 2's cap
    rows, Slice 3's wire rows and round 2's additions, and the TREE regenerate will publish
    that line into a standing doc **for the first time**. `ARTIFACT.md`
    `### Documentation / release sanity` requires the feeding docstring fix and the
@@ -463,7 +463,7 @@ recorded before Phase B starts.**
    `tests/test_views.py` as a TREE row this slice adds and the Slice-2-prose sub-check
    already names the file, so it is in scope. Correct it to the file's actual slice scope
    (provenance, per `ARTIFACT.md`'s keep-provenance/scrub-staging distinction — do not
-   delete the `spec-065` citation).
+   delete the `spec-046` citation).
 3. **The `views.py` mixin-docstring re-word lands before the regenerate too** (same phase
    rule), though it targets `_RequestBodyBoundaryMixin`'s class docstring, not the module
    first line, so it cannot change the rendered row.
@@ -479,7 +479,7 @@ recorded before Phase B starts.**
    `GlossarySpecMention` rows feed `build_glossary_md.py`'s
    `allGlossarySpecMentions` query, so `docs/GLOSSARY.md` is stale if it runs after.
 7. **The seven new `GlossaryTerm` rows and the three rewrites land before
-   `build_glossary_md.py`.** And `scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+   `build_glossary_md.py`.** And `scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
    runs **after** the regenerate — it is the gate that catches a broken anchor from a
    changed heading.
 
@@ -552,7 +552,7 @@ run an in-process `/graphql/` query requesting `uuid { id }`, which needs the `p
     `views.py`, `_request_body.py`, `consumers.py`, `utils/sessions.py` and
     `tests/test_views.py` in **both** the current and target package layouts and both test
     trees, plus a corrected `routers.py` row (its module docstring first line already reads
-    `Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).`).
+    `Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).`).
     Then `--check` to confirm it is now up to date.
 11. **Glossary DB**: the three rewrites and the seven new terms (Ruling 3). Verify the
     `entry_order` monotonicity premise first.
@@ -564,7 +564,7 @@ run an in-process `/graphql/` query requesting `uuid { id }`, which needs the `p
 13. **`uv run python examples/fakeshop/manage.py import_spec_terms`** (write mode). It
     processes **every** done card and creates `CardGlossaryTerm` + `GlossarySpecMention`
     rows from each card's CSV, so the resulting `db.sqlite3` diff can legitimately span
-    more than card 065. **Flag the wider diff in the build report; do not treat it as a
+    more than card 046. **Flag the wider diff in the build report; do not treat it as a
     defect and do not try to narrow it.**
 14. **Regenerate all three, from the repo root**: `scripts/build_kanban_md.py`,
     `scripts/build_kanban_html.py`, `scripts/build_glossary_md.py`. `KANBAN.html`'s Vue
@@ -596,10 +596,10 @@ Focused runs that confirm nothing regressed (no `--cov*` flags, ever):
   outputs. This is the real proof; a clean `git diff` is not available on a slice that
   legitimately diverges the DB from `HEAD`.
 - `uv run python scripts/build_tree_md.py --check` → up to date.
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
   → `OK: 37 terms`, exit 0. (Baseline at pre-flight was the same; a regression here means
   a rewritten heading changed an anchor.)
-- `KANBAN.md` shows `DONE-065-0.0.15` in the **Done** section, absent from its old
+- `KANBAN.md` shows `DONE-046-0.0.15` in the **Done** section, absent from its old
   section, with `definition_of_done` boxes 0-4 ticked and box 5 unticked.
 - `git status --short` after every write-mode run: every modified file must be
   slice-intended and appear in `### Files touched`. Anything else is a
@@ -654,18 +654,18 @@ in the meantime.
 
 ### Files Worker 2 must NOT touch
 
-- **`docs/spec-065-transport_security-0_0_15.md` and
-  `docs/spec-065-transport_security-0_0_15-rationale.md`** — custodian-only; Worker 2 never
+- **`docs/spec-046-transport_security-0_0_15.md` and
+  `docs/spec-046-transport_security-0_0_15-rationale.md`** — custodian-only; Worker 2 never
   edits the spec and **never reads the rationale companion**. Required wording goes in
   `### Notes for Worker 1 (spec reconciliation)` **on disk**, not only in the return report:
   round 1's custodian had to re-derive a list that never reached disk.
-- **`docs/spec-065-transport_security-0_0_15-terms.csv`** — stays at 37 rows (Ruling 3).
+- **`docs/spec-046-transport_security-0_0_15-terms.csv`** — stays at 37 rows (Ruling 3).
 - **`docs/feedback.md`** — the maintainer's review document. Evidence, never edited, never
   annotated, never ticked.
 - **`drys.md`, `vulns.md`** (untracked maintainer scoping notes) — never touch. This is
   the concrete reason the `check_trailing_commas.py` invocation above carries explicit
   paths.
-- **`docs/builder/build-065-transport_security-0_0_15.md`** — Worker 0's file, including
+- **`docs/builder/build-046-transport_security-0_0_15.md`** — Worker 0's file, including
   every slice checkbox.
 - **Every other `docs/builder/bld-*.md`**, and in particular
   **`docs/builder/bld-review-2-w3_residual.md`**, which a Worker 3 pass wrote or is
@@ -723,7 +723,7 @@ these was acted on.**
 
 1. **The Slice-5 sub-check at `:329-338` is factually stale.** It asserts
    `test_transport_api.py`'s module docstring first line "still scopes the file to
-   `(spec-065 Slices 1-2)`". It reads `(spec-065 Slices 1-3)` on disk **and at `HEAD`**.
+   `(spec-046 Slices 1-2)`". It reads `(spec-046 Slices 1-3)` on disk **and at `HEAD`**.
    The sub-check's *instruction* ("correct it to the file's actual slice scope … before the
    `docs/TREE.md` regenerate") is still the right instruction and is satisfied; only the
    premise sentence is wrong. Candidate for a one-clause correction at final verification.
@@ -732,7 +732,7 @@ these was acted on.**
    the spec only if the maintainer wants the requirement made unmissable; the bullet
    already says it.
 3. **The seven new glossary anchors are deliberately absent from the terms CSV**
-   (Ruling 3). If the maintainer wants card 065's `CardGlossaryTerm` link set to include
+   (Ruling 3). If the maintainer wants card 046's `CardGlossaryTerm` link set to include
    the terms it authored, that is a **Worker-1 pass** editing the CSV **and** the spec's
    `## Key glossary references` + link-def block together, followed by a re-run of
    `import_spec_terms` and `build_glossary_md.py`. Route to `bld-final.md`'s
@@ -834,7 +834,7 @@ these was acted on.**
   - [x] The Slice-3 prose correction, in
         `examples/fakeshop/test_query/test_transport_api.py` and carried here for the same
         reason as the Slice-1 and Slice-2 prose above: the module docstring's **first line**
-        still scopes the file to `(spec-065 Slices 1-2)` although it now also carries the
+        still scopes the file to `(spec-046 Slices 1-2)` although it now also carries the
         S9 async rows and the wire contract's kill-switch rows — correct it to the file's
         actual slice scope, and do it **before** the [`docs/TREE.md`][tree] regenerate in
         this same slice, because that first line is the text `scripts/build_tree_md.py`
@@ -878,7 +878,7 @@ regenerate. Every line below is on the artifact's `### Files Worker 2 may write`
   The spec's *requirement* vocabulary for its three-part contract is untouched, so it still
   does not collide with this docstring's *condition* numbering.
 - `tests/test_views.py` — **two** docstring edits, no assertion changed. (1) Module docstring
-  first line `(spec-065 Slice 1)` -> `(spec-065 Slices 1-3)`, matching the file's actual scope
+  first line `(spec-046 Slice 1)` -> `(spec-046 Slices 1-3)`, matching the file's actual scope
   (S1 import boundary, S2 cap rows, S3 wire rows) and the sibling
   `test_transport_api.py`; provenance kept, staging language absent. (2) **Carried
   correction 2** — `test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_typeerror`'s
@@ -944,7 +944,7 @@ regenerate. Every line below is on the artifact's `### Files Worker 2 may write`
   names exactly the three superseded items with working in-page anchors (each anchor copied
   from a link `spec-041` already carries, not hand-derived), states what survives unchanged,
   and states the `0.262.0` -> `0.316.0` reconciliation **as explicitly not a supersession**,
-  per Decision 14. Plus `[spec-065]: ../spec-065-transport_security-0_0_15.md` added to the
+  per Decision 14. Plus `[spec-046]: ../spec-046-transport_security-0_0_15.md` added to the
   existing `<!-- docs/ -->` group, alphabetically between `[glossary]` and `[tree]`. Plus
   Ruling 5's six corrections and only those six: the 12 `0.262.0` mentions are now 6 corrected
   (the two pinned-floor claims, the three live-error-string descriptions, and the live test
@@ -981,9 +981,9 @@ regenerate. Every line below is on the artifact's `### Files Worker 2 may write`
 
 **Baseline-dirty, untouched by me** (`AGENTS.md` L34, and the artifact's do-not-revert list):
 `django_strawberry_framework/auth/mutations.py`, `auth/sessions.py`, `conf.py`,
-`docs/feedback.md`, `docs/spec-065-transport_security-0_0_15.md`,
-`docs/spec-065-transport_security-0_0_15-rationale.md` (never read),
-`docs/builder/build-065-transport_security-0_0_15.md`,
+`docs/feedback.md`, `docs/spec-046-transport_security-0_0_15.md`,
+`docs/spec-046-transport_security-0_0_15-rationale.md` (never read),
+`docs/builder/build-046-transport_security-0_0_15.md`,
 `docs/builder/bld-review-2-w3_residual.md`, `drys.md`, `vulns.md`. Nothing was reverted.
 
 #### Verify-only rows: each satisfies its bullet, quoted
@@ -994,11 +994,11 @@ against the sub-check and made **no** edit.
 | sub-check fragment | satisfying text on disk | verdict |
 |---|---|---|
 | `auth/sessions.py::classify_transport` unrecognized-scope message | `"Serve GraphQL over HTTP through DjangoGraphQLView in your URLconf, and over WebSocket through DjangoGraphQLProtocolRouter, so the scope carries a recognized protocol type."` | satisfied. It no longer tells the reader to route GraphQL HTTP through the router. |
-| `auth/mutations.py::_login_resolve_body` / `::_logout_resolve_body` | both now read `"an async Channels consumer instead awaits the native async body"` and add `"Since spec-065 the package router serves no HTTP at all, so a Channels HTTP scope reaches here only from a consumer the project mounted itself."` | satisfied on both, identically worded. |
+| `auth/mutations.py::_login_resolve_body` / `::_logout_resolve_body` | both now read `"an async Channels consumer instead awaits the native async body"` and add `"Since spec-046 the package router serves no HTTP at all, so a Channels HTTP scope reaches here only from a consumer the project mounted itself."` | satisfied on both, identically worded. |
 | `conf.py` `MAX_REQUEST_BODY_BYTES` multipart carve-out | `conf.py #"EXCEPT for a multipart request"` … `"so per-file count, per-file size, and aggregate size are NOT bounded by this key"`, and the Decision-8 co-requirement sentence is already there too (`#"is REQUIRED ALONGSIDE this one"`). | satisfied, both halves. |
 | `tests/test_views.py` mixin-privacy trivially-true assertion dropped | `test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists` carries exactly three assertions (`__bases__` twice, one MRO index), none about `__all__`, and its docstring records that privacy is proven once by the exact-`__all__` test. | satisfied. Its ordering rationale also already reads "must resolve to the package's implementation rather than to anything upstream might later define", i.e. it already agreed with the corrected `views.py` docstring. |
 | `test_transport_api.py::test_the_two_body_ceilings_are_distinguishable_by_the_response_they_produce` docstring | the `"the spec's Edge-case sentence predicting a 413 is inaccurate"` clause is gone; the `400` explanation and its `ASGIHandler.create_request` mechanism remain. | satisfied. |
-| `test_transport_api.py` module docstring **first line** | `"""Live \`\`/graphql/\`\` transport-boundary acceptance tests (spec-065 Slices 1-3).` — and `git show HEAD:examples/fakeshop/test_query/test_transport_api.py \| head -1` prints the identical line, so it was already correct at `HEAD`. | satisfied; the Slice-3 sub-check's premise sentence is falsified, see `### Notes for Worker 1` item 1 (carried forward from the plan, re-verified this pass). |
+| `test_transport_api.py` module docstring **first line** | `"""Live \`\`/graphql/\`\` transport-boundary acceptance tests (spec-046 Slices 1-3).` — and `git show HEAD:examples/fakeshop/test_query/test_transport_api.py \| head -1` prints the identical line, so it was already correct at `HEAD`. | satisfied; the Slice-3 sub-check's premise sentence is falsified, see `### Notes for Worker 1` item 1 (carried forward from the plan, re-verified this pass). |
 
 **Phase A gate — observed.** Everything above this line landed, was lint-clean, and was
 green under `uv run pytest tests/test_views.py --no-cov` (144 passed) before any DB write or
@@ -1080,11 +1080,11 @@ Other gates the plan named:
   for 46 done card(s).`; `… import_spec_terms --check` -> `OK: 46 done cards have glossary
   links.` (exit 0). Baseline was 45, expected 46, got 46.
 - `uv run python scripts/check_spec_glossary.py --spec
-  docs/spec-065-transport_security-0_0_15.md` -> `OK: 37 terms - all have glossary entries and
+  docs/spec-046-transport_security-0_0_15.md` -> `OK: 37 terms - all have glossary entries and
   at least one spec link.` (exit 0), run **after** the glossary regenerate, per sequencing
   constraint 7. No spec anchor was broken: no `GlossaryTerm.title` or `.anchor` was changed.
-- `KANBAN.md`: `DONE-065-0.0.15` appears in `## Done` (and in the `## WIP / DONE spec map`),
-  is **absent** from `## In progress` (which now holds only `TODO-ALPHA-045-0.0.15`), and its
+- `KANBAN.md`: `DONE-046-0.0.15` appears in `## Done` (and in the `## WIP / DONE spec map`),
+  is **absent** from `## In progress` (which now holds only `TODO-ALPHA-050-0.0.19`), and its
   `#### Definition of done` renders boxes 0-4 as `- [x]` and box 5 as `- [ ]`.
 - Version quintet / `CHANGELOG.md`: `git status --short` matches none of `pyproject.toml`,
   `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `CHANGELOG.md`.
@@ -1170,11 +1170,11 @@ fact of any environment.
 - **The card flip went through `apps.kanban.services.set_card_status`**, not a bare
   `card.status = …; card.save()`, so the `CardTransition` is logged atomically and any
   unresolved incoming `blocked_by` edge is stamped. `actor="maintainer"` (the only `Actor`
-  row); `note="spec-065 Slice 5: S12 transport doc fold-in, spec-041 amendment,
+  row); `note="spec-046 Slice 5: S12 transport doc fold-in, spec-041 amendment,
   GLOSSARY/TREE/KANBAN regenerated from source"`. `wip -> done`, `card_id` now
-  `DONE-065-0.0.15`.
+  `DONE-046-0.0.15`.
 - **`SpecDoc` was verify-only, as the plan corrected.** Its `url` already read
-  `https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-065-transport_security-0_0_15.md`;
+  `https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-046-transport_security-0_0_15.md`;
   no write. `TrackedPath.objects.filter(card_links__card=card).count() == 0` re-confirmed, so
   the flip had no effect on `docs/TREE.md` and there was no flip-before-TREE ordering
   constraint — I regenerated `docs/TREE.md` first anyway, per the plan's step order.
@@ -1183,7 +1183,7 @@ fact of any environment.
   `import_spec_terms` reconciled it instead of deleting it.
 - **`import_spec_terms` ran in write mode after the flip and before all three regenerates**
   (sequencing constraint 6). As the plan predicted, its `db.sqlite3` delta legitimately spans
-  more than card 065 — it processes every `done` card and rebuilds `CardGlossaryTerm` +
+  more than card 046 — it processes every `done` card and rebuilds `CardGlossaryTerm` +
   `GlossarySpecMention` from each card's CSV (the render reports 1408 spec mentions across 59
   specs). **Flagged, not narrowed, and not a defect.**
 - **The terms CSV was not touched.** It stays at 37 rows and
@@ -1251,12 +1251,12 @@ now discharged in the direction the plan chose. What follows is **new**, from th
     directly above the "Two slices (the card is a deliberate S)" paragraph. Current wording:
     `Status: **PLANNED — no slice built yet.**` That is factually wrong — card `041` is
     `DONE-041-0.0.14` and both its slices shipped. Recommended replacement:
-    `Status: **SHIPPED (\`0.0.14\`). Amended by spec-065; see the banner above.**` I did not
+    `Status: **SHIPPED (\`0.0.14\`). Amended by spec-046; see the banner above.**` I did not
     write it: Ruling 5 authorized the banner, the link def and the six `0.262.0` corrections
     and nothing else, and it explicitly says the Status line is left as the source of truth.
     This is a one-line custodian edit, not a builder edit.
 11. **The Slice-5 sub-check's `docs/TREE.md` bullet undercounts the rows the regenerate
-    added.** Where it lives: `docs/spec-065-transport_security-0_0_15.md`, `## Doc updates`,
+    added.** Where it lives: `docs/spec-046-transport_security-0_0_15.md`, `## Doc updates`,
     the `docs/TREE.md` bullet ("all four modules the earlier slices add … plus
     `tests/test_views.py` in the test trees"). The regenerate also published rows for
     `examples/fakeshop/test_query/test_transport_api.py` and `tests/test_prove_failability.py`,
@@ -1320,7 +1320,7 @@ Decision 16 inverted both halves. The shipped contract is **two** checkpoints, a
 connection-scoped so the close IS the rejection". This is the same sentence Slice 5 just
 corrected in `docs/README.md:360` and in the glossary — the contract is told in five places
 (`consumers.py`'s module docstring, `docs/README.md`, the new `Connection-scoped revocation`
-glossary entry, KANBAN card 065's scope, and here) and this is the one telling that drifted.
+glossary entry, KANBAN card 046's scope, and here) and this is the one telling that drifted.
 
 Pre-existing-at-HEAD, verified read-only:
 `git show HEAD:django_strawberry_framework/routers.py | grep -n "before every operation and rejects the operation"`
@@ -1334,14 +1334,14 @@ choice — escalated below rather than held against this diff.
 
 `docs/GLOSSARY.md` `## Channels request adapter` (source: `GlossaryTerm` id 529, `body`):
 
-> …before reading `scope["type"]` to split a Channels HTTP scope from a WebSocket scope**,.** Since spec-065 the package router serves no HTTP at all…
+> …before reading `scope["type"]` to split a Channels HTTP scope from a WebSocket scope**,.** Since spec-046 the package router serves no HTTP at all…
 
 At `HEAD` the sentence read "…from a WebSocket scope**, and** `login` / `logout` now run over
 Channels HTTP…"; the rewrite replaced the tail and left the comma. New this pass, in a rendered
 standing doc. Fix is one character in `GlossaryTerm.body` plus
 `uv run python scripts/build_glossary_md.py` — a DB edit, never a hand-edit of the rendered file.
 
-#### L2 — `README.md:62` puts `main`'s router shape inside the `0.0.14` description, then says what `065` removed
+#### L2 — `README.md:62` puts `main`'s router shape inside the `0.0.14` description, then says what `046` removed
 
 The paragraph opens `Newest shipped surface (`0.0.14`)` and now describes the WebSocket branch as
 "the package's private `DjangoWebSocketHostValidator` (the `Host` check) over
@@ -1510,18 +1510,18 @@ write to it.
 **Card wrap.**
 
 - `uv run python examples/fakeshop/manage.py import_spec_terms --check` →
-  `OK: 46 done cards have glossary links.` (exit 0). Baseline 45, so +1 for card 065.
-- `KANBAN.md`: `DONE-065-0.0.15` appears once under `## Done` (`:1340`) and once in the
-  `## WIP / DONE spec map` (`:98`); `## In progress` holds only `TODO-ALPHA-045-0.0.15`. Rendered
+  `OK: 46 done cards have glossary links.` (exit 0). Baseline 45, so +1 for card 046.
+- `KANBAN.md`: `DONE-046-0.0.15` appears once under `## Done` (`:1340`) and once in the
+  `## WIP / DONE spec map` (`:98`); `## In progress` holds only `TODO-ALPHA-050-0.0.19`. Rendered
   `#### Definition of done` boxes 0-4 are `- [x]`, box 5 `- [ ]`, per Ruling 4.
 - The three card-text corrections landed and read correctly against the shipped contract: `scope`
   S11 now says two checkpoints + connection-scoped close, `definition_of_done` order 3 the same,
   `arch_posture` order 3 the three-wrapper composition with the Host validator outermost.
-- **The "wider than card 065" DB delta is narrower than the build report feared, and I measured
+- **The "wider than card 046" DB delta is narrower than the build report feared, and I measured
   it rather than accepting the flag.** Row-count deltas vs `HEAD`: `glossaryterm` +7,
   `glossarycategorymembership` +7, `glossarytermlink` +23, `glossaryspecmention` +37,
   `cardglossaryterm` +37, `cardtransition` +1, `uuidmodel` +38. Identity diffs: the 37 new
-  `GlossarySpecMention` rows are **all** `spec_path = docs/spec-065-transport_security-0_0_15.md`
+  `GlossarySpecMention` rows are **all** `spec_path = docs/spec-046-transport_security-0_0_15.md`
   with **zero** removals; the 37 new `CardGlossaryTerm` rows are **all** `card_id = 65` (orders
   0-36) with **zero** rows removed or re-ordered for any other card; all 23 new
   `GlossaryTermLink` rows are sourced from the seven new terms; the 7 new memberships are
@@ -1529,7 +1529,7 @@ write to it.
   no other done card at all — the byte-level churn is SQLite page movement, not semantic reach.
   This is the documented reconciliation, not something else.
 - `CardTransition` id 5: card 65, `wip → done`, `actor=maintainer`, note
-  `"spec-065 Slice 5: S12 transport doc fold-in, spec-041 amendment, GLOSSARY/TREE/KANBAN
+  `"spec-046 Slice 5: S12 transport doc fold-in, spec-041 amendment, GLOSSARY/TREE/KANBAN
   regenerated from source"`. Went through the sanctioned service, as Ruling 4 required.
 
 **`spec-041`.** Banner sits above the untouched `Planned for 0.0.14` opener, names exactly the
@@ -1546,13 +1546,13 @@ refs, 0 missing, checked by slugifying every heading in the file); no heading in
 section was renamed, added or re-nested, so
 `#transport-the-graphql-http-endpoint-and-the-asgi-router` (used twice in `docs/README.md`)
 still lands. `README.md` / `TODAY.md` link `docs/README.md` through their existing defs with no
-fragment, so nothing there can break. `spec-041`'s new `[spec-065]` def resolves to a real file.
+fragment, so nothing there can break. `spec-041`'s new `[spec-046]` def resolves to a real file.
 `scripts/check_trailing_commas.py --check` with explicit paths over all ten changed
 `.py` / `.md` files → exit 0, so the 10-group link-def scaffold is intact everywhere.
 
 **Staging-vs-provenance.** The regenerate published
-`tests/test_views.py  # Package-tier contracts … (spec-065 Slices 1-3).` and
-`test_transport_api.py  # Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices
+`tests/test_views.py  # Package-tier contracts … (spec-046 Slices 1-3).` and
+`test_transport_api.py  # Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices
 1-3).` A naive reading of the "no `Slice N`" rule would flag both. They are **provenance**, not
 staging: they name which slices' contracts the file covers, contain no "planned" / "after Slice
 N" / `TODO(`, and the `test_transport_api.py` spelling was already at `HEAD`. Correct as shipped.
@@ -1651,7 +1651,7 @@ generated or read.
 - `uv run python examples/fakeshop/manage.py check` → `System check identified no issues (0 silenced).`
 - `uv run python scripts/build_tree_md.py --check` → `docs/TREE.md is up to date.` (exit 0). It
   failed before this slice, as CORRECTION 1 recorded; that failure is closed.
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
   → `OK: 37 terms - all have glossary entries and at least one spec link.` (exit 0), run after
   the regenerates. No anchor broken.
 - `uv run python examples/fakeshop/manage.py import_spec_terms --check` → `OK: 46 …` (exit 0).
@@ -1731,7 +1731,7 @@ generated or read.
   `MAX_REQUEST_BODY_BYTES` comment carries both the carve-out and the
   `#"is REQUIRED ALONGSIDE this one"` co-requirement; the mixin-privacy test has three
   assertions and none about `__all__`; `test_transport_api.py`'s first line is
-  `(spec-065 Slices 1-3)` and its `413` clause count is `0`.
+  `(spec-046 Slices 1-3)` and its `413` clause count is `0`.
 - The `Request-body cap`, `UTF-8 wire contract`, `WebSocket revalidation window`,
   `WebSocket consumer-injection seam`, `WebSocket Host boundary`, `Connection-scoped revocation`
   and `` `DjangoGraphQLView` `` entries all cite the right Decision numbers (6, 7, 9+10, 11+16,
@@ -1795,7 +1795,7 @@ the highest-value one-line custodian edit in this set.
 7. **L5 — `BACKLOG.md:1616` / `:1661`** describe the router as serving HTTP + WebSocket in the
    present tense. Deliberately outside the spec's Doc-updates set, so it is a
    `### Deferred work catalog` entry, not a gap.
-8. **Recorded so a later pass does not "fix" it:** KANBAN card 065's `arch_posture`
+8. **Recorded so a later pass does not "fix" it:** KANBAN card 046's `arch_posture`
    injection-seam bullet still says "Per-operation session revalidation is a WebSocket concern
    layered through that seam". Ruling 4 scoped card-text corrections to exactly three items and
    kept the RECOMMENDED-DIRECTION framing and all three `open_question` items as historical
@@ -1844,8 +1844,8 @@ Nothing is left `- [ ]`, so no deferral line is owed for the checklist itself.
 | the three `auth/` transport strings | **landed, legitimately verify-only** | The corrected text is on disk in `auth/sessions.py::classify_transport` and both `auth/mutations.py` resolve-body docstrings, and both files are on the **do-not-revert** list as the maintainer's concurrent work. The sub-check's requirement is that the strings be right in the same pass as the prose; they are. Recorded plainly: this content did **not** arrive through Slice 5's own diff, and the tick is for the state, not for authorship. |
 | `examples/fakeshop/test_query/README.md` | **landed** | `:5` states outright that `test_transport_api.py` "is made of nothing else" and enumerates the hostile-`Host` / `secure=` / `enforce_csrf_checks=` / `AsyncClient` rows, the in-process `ASGIHandler` driver, the real `multipart/form-data` control fields and the `Client(enforce_csrf_checks=True)` ordering row with its upload-handler sentinel — i.e. the file says it rather than leaving it to inference, which is the sub-check's own test. `:15` adds the file to the sibling enumeration; `:17` carries the S1 / S2 / S9 acceptance rows. |
 | Slice-2 prose corrections | **landed** (two authored, two verify-only) | authored: `views.py::_RequestBodyBoundaryMixin`'s docstring now gives the precedence reason and says explicitly that mixin-first is *not* what satisfies `View.as_view`'s `hasattr` guard; `tests/test_views.py`'s mixin-privacy test carries three assertions, none about `__all__`. verify-only on the maintainer's dirty files: `conf.py #"EXCEPT for a multipart request"` plus `#"is REQUIRED ALONGSIDE this one"`; the `413`-is-inaccurate clause is gone from `test_transport_api.py`'s two-ceilings row. |
-| Slice-3 prose correction | **satisfied, premise falsified** | `test_transport_api.py`'s first line reads `(spec-065 Slices 1-3)` on disk **and at `HEAD`** — I re-confirmed with `git show HEAD:… \| head -1`. The instruction is discharged; the sub-check's premise sentence was not, and I corrected the spec rather than carrying it to `bld-final.md` (see `### Spec changes made (Worker 1 only)`, edit 6). |
-| card flip + `KANBAN` regeneration | **landed** | `KANBAN.md:98` (`## WIP / DONE spec map`) and `:1340` (`## Done`) both read `DONE-065-0.0.15`; `WIP-ALPHA-065` is absent from the file; `import_spec_terms --check` -> `OK: 46 done cards have glossary links.` DoD boxes 0-4 `- [x]`, box 5 `- [ ]` as Ruling 4 decided. |
+| Slice-3 prose correction | **satisfied, premise falsified** | `test_transport_api.py`'s first line reads `(spec-046 Slices 1-3)` on disk **and at `HEAD`** — I re-confirmed with `git show HEAD:… \| head -1`. The instruction is discharged; the sub-check's premise sentence was not, and I corrected the spec rather than carrying it to `bld-final.md` (see `### Spec changes made (Worker 1 only)`, edit 6). |
+| card flip + `KANBAN` regeneration | **landed** | `KANBAN.md:98` (`## WIP / DONE spec map`) and `:1340` (`## Done`) both read `DONE-046-0.0.15`; `WIP-ALPHA-046` is absent from the file; `import_spec_terms --check` -> `OK: 46 done cards have glossary links.` DoD boxes 0-4 `- [x]`, box 5 `- [ ]` as Ruling 4 decided. |
 | no version quintet, no `CHANGELOG.md` | **honoured** | `git status --short` names none of `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `CHANGELOG.md`; `pyproject.toml:4` is still `version = "0.0.14"`. |
 
 **Builder's required-amendment list, discharged item by item.** Items 1, 4-8 were the plan's own
@@ -1968,7 +1968,7 @@ released version, which is the one outcome none of the paths may produce).
 
 **Confirmed myself.** `grep -n "scope,\." docs/GLOSSARY.md` prints `327:`, inside
 `## Channels request adapter`: "…to split a Channels HTTP scope from a WebSocket scope**,.**
-Since spec-065 the package router serves no HTTP at all…". At `HEAD` the same sentence read
+Since spec-046 the package router serves no HTTP at all…". At `HEAD` the same sentence read
 "…from a WebSocket scope**, and** `login` / `logout` now run over Channels HTTP consumers too",
 so the rewrite replaced the tail and left the comma. **New this pass, in a rendered standing
 doc.**
@@ -1980,8 +1980,8 @@ one column, so a full slice re-loop is the wrong instrument; and it is cosmetic,
 this build's own regenerate can fix it for free.
 
 **Routing record.** Target: `GlossaryTerm` **id 529**, anchor `channels-request-adapter`, column
-`body`; delete the comma in `"…from a WebSocket scope,. Since spec-065…"` so it reads
-`"…from a WebSocket scope. Since spec-065…"`. Then `uv run python scripts/build_glossary_md.py`
+`body`; delete the comma in `"…from a WebSocket scope,. Since spec-046…"` so it reads
+`"…from a WebSocket scope. Since spec-046…"`. Then `uv run python scripts/build_glossary_md.py`
 and confirm `grep -c "scope,\." docs/GLOSSARY.md` is `0` and the regenerate is byte-stable
 across two runs. Owner: whichever pass next legitimately writes the glossary DB — the
 **cross-slice integration pass** if it opens one, otherwise the joint `0.0.15` cut, which is
@@ -2023,7 +2023,7 @@ and the spec now matches it.
 
 **2d — `status_text = "shipped"` on the seven new glossary entries. Ruling: the joint `0.0.15`
 cut's, not this card's.** Three reasons, in decreasing order of force. (a) Decision 15 assigns
-the `0.0.15` status flip to the cut and card `045` is still `todo` on that line, so this card
+the `0.0.15` status flip to the cut and card `050` is still `todo` on that line, so this card
 stamping `0.0.15` would be this card taking a step the cut owns. (b) The stamp would be
 **false today**: the version quintet reads `0.0.14` on disk, so `shipped (0.0.15)` would name a
 version that exists in no released artifact. (c) Bare `shipped` is not a defect: 16 entries in
@@ -2064,8 +2064,8 @@ six keeps** — recorded here so it is not re-derived a fourth time.
 
 ### Spec changes made (Worker 1 only)
 
-Seven edits, all quoted. Byte counts: `docs/spec-065-transport_security-0_0_15.md`
-**226,343 -> 227,601** (+1,258); `docs/spec-065-transport_security-0_0_15-rationale.md`
+Seven edits, all quoted. Byte counts: `docs/spec-046-transport_security-0_0_15.md`
+**226,343 -> 227,601** (+1,258); `docs/spec-046-transport_security-0_0_15-rationale.md`
 **64,734 -> 69,226** (+4,492); `docs/SPECS/spec-041-channels_router-0_0_14.md` **150,070 ->
 150,218** (+148, the Status line alone; `HEAD` was 147,420 and the rest is Slice 5's banner and
 corrections).
@@ -2076,12 +2076,12 @@ corrections).
    banner Slice 5 added two dozen lines above it says "the Status line remains the source of
    truth", which made the contradiction self-referential. Now:
    `Status: **COMPLETE** (card \`DONE-041-0.0.14\`) — both slices built and the card wrap landed;`
-   `the \`0.0.14\` release rode the joint cut. Amended by [\`spec-065\`][spec-065]; see the banner`
+   `the \`0.0.14\` release rode the joint cut. Amended by [\`spec-046\`][spec-046]; see the banner`
    `above.` The `**COMPLETE** (card \`DONE-NNN-X.X.X\`)` shape is this repo's existing convention
-   for a shipped spec (`spec-035:5`, `spec-042:55`), and `[spec-065]` reuses the link definition
+   for a shipped spec (`spec-035:5`, `spec-042:55`), and `[spec-046]` reuses the link definition
    Slice 5 already added at `:2167`. **No checkbox anywhere in that file was touched** and the
    opening `Planned for 0.0.14` paragraph is untouched, per the shipped-card closeout convention.
-2. **Spec `:3`, the opener's card id.** `WIP-ALPHA-065-0.0.15` -> `DONE-065-0.0.15`, falsified by
+2. **Spec `:3`, the opener's card id.** `WIP-ALPHA-046-0.0.15` -> `DONE-046-0.0.15`, falsified by
    this slice's own card flip. `Planned for \`0.0.15\`` stays: the target release is still a
    target.
 3. **Spec `:37-42`, the `Status:` line** (mandatory per `worker-1.md`
@@ -2116,7 +2116,7 @@ corrections).
    sentence stating the render is source-driven so the list is not a ceiling. I verified each
    named row exists: `docs/TREE.md:628`, `:449`/`:661`, `:454`/`:666`.
 7. **`## Slice checklist`, Slice 5's `test_transport_api.py` sub-bullet.** The premise `the module
-   docstring's **first line** still scopes the file to \`(spec-065 Slices 1-2)\` although it now
+   docstring's **first line** still scopes the file to \`(spec-046 Slices 1-2)\` although it now
    also carries … — correct it to the file's actual slice scope` becomes `the module docstring's
    **first line** must name the file's actual slice scope, which now also covers … — confirm it
    does and correct it if it does not`. The premise was true when written and was falsified by
@@ -2134,12 +2134,12 @@ direction of the drift — plus a new `### Change record for the spec's non-deci
 
 ### Mechanical verification of the spec edits — four ways, none by eye
 
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
   -> `OK: 37 terms - all have glossary entries and at least one spec link.` (exit 0).
 - **Every in-page anchor resolves.** Slugified every heading in both edited specs (fence-aware,
-  keeping `_`, stripping backticks) and matched all `](#…)` uses: `spec-065` **23 anchors, 0
+  keeping `_`, stripping backticks) and matched all `](#…)` uses: `spec-046` **23 anchors, 0
   missing**; `spec-041` **23 anchors, 0 missing**. Also re-checked `docs/README.md` (3 anchors, 0
-  missing), so edit 1's new `[spec-065]` use and the banner's copied anchors all land.
+  missing), so edit 1's new `[spec-046]` use and the banner's copied anchors all land.
 - **Every reference-style definition is used and every use is defined**, in all three files:
   `used-not-defined: []`, `defined-not-used: []`. No cross-reference points into moved text
   without naming the rationale file — the two new Decision-8 change records are cited from the
@@ -2154,7 +2154,7 @@ direction of the drift — plus a new `### Change record for the spec's non-deci
 |---|---|
 | `uv run pytest --no-cov` | **5202 passed, 40 skipped** in 55.75s — exactly the declared baseline |
 | `uv run pytest tests/test_views.py tests/test_routers.py --no-cov` | **266 passed** (144 + 122, both declared counts) |
-| `uv run python scripts/check_spec_glossary.py --spec …spec-065…md` | `OK: 37 terms`, exit 0 |
+| `uv run python scripts/check_spec_glossary.py --spec …spec-046…md` | `OK: 37 terms`, exit 0 |
 | `uv run python examples/fakeshop/manage.py check` | `System check identified no issues (0 silenced).` |
 | `uv run python scripts/build_tree_md.py --check` | `docs/TREE.md is up to date.` exit 0 |
 | `uv run python examples/fakeshop/manage.py import_spec_terms --check` | `OK: 46 done cards have glossary links.` exit 0 |
@@ -2194,7 +2194,7 @@ Consolidated so Worker 0 can build the next dispatch's scope from one list. The 
   seven anchors above), beside the `README.md` / `TODAY.md` "Coming next" -> "Shipped today" move
   and the `djangographqlprotocolrouter` entry's `0.0.14` -> `0.0.15` question.
 - **The terms CSV stays at 37 rows.** Ruling 3's reasoning is sound and Worker 3 endorsed it; if
-  the maintainer wants card 065's link set to include the seven terms it authored, that is one
+  the maintainer wants card 046's link set to include the seven terms it authored, that is one
   Worker-1 pass editing the CSV **and** the spec's `## Key glossary references` + link-def block
   together, then re-running `import_spec_terms` and `build_glossary_md.py`.
 - **`definition_of_done` order 5 stays unticked** — coverage is the maintainer's gate and the

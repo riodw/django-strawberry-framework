@@ -1,4 +1,4 @@
-# W3 adversarial review — review round 1 remediation (card 065 transport security)
+# W3 adversarial review — review round 1 remediation (card 046 transport security)
 
 Reviewer: Worker 3, deliberately isolated from both builders. Nothing in
 `bld-review-1-http_boundary.md` / `bld-review-1-ws_boundary.md` was taken on trust; every claim
@@ -11,7 +11,7 @@ Baseline at review start: `uv run pytest --no-cov -q` -> **4977 passed, 40 skipp
 
 Working tree at review end is byte-identical to review start (every failability edit restored and
 verified by md5 against a pre-edit copy; `git status --short` unchanged apart from
-`docs/spec-065-*.md`, which the concurrent spec-reconciliation pass is editing).
+`docs/spec-046-*.md`, which the concurrent spec-reconciliation pass is editing).
 
 ## Verdicts
 
@@ -308,7 +308,7 @@ reopening of the original finding. What is lost is the other half of Decisions 9
 The dishonest sentence is in `_strawberry_patches.py`'s module docstring (and echoed in
 `views.py::_RequestBodyBoundaryMixin.parse_json`):
 
-> The strict UTF-8 wire contract (spec-065 Decision 9) is **not** on this switch: it is enforced by
+> The strict UTF-8 wire contract (spec-046 Decision 9) is **not** on this switch: it is enforced by
 > ``views.py::_RequestBodyBoundaryMixin.parse_json``, so a consumer who mounts a package view keeps
 > it whatever this setting says.
 
@@ -341,7 +341,7 @@ Of the 50, the two closest to a runtime value are
 input coercion rejects a scalar where an input object is expected, so both look reachable only from a
 programmatic caller. Treat this as a docstring-scope fix now (say "every typed rejection on the
 transport boundary"), and a separate DRY pass if the maintainer wants the other 50 routed — that is
-out of card 065's scope and should not be smuggled in.
+out of card 046's scope and should not be smuggled in.
 
 ### W3-4 (Low) — the revalidation window's finiteness rejection does not deliver the property its docstring claims
 
@@ -415,7 +415,7 @@ either next, not a defect.
 
 ## Spec reconciliation
 
-Not judged, and deliberately not reported: `docs/spec-065-transport_security-0_0_15.md` was being
+Not judged, and deliberately not reported: `docs/spec-046-transport_security-0_0_15.md` was being
 written **during** this review (one candidate residual I recorded — the DRY-reuse bullet "The UTF-8
 decode is added to the existing `_patched_parse_json` wrapper" — had been removed from the file
 within a minute of my reading it). Spec-prose findings from this review would be stale on arrival.

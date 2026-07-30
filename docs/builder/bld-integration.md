@@ -1,6 +1,6 @@
-# Build: cross-slice integration pass — card 065 (transport_security / 0.0.15)
+# Build: cross-slice integration pass — card 046 (transport_security / 0.0.15)
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` (whole file; the direct input is
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` (whole file; the direct input is
 `## Helper-reuse obligations (DRY)` at `:2192`, and Decisions 7-11 and 16-19)
 Status: final-accepted
 
@@ -20,8 +20,8 @@ routing record gave them. That is this pass's own recurring lesson, recorded aga
 - `AGENTS.md`, `START.md`, `GOAL.md`, `docs/GLOSSARY.md`, `CHANGELOG.md` (untouched — the
   version quintet is the joint cut's, spec Decision 15).
 - `docs/builder/BUILD.md`, `docs/builder/ARTIFACT.md`, `docs/builder/worker-1.md`.
-- `docs/spec-065-transport_security-0_0_15.md` and its rationale companion (both owned here).
-- `docs/builder/build-065-transport_security-0_0_15.md`, `## Open maintainer decisions`
+- `docs/spec-046-transport_security-0_0_15.md` and its rationale companion (both owned here).
+- `docs/builder/build-046-transport_security-0_0_15.md`, `## Open maintainer decisions`
   included — **M4** and **M5** are the maintainer's and are not re-litigated here.
 - Every closed artifact, in order: `bld-slice-1-protocol_split.md`,
   `bld-slice-2-body_cap.md`, `bld-slice-3-utf8_wire.md`, `bld-slice-4-ws_revalidation.md`,
@@ -33,7 +33,7 @@ routing record gave them. That is this pass's own recurring lesson, recorded aga
 - `docs/builder/worker-memory/worker-1.md`, read first and consolidated before appending.
 
 **Spec status-line re-verification** (mandatory per `worker-1.md`): spec `:3` reads
-`DONE-065-0.0.15`, `:36-42` reads `**BUILT — all five slices …**` with the joint-cut caveat.
+`DONE-046-0.0.15`, `:36-42` reads `**BUILT — all five slices …**` with the joint-cut caveat.
 Both are still true at the integration pass and neither was edited. No predecessor doc
 reference is dangling.
 
@@ -114,7 +114,7 @@ One-way throughout, no cycle, no sibling reaching outside its documented boundar
 
 ### Staged-anchor sweep (`BUILD.md` step 6)
 
-`grep -rEn 'TODO\(spec-065|TODO-(ALPHA|BETA|STABLE)-065'` over the tree, excluding
+`grep -rEn 'TODO\(spec-046|TODO-(ALPHA|BETA|STABLE)-046'` over the tree, excluding
 `KANBAN.*` / `BACKLOG.md`: **zero anchors in shipped source, tests, or standing docs.** The
 only hits are the spec's own line `:2188` describing the convention generically and the
 per-cycle `bld-*.md` narrative of Slice 1's anchor and Slice 2's removal of it. Nothing to
@@ -217,7 +217,7 @@ needs nothing further.
 ### 5 — L1: `GlossaryTerm` id 529 — CONFIRMED, one character
 
 `grep -n "scope,\." docs/GLOSSARY.md` prints `327`, inside `## Channels request adapter`:
-"…to split a Channels HTTP scope from a WebSocket scope**,.** Since spec-065…". Anchor
+"…to split a Channels HTTP scope from a WebSocket scope**,.** Since spec-046…". Anchor
 `channels-request-adapter`, column `body`. **This pass opens the glossary DB anyway** (for L3
 surface 2), so per the routing record's own condition L1 travels with it here rather than to
 the joint cut. `title` and `anchor` stay untouched.
@@ -312,7 +312,7 @@ session read that raised), while a `Host` denial is the boundary *working*. Logg
 anomaly and logging a policy decision are different things.
 
 **That argument does not survive the card's own thesis, and this is the part no cohort could
-see.** Card 065's thesis is that Django owns the Host decision. Django's ownership of that
+see.** Card 046's thesis is that Django owns the Host decision. Django's ownership of that
 decision *includes* reporting it: `django/core/handlers/exception.py::response_for_exception`
 routes every `SuspiciousOperation` — `DisallowedHost` included — to a
 `django.security.DisallowedHost` logger at `error` level, and Django's default `LOGGING`
@@ -604,8 +604,8 @@ before editing.
      `body`: scope the "**`multipart/form-data` is a carve-out**" sentence with the same
      clause.
    - `GlossaryTerm` **id 529**, anchor `channels-request-adapter`, column `body`: delete the
-     stray comma so `"…from a WebSocket scope,. Since spec-065…"` reads
-     `"…from a WebSocket scope. Since spec-065…"`.
+     stray comma so `"…from a WebSocket scope,. Since spec-046…"` reads
+     `"…from a WebSocket scope. Since spec-046…"`.
    - `title` and `anchor` stay untouched on both rows. Then
      `uv run python scripts/build_glossary_md.py`.
    - **Concurrent-writer discipline:** the DB is a concurrent-writable tracked binary. Apply
@@ -636,8 +636,8 @@ closed as Slice 5's, and the integration pass is the pass its own final verifica
 
 `django_strawberry_framework/conf.py`, `auth/mutations.py`, `auth/sessions.py`, `drys.md`,
 `vulns.md` — never edited, **never reverted**. `docs/feedback.md`. Every `bld-*.md` but this
-one. `docs/builder/build-065-transport_security-0_0_15.md` and every checkbox in it.
-`docs/spec-065-*.md` and its rationale (Worker 1's alone). `docs/GLOSSARY.md` as **text** (it
+one. `docs/builder/build-046-transport_security-0_0_15.md` and every checkbox in it.
+`docs/spec-046-*.md` and its rationale (Worker 1's alone). `docs/GLOSSARY.md` as **text** (it
 is rendered), `docs/TREE.md`, `KANBAN.md`, `KANBAN.html`. `README.md`, `TODAY.md`,
 `examples/fakeshop/test_query/README.md`, `docs/SPECS/spec-041-channels_router-0_0_14.md`.
 `CHANGELOG.md`, `pyproject.toml`, `django_strawberry_framework/__init__.py`,
@@ -751,7 +751,7 @@ contract), plus this pass's own:
 |---|---|
 | `uv run pytest --no-cov` | **5202 passed, 40 skipped** in 61.36s — exactly the declared baseline |
 | `uv run pytest tests/test_views.py tests/test_routers.py --no-cov` | **266 passed** (144 + 122, both declared counts) |
-| `uv run python scripts/check_spec_glossary.py --spec …spec-065…md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit 0, **after** the spec edits |
+| `uv run python scripts/check_spec_glossary.py --spec …spec-046…md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit 0, **after** the spec edits |
 | `uv run python examples/fakeshop/manage.py check` | `System check identified no issues (0 silenced).` |
 | `uv run python scripts/build_tree_md.py --check` | `docs/TREE.md is up to date.` exit 0 |
 | `uv run python examples/fakeshop/manage.py import_spec_terms --check` | `OK: 46 done cards have glossary links.` exit 0 |
@@ -768,8 +768,8 @@ attributions are read-only by construction. `docs/shadow/` is gitignored, so the
 ## Spec changes made (Worker 1 only)
 
 Four edits across two files, all quoted or described above. Byte counts:
-`docs/spec-065-transport_security-0_0_15.md` **227,601 → 229,630** (+2,029);
-`docs/spec-065-transport_security-0_0_15-rationale.md` **69,226 → 73,718** (+4,492).
+`docs/spec-046-transport_security-0_0_15.md` **227,601 → 229,630** (+2,029);
+`docs/spec-046-transport_security-0_0_15-rationale.md` **69,226 → 73,718** (+4,492).
 
 1. **`## Helper-reuse obligations (DRY)`, the view-subclassing obligation** (finding S-1, item
    1). Was "Two overridden hooks — `run` for the cap and `parse_json` for the wire contract —
@@ -801,11 +801,11 @@ link definition, `[s65-dry]`.
 
 ### Mechanical verification of the spec edits — four ways, none by eye
 
-- `check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md` → `OK: 37 terms`,
+- `check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md` → `OK: 37 terms`,
   exit 0.
 - **Every in-page anchor resolves.** Slugified every heading in both files fence-aware (keeping
   `_`, stripping backticks, mapping each space to one `-`) and matched all `](#…)` uses:
-  `spec-065` **44 anchors, 23 uses, 0 missing**; rationale **25 anchors, 0 in-page uses**.
+  `spec-046` **44 anchors, 23 uses, 0 missing**; rationale **25 anchors, 0 in-page uses**.
   This check earned its keep immediately: my first draft of edit 1 invented two Decision
   anchors (`decision-7--a-cumulative-request-body-cap-…`,
   `decision-9--the-utf-8-wire-contract-…`) that do not exist, and the checker named both
@@ -905,7 +905,7 @@ owed.
 | `uv run pytest tests/test_views.py tests/test_routers.py tests/test_strawberry_patches.py tests/test_exceptions.py tests/test_cross_web_patches.py examples/fakeshop/test_query/test_transport_api.py --no-cov` | **401 passed** |
 | `uv run pytest tests/test_views.py --no-cov` / `tests/test_routers.py --no-cov` | **144** / **122** — the declared counts, unmoved |
 | `uv run pytest --no-cov` (full sweep) | **5202 passed, 40 skipped** in 56.85s — exactly the declared baseline |
-| `uv run python scripts/check_spec_glossary.py --spec …spec-065…md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit 0, run **after** the glossary regenerate |
+| `uv run python scripts/check_spec_glossary.py --spec …spec-046…md` | `OK: 37 terms - all have glossary entries and at least one spec link.` exit 0, run **after** the glossary regenerate |
 | `uv run python examples/fakeshop/manage.py import_spec_terms --check` | `OK: 46 done cards have glossary links.` exit 0 |
 | `uv run python examples/fakeshop/manage.py check` | `System check identified no issues (0 silenced).` |
 | `uv run python scripts/build_tree_md.py --check` | `docs/TREE.md is up to date.` exit 0 |
@@ -1014,7 +1014,7 @@ Owned by this pass per the plan's declaration, and run.
   `git diff`.
 - **The `docs/GLOSSARY.md` diff is wide and that is expected, not this pass's residue.** It is
   103 changed lines against `HEAD` because `HEAD`'s copy predates Slice 5's own uncommitted
-  regeneration (seven new spec-065 terms, the router / auth-mutations rewrites, the seven index
+  regeneration (seven new spec-046 terms, the router / auth-mutations rewrites, the seven index
   rows). Attributed mechanically rather than assumed: `GlossaryTerm.updated_date` ordering shows
   only **two** rows written after Slice 5's `2026-07-29T00:37` batch — `id 560 request-body-cap`
   and `id 529 channels-request-adapter`, both at `17:14`, both mine — so the render delta beyond
@@ -1068,7 +1068,7 @@ already in place.
   `### 4 — L3` above and again in `### Implementation notes`, so it can be applied without
   re-deriving it. The same is true of `conf.py`'s `UPSTREAM_PATCH_DEPENDENCIES` comment, which
   the build plan records as mirroring item C's false scoping: **also a maintainer item.**
-- **`docs/spec-065-transport_security-0_0_15.md` and its `-rationale.md` — not written, not
+- **`docs/spec-046-transport_security-0_0_15.md` and its `-rationale.md` — not written, not
   read-modified.** A concurrent Worker 1 is rewriting both. I read the spec for the contract
   only (`:1275-1292`, Decision 9), and its state is reported above rather than edited.
 - **`tests/test_views.py` — untouched**, so finding L-B (the package-tier
@@ -1272,7 +1272,7 @@ are the maintainer's pending decisions and were not touched.
 | gate | result |
 |---|---|
 | `uv run pytest --no-cov` (FULL suite) | **5202 passed, 40 skipped** in 66.84s — exactly the declared baseline |
-| `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md` | `OK: 37 terms - all have glossary entries and at least one spec link.` **exit 0** |
+| `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md` | `OK: 37 terms - all have glossary entries and at least one spec link.` **exit 0** |
 | `git diff --check` | **exit 0** |
 | `docs/GLOSSARY.md` two-consecutive-regenerate byte-stability, **rendered to scratch** | `build_glossary_md.py --md <scratch>/fv-g1.md` and `--md <scratch>/fv-g2.md`, both exit 0; `cmp fv-g1 fv-g2` **identical** and `cmp fv-g1 docs/GLOSSARY.md` **identical**. The tracked file was never written — it is still the `M` line the round left, byte-for-byte the current render |
 | `git status --short` | **33 lines**, identical to Worker 3's pass-2 count. Nothing was added, removed, newly dirtied, or reverted |

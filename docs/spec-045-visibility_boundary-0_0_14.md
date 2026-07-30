@@ -1,6 +1,6 @@
 # Spec: Sealed `get_queryset` visibility-boundary policy artifacts — the governing security decisions, spec, and glossary for the framework-owned execution queryset
 
-Built for `0.0.14` (card `DONE-064-0.0.14`). This is a **documentation-only**
+Built for `0.0.14` (card `DONE-045-0.0.14`). This is a **documentation-only**
 slice over an already-landed implementation: commit `60998b17`
 ("feat(visibility): seal get_queryset hook results into framework-owned
 querysets") shipped the sealed [visibility boundary][glossary-visibility-boundary].
@@ -56,7 +56,7 @@ A single documentation slice; the code shipped in commit `60998b17`.
         untrusted-object rebuild, prove-then-clone AST trust,
         identity-fast-path removal, `Prefetch` rebuild + alias threading,
         queryset-shape rejections, and the typed error contract.
-  - [ ] This spec `docs/spec-064-visibility_boundary-0_0_14.md` and its
+  - [ ] This spec `docs/spec-045-visibility_boundary-0_0_14.md` and its
         companion `*-terms.csv`.
   - [ ] The five new glossary entries imported via the fakeshop glossary DB and
         `docs/GLOSSARY.md` regenerated (never hand-edited).
@@ -422,7 +422,7 @@ This card's Slice 1 doc set (the only surface it touches):
 - `KANBAN.md` / `KANBAN.html` via the kanban DB + re-render: this card in Done
   with its glossary links.
 - The prior `[P2]` policy-artifact residual recorded as closed in this spec.
-- This spec and its companion `docs/spec-064-visibility_boundary-0_0_14-terms.csv`.
+- This spec and its companion `docs/spec-045-visibility_boundary-0_0_14-terms.csv`.
 
 `README.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, and
 `CHANGELOG.md` are untouched: the boundary is internal security-boundary
@@ -461,7 +461,7 @@ already shipped.
       contract: untrusted-object rebuild, prove-then-clone AST trust,
       identity-fast-path removal, `Prefetch` rebuild + alias threading,
       queryset-shape rejections, and the typed error contract.
-- [ ] Spec `docs/spec-064-visibility_boundary-0_0_14.md` authored with its
+- [ ] Spec `docs/spec-045-visibility_boundary-0_0_14.md` authored with its
       companion `*-terms.csv`.
 - [ ] The five new glossary entries imported via the fakeshop glossary DB and
       `docs/GLOSSARY.md` regenerated.

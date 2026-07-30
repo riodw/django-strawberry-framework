@@ -1,7 +1,7 @@
-"""Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
+"""Package-tier contracts for the package's Django GraphQL views (spec-046 Slices 1-3).
 
 Deliberately narrow: this file holds only what a live request cannot express
-(spec-065 Decision 13, Placement). Every request-shaped S1 proof - project
+(spec-046 Decision 13, Placement). Every request-shaped S1 proof - project
 middleware, ``ALLOWED_HOSTS``, CSRF, security headers, cache policy, exact
 routing, and the per-mount IDE / GET controls - is earned over fakeshop's real
 ``/graphql/`` in ``examples/fakeshop/test_query/test_transport_api.py``.
@@ -27,7 +27,7 @@ What stays here:
   execution witnesses, the ASGI fragment shapes) is live in
   ``examples/fakeshop/test_query/test_transport_api.py``;
 - Slice 3's strict UTF-8 wire contract, now that the package view owns it
-  (spec-065 Decision 9): the per-encoding ``__cause__`` matrix, which is
+  (spec-046 Decision 9): the per-encoding ``__cause__`` matrix, which is
   invisible over the wire because all nine rejected shapes carry the identical
   status and message by design.
 
@@ -274,7 +274,7 @@ def _settings_with(value):
 def test_the_cap_precedence_ladder_is_kwarg_then_setting_then_default(kwarg, setting, expected):
     """``max_request_body_bytes=`` > ``MAX_REQUEST_BODY_BYTES`` > the default.
 
-    The two ``None``s mean different things by design (spec-065 Decision 7 step
+    The two ``None``s mean different things by design (spec-046 Decision 7 step
     4): a ``None`` KWARG says "this mount did not override anything" and defers,
     while ``None`` IN THE SETTING is the documented way to disable the package
     cap. Both rungs are exercised here against an explicitly-set setting so no
@@ -1346,7 +1346,7 @@ def _strawberry_patch_opted_out():
 def test_the_package_view_rejects_every_non_utf8_wire_shape(view_class, body, cause):
     """The wire matrix, now owned by the view: every non-UTF-8 shape 400s, and why.
 
-    The executable form of spec-065 Decision 9's measured-behavior table and of
+    The executable form of spec-046 Decision 9's measured-behavior table and of
     Decision 10 reason (a). Status and message are identical across all nine rows
     - deliberately, so one byte sequence has one interpretation at every hop - so
     ``__cause__`` is the only thing that records the split:
@@ -1449,7 +1449,7 @@ def test_the_package_view_passes_a_str_body_through_by_identity(view_class):
 
     Upstream's GET ``variables`` / ``extensions`` parses and the multipart
     ``operations`` / ``map`` form fields arrive already decoded by Django, and
-    spec-065 Decision 9 passes them through untouched. Asserting object identity
+    spec-046 Decision 9 passes them through untouched. Asserting object identity
     rather than equality is what rules out an incidental encode-then-decode cycle
     on those paths.
     """
@@ -1470,7 +1470,7 @@ def test_the_package_view_passes_a_str_body_through_by_identity(view_class):
 def test_the_wire_reason_is_upstreams_own_parse_json_literal():
     """The 400's reason is pinned against what upstream actually raises, not a copy.
 
-    Identity with upstream's message is the contract (spec-065 Decision 9): a body
+    Identity with upstream's message is the contract (spec-046 Decision 9): a body
     the package's strict decode refused and a body upstream's ``json.loads``
     refused must be indistinguishable on the wire, so ``__cause__`` stays the only
     discriminator. Two named constants reproduce that literal - the view's and the

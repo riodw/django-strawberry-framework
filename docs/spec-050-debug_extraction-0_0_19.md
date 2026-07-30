@@ -1,8 +1,8 @@
 # Spec: Extract `DjangoDebugExtension` into the standalone `django-strawberry-debug` package — the framework keeps a `[debug]` extra and a guarded re-export
 
-Planned for `0.0.15` (card `TODO-ALPHA-045-0.0.15`); **this card is the only
-card at `0.0.15` and owns the version bump**
-([Decision 7](#decision-7--lone-card-at-0015--slice-3-owns-the-version-cut)).
+Planned for `0.0.19` (card `TODO-ALPHA-050-0.0.19`); **this card is the only
+card at `0.0.19` and owns the version bump**
+([Decision 7](#decision-7--lone-card-at-0019--slice-3-owns-the-version-cut)).
 This card moves the
 [`DjangoDebugExtension`][glossary-djangodebugextension] — the
 [response-extensions debug middleware][glossary-response-extensions-debug-middleware]
@@ -16,7 +16,7 @@ re-export in `extensions/__init__.py` so the shipped import path
 keeps working byte-for-byte.
 
 Why extraction is right **here** when the package-split investigation
-(card `046`, the boundary+DRY card) rejected splitting the optimizer: the
+(card `051`, the boundary+DRY card) rejected splitting the optimizer: the
 verdicts flow from the same evidence standard, applied to opposite facts.
 The optimizer is bidirectionally fused to the type system; the debug
 extension's entire import surface is stdlib + Django + graphql-core +
@@ -35,11 +35,11 @@ move with the logger swap, self-contained test harness, CI, publish
 `0.1.0`), Slice 2 (**the framework seam**: delete `extensions/debug.py` and
 its package-tier suite, rewrite `extensions/__init__.py` as the guarded
 lazy re-export, add the `[debug]` extra, re-shape the live tier), Slice 3
-(**docs fold-in + the `0.0.15` version cut + card wrap**).
+(**docs fold-in + the `0.0.19` version cut + card wrap**).
 
 Permission caveat: `AGENTS.md` prohibits `CHANGELOG.md` edits without
 explicit permission; this spec's Slice 3 grants that permission for the
-`0.0.15` release entry, and no earlier slice touches it.
+`0.0.19` release entry, and no earlier slice touches it.
 
 ---
 
@@ -119,7 +119,7 @@ new repository; Slices 2–3 land here).
         [probe URLconf][glossary-probe-urlconf] scaffold retire with the
         moved suite ([Decision 5](#decision-5--test-relocation-package-tier-moves-live-tier-shrinks-to-the-seam)).
   - [ ] Coverage gate `fail_under = 100` re-verified after the deletion.
-- [ ] **Slice 3 — Docs fold-in + `0.0.15` cut + card wrap**
+- [ ] **Slice 3 — Docs fold-in + `0.0.19` cut + card wrap**
   - [ ] GLOSSARY updates via the glossary DB + re-render (never hand-edit):
         `DjangoDebugExtension`-family entries point at the new package +
         extra; `README.md` feature list and install section likewise;
@@ -130,7 +130,7 @@ new repository; Slices 2–3 land here).
         `django_strawberry_framework/__init__.py::__version__`,
         `tests/base/test_init.py`, the GLOSSARY package-version row, the
         root package entry in `uv.lock`.
-  - [ ] `CHANGELOG.md` `0.0.15` entry (permission granted by this slice).
+  - [ ] `CHANGELOG.md` `0.0.19` entry (permission granted by this slice).
   - [ ] Card flip to Done + `KANBAN.md`/`KANBAN.html` regeneration from the
         DB; `import_spec_terms` run.
 
@@ -173,7 +173,7 @@ evidence — is exactly right for this module, on the same evidence standard.
 - Card `WIP-ALPHA-044-0.0.14` is mid-flight and owns the `0.0.14`
   [joint version cut][glossary-joint-version-cut]; this card is sequenced
   strictly behind it ([Risks](#risks-and-open-questions)).
-- The boundary+DRY card (`TODO-ALPHA-046-0.0.16`) is sequenced behind THIS
+- The boundary+DRY card (`TODO-ALPHA-051-0.0.20`) is sequenced behind THIS
   card and writes its import-linter `extensions/`-leaf contract against the
   post-extraction tree.
 
@@ -368,11 +368,11 @@ floor shared extension instances and engine-owned execution contexts across
 concurrent sync requests). It was never debug-only; it does not travel with
 the feature.
 
-### Decision 7 — Lone card at `0.0.15` — Slice 3 owns the version cut
+### Decision 7 — Lone card at `0.0.19` — Slice 3 owns the version cut
 
-Per the Step 3 scan, this card is the **only** non-Done card at `0.0.15`
+Per the Step 3 scan, this card is the **only** non-Done card at `0.0.19`
 (the `0.0.14` line belongs to the in-flight `044`
-[joint version cut][glossary-joint-version-cut]; `0.0.16` belongs to the
+[joint version cut][glossary-joint-version-cut]; `0.0.20` belongs to the
 boundary+DRY card). So this spec mirrors the lone-card shape (spec-038
 Decision 14, spec-044 Decision 12): Slice 3 carries the version quintet
 (`pyproject.toml` `[project].version`,
@@ -384,7 +384,7 @@ package entry in `uv.lock`), the release-status doc moves, and the
 ### Decision 8 — TODO anchors stage the unbuilt slices
 
 Per the repo's staging discipline, staged-but-unbuilt slices carry
-`TODO(spec-045 Slice N)` source anchors at the sites they will change
+`TODO(spec-050 Slice N)` source anchors at the sites they will change
 (`extensions/__init__.py`, `extensions/debug.py`, `pyproject.toml`'s
 optional-dependencies block), removed in the change that ships the slice.
 Caveat: the version-quintet sites currently carry `TODO(spec-044 Slice 3)`
@@ -398,7 +398,7 @@ anchors **only after** spec-044's cut lands and removes them
 |---|---|---|---|---|
 | 1 | new repo | scaffold + verbatim move + logger swap + harness + CI + publish `0.1.0` | 0 (additive elsewhere) | LOW — verbatim move, proven suite |
 | 2 | this repo | delete `debug.py` + package suite; guarded re-export; `[debug]` extra; absence + seam tests; probe slim | ~−1,850 lines | LOW-MED — coverage re-verify, orphan-import sweep |
-| 3 | this repo | docs fold-in + `0.0.15` quintet + card wrap | docs only | mechanical breadth |
+| 3 | this repo | docs fold-in + `0.0.19` quintet + card wrap | docs only | mechanical breadth |
 
 Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 `0.1.0` is installable (the dev group and the `[debug]` extra both pin it);
@@ -492,7 +492,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- The boundary+DRY card (`TODO-ALPHA-046-0.0.16`) — depends on this card;
+- The boundary+DRY card (`TODO-ALPHA-051-0.0.20`) — depends on this card;
   its contracts are written against the post-extraction tree.
 - The spec-044 follow-on list (async SQL capture, knobs, redaction) — moves
   to the new repository's tracker.
@@ -516,7 +516,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
       works; with the extra absent, the import-innocence + install-hint
       contract holds.
 - [ ] Full suite green under `fail_under = 100` after the deletion.
-- [ ] Slice 3 shipped: version quintet at `0.0.15`, GLOSSARY flips,
+- [ ] Slice 3 shipped: version quintet at `0.0.19`, GLOSSARY flips,
       `CHANGELOG.md` entry, card flipped Done, `KANBAN.md`/`KANBAN.html`
       regenerated from the DB, `import_spec_terms` green.
 

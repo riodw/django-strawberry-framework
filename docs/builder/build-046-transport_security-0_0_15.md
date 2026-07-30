@@ -1,6 +1,6 @@
-# Package build plan: transport_security / 0.0.15 (065)
+# Package build plan: transport_security / 0.0.15 (046)
 
-Spec source: `docs/spec-065-transport_security-0_0_15.md`
+Spec source: `docs/spec-046-transport_security-0_0_15.md`
 Target release: `0.0.15`
 Date created: 2026-07-25
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.
@@ -14,7 +14,7 @@ below, NOT in scope); cleanup: no prior `build-*.md` / `bld-*.md` artifacts exis
 slate), `docs/builder/worker-memory/` + `docs/builder/temp-tests/` empty and seeded,
 `docs/shadow/` holds only this build's own `review_inspect.py` output.
 `scripts/review_inspect.py` smoke-ran against `django_strawberry_framework/routers.py`.
-`scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md` exits 0
+`scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md` exits 0
 (`OK: 37 terms`).
 
 ## Baseline-dirty, OUT OF SCOPE — do not edit, do not revert
@@ -46,7 +46,7 @@ edit them unless this build's own slice contract names them.**
   program's card rows + the concurrent glossary edit. Never reset. Apply writes on top.
 - `KANBAN.md` / `KANBAN.html` — **generated exports** of that DB (this program's card
   creation + SpecDoc link are already exported into them).
-- `docs/spec-065-transport_security-0_0_15.md` + `-terms.csv` — this build's input contract
+- `docs/spec-046-transport_security-0_0_15.md` + `-terms.csv` — this build's input contract
   (authored by the NEXT.md flow). Only Worker 1 may mutate the spec.
 
 ### Tracked binary / generated files that a concurrent writer can rewrite mid-build
@@ -59,17 +59,17 @@ for a rendered doc) before treating churn as revertible. DB-backed slices verify
 
 ## Build-wide context flags
 
-- **Joint version cut — the bump is NOT ours.** Card `TODO-ALPHA-045-0.0.15` is a non-Done
+- **Joint version cut — the bump is NOT ours.** Card `TODO-ALPHA-050-0.0.19` is a non-Done
   card sharing target version `0.0.15`, so per `docs/SPECS/NEXT.md` Step 3 the version
   quintet (`pyproject.toml` `[project].version`, `django_strawberry_framework/__init__.py`
   `__version__`, `tests/base/test_init.py`, and the `CHANGELOG.md` entry) is owned by the
-  **last card of the `0.0.15` line to land**. Card 065 is built first, so **no slice in this
+  **last card of the `0.0.15` line to land**. Card 046 is built first, so **no slice in this
   build moves the version quintet and no slice edits `CHANGELOG.md`**
   (spec Decision 15).
-- **Known stale prose, NOT this build's to fix:** `spec-045` Decision 7 and `spec-046`
-  Decision 11 each assert they are the "only card" at `0.0.15` / `0.0.16`. Cards 065 / 066
+- **Known stale prose, NOT this build's to fix:** `spec-050` Decision 7 and `spec-051`
+  Decision 11 each assert they are the "only card" at `0.0.15` / `0.0.16`. Cards 046 / 047
   joined those lines, so that justification is now stale — though the *conclusion* (045 owns
-  the `0.0.15` cut, as the last to land) remains correct and is exactly what spec-065 defers
+  the `0.0.15` cut, as the last to land) remains correct and is exactly what spec-046 defers
   to. Surfaced to the maintainer; out of scope here.
 - **Breaking change, deliberately.** This build breaks the shipped `0.0.14`
   `DjangoGraphQLProtocolRouter` constructor contract three ways (required
@@ -163,7 +163,7 @@ without colliding: every consumer/revalidation test lives in `tests/test_routers
 - `docs/builder/bld-review-1-ws_boundary.md` — findings 3 + 4 + 5 + 6 (`routers.py`,
   `consumers.py`, `auth/sessions.py`, the relocated session-store resolver, `tests/test_routers.py`)
 - Findings 7 + 8, plus every amendment the two builders report, are **custodian-only** work on
-  `docs/spec-065-transport_security-0_0_15.md`. Builders report required wording; they never edit
+  `docs/spec-046-transport_security-0_0_15.md`. Builders report required wording; they never edit
   the spec.
 
 Neither builder may touch the other's files. The adversarial review of both cohorts runs in a
@@ -293,7 +293,7 @@ Grouped by **file ownership** again, so workers cannot collide:
 - `docs/builder/bld-review-2-ws_host_boundary.md` — findings 4 + 5 (`routers.py`, the new private
   host validator, `tests/test_routers.py`). **Serialized after the revocation cohort**, because
   both own `tests/test_routers.py`.
-- Spec work is custodian-only on `docs/spec-065-transport_security-0_0_15.md`, and this round it
+- Spec work is custodian-only on `docs/spec-046-transport_security-0_0_15.md`, and this round it
   also reconciles the historical `0.262.0` language in the shipped
   `docs/SPECS/spec-041-channels_router-0_0_14.md`.
 
@@ -437,11 +437,11 @@ both edits explicitly in the build dispatch is what makes the routing real.
 Slice 5 is `final-accepted` (plan -> build -> review -> final verification, every `Status:` a single
 bare legal value). All ten sub-checks landed or were legitimately verify-only; ten of them were
 verify-only or partially satisfied on disk before the pass began, six beyond the four Worker 0
-pre-verified. `DONE-065-0.0.15` renders in `## Done` and is absent from `## In progress`;
+pre-verified. `DONE-046-0.0.15` renders in `## Done` and is absent from `## In progress`;
 `import_spec_terms --check` moved `OK: 45` -> `OK: 46 done cards`; all four generated docs proved
 byte-stable across two consecutive regenerates; `build_tree_md.py --check` now passes, having failed
 before the slice. The version quintet is untouched and `pyproject.toml` correctly still reads
-`0.0.14` — card 045 is still `todo` at `0.0.15`, so the joint cut owns it (Decision 15).
+`0.0.14` — card 050 is still `todo` at `0.0.15`, so the joint cut owns it (Decision 15).
 
 `bld-integration.md` is `planned` with a nine-box checklist for a Worker 2 consolidation loop.
 

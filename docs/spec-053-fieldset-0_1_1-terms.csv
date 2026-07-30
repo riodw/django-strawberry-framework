@@ -24,7 +24,7 @@ FK-id elision,fk-id-elision,must stay undisturbed for unmanaged fields
 Connection-aware optimizer planning,connection-aware-optimizer-planning,must stay undisturbed for unmanaged fields
 `ConfigurationError`,configurationerror,raise type for every new finalize-time validation
 `Meta.aggregate_class`,metaaggregate_class,stays in DEFERRED_META_KEYS
-`Meta.search_fields`,metasearch_fields,stays in DEFERRED_META_KEYS; card 049 owns it
+`Meta.search_fields`,metasearch_fields,stays in DEFERRED_META_KEYS; card 054 owns it
 `AggregateSet`,aggregateset,remaining sidecar sibling (0.1.3)
 `Meta.choice_enum_names`,metachoice_enum_names,out-of-scope 0.1.4-line key
 Live-first coverage mandate,live-first-coverage-mandate,governs Slice 4 test placement

@@ -1,8 +1,8 @@
 # Spec: Boundary hardening + system-wide DRY squeeze — enforce the optimizer/core seams inside one distribution, then compress ~1,100–1,300 duplicated lines across four verified axes
 
-Planned for `0.0.16` (card `TODO-ALPHA-046-0.0.16`); **this card is the only
-card at `0.0.16` and owns the version bump**
-([Decision 11](#decision-11--lone-card-at-0016--slice-5-owns-the-version-cut)).
+Planned for `0.0.20` (card `TODO-ALPHA-051-0.0.20`); **this card is the only
+card at `0.0.20` and owns the version bump**
+([Decision 11](#decision-11--lone-card-at-0020--slice-5-owns-the-version-cut)).
 This card is a **maintainability card**: it ships no new consumer feature
 (the one consumer-visible artifact is the packaging-extras advertisement,
 [Decision 5](#decision-5--packaging-extras-advertise-the-existing-soft-dependency-seams)).
@@ -55,11 +55,11 @@ provably-coinciding behavior), Slice 3 (**structural DRY batch** —
 dispatch-table unification), Slice 4 (**contract-level DRY** — the
 single-window planner unification, the walker dual-contract retirement, the
 model relation-decoder re-expression), Slice 5 (**docs fold-in + the
-`0.0.16` version cut + card wrap**).
+`0.0.20` version cut + card wrap**).
 
 Permission caveat: `AGENTS.md` prohibits `CHANGELOG.md` edits without
 explicit permission; this spec's Slice 5 grants that permission for the
-`0.0.16` release entry, and no earlier slice touches it.
+`0.0.20` release entry, and no earlier slice touches it.
 
 ---
 
@@ -189,14 +189,14 @@ independently verifiable; the weight is breadth, not depth.
   - [ ] D2 walker `_resolve_field_map` dual contract retired (FieldMeta
         fallback map).
   - [ ] D3 model relation decoder re-expressed over the shared spine.
-- [ ] **Slice 5 — Docs fold-in + `0.0.16` cut + card wrap**
+- [ ] **Slice 5 — Docs fold-in + `0.0.20` cut + card wrap**
   - [ ] GLOSSARY/TREE/KANBAN fold-in per the completing-spec rules;
         `docs/GLOSSARY.md` status flips for anything this card shipped.
   - [ ] The version quintet: `pyproject.toml` `[project].version`,
         `django_strawberry_framework/__init__.py::__version__`,
         `tests/base/test_init.py`, the GLOSSARY package-version row, the
         root package entry in `uv.lock`.
-  - [ ] `CHANGELOG.md` `0.0.16` entry (permission granted by this slice).
+  - [ ] `CHANGELOG.md` `0.0.20` entry (permission granted by this slice).
   - [ ] Card flip to Done + `KANBAN.md`/`KANBAN.html` regeneration from the
         DB; `import_spec_terms` run.
 
@@ -234,8 +234,8 @@ duplication that makes every cross-cutting change cost more than it should.
   time; this card is the cross-file strategic pass. Neither blocks the other.
 - Card `WIP-ALPHA-044-0.0.14`
   ([`DjangoDebugExtension`][glossary-djangodebugextension]) is mid-flight and owns
-  the `0.0.14` joint cut; card `TODO-ALPHA-045-0.0.15`
-  ([`docs/spec-045-debug_extraction-0_0_15.md`][spec-045]) then **extracts
+  the `0.0.14` joint cut; card `TODO-ALPHA-050-0.0.19`
+  ([`docs/spec-050-debug_extraction-0_0_19.md`][spec-050]) then **extracts
   that extension into the standalone `django-strawberry-debug` package**.
   This card is sequenced behind BOTH: by the time its slices run,
   `extensions/debug.py` is gone, `extensions/` is a soft-dependency leaf
@@ -369,7 +369,7 @@ Contracts (initial set):
    `rest_framework`, `middleware`, `extensions`, or `testing` (matching the
    existing `require_optional_module` discipline; `testing` is a leaf by
    design; `extensions` is a soft-dep leaf by the time this contract is
-   authored — card `045`'s extraction reduced it to the guarded
+   authored — card `050`'s extraction reduced it to the guarded
    `django-strawberry-debug` re-export).
 4. **`utils` independence** (`forbidden`): `django_strawberry_framework.utils`
    imports no feature subpackage (`exceptions` and stdlib/Django only), with
@@ -418,7 +418,7 @@ gain; the re-export achieves the same seam without relocation.
 
 **Decision**: `[project.optional-dependencies]` gains `drf`, `channels`,
 `keyset-encryption`, `debug-toolbar`, each pinning the floor the dev group
-already installs. The block itself already exists by this card: card `045`'s
+already installs. The block itself already exists by this card: card `050`'s
 extraction established it with the `debug` extra
 (`django-strawberry-debug`); this card adds the remaining four members to
 the same pattern. `[project].dependencies` is untouched; the runtime guards
@@ -534,12 +534,12 @@ shared spine gains an `allow_empty` knob because the mutation flavor
 legitimately defers its empty-set raise to `build_mutation_input` (a
 consumer-`overrides` merge can empty the generated remainder).
 
-### Decision 11 — Lone card at `0.0.16` — Slice 5 owns the version cut
+### Decision 11 — Lone card at `0.0.20` — Slice 5 owns the version cut
 
-Per the Step 3 scan, this card is the **only** non-Done card at `0.0.16`
+Per the Step 3 scan, this card is the **only** non-Done card at `0.0.20`
 (its board neighbors are `0.0.14` — the [joint version
-cut][glossary-joint-version-cut] card `044` owns that line — `0.0.15` — the
-lone debug-extraction card `045` owns that cut — and the `0.1.x` beta
+cut][glossary-joint-version-cut] card `044` owns that line — `0.0.19` — the
+lone debug-extraction card `050` owns that cut — and the `0.1.x` beta
 queue). So this spec mirrors the lone-card shape (spec-038 Decision 14,
 spec-044 Decision 12): Slice 5 carries the version quintet
 (`pyproject.toml` `[project].version`,
@@ -551,7 +551,7 @@ package entry in `uv.lock`), the release-status doc moves, and the
 ### Decision 12 — TODO anchors stage the unbuilt slices
 
 Per the repo's staging discipline, staged-but-unbuilt slices carry
-`TODO(spec-046 Slice N)` source anchors at the sites they will change,
+`TODO(spec-051 Slice N)` source anchors at the sites they will change,
 removed in the change that ships the slice. Caveat: the version-quintet
 sites currently carry `TODO(spec-044 Slice 3)` anchors owned by the
 in-flight `0.0.14` cut; this card adds its Slice 5 anchors **only after**
@@ -638,7 +638,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   boundary (run only at maintainer-invoked gates per `AGENTS.md`). Baseline
   note: the 49-failure + 1-collection-error baseline observed at authoring
   time has since resolved — the suite returned to green (4,371 passed, 100%
-  coverage) at the `0.0.14` / `DONE-064` close on 2026-07-20; still reconcile
+  coverage) at the `0.0.14` / `DONE-045` close on 2026-07-20; still reconcile
   the working-tree state with the maintainer before using the suite as this
   card's gate (concurrent sessions remain active).
 - **Behavior changes get NEW coverage first** (the
@@ -671,14 +671,14 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 
 ## Risks and open questions
 
-- **Sequencing behind spec-044 AND spec-045**: card 044 owns the `0.0.14`
-  cut (its TODO anchors sit on the version-quintet sites), and card 045's
-  debug extraction ships `0.0.15` next — this card's Slice 1 contract
+- **Sequencing behind spec-044 AND spec-050**: card 044 owns the `0.0.14`
+  cut (its TODO anchors sit on the version-quintet sites), and card 050's
+  debug extraction ships `0.0.19` next — this card's Slice 1 contract
   wording and Slice 5 cut both assume the post-extraction tree. This card
   must not start Slice 5 (nor place its own quintet anchors) until BOTH
-  cuts land. Preferred answer: begin Slices 1–2 only after card 045 wraps
+  cuts land. Preferred answer: begin Slices 1–2 only after card 050 wraps
   (they are cheap to hold and the contract wording depends on it); hold
-  Slice 5 behind the `0.0.15` release. Fallback: if the queue stalls, the
+  Slice 5 behind the `0.0.19` release. Fallback: if the queue stalls, the
   maintainer may re-order the cuts explicitly, and contract 3's
   `extensions` wording reverts to the pre-extraction (hard-import leaf)
   shape.
@@ -709,11 +709,11 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 - Any package split or new distribution — rejected, Decision 1.
 - Test-tree DRY, docstring-volume reduction, and process/ceremony changes —
   raised in the maintainer conversation, not carded here.
-- The beta-release cleanup card (now `TODO-ALPHA-047-0.1.0` after the
+- The beta-release cleanup card (now `TODO-ALPHA-052-0.1.0` after the
   renumbers — it ushers in the beta and closes the Alpha column) — this
   card's squeeze does not absorb its verification scope.
-- The `DjangoDebugExtension` extraction — card `045`
-  ([`docs/spec-045-debug_extraction-0_0_15.md`][spec-045]), which this card
+- The `DjangoDebugExtension` extraction — card `050`
+  ([`docs/spec-050-debug_extraction-0_0_19.md`][spec-050]), which this card
   depends on.
 
 ## Definition of done
@@ -730,7 +730,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
       `authorization_phase` with live coverage (Decision 6).
 - [ ] Full suite green under `fail_under = 100`; zero error-string assertion
       edits outside Decisions 6/10; bench deltas at noise level.
-- [ ] Slice 5 shipped: version quintet at `0.0.16`, GLOSSARY flips,
+- [ ] Slice 5 shipped: version quintet at `0.0.20`, GLOSSARY flips,
       `CHANGELOG.md` entry, card flipped Done, `KANBAN.md`/`KANBAN.html`
       regenerated from the DB, `import_spec_terms` green.
 
@@ -781,7 +781,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 
 <!-- docs/SPECS/ -->
 [spec-038]: SPECS/spec-038-auth_mutations-0_0_13.md
-[spec-045]: spec-045-debug_extraction-0_0_15.md
+[spec-050]: spec-050-debug_extraction-0_0_19.md
 [spec-039]: SPECS/spec-039-serializer_mutations-0_0_13.md
 [spec-043]: SPECS/spec-043-test_client-0_0_14.md
 

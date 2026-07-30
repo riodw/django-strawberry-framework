@@ -39,14 +39,14 @@ is with the package absent.
 
 What a **package** view keeps in every state of this setting is the
 strict UTF-8 **wire contract**, and by construction rather than by luck:
-it owns both halves (spec-065 Decision 9) - the decode, in
+it owns both halves (spec-046 Decision 9) - the decode, in
 ``views.py::_RequestBodyBoundaryMixin.parse_json``, and the *body source*
 that delivers undecoded bytes to it, in
 ``views.py::_RawBodyRequestAdapter``. Owning only the decode was not
 enough: with the ``cross_web`` half off, upstream's sync adapter decodes
 inside its own property and the view's ``parse_json`` is never entered
 with bytes at all, which cost the sync transport its controlled ``400``
-(spec-065 review W3-2). See
+(spec-046 review W3-2). See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -83,7 +83,7 @@ Where the strict UTF-8 wire contract lives (and why not here)
 -------------------------------------------------------------
 
 It used to live in this function. It does not any more, and the move is
-the point: the wire contract (spec-065 Decision 9 - a GraphQL-over-HTTP
+the point: the wire contract (spec-046 Decision 9 - a GraphQL-over-HTTP
 request body is UTF-8 or it is a ``400``) is permanent **package
 policy**, while everything else in this module is a temporary workaround
 for an upstream *defect*. Sharing one site meant sharing one lifecycle
@@ -264,7 +264,7 @@ see "Two lifecycles" above):
 
    **Gap 1 has no live diagnostic any more**, and reading one into the
    suite inverts the verdict. Every fakeshop body row posts to a *package*
-   view, whose own strict UTF-8 decode (spec-065 Decision 9) rejects an
+   view, whose own strict UTF-8 decode (spec-046 Decision 9) rejects an
    undecodable body before ``parse_json`` is entered - so
    ``test_post_invalid_utf8_json_body_returns_400_not_500``,
    ``test_post_raw_binary_body_returns_400_not_500``, and the whole
@@ -340,7 +340,7 @@ _original_parse_query_params = (
 # Upstream's own ``BaseView.parse_json`` rejection reason, reproduced verbatim
 # so the widened ``except`` is indistinguishable from the ``except`` it widens.
 # ``views.py::_JSON_PARSE_REASON`` reproduces the same literal for the package's
-# strict-decode rejection (spec-065 Decision 9): one byte sequence, one
+# strict-decode rejection (spec-046 Decision 9): one byte sequence, one
 # interpretation at every hop, ``__cause__`` the only discriminator. The two
 # copies are deliberate rather than imported - this module must stay importable
 # (and deletable) without reaching into the package's view surface, so
@@ -467,7 +467,7 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
 
     **This function does not decode, and must not start.** The strict
     UTF-8 wire contract that used to live here now belongs to
-    ``views.py::_RequestBodyBoundaryMixin.parse_json`` (spec-065 Decision
+    ``views.py::_RequestBodyBoundaryMixin.parse_json`` (spec-046 Decision
     9; see the module docstring for why the lifecycles had to split).
     Consequently this wrapper preserves upstream's ``bytes`` semantics
     exactly - ``json.loads``'s RFC 8259 auto-detection still applies to a

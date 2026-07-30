@@ -4,7 +4,7 @@ Review reference: `docs/feedback.md` — High 3 (the consumer factory contract a
 result), Medium 4 (the revalidation helper breaks the auth subsystem's opt-in import boundary),
 Medium 5 (the revocation acceptance row does not reproduce the promised separate-request flow),
 and the lower-severity "An enormous integer window escapes the typed configuration boundary".
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` Decision 11, Edge cases
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` Decision 11, Edge cases
 #"`websocket_revalidation_window` is meaningless when a custom class is injected", Test plan S11
 rows 25 and 29.
 
@@ -341,7 +341,7 @@ un-introspectable factory accepted, the huge-int *candidate* rejected, and no co
 
 ## Notes for the spec custodian
 
-Not edited (the custodian owns `docs/spec-065-*.md`); see the caller report for the quoted
+Not edited (the custodian owns `docs/spec-046-*.md`); see the caller report for the quoted
 sentences. In summary: Decision 11's factory sentence needs the return-value contract; Edge cases'
 `websocket_revalidation_window` bullet and Test plan row 29 must say "positive window"; Decision
 11's "pinned to the operation's own resolved alias" and the matching Edge cases bullet overstate

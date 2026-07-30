@@ -22,12 +22,12 @@ Schema reload discipline,schema-reload-discipline,required of every new live sui
 `seed_data`,seed_data,first line of every live catalog test
 Live-first coverage mandate,live-first-coverage-mandate,decides S1/S2 placement (live) vs the router matrix (package tier)
 Single-upstream parity,single-upstream-parity,the honest-parity rule this card deliberately diverges from (Borrowing posture)
-Joint version cut,joint-version-cut,card 045 shares 0.0.15 so the quintet defers (Decision 15)
+Joint version cut,joint-version-cut,card 050 shares 0.0.15 so the quintet defers (Decision 15)
 `DjangoOptimizerExtension`,djangooptimizerextension,must survive the schema pass-through on both protocols and in the view
 `strawberry_config`,strawberry_config,same schema-construction surface
-Developer-only debug posture,developer-only-debug-posture,named in the transport guidance; the S8 change itself is card 067
+Developer-only debug posture,developer-only-debug-posture,named in the transport guidance; the S8 change itself is card 048
 Debug-toolbar middleware,debug-toolbar-middleware,production-exposure guidance + the MIDDLEWARE-edit precedent rejected in Decision 6
-`DjangoDebugExtension`,djangodebugextension,the S8/S10 disclosure symbol pointed out of scope to card 067
+`DjangoDebugExtension`,djangodebugextension,the S8/S10 disclosure symbol pointed out of scope to card 048
 Multi-database cooperation,multi-database-cooperation,"the rule the S11 revalidation satisfies by letting the session and user reads follow Django's own database routers"
 Cookbook parity,cookbook-parity,"project-level engine configuration migrates by recipe, not by the import-only promise"
 `DjangoType`,djangotype,no new `Meta` key; transport config is not type config (Non-goals)

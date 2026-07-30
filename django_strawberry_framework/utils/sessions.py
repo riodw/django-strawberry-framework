@@ -9,7 +9,7 @@ in.
   about the resolved class (can a WebSocket ``logout`` truthfully invalidate a
   session, or is there no server-side record to delete?).
 * ``consumers.py::_refreshed_actor`` *instantiates* it to reload a WebSocket
-  connection's session during the per-operation actor revalidation (spec-065
+  connection's session during the per-operation actor revalidation (spec-046
   Decision 11).
 
 **Why it lives here and not in ``auth/sessions.py``.** The ``auth`` package is

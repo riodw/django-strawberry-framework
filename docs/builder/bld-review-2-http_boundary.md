@@ -3,7 +3,7 @@
 Review reference: `docs/feedback.md` — High 2 (multipart `operations` / `map` bypass the strict
 UTF-8 wire contract), High 3 (the multipart declared cap runs after CSRF has already parsed the
 body), Low 6 (stream capability failures escape the body boundary as raw errors).
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Decision 7 (the counted cap and the
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Decision 7 (the counted cap and the
 three probe outcomes), Decision 8 (the deployment-layer co-requirement), Decision 9 (the strict
 UTF-8 wire contract), Decision 17 (multipart control fields), Decision 18 (the CSRF re-entry);
 Slice 2 / Slice 3 checklists; acceptance criteria 15, 39-42.
@@ -146,13 +146,13 @@ outcome 2, bounded read.
 
 ## Required spec amendments
 
-Every item below is a sentence in `docs/spec-065-transport_security-0_0_15.md` (custodian-owned, not
+Every item below is a sentence in `docs/spec-046-transport_security-0_0_15.md` (custodian-owned, not
 edited here) that the shipped code makes false, over-claiming, or incomplete. Line numbers are
 against the working tree at the time of writing.
 
 ### 1. Decision 17, condition 1 — the encoding resolution has three rungs, not two
 
-`docs/spec-065-transport_security-0_0_15.md:2253-2257` (current):
+`docs/spec-046-transport_security-0_0_15.md:2253-2257` (current):
 
 > The package resolves it the way Django does — the declared top-level `charset` (which Django has
 > already promoted onto `request.encoding` from `content_params`), else `settings.DEFAULT_CHARSET` —
@@ -171,13 +171,13 @@ Recommended replacement:
 
 ### 2. Decision 17 — the two conditions are enforced at two different sites, and condition 1 is earlier than the spec says
 
-`docs/spec-065-transport_security-0_0_15.md:2263-2265` (current):
+`docs/spec-046-transport_security-0_0_15.md:2263-2265` (current):
 
 > The guard is one shared helper on `_RequestBodyBoundaryMixin`; each view overrides upstream's
 > `parse_multipart` with a two-line delegate that runs the helper and then calls `super()` — the
 > sync view synchronously, the async view as a coroutine
 
-and the same claim in the Slice 3 checklist, `docs/spec-065-transport_security-0_0_15.md:221-226`:
+and the same claim in the Slice 3 checklist, `docs/spec-046-transport_security-0_0_15.md:221-226`:
 
 > The multipart control-document guard: each view overrides upstream's `parse_multipart` with a
 > two-line delegate over one shared mixin helper, which accepts only an effective form encoding that
@@ -202,7 +202,7 @@ value reaches `parse_json`".
 
 ### 3. Decision 17 — the `bytes` carve-out is unstated
 
-Add after `docs/spec-065-transport_security-0_0_15.md:2260` (condition 2):
+Add after `docs/spec-046-transport_security-0_0_15.md:2260` (condition 2):
 
 > A `bytes` control value — which Django never produces, but the adapter protocol upstream's
 > `parse_multipart` reads permits — is deliberately **not** marker-checked: no replacement has
@@ -211,7 +211,7 @@ Add after `docs/spec-065-transport_security-0_0_15.md:2260` (condition 2):
 
 ### 4. Decision 17's table — two rows missing
 
-The table at `docs/spec-065-transport_security-0_0_15.md:2292-2299` has no row for the two
+The table at `docs/spec-046-transport_security-0_0_15.md:2292-2299` has no row for the two
 declared-charset shapes the implementation and the live matrix cover:
 
 | multipart `operations` on the wire | Django's decode | package guard | outcome |
@@ -223,7 +223,7 @@ The second row is the interesting one: Django's own fallback is what the package
 
 ### 5. Decision 7, probe outcome 2 — an incoherent pair does not always stay in outcome 2
 
-`docs/spec-065-transport_security-0_0_15.md:1234-1238` (current):
+`docs/spec-046-transport_security-0_0_15.md:1234-1238` (current):
 
 > 2. **Safely unmeasurable, original position intact** — the stream declared itself unseekable, or
 >    `tell()` refused, or the pair came out incoherent and the restore succeeded.
@@ -238,7 +238,7 @@ Recommended replacement:
 
 ### 6. Decision 7, probe outcome 3 — "the restoring seek failed" is too narrow
 
-`docs/spec-065-transport_security-0_0_15.md:1244-1250` (current):
+`docs/spec-046-transport_security-0_0_15.md:1244-1250` (current):
 
 > 3. **Position potentially corrupted** — the seek to the end succeeded (or raised after moving) and
 >    the restoring seek then failed, so the stream's read position is no longer known to be where the
@@ -255,7 +255,7 @@ Recommended replacement:
 
 ### 7. Decision 7's rejected-alternatives block — the disclosed cost is no longer the cost
 
-`docs/spec-065-transport_security-0_0_15.md:2688-2692` (current):
+`docs/spec-046-transport_security-0_0_15.md:2688-2692` (current):
 
 > The cost in the over-reporting direction is disclosed rather than papered over: the restored
 > position lands past the end, so the request reaches Strawberry with an **empty** body and is a
@@ -272,7 +272,7 @@ That empty-body fall-through is exactly what the verified restore removes. Recom
 
 ### 8. Acceptance criterion 15 — the incoherent-pair sentence now describes two different outcomes
 
-`docs/spec-065-transport_security-0_0_15.md:2874-2879` (current):
+`docs/spec-046-transport_security-0_0_15.md:2874-2879` (current):
 
 > A stream whose `tell()` / `seek` pair is incoherent in either direction — an over-reported position,
 > an under-reported end — is refused a measurement and bounded by the read instead, in both the
@@ -289,7 +289,7 @@ Recommended replacement:
 
 ### 9. Decision 18, step 1 and the stamping paragraph — name the site precisely
 
-`docs/spec-065-transport_security-0_0_15.md:2341` says "the outer dispatch callback carries
+`docs/spec-046-transport_security-0_0_15.md:2341` says "the outer dispatch callback carries
 `csrf_exempt`", and `:2350-2351` says it is "stamped by the package, once, on the callback
 `as_view()` returns — a single override on the shared mixin". The second sentence is exactly what
 shipped; the first is loose enough to be read as `dispatch`. Recommended: make step 1 say "the
@@ -305,7 +305,7 @@ paragraph:
 
 ### 10. Decision 18, "What this does not change" — the consumer-middleware limit is missing
 
-`docs/spec-065-transport_security-0_0_15.md:2383-2387` names only the ASGI spooling. Add:
+`docs/spec-046-transport_security-0_0_15.md:2383-2387` names only the ASGI spooling. Add:
 
 > The reorder also only moves the **package's own** CSRF check. Any consumer middleware that reads
 > `request.POST` or `request.body` inbound still runs before the view and still precedes the gate; the
@@ -318,7 +318,7 @@ paragraph:
 
 ### 11. Decision 18, consequence (b) — incomplete in two ways
 
-`docs/spec-065-transport_security-0_0_15.md:2392-2397` (current):
+`docs/spec-046-transport_security-0_0_15.md:2392-2397` (current):
 
 > (b) An `HTTPException` raised inside the continuation (a `400` from the wire contract, say) unwinds
 > past `csrf_protect` without reaching its `process_response`, so those error responses do not carry a
@@ -335,14 +335,14 @@ Recommended replacement:
 
 ### 12. Decision 9 — "one step earlier" is two steps for half of Decision 17
 
-`docs/spec-065-transport_security-0_0_15.md:1381-1383`: "The multipart control documents get their
+`docs/spec-046-transport_security-0_0_15.md:1381-1383`: "The multipart control documents get their
 own boundary, one step earlier, in Decision 17." Recommended: "…get their own boundary earlier:
 their form **encoding** is checked in `run`, before the form is parsed at all, and their decoded
 values are checked in `parse_multipart`, before `parse_json` — both in Decision 17."
 
 ### 13. Test plan / Decision 13 — record where the ordering row runs, and what the round added
 
-`docs/spec-065-transport_security-0_0_15.md:1958-1964` describes the cap rows gaining "a
+`docs/spec-046-transport_security-0_0_15.md:1958-1964` describes the cap rows gaining "a
 `Client(enforce_csrf_checks=True)` sibling with a parser sentinel". Two facts belong on disk, because
 a later reader cannot re-derive either from the code:
 
@@ -396,8 +396,8 @@ above is the closest thing it carries, and every item is dispositioned below.
 Grounded in `git status --short` after both ruff invocations. The four files below are this
 cohort's; everything else `git status` reports (`README.md`, `TODAY.md`, `conf.py`, `auth/*`,
 `consumers.py`, `routers.py`, `tests/test_routers.py`, `docs/README.md`, `docs/feedback.md`,
-`docs/spec-065-*.md`, `docs/builder/BUILD.md`, `docs/builder/worker-*.md`,
-`docs/builder/build-065-*.md`, the three sibling `bld-review-2-*.md`, `drys.md`, `vulns.md`) is
+`docs/spec-046-*.md`, `docs/builder/BUILD.md`, `docs/builder/worker-*.md`,
+`docs/builder/build-046-*.md`, the three sibling `bld-review-2-*.md`, `drys.md`, `vulns.md`) is
 the concurrent WS cohorts', the coordinator's, or the maintainer's, and was neither read for
 modification nor written (`AGENTS.md` L34).
 
@@ -545,7 +545,7 @@ Mutation A was **also re-run at the floor** (see `### Floor verification`): **6 
 
 ### Hot-path budget
 
-`build-065-transport_security-0_0_15.md` declares no hot path (the requirement postdates the
+`build-046-transport_security-0_0_15.md` declares no hot path (the requirement postdates the
 plan, exactly as the review's M5 records for the WS cohort). This cohort's changed path meets
 `BUILD.md`'s definition anyway — `_enforce_request_boundary` runs **per request** — so the number
 is captured rather than argued about, and whether the trade is acceptable is the maintainer's.
@@ -719,14 +719,14 @@ reasoned about.
 
 ## Required spec amendments (pass 2)
 
-Every item is a sentence in `docs/spec-065-transport_security-0_0_15.md` (custodian-owned, not
+Every item is a sentence in `docs/spec-046-transport_security-0_0_15.md` (custodian-owned, not
 edited here) that the code shipped this pass makes false, over-claiming, or incomplete. Line
 numbers are against the working tree at the time of writing; each item also names its section so
 the reference survives line drift.
 
 ### P2-1. Decision 17, condition 1 — the resolution is CONJUNCTIVE, not a fallback chain (replaces pass 1's item 1)
 
-`docs/spec-065-transport_security-0_0_15.md:2254-2258`, section
+`docs/spec-046-transport_security-0_0_15.md:2254-2258`, section
 `### Decision 17 - Multipart control fields stay Django-parsed, behind a strict loss-detection guard`,
 numbered condition 1 (current):
 
@@ -758,7 +758,7 @@ Recommended replacement:
 >    consumer middleware assigning it overwrites the promotion, and a client declaring
 >    `charset=utf-8` while Django decoded Latin-1 got the declaration validated and the override
 >    applied — a non-UTF-8-decoded control document reaching `json.loads`, invisible to the
->    replacement-marker check because a Latin-1 decode never fails (spec-065 review round 2, M1).
+>    replacement-marker check because a Latin-1 decode never fails (spec-046 review round 2, M1).
 >
 >    Condition (b) is not implied by (a): for a codec name Django cannot load, the promotion does
 >    not happen, so `request.encoding` stays `None` and (a) is satisfied by `DEFAULT_CHARSET` —
@@ -777,7 +777,7 @@ Recommended replacement:
 ### P2-2. Decision 17 — the encoding guard is scoped to a multipart **POST**, and Decision 7's carve-out with it
 
 Nothing in Decision 17 currently states the method scoping, and the guard's absence of one was a
-defect (spec-065 review round 2, L1): a `GET /graphql/?query=...` carrying a stale
+defect (spec-046 review round 2, L1): a `GET /graphql/?query=...` carrying a stale
 `multipart/form-data; charset=iso-8859-1` header was answered `400` even though the view reads no
 body on GET and Django decodes no field. Recommended: add after the two numbered conditions in
 `### Decision 17`:
@@ -796,7 +796,7 @@ body on GET and Django decodes no field. Recommended: add after the two numbered
 
 ### P2-3. Decision 17's table — three rows missing, and one row's mechanism is now attributable
 
-The table at `docs/spec-065-transport_security-0_0_15.md:2292-2299` (`### Decision 17`) has no row
+The table at `docs/spec-046-transport_security-0_0_15.md:2292-2299` (`### Decision 17`) has no row
 for the shapes the conjunctive resolution decides. Pass 1's item 4 asked for two rows; this pass
 supersedes it with four, because the middleware and `DEFAULT_CHARSET` shapes are the interesting
 ones:
@@ -815,7 +815,7 @@ conjunctive-with-Django's-own-`or` rather than "every value in sight must be UTF
 
 ### P2-4. Slice 3 checklist — "one shared mixin helper" is two helpers at two sites, and the encoding half is method-scoped
 
-`docs/spec-065-transport_security-0_0_15.md:221-226`, `## Slice checklist`, Slice 3 (current):
+`docs/spec-046-transport_security-0_0_15.md:221-226`, `## Slice checklist`, Slice 3 (current):
 
 > - [ ] The multipart control-document guard: each view overrides upstream's
 >       `parse_multipart` with a two-line delegate over one shared mixin helper, which
@@ -840,7 +840,7 @@ scoping in):
 
 ### P2-5. Decision 7, probe outcome 3 — the fail-closed refusal now leaves a server-side record
 
-`docs/spec-065-transport_security-0_0_15.md:1244-1250`, `### Decision 7`, probe outcome 3. Pass 1's
+`docs/spec-046-transport_security-0_0_15.md:1244-1250`, `### Decision 7`, probe outcome 3. Pass 1's
 item 6 already proposes a replacement for the "the restoring seek then failed" clause and stands;
 this item adds the observability sentence to whatever wording lands. Current tail:
 
@@ -857,14 +857,14 @@ Recommended addition:
 > the probe outcome and the **class** of the stream that caused it, and nothing on the wire
 > changes. A request that was not oversized and was refused anyway means the stream the ASGI
 > server or a middleware installed does not report positions coherently, and the log is where
-> that is said (spec-065 review round 2, L2).
+> that is said (spec-046 review round 2, L2).
 
 ### P2-6. Edge cases, "GET requests carry no body" — the sentence is now true of both halves and should say so
 
-`docs/spec-065-transport_security-0_0_15.md:2738-2740`, `## Edge cases` (current):
+`docs/spec-046-transport_security-0_0_15.md:2738-2740`, `## Edge cases` (current):
 
 > - **GET requests carry no body.** The cap is a no-op on GET; the `variables` /
->   `extensions` query-param size is a `TODO-ALPHA-066-0.0.16` concern (S4), and the
+>   `extensions` query-param size is a `TODO-ALPHA-047-0.0.16` concern (S4), and the
 >   existing `_patched_parse_query_params` shield keeps the body contract off those parses.
 
 Recommended replacement:
@@ -873,12 +873,12 @@ Recommended replacement:
 >   halves: the cap returns early, and a stale `multipart/form-data` `Content-Type` on a GET is
 >   not a form Django decodes, so the multipart encoding guard returns too (P2-2 /
 >   `_is_multipart_form_post`). The `variables` / `extensions` query-param size is a
->   `TODO-ALPHA-066-0.0.16` concern (S4), and the existing `_patched_parse_query_params` shield
+>   `TODO-ALPHA-047-0.0.16` concern (S4), and the existing `_patched_parse_query_params` shield
 >   keeps the body contract off those parses.
 
 ### P2-7. Acceptance criteria 39 / 41-42 — three rows this pass adds, for the custodian to fold in
 
-`docs/spec-065-transport_security-0_0_15.md:3012-3018` (criterion 39) enumerates the multipart
+`docs/spec-046-transport_security-0_0_15.md:3012-3018` (criterion 39) enumerates the multipart
 matrix but not the two deployments the conjunctive resolution decides, and there is no criterion
 covering the GET carve-out. Recommended: extend criterion 39's list with
 

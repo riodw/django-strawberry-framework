@@ -1,6 +1,6 @@
 # Build: Slice 3 — S9: one UTF-8 wire contract
 
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Slice 3 checklist lines 159-170;
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Slice 3 checklist lines 159-170;
 Decision 9 (lines 1016-1073), Decision 10 (1075-1098), Decision 13's "Inverted" paragraph
 (1277-1282) and Placement (1284-1294); User-facing API — Consumer-visible behavior's non-UTF-8
 bullet (597-598) and Error shapes' non-UTF-8 bullet (636-638); Helper-reuse obligations' UTF-8
@@ -170,7 +170,7 @@ canonical"). Every source reference below uses `path::QualifiedName` or
 7. **Installed versions used for every measurement above:** `strawberry-graphql` 0.316.0,
    `cross-web` 0.7.0, Django 6.0.5.
 
-8. **No staged anchors to discharge.** `grep -rEn 'TODO\(spec-065|TODO-ALPHA-065'` over the tree
+8. **No staged anchors to discharge.** `grep -rEn 'TODO\(spec-046|TODO-ALPHA-046'` over the tree
    (excluding `KANBAN*`/`BACKLOG.md`/`docs/builder/`/the DB) matches only the spec's own prose at
    line 1378. No Slice-3 source anchor was pre-placed.
 
@@ -500,7 +500,7 @@ gap — whether the wire contract survives `APPLY_UPSTREAM_PATCHES` — is answe
 
 ### Spec slice checklist (verbatim)
 
-Copied byte-for-byte from `docs/spec-065-transport_security-0_0_15.md` lines 160-170 (the four
+Copied byte-for-byte from `docs/spec-046-transport_security-0_0_15.md` lines 160-170 (the four
 sub-bullets of the Slice 3 block), preserving text, nesting, and inline citations; verified with
 `diff` against a `sed -n '160,170p'` extract. The anchor links are verbatim from the spec and
 intentionally resolve only there.
@@ -800,7 +800,7 @@ Deltas the plan did not pin.
    at both tiers** — UTF-16-BE, UTF-32-BE, and UTF-32-with-BOM have live rows (A4) and package rows
    (C3). The optional completeness edit to Decision 9's "Measured behavior" paragraph is unblocked if
    you want it; the measured split is in note 1 above.
-6. **No staged anchor discharged or added.** `grep -rEn 'TODO\(spec-065|TODO-ALPHA-065'` over the
+6. **No staged anchor discharged or added.** `grep -rEn 'TODO\(spec-046|TODO-ALPHA-046'` over the
    tree still matches only the spec's own prose; this slice pre-placed nothing and removed nothing.
 
 ---
@@ -966,10 +966,10 @@ new test modules, so left alone it publishes a stale scope claim for a file that
 row.
 
 ```examples/fakeshop/test_query/test_transport_api.py
-"""Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-2).
+"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046 Slices 1-2).
 ```
 
-Recommended change: `... (spec-065 Slices 1-3)`. Cheap and free of TREE.md consequences right now
+Recommended change: `... (spec-046 Slices 1-3)`. Cheap and free of TREE.md consequences right now
 because the file is still untracked and has never been rendered. No test expectation is affected.
 Disposition: routed to Worker 1 (below) to assign to this slice or to Slice 5's TREE pass; it must
 not reach `docs/TREE.md` unfixed.
@@ -1155,7 +1155,7 @@ listing.
    artifacts. Worth one line in `bld-integration.md` so the integration pass does not read them as a
    contradiction of shipped behavior.
 7. **No staged anchor outstanding.** Independently re-swept
-   `grep -rEn 'TODO\(spec-065|TODO-ALPHA-065'`: matches only the spec's own prose line 1378.
+   `grep -rEn 'TODO\(spec-046|TODO-ALPHA-046'`: matches only the spec's own prose line 1378.
 8. **DRY item routed to the integration pass:** the six inline `await client.post(...)` blocks in
    `test_transport_api.py` (see `### DRY findings`), alongside the Slice-2 permission-block item.
 
@@ -1273,7 +1273,7 @@ time; `bld-final.md`'s gate re-runs it as the backstop.
 
 ### Staged-anchor check
 
-`grep -rEn 'TODO\(spec-065|TODO-ALPHA-065'` over the tree: **no source or test anchor
+`grep -rEn 'TODO\(spec-046|TODO-ALPHA-046'` over the tree: **no source or test anchor
 anywhere** - the only matches are the spec's own prose describing the convention and the
 `bld-*.md` per-cycle narrative. Slice 3 pre-placed none and discharged none, correctly (Slice
 1's single anchor was Slice 2's and is gone).
@@ -1377,9 +1377,9 @@ untouched.
 
 ### Spec changes made (Worker 1 only)
 
-Six edits to `docs/spec-065-transport_security-0_0_15.md`, all triggered by Slice 3. Verified
+Six edits to `docs/spec-046-transport_security-0_0_15.md`, all triggered by Slice 3. Verified
 after the last one:
-`uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
 -> **`OK: 37 terms - all have glossary entries and at least one spec link.` (exit 0)**. Term
 count unchanged at 37, so **no new glossary term and no `-terms.csv` row** is owed and
 `docs/GLOSSARY.md` is untouched (its dirty state is the baseline-listed concurrent

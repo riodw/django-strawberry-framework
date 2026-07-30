@@ -1,10 +1,10 @@
-# Worker 3 residual review — spec-065 review round 2, remediation of M1 / M2 / M3
+# Worker 3 residual review — spec-046 review round 2, remediation of M1 / M2 / M3
 
 Reviewer: Worker 3 (isolated from all three builder cohorts and from the predecessor W3 pass).
 Subject: the **remediation** of `docs/builder/bld-review-2-w3_review.md`'s five Medium findings, which
 went builder -> commit with no independent review pass. Reviewed against
-`docs/spec-065-transport_security-0_0_15.md` (custodian-corrected 2026-07-28),
-`docs/spec-065-transport_security-0_0_15-rationale.md`, and the working tree as it stands.
+`docs/spec-046-transport_security-0_0_15.md` (custodian-corrected 2026-07-28),
+`docs/spec-046-transport_security-0_0_15-rationale.md`, and the working tree as it stands.
 
 Status: final-accepted
 
@@ -14,7 +14,7 @@ remediation into one commit (`10c50722`), so the remediation is not separable by
 reviewed as the current state of the four production files and three test files, cross-read against
 the three cohorts' `## Build report (Worker 2, pass 2)` sections.
 
-**M4 and M5 are pending maintainer decisions** (`docs/builder/build-065-transport_security-0_0_15.md`
+**M4 and M5 are pending maintainer decisions** (`docs/builder/build-046-transport_security-0_0_15.md`
 `## Open maintainer decisions`). Neither is re-litigated here. The one new unpinned boundary below is
 the **thirteenth**, not one of the twelve censused.
 
@@ -675,8 +675,8 @@ revert, no `git checkout`, no `git add`, no commit:
 |---|---|
 | `README.md`, `docs/README.md`, `TODAY.md` | Slice 5 (`bld-slice-5-docs_foldin.md`), declared out of scope for this pass |
 | `django_strawberry_framework/auth/mutations.py`, `auth/sessions.py`, `conf.py`, `drys.md`, `vulns.md` | baseline-dirty concurrent session |
-| `docs/spec-065-transport_security-0_0_15.md`, `…-rationale.md` | Worker 1 (custodian) |
-| `docs/builder/build-065-transport_security-0_0_15.md` | Worker 0 |
+| `docs/spec-046-transport_security-0_0_15.md`, `…-rationale.md` | Worker 1 (custodian) |
+| `docs/builder/build-046-transport_security-0_0_15.md` | Worker 0 |
 | `docs/feedback.md` | the maintainer's review document - evidence, never edited |
 | `docs/builder/bld-review-2-w3_residual.md` (untracked), `bld-slice-5-docs_foldin.md` (untracked) | this artifact / Slice 5's |
 
@@ -882,7 +882,7 @@ the escalation is about scope breadth, not about whether this seam owes one.
 ### Notes for Worker 1 (spec reconciliation)
 
 1. **No spec edit is required by this pass**, and I checked the code against the spec rather than
-   taking Worker 3's word for it. `docs/spec-065-transport_security-0_0_15.md` Decision 17
+   taking Worker 3's word for it. `docs/spec-046-transport_security-0_0_15.md` Decision 17
    requirement 1 says "The encoding Django will actually decode with must canonicalize to UTF-8", and
    requirements 1 and 2 "accept exactly the codec aliases `codecs.lookup` canonicalizes to UTF-8 …
    and a name Python cannot resolve cannot be proven UTF-8 and is therefore a refusal." A non-`str`
@@ -1210,7 +1210,7 @@ Everything below re-executed by me, in the shared `.venv`, with no `--cov*` flag
 1. **No spec edit is required by this pass, and none was made.** Decision 17's requirement 1 covers a
    non-`str` effective encoding through "a name Python cannot resolve cannot be proven UTF-8 and is
    therefore a refusal", verified against the code rather than against the prose; the outcome table
-   owes no row because its column is a wire shape. `docs/spec-065-transport_security-0_0_15.md` and
+   owes no row because its column is a wire shape. `docs/spec-046-transport_security-0_0_15.md` and
    its rationale companion were not opened for writing.
 2. **Escalated: three one-clause prose corrections, bundled.** All three nits above are text, not
    behavior, and none is a builder-blocking gap - but two of them are *false statements on disk about
@@ -1507,13 +1507,13 @@ All read-only; no `--cov*` flag anywhere; no `git` command that writes; no `ruff
 - `uv run pytest --no-cov` -> **5202 passed, 40 skipped**. Matches the dispatch baseline exactly.
 - `uv run pytest tests/test_views.py tests/test_routers.py --no-cov` -> **266 passed** = 144 + 122,
   both baselines matched.
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-065-transport_security-0_0_15.md`
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-046-transport_security-0_0_15.md`
   -> `OK: 37 terms`, exit **0** - re-run **after** my spec edit.
 - `uv run ruff format --check .` -> `405 files already formatted`; `uv run ruff check .` ->
   `All checks passed!`. Read-only only; this pass touches no source, so the open
   `AGENTS.md:15`-vs-scoped-`ruff` conflict is sidestepped rather than resolved.
 - `git diff --check` -> exit **0**.
-- `uv run python scripts/check_trailing_commas.py --check docs/spec-065-transport_security-0_0_15.md docs/spec-065-transport_security-0_0_15-rationale.md docs/builder/bld-review-2-w3_residual.md`
+- `uv run python scripts/check_trailing_commas.py --check docs/spec-046-transport_security-0_0_15.md docs/spec-046-transport_security-0_0_15-rationale.md docs/builder/bld-review-2-w3_residual.md`
   -> exit **0**.
 - Spec integrity after my edit, checked mechanically rather than by eye: every in-page `](#anchor)`
   resolves against a real heading (**0** unresolved); every `][ref]` use has a definition in both
@@ -1543,7 +1543,7 @@ All read-only; no `--cov*` flag anywhere; no `git` command that writes; no `ruff
 
 ### One correction to the plan's own record
 
-`build-065-transport_security-0_0_15.md` `### Artifact Status: hygiene lapse in round 2` says
+`build-046-transport_security-0_0_15.md` `### Artifact Status: hygiene lapse in round 2` says
 **three** violations. There are **four**: `bld-review-2-ws_revocation.md` and
 `bld-review-2-ws_host_boundary.md` have no `Status:` line at all (2), `bld-review-2-http_boundary.md`
 reads the illegal `Status: built (pass 2), dirty, uncommitted.` (3), and
@@ -1556,7 +1556,7 @@ well-formed one.
 
 ### Summary
 
-Review round 2 of card 065 is **closed**. Its six dispatched findings (Blocker 1, High 2, High 3,
+Review round 2 of card 046 is **closed**. Its six dispatched findings (Blocker 1, High 2, High 3,
 Medium 4, Medium 5, Low 6) are each closed by a real bound with a regression that bites; the W3
 review's M1 / M2 / M3 and this artifact's own M6 are closed with them; no finding was closed by a
 relabelling and no fix introduced a fail-open shape. The shipped transport boundary and the spec now
@@ -1571,7 +1571,7 @@ Two edits, both to close the **one** genuine spec/code divergence this pass foun
 change records. Nothing else in either file was touched; no decision was renumbered; no test-plan
 row, slice-checklist sub-bullet or DoD box was edited.
 
-1. **`docs/spec-065-transport_security-0_0_15.md`, `### Decision 7`** - a new paragraph,
+1. **`docs/spec-046-transport_security-0_0_15.md`, `### Decision 7`** - a new paragraph,
    "**Method scoping, stated because steps 2 and 3 split on it**", inserted after the four numbered
    steps and before "**How the body is measured…**". Reason: step 3 claimed a hand-off to
    `MultiPartParser` for "a multipart request", which is false for a multipart request on any method
@@ -1579,14 +1579,14 @@ row, slice-checklist sub-bullet or DoD box was edited.
    counted path instead - and the decision never stated that `GET` is outside the cap at all
    (`views.py::_enforce_request_body_limit` #`'request.method == "GET"'`). Triggered by the HTTP
    cohort's undischarged pass-2 amendment **P2-2**, whose divergence I re-verified against the code.
-2. **`docs/spec-065-transport_security-0_0_15.md`, `### Decision 17`** - one paragraph inserted
+2. **`docs/spec-046-transport_security-0_0_15.md`, `### Decision 17`** - one paragraph inserted
    after requirement 3 and before "Requirements 1 and 2 accept exactly the codec aliases…", stating
    that all three requirements apply to a multipart **POST** and nothing else, through the same
    discriminator, and why a stale `multipart/form-data` `Content-Type` on a `GET` must not be
    refused. Reason: the requirements were stated with no scope while the shipped guard
    (`views.py::_enforce_multipart_form_encoding` #`"if not _is_multipart_form_post(request):"`) is
    scoped. Same amendment, same divergence, the other half of it.
-3. **`docs/spec-065-transport_security-0_0_15-rationale.md`** - one **Change record** appended to the
+3. **`docs/spec-046-transport_security-0_0_15-rationale.md`** - one **Change record** appended to the
    `### Decision 7` entry and one to the `### Decision 17` entry, each naming what changed, the round
    that caused it, and (for Decision 7) that no alternative was rejected because the only alternative
    was leaving the spec silent. Required by `BUILD.md` `## Spec rationale extraction`: the companion

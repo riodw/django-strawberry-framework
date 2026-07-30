@@ -1,9 +1,9 @@
-# Worker 3 adversarial review — spec-065 review round 2
+# Worker 3 adversarial review — spec-046 review round 2
 
 Reviewer: Worker 3 (isolated from all three builder cohorts).
 Subject: the combined round-2 tree — `docs/builder/bld-review-2-ws_revocation.md`,
 `bld-review-2-http_boundary.md`, `bld-review-2-ws_host_boundary.md`, against `docs/feedback.md`
-(round-2 maintainer review) and `docs/spec-065-transport_security-0_0_15.md`.
+(round-2 maintainer review) and `docs/spec-046-transport_security-0_0_15.md`.
 
 Status: **revision-needed** — five Medium findings (three from the primary pass, two from the
 obligations `worker-3.md` / `BUILD.md` gained mid-pass; see the Addendum), one of which reopens the
@@ -446,7 +446,7 @@ worse or were already rejected.
 Deletions verified by grep over the whole tree (excluding `.venv` and the builder artifacts):
 `_REVOKED_SESSION_MESSAGE`, `_REVOKED_SUBSTRING`, `_assert_rejected` and `errors_as_list` survive
 only in prose — `docs/builder/bld-slice-4-ws_revalidation.md` (historical),
-`bld-review-1-w3_review.md` (historical) and `docs/spec-065-...md:2822` (custodian's, spec wording,
+`bld-review-1-w3_review.md` (historical) and `docs/spec-046-...md:2822` (custodian's, spec wording,
 out of scope). No `graphql` import remains in `consumers.py` at any level; the module's only
 non-stdlib module-level imports are `django.core.exceptions.DisallowedHost`, `django.http.HttpRequest`,
 `. logger` and `.exceptions`, with `channels.auth.get_user`
@@ -666,7 +666,7 @@ while their docstrings assert privacy — recorded as **L6**.
 - **What a `docs/TREE.md` regenerate would pick up** (I did **not** regenerate):
   `consumers.py`'s rendered first line changes to *"The WebSocket Host boundary, the GraphQL
   consumer, and its two revalidation checkpoints."*; `routers.py`'s changes to *"Channels ASGI
-  router: Django owns HTTP, the package composes WebSocket (spec-065)."*, replacing the stale
+  router: Django owns HTTP, the package composes WebSocket (spec-046)."*, replacing the stale
   spec-041 text currently on lines 207 and 316 of `TREE.md`; and **`consumers.py` and
   `_request_body.py` would be added as new rows — neither appears in `docs/TREE.md` at all today.**
   All four first lines are shipped-behavior descriptions with no staging language, so the
@@ -922,13 +922,13 @@ runs per outbound information-bearing message and now takes a connection-local l
 across a session-store read**, so every concurrent operation waiting to emit on that socket queues
 behind that read.
 
-- `docs/builder/build-065-transport_security-0_0_15.md` carries **no hot-path declaration** (the
+- `docs/builder/build-046-transport_security-0_0_15.md` carries **no hot-path declaration** (the
   requirement postdates the plan).
 - `docs/builder/bld-review-2-ws_revocation.md` has **no `### Hot-path budget` subsection and no
   number**. §3.3 states the cost qualitatively and bounds its *blast radius* three ways by test row
   — one connection only, protected frames only, priced by the window — which is good engineering
   and is not a measurement.
-- `docs/spec-065-transport_security-0_0_15.md:2166` and `consumers.py:67-77` both describe it as
+- `docs/spec-046-transport_security-0_0_15.md:2166` and `consumers.py:67-77` both describe it as
   "a per-connection serialization point on the outbound hot path", i.e. the round is already aware
   it is one.
 
@@ -1039,7 +1039,7 @@ Applied, and it produced two of my three Mediums:
 ## Notes for Worker 1 (spec reconciliation) — additions
 
 4. **Escalated: the plan needs a hot-path declaration, and this round owes a number.** `M5`.
-   `build-065-...md`'s preamble predates `BUILD.md`'s `## Hot-path budget`; the WS-revocation slice
+   `build-046-...md`'s preamble predates `BUILD.md`'s `## Hot-path budget`; the WS-revocation slice
    meets the definition ("per outbound message", "per connection") and the spec itself already calls
    it a hot path at `:2166`. Resolution paths: (a) declare the slice hot-path and re-loop the
    cohort for a before/after number — `_instrument_revalidation`'s `probe.reads` is already the

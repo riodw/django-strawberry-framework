@@ -2331,14 +2331,14 @@ def test_cascade_composes_with_filter_and_order_live():
 # applied at app load and fix upstream *defects*: without them the sync
 # `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the body, before
 # GraphQL parsing runs -> an unhandled 500. The package's own strict UTF-8 wire
-# contract (spec-065 Decision 9) is *not* one of those patches - it lives on the
+# contract (spec-046 Decision 9) is *not* one of those patches - it lives on the
 # mounted view, in `views.py::_RequestBodyBoundaryMixin.parse_json`, so it holds
 # whatever `APPLY_UPSTREAM_PATCHES` says. The sync adapter hands the raw bytes to
 # that view method, which decodes them once with strict UTF-8: the success set is
 # UTF-8, and UTF-8 only. UTF-16 and UTF-32 (BOM or BOM-less) and a leading UTF-8
 # BOM are all a controlled 400 - the BOM'd multi-byte forms fail at that decode,
 # while the BOM-less ones and the UTF-8 BOM decode cleanly and are then refused
-# by upstream's own `json.loads` (spec-065 Decision 10 chose rejection over
+# by upstream's own `json.loads` (spec-046 Decision 10 chose rejection over
 # stripping). No dedicated rejection branch exists for any of them. Both
 # transports answer identically because both views inherit the one mixin method;
 # the async colour of these rows and the patch-opted-out rows live in
@@ -2372,13 +2372,13 @@ def test_post_raw_binary_body_returns_400_not_500():
 def test_post_utf16_json_body_is_rejected_as_400():
     """A UTF-16-encoded JSON body (with BOM) -> controlled 400.
 
-    The history is the point of keeping this row. Before spec-065 this request
+    The history is the point of keeping this row. Before spec-046 this request
     *succeeded*: the cross_web patch handed the raw bytes to ``parse_json`` and
     ``json.loads`` auto-detected UTF-16 per RFC 8259, so a body that used to
     500 on the sync view started answering 200 - wider than "400 instead of
     500", and identical to the async transport.
 
-    The wire contract (spec-065 Decision 9) narrows the success set to UTF-8,
+    The wire contract (spec-046 Decision 9) narrows the success set to UTF-8,
     so the same bytes are now a 400. Mechanism: ``encode("utf-16")`` prefixes
     the BOM ``FF FE`` and ``0xFF`` is not a valid UTF-8 start byte, so the
     strict decode inside ``views.py::_RequestBodyBoundaryMixin.parse_json``
@@ -2423,7 +2423,7 @@ def test_post_utf8_bom_json_body_is_rejected_as_400():
     still starts with U+FEFF, so returning raw bytes made this body succeed on
     the sync transport exactly as on async.
 
-    spec-065 Decision 10 chose rejection: the package neither strips the BOM
+    spec-046 Decision 10 chose rejection: the package neither strips the BOM
     nor decodes with ``utf-8-sig``, because accept-and-strip re-creates the
     parser differential the wire contract exists to close (a proxy, WAF, or
     body scanner that does not strip sees a different document than the
@@ -2452,7 +2452,7 @@ def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding):
 
     The three rows above carry the history for the encodings that used to
     succeed; these four complete the "UTF-16 / UTF-32 (BOM and BOM-less)" set
-    the wire contract claims (spec-065 test-plan row 19), which had no UTF-32
+    the wire contract claims (spec-046 test-plan row 19), which had no UTF-32
     coverage at any tier before this slice. ``encode("utf-32")`` emits a BOM and
     fails at the strict decode; the three BOM-less forms decode into
     NUL-studded text and fail at upstream's ``json.loads``. Both routes are the

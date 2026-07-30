@@ -3,7 +3,7 @@
 Review reference: `docs/feedback.md` — Blocker 1 (the counted body cap materializes the unbounded
 body before rejecting it) and High 2 (a package security policy is disabled by the unrelated
 upstream-patch kill switch).
-Spec reference: `docs/spec-065-transport_security-0_0_15.md` — Decision 7 (the counted cap),
+Spec reference: `docs/spec-046-transport_security-0_0_15.md` — Decision 7 (the counted cap),
 Decision 8 (the deployment-layer co-requirement), Decision 9 (the strict UTF-8 wire contract),
 Decision 10 (the rejected UTF-8 BOM); Slice 2 and Slice 3 checklists; Test plan S2 rows 13-18 and
 S9 rows 19-24.
@@ -678,7 +678,7 @@ only at the floor, and it now runs through the coherence guard.
 
 ## Notes for the spec custodian (not edited here)
 
-`docs/spec-065-transport_security-0_0_15.md` is custodian-owned and was being edited concurrently.
+`docs/spec-046-transport_security-0_0_15.md` is custodian-owned and was being edited concurrently.
 The amendments this pass requires:
 
 1. **Decision 9, the `_patched_body` paragraph.** "Keeping the adapter's bytes raw is what lets the

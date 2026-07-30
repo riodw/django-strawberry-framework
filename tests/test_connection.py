@@ -1561,7 +1561,7 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
 
 # =============================================================================
 # Sealed-execution boundary at the connection surface
-# (docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions").
+# (docs/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions").
 # A hostile hook-return SUBCLASS whose overrides would erase the visibility
 # predicate or synthesize rows is neutralized by sealing: edges carry only the
 # visible rows and totalCount counts only the visible rows, sync AND async. Each

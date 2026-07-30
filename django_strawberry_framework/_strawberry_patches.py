@@ -19,16 +19,27 @@ out globally with ``DJANGO_STRAWBERRY_FRAMEWORK =
 ``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}``. Everything behind
 that gate is a workaround for an upstream *defect*, and nothing behind it
 is package security policy - which is the whole point of the gate's
-scope. What the gate governs is therefore the hardening a consumer gets
-on **Strawberry's own** view: the companion ``cross_web`` patch routes
-that view's sync bytes into ``parse_json``, so disabling only one of the
-pair leaves its malformed-body hardening incomplete, and disabling both
-leaves an undecodable body an unhandled ``500`` there, exactly as it is
-with the package absent.
+scope. What the gate does NOT scope is the **mount**. :func:`apply`
+assigns ``BaseView.parse_json``, and
+``views.py::_RequestBodyBoundaryMixin.parse_json`` delegates through
+``super().parse_json(data)`` to that very attribute, so a **package**
+view rides this gate for the body-envelope guard exactly as Strawberry's
+own view does: with the gate off, ``b"42"`` and ``b"[1,2]"`` come back
+out of a real ``DjangoGraphQLView``'s ``parse_json`` as ``42`` and
+``[1, 2]``, and upstream's unguarded ``data.get("query")`` turns each
+into an unhandled ``500`` there too - pinned on the wire, against the
+package mount, by
+``examples/fakeshop/test_query/test_transport_api.py``'s
+``test_the_upstream_bug_workaround_still_respects_its_own_opt_out``.
+Strawberry's own view additionally depends on the companion ``cross_web``
+patch to route its sync bytes into ``parse_json``, so disabling only one
+of the pair leaves its malformed-body hardening incomplete, and disabling
+both leaves an undecodable body an unhandled ``500`` there, exactly as it
+is with the package absent.
 
-A **package** view is unaffected in every state of this setting, and by
-construction rather than by luck: it owns both halves of the strict UTF-8
-wire contract (spec-065 Decision 9) - the decode, in
+What a **package** view keeps in every state of this setting is the
+strict UTF-8 **wire contract**, and by construction rather than by luck:
+it owns both halves (spec-065 Decision 9) - the decode, in
 ``views.py::_RequestBodyBoundaryMixin.parse_json``, and the *body source*
 that delivers undecoded bytes to it, in
 ``views.py::_RawBodyRequestAdapter``. Owning only the decode was not

@@ -592,8 +592,10 @@ def _login_resolve_body(
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
     a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
-    one permitted sync->async hop; the package router's async consumer instead awaits
-    the native async body). The success payload is constructed BEFORE the session is
+    one permitted sync->async hop; an async Channels consumer instead awaits the
+    native async body). Since spec-065 the package router serves no HTTP at all, so
+    a Channels HTTP scope reaches here only from a consumer the project mounted
+    itself. The success payload is constructed BEFORE the session is
     mutated (step 6) so a payload-construction failure cannot create a session the
     client never sees, and it holds the authenticated user OBJECT (not a scalar
     snapshot) so nested GraphQL fields resolve after login and observe the
@@ -773,8 +775,10 @@ def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
     Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
     a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
-    one permitted sync->async hop; the package router's async consumer instead awaits
-    the native async body). ``ok`` retains the shipped meaning: it is ``true`` only
+    one permitted sync->async hop; an async Channels consumer instead awaits the
+    native async body). Since spec-065 the package router serves no HTTP at all, so
+    a Channels HTTP scope reaches here only from a consumer the project mounted
+    itself. ``ok`` retains the shipped meaning: it is ``true`` only
     when an authenticated actor existed under the lock before teardown, and an
     already-anonymous logout returns ``{ok: false, errors: []}`` after still flushing
     any residual session data (idempotent teardown with an observational result). A

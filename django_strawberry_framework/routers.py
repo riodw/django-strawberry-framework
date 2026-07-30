@@ -403,17 +403,23 @@ def _build_router_class() -> type[Any]:
 
         ``None`` (the default) selects the package's own
         ``consumers.py::GraphQLWebSocketConsumer``, which revalidates the session
-        actor before every operation and rejects the operation - not the socket -
-        when the session is no longer valid.
+        actor at TWO security checkpoints - operation admission, and every
+        outbound information-bearing frame - because the actor is
+        connection-scoped, not operation-scoped. The first failed validation at
+        either checkpoint therefore closes the whole SOCKET with upstream's own
+        ``4403`` / ``"Forbidden"``, suppressing the pending frame and sending no
+        preceding operation error: the close IS the rejection.
         ``websocket_revalidation_window`` is the accepted revocation delay in
-        seconds for that consumer: ``0.0`` (the default) revalidates every
-        operation, and a positive value trades one session read per authenticated
-        operation for a named number of seconds during which a revoked session
-        still executes. It configures the package's consumer only, so pairing a
-        positive window with ``websocket_consumer_class`` is a construction error
-        rather than a silently ignored knob. See
-        ``consumers.py::GraphQLWebSocketConsumer`` for the maximum-connection-
-        lifetime statement and the knobs an injected class can set.
+        seconds for that consumer: ``0.0`` (the default) revalidates at every
+        checkpoint - every admission and every information-bearing frame - and a
+        positive value trades one session read per authenticated checkpoint for a
+        named number of seconds during which a revoked session still executes. It
+        configures the package's consumer only, so pairing a positive window with
+        ``websocket_consumer_class`` is a construction error rather than a
+        silently ignored knob. See
+        ``consumers.py::GraphQLWebSocketConsumer`` for which frame types are
+        gated, the maximum-connection-lifetime statement, and the knobs an
+        injected class can set.
         """
 
         def __init__(

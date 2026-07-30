@@ -225,9 +225,18 @@ def _form_encoding_is_utf8(request: HttpRequest) -> bool:
       ``encoding or settings.DEFAULT_CHARSET``. **That pair is the only value
       Django decodes with.**
 
-    So the conditions are:
+    So the conditions are, numbered in the order the body below evaluates them:
 
-    1. **The encoding Django will actually use** - ``request.encoding or
+    1. **A declared ``charset``, when present, must canonicalize to UTF-8.** Not
+       implied by condition 2: for a codec name Django cannot load, the promotion
+       does not happen, so ``request.encoding`` stays ``None`` and condition 2 is
+       satisfied by ``DEFAULT_CHARSET`` - accepting a request whose declaration
+       nobody honoured. The package refuses instead. A client that asks for an
+       encoding this endpoint will not honour gets a controlled ``400`` rather
+       than a decode in some other encoding, and that stays true for a *usable*
+       non-UTF-8 name as well, so the two conditions never have to be reasoned
+       about jointly.
+    2. **The encoding Django will actually use** - ``request.encoding or
        settings.DEFAULT_CHARSET``, verbatim the expression
        ``parse_file_upload`` and ``MultiPartParser.__init__`` produce between
        them - must canonicalize to UTF-8. It is checked whatever the client
@@ -240,15 +249,6 @@ def _form_encoding_is_utf8(request: HttpRequest) -> bool:
        :data:`_REPLACEMENT_CHARACTER` and
        :meth:`_RequestBodyBoundaryMixin._reject_lossy_multipart_control_fields`
        could not see it either.
-    2. **A declared ``charset``, when present, must canonicalize to UTF-8 too.**
-       Not implied by condition 1: for a codec name Django cannot load, the
-       promotion does not happen, so ``request.encoding`` stays ``None`` and
-       condition 1 is satisfied by ``DEFAULT_CHARSET`` - accepting a request
-       whose declaration nobody honoured. The package refuses instead. A client
-       that asks for an encoding this endpoint will not honour gets a controlled
-       ``400`` rather than a decode in some other encoding, and that stays true
-       for a *usable* non-UTF-8 name as well, so the two conditions never have to
-       be reasoned about jointly.
 
     A project that reconfigures ``DEFAULT_CHARSET`` away from UTF-8 is therefore
     refused when nothing else supplies the encoding, and accepted when the client
@@ -366,10 +366,14 @@ class _RequestBodyBoundaryMixin:
     or on ``APPLY_UPSTREAM_PATCHES`` (see ``parse_json`` for why that ownership
     is load-bearing rather than tidy).
 
-    Sits first in each view's bases so ``max_request_body_bytes`` is already a
-    class attribute by the time Django's ``View.as_view`` runs its ``hasattr``
-    keyword guard, so ``parse_json`` resolves to this policy ahead of anything
-    upstream defines, and so a consumer subclass can override any part.
+    Sits first in each view's bases so this mixin's attribute and its methods take
+    precedence over any same-named attribute or method upstream may later add:
+    ``max_request_body_bytes`` and ``parse_json`` resolve to this policy ahead of
+    anything upstream defines, and a consumer subclass can still override any part.
+    Mixin-FIRST is not what satisfies ``View.as_view``'s keyword guard - that guard
+    is a ``hasattr`` over the whole MRO, so a mixin-last subclass would bind
+    ``max_request_body_bytes=`` identically; precedence over upstream is the
+    operative reason.
 
     **Precedence.** ``as_view(max_request_body_bytes=...)`` > the
     ``MAX_REQUEST_BODY_BYTES`` setting > the setting's own 1 MiB default. A
@@ -400,8 +404,11 @@ class _RequestBodyBoundaryMixin:
     byte-for-byte, and Django's own ``DATA_UPLOAD_MAX_MEMORY_SIZE`` ceiling still
     fires where it always did. Whichever ceiling is lower still wins.
 
-    **Multipart.** Bounded by the declared-size gate plus Django's own
-    ``MultiPartParser``, and nothing else. The body is deliberately never
+    **Multipart, on a POST.** Bounded by the declared-size gate plus Django's own
+    ``MultiPartParser``, and nothing else. The carve-out is POST-scoped - a
+    multipart content type on any other method is counted like any other body,
+    which is the stricter direction (see :func:`_is_multipart_form_post`). The
+    body is deliberately never
     materialized for a multipart request - reading it would pull the whole
     payload into memory and defeat Django's streaming upload handlers, breaking
     the ``Upload``-scalar path this package ships. Per-file count, per-file

@@ -406,6 +406,25 @@ def _sized_body(size, query=_TYPENAME, variables=None):
     return raw
 
 
+def _user_who_can_add_categories():
+    """A ``view_category_1`` actor holding ``add_category``, ready to authorize a write.
+
+    No ``create_users`` user holds a write permission by default and ``staff_1``
+    is ``is_staff`` but not a superuser, so a row driving ``createCategory`` has
+    to grant the permission explicitly - the same way ``test_products_api.py``
+    does - or it fails on authorization rather than on its own subject.
+    """
+    from django.contrib.auth.models import Permission
+
+    create_users(1)
+    user_model = get_user_model()
+    user = user_model.objects.get(username="view_category_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_category", content_type__app_label="products"),
+    )
+    return user_model.objects.get(pk=user.pk)  # drop the stale per-request perm cache
+
+
 def _assert_body_limit_response(response):
     """The package's own ``413``: the exact reason, ``text/plain``, no envelope.
 
@@ -803,15 +822,7 @@ def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(token_mode,
     user holds a write perm by default, and ``staff_1`` is ``is_staff`` but not a
     superuser) so the row fails on CSRF alone, never on authorization.
     """
-    from django.contrib.auth.models import Permission
-
-    create_users(1)
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_category_1")
-    user.user_permissions.add(
-        Permission.objects.get(codename="add_category", content_type__app_label="products"),
-    )
-    user = user_model.objects.get(pk=user.pk)  # drop the stale per-request perm cache
+    user = _user_who_can_add_categories()
     client = Client(enforce_csrf_checks=True)
     client.force_login(user)
     client.get("/graphql/", HTTP_ACCEPT="text/html")
@@ -956,10 +967,10 @@ async def test_the_async_package_view_runs_inside_djangos_middleware_chain():
     transport.
     """
     with override_settings(ROOT_URLCONF=__name__):
-        response = await AsyncClient().post(
-            "/async-graphql/",
-            data=json.dumps({"query": _TYPENAME}),
-            content_type="application/json",
+        response = await _post_bytes(
+            AsyncClient(),
+            json.dumps({"query": _TYPENAME}),
+            path="/async-graphql/",
         )
 
     assert response.status_code == 200
@@ -992,21 +1003,13 @@ async def test_the_async_package_view_enforces_the_same_utf8_wire_contract():
     document = json.dumps({"query": _TYPENAME})
     with override_settings(ROOT_URLCONF=__name__):
         client = AsyncClient()
-        utf16 = await client.post(
-            "/async-graphql/",
-            data=document.encode("utf-16"),
-            content_type="application/json",
+        utf16 = await _post_bytes(client, document.encode("utf-16"), path="/async-graphql/")
+        utf8_bom = await _post_bytes(
+            client,
+            b"\xef\xbb\xbf" + document.encode("utf-8"),
+            path="/async-graphql/",
         )
-        utf8_bom = await client.post(
-            "/async-graphql/",
-            data=b"\xef\xbb\xbf" + document.encode("utf-8"),
-            content_type="application/json",
-        )
-        control = await client.post(
-            "/async-graphql/",
-            data=document,
-            content_type="application/json",
-        )
+        control = await _post_bytes(client, document, path="/async-graphql/")
 
     assert utf16.status_code == 400
     assert utf8_bom.status_code == 400
@@ -1262,15 +1265,7 @@ def test_an_over_cap_mutation_is_rejected_before_any_parse_or_schema_execution()
     only the positive direction shows both instruments work, which is what turns
     the empty lists into evidence.
     """
-    from django.contrib.auth.models import Permission
-
-    create_users(1)
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_category_1")
-    user.user_permissions.add(
-        Permission.objects.get(codename="add_category", content_type__app_label="products"),
-    )
-    user = user_model.objects.get(pk=user.pk)  # drop the stale per-request perm cache
+    user = _user_who_can_add_categories()
 
     over_name = "zzz_cap_rejected_cat"
     under_name = "zzz_cap_allowed_cat"
@@ -1436,16 +1431,8 @@ async def test_the_async_package_view_enforces_the_same_body_cap():
     """
     with override_settings(ROOT_URLCONF=__name__):
         client = AsyncClient()
-        over = await client.post(
-            "/async-cap-tiny/",
-            data=_sized_body(_TINY_CAP * 4),
-            content_type="application/json",
-        )
-        under = await client.post(
-            "/async-cap-tiny/",
-            data=_sized_body(_TINY_CAP),
-            content_type="application/json",
-        )
+        over = await _post_bytes(client, _sized_body(_TINY_CAP * 4), path="/async-cap-tiny/")
+        under = await _post_bytes(client, _sized_body(_TINY_CAP), path="/async-cap-tiny/")
 
     _assert_body_limit_response(over)
 
@@ -1551,15 +1538,11 @@ async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_
     """
     with _strawberry_patch_opted_out():
         client = AsyncClient()
-        rejected = await client.post(
-            "/async-graphql/",
-            data=body,
-            content_type="application/json",
-        )
-        control = await client.post(
-            "/async-graphql/",
-            data=json.dumps({"query": _TYPENAME}),
-            content_type="application/json",
+        rejected = await _post_bytes(client, body, path="/async-graphql/")
+        control = await _post_bytes(
+            client,
+            json.dumps({"query": _TYPENAME}),
+            path="/async-graphql/",
         )
 
     assert rejected.status_code == 400
@@ -1720,11 +1703,7 @@ def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
     scalar = b"42"
 
     with _strawberry_patch_opted_out():
-        unguarded = Client(raise_request_exception=False).post(
-            "/graphql/",
-            data=scalar,
-            content_type="application/json",
-        )
+        unguarded = _post_bytes(Client(raise_request_exception=False), scalar)
 
     guarded = _post_bytes(Client(), scalar)
 

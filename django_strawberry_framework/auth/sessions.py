@@ -123,8 +123,9 @@ def classify_transport(request: Any) -> Transport:
         raise ConfigurationError(
             "The auth session boundary received a Channels request scope with an "
             f'unsupported `type` ({scope_type!r}); expected `"http"` or `"websocket"`. '
-            "Route GraphQL through DjangoGraphQLProtocolRouter so the scope carries a "
-            "recognized protocol type.",
+            "Serve GraphQL over HTTP through DjangoGraphQLView in your URLconf, and "
+            "over WebSocket through DjangoGraphQLProtocolRouter, so the scope carries "
+            "a recognized protocol type.",
         )
     if isinstance(request, HttpRequest):
         return Transport.DJANGO_HTTP

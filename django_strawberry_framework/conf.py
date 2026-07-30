@@ -114,7 +114,12 @@ RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
 # ``views.py::_resolved_max_request_body_bytes``, overridable per mount with
 # ``as_view(max_request_body_bytes=...)``). The bound is on bytes the
 # application actually RECEIVED, not on the client's ``Content-Length``
-# declaration. Defaults to ``1_048_576`` (1 MiB): a GraphQL request body is a
+# declaration - EXCEPT for a multipart request, whose bound is the declaration
+# plus Django's own ``MultiPartParser`` and nothing else. A multipart body is
+# deliberately never materialized here: reading it would defeat Django's
+# streaming upload handlers and break the ``Upload``-scalar path this package
+# ships, so per-file count, per-file size, and aggregate size are NOT bounded
+# by this key. Defaults to ``1_048_576`` (1 MiB): a GraphQL request body is a
 # query document, whose legitimate size is orders of magnitude below Django's
 # upload-shaped ``DATA_UPLOAD_MAX_MEMORY_SIZE``, which is why the endpoint does
 # not inherit that project-wide knob. ``None`` disables the package cap and

@@ -71,6 +71,12 @@ def describe_value(value: object) -> str:
     try:
         return f"{_safe_type_name(value)} {value!r}"
     except BaseException:
+        # Deliberately NOT the ``<unprintable {T}>`` spelling its two siblings use
+        # (``_safe_arg_repr`` and ``DjangoStrawberryFrameworkError.__str__``): those
+        # render STANDALONE, while this one is a FRAGMENT interpolated into prose
+        # ("got an unprintable Foo."). Three sites carrying two spellings is the
+        # cost of that grammatical difference - do not unify them, or one of the
+        # three sites reads wrongly.
         return f"an unprintable {_safe_type_name(value)}"
 
 

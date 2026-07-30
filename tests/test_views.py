@@ -1,4 +1,4 @@
-"""Package-tier contracts for the package's Django GraphQL views (spec-065 Slice 1).
+"""Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
 
 Deliberately narrow: this file holds only what a live request cannot express
 (spec-065 Decision 13, Placement). Every request-shaped S1 proof - project
@@ -1687,6 +1687,43 @@ def test_only_codecs_that_canonicalize_to_utf8_are_accepted_as_a_form_encoding(c
 
     with pytest.raises(HTTPException) as excinfo:
         view._enforce_multipart_form_encoding(request)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == _JSON_PARSE_REASON
+
+
+_NON_STRING_ENCODINGS = (
+    pytest.param(b"utf-8", id="bytes-lifted-off-a-header"),
+    pytest.param(42, id="int"),
+    pytest.param(object(), id="arbitrary-object"),
+)
+
+
+@pytest.mark.parametrize("encoding", _NON_STRING_ENCODINGS)
+def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_typeerror(encoding):
+    """``codecs.lookup`` raises ``TypeError``, not ``LookupError``, on a non-string.
+
+    ``request.encoding`` is a public settable attribute with no type coercion, so
+    the value ``_form_encoding_is_utf8`` resolves is whatever consumer middleware
+    assigned - and ``b"utf-8"`` lifted straight off a header is the plausible slip
+    rather than a synthetic one. ``codecs.lookup`` refuses every non-``str``
+    argument with ``TypeError``, which no ``LookupError`` handler catches.
+
+    The refusal is asserted at the boundary rather than on
+    ``_canonicalizes_to_utf8``'s return value, because the contract at stake is
+    the wire outcome: with the ``TypeError`` arm gone the exception escapes
+    ``_enforce_multipart_form_encoding`` -> ``_enforce_request_boundary`` -> ``run``
+    and upstream's ``dispatch`` ``except HTTPException`` does not catch it, so a
+    controlled ``400`` becomes an unhandled ``500``. That is not a claim a narrower
+    row could not see the mutation - removing the arm makes the helper *raise*
+    rather than return, so a row asserting only ``is False`` fails too. What this
+    shape buys is that the assertions are the observable contract: the status code
+    and the shared reason string, rather than a private helper's return value.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_multipart_form_encoding(_multipart_request(encoding=encoding))
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == _JSON_PARSE_REASON

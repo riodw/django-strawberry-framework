@@ -1,6 +1,6 @@
 # Spec: Transport security — Django-owned HTTP, a bounded request body, one UTF-8 wire, and WebSocket actor revalidation
 
-Planned for `0.0.15` (card [`WIP-ALPHA-065-0.0.15`][kanban]). This is **card 1 of a
+Planned for `0.0.15` (card [`DONE-065-0.0.15`][kanban]). This is **card 1 of a
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's two Blockers (**S1**, **S2**),
 two Mediums (**S9**, **S11**), and the **transport slice of S12**. Cards
@@ -34,9 +34,12 @@ package's documented API freeze begins at `1.0.0`; correcting a newly confirmed
 security-boundary error during alpha is strictly preferable to preserving an unsafe
 migration convenience.
 
-Status: **IN BUILD — Slices 1-4 (S1, S2, S9, S11) are built, with
+Status: **BUILT — all five slices (S1, S2, S9, S11, and the S12 transport slice) are
+built, with
 [Decisions 16-19](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
-contracts landing inside them; Slice 5 remains.** Five slices: Slice 1 (**S1** — the
+contracts landing inside them. The `0.0.15` release itself is the joint cut's
+([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)), so the
+version quintet still reads `0.0.14` on disk.** Five slices: Slice 1 (**S1** — the
 protocol
 split: HTTP to a required Django ASGI application, the package's Django GraphQL view,
 WebSocket-only exact routing), Slice 2 (**S2** — the cumulative body cap plus the
@@ -194,14 +197,18 @@ Each top-level item maps to one commit / PR.
   - [ ] `_strawberry_patches.py::_patched_parse_json` decodes nothing and keeps its
         `UnicodeDecodeError` translation, which is a genuine upstream bug fix; both patch
         modules' `APPLY_UPSTREAM_PATCHES` docstring paragraphs state that the gate covers
-        upstream *defects* only, scope the per-half consequence of disabling it to
-        Strawberry's own view, and name the two view-owned halves that carry the wire
+        upstream *defects* only, scope the per-half consequence of disabling it **per
+        mount** — the `cross_web` half reaches Strawberry's own view alone, the Strawberry
+        half reaches a package mount too, through `super().parse_json` — and name the two
+        view-owned halves that carry the wire
         contract whatever the setting says.
   - [ ] `_cross_web_patches.py::_patched_body` keeps returning raw bytes; its docstring
         is rewritten to state the new contract, the mount it now serves (a package view
         never reaches that getter), and why the patch survives S1.
   - [ ] The multipart control-document guard: each view overrides upstream's
-        `parse_multipart` with a two-line delegate over one shared mixin helper, which
+        `parse_multipart` with a thin delegate over one shared mixin helper — two statements
+        on the sync view, three on the async one, whose request adapter's form data must be
+        awaited before it can be handed over — which
         accepts only an effective form encoding that canonicalizes to UTF-8 and refuses a
         `operations` / `map` value carrying Django's replacement marker `U+FFFD`, both with
         the same controlled `400`, **before** either value reaches `parse_json`
@@ -329,9 +336,9 @@ Each top-level item maps to one commit / PR.
   - [ ] The Slice-3 prose correction, in
         `examples/fakeshop/test_query/test_transport_api.py` and carried here for the same
         reason as the Slice-1 and Slice-2 prose above: the module docstring's **first line**
-        still scopes the file to `(spec-065 Slices 1-2)` although it now also carries the
-        S9 async rows and the wire contract's kill-switch rows — correct it to the file's
-        actual slice scope, and do it **before** the [`docs/TREE.md`][tree] regenerate in
+        must name the file's actual slice scope, which now also covers the S9 async rows and
+        the wire contract's kill-switch rows — confirm it does and correct it if it does
+        not, and do that **before** the [`docs/TREE.md`][tree] regenerate in
         this same slice, because that first line is the text `scripts/build_tree_md.py`
         renders (pinning a number at Slice 3 would have been a guess about a file Slice 4
         could still add rows to; pinning it here pins the truth). No assertion changes; the
@@ -414,8 +421,10 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   missing-`Origin`** handshake is denied against `ALLOWED_HOSTS`. What that composition does
   **not** do — measured, not assumed — is validate the handshake's `Host`.
   `channels.security.websocket.OriginValidator.__call__` reads the `Origin` header and
-  nothing else, and `AllowedHostsOriginValidator` is only a factory for
-  `OriginValidator(settings.ALLOWED_HOSTS)`; a handshake carrying an allowed `Origin` and a
+  nothing else, and `AllowedHostsOriginValidator` is a factory that configures it with
+  `settings.ALLOWED_HOSTS` — or, under `DEBUG` with that setting empty, with its own
+  hardcoded `["localhost", "127.0.0.1", "[::1]"]` — and reads no `Host` under either;
+  a handshake carrying an allowed `Origin` and a
   hostile `Host` connects successfully. The class name is not evidence of behavior, and this
   card therefore adds the missing Host boundary rather than narrowing the claim
   ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
@@ -539,8 +548,8 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
 4. **One wire encoding, on every JSON document the endpoint parses.** An
    `application/json` request body is UTF-8, strictly, with one documented BOM policy and
    byte-identical sync / async behavior. A multipart `operations` / `map` control document
-   — which Django, not the package, decodes — must declare an effective UTF-8 encoding and
-   must survive that decode without a replacement marker
+   — which Django, not the package, decodes — must be decoded by Django in UTF-8, must not
+   have declared any other encoding, and must survive that decode without a replacement marker
    ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
    Both halves have a lifecycle of their own: permanent
    package policy, not a workaround riding a patch's kill switch.
@@ -647,9 +656,12 @@ borrowed HTTP branch is the defect. So this card **stops borrowing that half**:
 - **Borrowed from Strawberry:** `strawberry.django.views.GraphQLView` /
   `AsyncGraphQLView` are subclassed rather than reimplemented
   ([Decision 6](#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf)).
-  Both are part of the existing hard `strawberry-graphql` dependency (their imports are
-  `django`, `cross_web`, and `strawberry` only, verified in the installed 0.316.0), so no
-  optional-import guard applies.
+  Both are part of the existing hard `strawberry-graphql` dependency, and their imports are
+  the standard library, `asgiref`, `cross_web`, `django`, `strawberry.http`, and their own
+  `strawberry.django.context` sibling — verified in the installed 0.316.0, and the same list
+  `views.py`'s own module docstring states. No optional-import guard applies: `asgiref` is
+  Django's own hard dependency, and every other name is already a hard dependency of this
+  package.
 - **`graphene-django` still ships no ASGI/Channels helper**, so the honest-parity claim
   from `spec-041` is unchanged in kind — but it is now parity *plus a documented
   divergence*, which per [Cookbook parity][glossary-cookbook-parity] is exactly the class
@@ -746,8 +758,9 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 - **HTTP path matching is Django's.** `path("graphql/", ...)` matches `/graphql/` and
   nothing else; `/graphql` is handled by `CommonMiddleware`'s `APPEND_SLASH`, and
   `/graphql-admin` / `/graphqlanything` reach the rest of the URLconf or `404`. The
-  migration note states the explicit policy and warns that an `APPEND_SLASH` redirect is
-  a `301` most clients will not re-`POST` — post to the trailing-slash URL, or declare
+  migration note states the explicit policy and warns that an `APPEND_SLASH` redirect is a
+  `301` most clients will not re-`POST` under `DEBUG=False`, and a `RuntimeError` rather than
+  a redirect at all under `DEBUG=True` — post to the trailing-slash URL, or declare
   both patterns deliberately.
 - **WebSocket path matching is the router's, and is exact.** `r"^graphql/?$"` matches
   `/graphql` and `/graphql/` and rejects every prefix extension.
@@ -823,7 +836,8 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 - **Multipart control document the endpoint refuses to decode** — the same
   `HTTPException(400, "Unable to parse request body as JSON")` as every other refused
   request document, raised before `parse_json` sees either value. Identical status and
-  reason for the two refusal causes (a non-UTF-8 effective form encoding, and a `U+FFFD`
+  reason for every refusal cause (a non-UTF-8 declared `charset`, a non-UTF-8 encoding
+  Django would decode with, and a `U+FFFD`
   in a decoded control value) and identical to a plain malformed-JSON rejection, for the
   same reason the nine encoding shapes share one response: a caller must not be able to
   attribute a rejection by message
@@ -1002,13 +1016,16 @@ every integration surface (`routers.py`, `middleware/debug_toolbar.py`,
 does ship a view, and the exact `urlpatterns` entry is the one above.
 
 The subclass adds exactly **one subject** — the raw request body — and inherits everything
-else. That subject is two questions and two overridden hooks, both on one shared private
-mixin: how many of the body's bytes will be processed (the cumulative cap,
+else. That subject is two questions: how many of the body's bytes will be processed (the
+cumulative cap,
 [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared))
 and how those exact bytes become text (the strict UTF-8 wire contract,
 [Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
+Answering them takes **four** overridden hooks, every decision body of which sits once on one
+shared private mixin; the count, and which two of the four are hosted on the mixin itself
+rather than declared per view, are stated once under *Helper-reuse obligations (DRY)*.
 Every upstream kwarg (`graphql_ide`, `allow_queries_via_get`,
-`multipart_uploads_enabled`, `subscriptions_enabled`) keeps working, unchanged, so the
+`multipart_uploads_enabled`) keeps working, unchanged, so the
 S1 regression proving `graphql_ide=None` and `allow_queries_via_get=False` are supported
 is a proof about the shipped surface rather than about a package reimplementation.
 
@@ -1053,6 +1070,19 @@ request-body ceiling before `parse_json` and before schema execution:
    disables the package cap explicitly; a `None` *kwarg*, by contrast, means "this mount did
    not override anything" and defers to the setting, so a single mount cannot disable a cap
    the project has set.
+
+**Method scoping, stated because steps 2 and 3 split on it.** The limit is resolved on every
+request, so a misconfigured mount fails loud on `GET` too, but it bounds nothing on a `GET`:
+this endpoint reads no body for one. Which of steps 2 and 3 a body-bearing request takes is
+then decided by a single named discriminator, `views.py::_is_multipart_form_post`, true only
+for a `multipart/form-data` **POST** — `HttpRequest._load_post_and_files` installs an empty
+`QueryDict` without consulting the content type at all unless the method is `"POST"`. So a
+stale `multipart/form-data` `Content-Type` on any other method describes a form Django will
+never parse, and such a request takes step 2 and is **counted like any other body** — the
+stricter direction — rather than being handed off under step 3. Naming the discriminator once
+is also what stops this carve-out and
+[Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)'s
+encoding guard drifting apart on a request shape.
 
 **How the body is measured, and why not `len(request.body)`.** `HttpRequest.body` performs
 an unbounded `self.read()` into one `bytes` value, so counting it would detect an
@@ -1111,8 +1141,12 @@ seam this design deliberately centralizes, so the probe reports exactly three ou
    Verifying a zero costs exactly one `read`, so the fail-safe direction is affordable, and
    a genuinely empty body is still allowed — by measurement rather than by assumption.
 3. **Position potentially corrupted** — the seek to the end succeeded (or raised after
-   moving) and the restoring seek then failed, so the stream's read position is no longer
-   known to be where the request started. The package **fails closed** with its own
+   moving) and the restore then failed to prove itself: the restoring seek raised, or the
+   `tell()` that verifies it answered something other than the position the probe started
+   from. Either way the stream's read position is no longer
+   known to be where the request started, and the two are one outcome rather than two — an
+   over-reported position takes the second route, because a `tell()` that lies about where
+   the stream is lies about the restore too. The package **fails closed** with its own
    controlled rejection rather than reading from an unknown offset or guessing a rewind to
    zero: the bytes cannot be recovered, and a bounded read from an unknown position would
    measure a body nobody sent. This is the only new refusal, and it is a refusal rather
@@ -1149,9 +1183,14 @@ with a controlled `413`. The un-fixable half is [Decision 8](#decision-8--the-de
 
 **Decision.** The spec documents an explicit reverse-proxy / ASGI-server body cap as a
 **required** part of the deployment contract, with concrete directions
-(`client_max_body_size` on nginx, `--limit-request-field-size` / equivalents on the ASGI
-server, and the note that Daphne's request-buffer size controls fragment delivery rather
-than total accepted body). Slice 5's transport guidance states plainly that routing
+(`client_max_body_size` on nginx, `LimitRequestBody` on Apache, and the statement that
+**no mainstream ASGI server bounds the total body at all** — Uvicorn, Hypercorn, and
+Daphne ship no total-request-body limit, the size knobs they do expose bound the request
+line and headers rather than the body, and Daphne's request-buffer size controls fragment
+delivery rather than total accepted body). Naming a header-shaped knob as if it capped the
+body would hand the reader exactly the false comfort this decision exists to remove: the
+proxy line is load-bearing **because** the layer below the application supplies nothing.
+Slice 5's transport guidance states plainly that routing
 through Django restores the authoritative middleware lifecycle but **does not**
 automatically provide every transport resource bound, and that the package's view cap
 bounds what the application *processes*, not what the server *accepts*.
@@ -1171,8 +1210,13 @@ the other's obligation as its own:
   with the key rather than after it.
 - **Slice 5 owns the consumer-facing prose surface**: the [`docs/README.md`][docs-readme]
   transport guidance, where the concrete directives above live, together with the multipart
-  carve-out (for a multipart request the bound is the declaration plus Django's
-  `MultiPartParser`, not a byte count) — and, alongside it, the statement that the
+  carve-out (on a multipart **POST** — the one request shape
+  `views.py::_is_multipart_form_post` admits — the bound is the declaration plus Django's
+  `MultiPartParser`, not a byte count; a multipart content type on any other method takes
+  the counted path like any other body, per
+  [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)'s
+  method scoping, and the carve-out must be stated with that scope so a reader cannot read
+  the looser half as the whole rule) — and, alongside it, the statement that the
   declaration *is* nonetheless enforced before that parser and its upload handlers run,
   which is a property of the view's `csrf_exempt` / `csrf_protect` ordering rather than of
   the cap
@@ -1239,8 +1283,10 @@ with a controlled `400`; a package view never reaches that getter at all.
 `UnicodeDecodeError` translation, which remains reachable on that same upstream-mounted
 path (`json.loads(bytes)` raises it whenever the bytes are undecodable under the encoding
 `detect_encoding` picks) and is a genuine upstream bug fix. The patch pair's joint
-ownership of the malformed-body contract is unchanged, and so is its subject — Strawberry's
-own view; what narrows is the *success* set, and it narrows on the package view.
+ownership of the malformed-body contract is unchanged, and so is its subject for the
+`cross_web` half — Strawberry's own view. Its subject is *both* mounts for the Strawberry
+half, whose body-envelope guard a package view still reaches through `super().parse_json`;
+what narrows is the *success* set, and it narrows on the package view.
 
 **Ownership follows lifecycle, so the gate does not carry the policy.** Both patches keep
 installing where they install today — from `apps.py::DjangoStrawberryFrameworkConfig.ready`
@@ -1269,11 +1315,17 @@ property-scoped decode costs, why `request_adapter_class` is the seam, and why t
 is not the `cross_web` patch under another name. The
 `APPLY_UPSTREAM_PATCHES` paragraph of **both** patch module docstrings —
 `_strawberry_patches.py` and `_cross_web_patches.py` — states that the gate covers upstream
-*defects* only, names the per-half consequence of disabling it **on Strawberry's own view**,
-the only mount the gate can still reach (without the `cross_web` half an undecodable body is
-an unhandled `500` there; without the Strawberry half a scalar or non-object-batch body is),
-and names the two view-owned halves that carry the wire contract on a package mount whatever
-the setting says. Naming both is the point: a consumer who reads only the module they
+*defects* only, and names the per-half consequence of disabling it **per mount**, because the
+two halves do not reach the same mounts. The `cross_web` half reaches Strawberry's own view
+alone — without it an undecodable body is an unhandled `500` there, while a package mount is
+untouched, since `_RawBodyRequestAdapter` shadows the patched property by identity. The
+Strawberry half reaches **both** mounts: the mixin's `parse_json` delegates with `super()`
+into `BaseView.parse_json`, which is the very attribute that patch assigns, so with the gate
+off a scalar or non-object-batch body (`b"42"`, `b"[1,2]"`) comes back out of a real
+`DjangoGraphQLView` unguarded and reaches the same unhandled `500` it reaches on upstream's
+view. What rides the gate on neither mount is the **wire contract**: the strict decode and
+the body source are view-owned code, and both docstrings name those two halves as carrying it
+whatever the setting says. Naming both is the point: a consumer who reads only the module they
 disabled still learns exactly what they gave up, and what they did not. Any consumer-facing
 restatement is Slice 5's transport deployment guidance, not a fifth code surface.
 
@@ -1391,8 +1443,9 @@ not a per-operation seam. The per-operation **admission** entries are
 `BaseGraphQLTransportWSHandler.handle_subscribe` and the `graphql_ws` sibling's
 `handle_start`, reachable through the `graphql_transport_ws_handler_class` /
 `graphql_ws_handler_class` class attributes on the view. The package's consumer points
-those at two two-line subclasses, each of which awaits one shared package function and
-then delegates with `super()`. The revalidation logic is single-sited in that function;
+those at two three-line subclasses, each of which awaits one shared package function,
+returns without admitting the operation if it refused, and otherwise delegates with
+`super()`. The revalidation logic is single-sited in that function;
 the per-protocol subclasses carry no logic of their own.
 
 Admission is only **half** the boundary. An admitted subscription iterates its result
@@ -1474,8 +1527,9 @@ finite but astronomical window: `10**300` and `1e308` are accepted, and a window
 [Decision 12](#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced)
 sets no maximum connection lifetime — there is no correct default, any ceiling would be a
 constant invented here rather than derived from anything, and the window is a deliberate
-consumer trade-off (one session read per authenticated operation against a named revocation
-delay) that the deployment can price and the package has no standing to second-guess. The
+consumer trade-off (one session read per authenticated **checkpoint** against a named
+revocation delay — never per operation, since the outbound frame is a checkpoint too) that the
+deployment can price and the package has no standing to second-guess. The
 guard is about values the package cannot *use*, not about values it disapproves of.
 
 The message renders through the package's one safe value-describer, since the `got ...` tail
@@ -1532,15 +1586,6 @@ reference occupy the server*. That residue is DoS-relevant and is named as such
 ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
 #"The idle-socket consequence"); it is not an authorization hole, because the idle socket has
 no authorization capability while idle.
-
-**Why not enforce it.** A framework-imposed disconnect is a visible behavior change for
-every subscription consumer, with no correct default: the right lifetime for a dashboard
-subscription and for a short-lived request-response socket differ by orders of magnitude.
-The audit asks for "at minimum, document a maximum connection lifetime and a
-consumer-class injection seam"; the seam ships in
-[Decision 11](#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default),
-and with revalidation on at both checkpoints, lifetime stops being the bound the
-*authorization* boundary depends on.
 
 *Rejected alternatives and change record: [rationale companion, Decision 12][rationale-d12].*
 
@@ -1848,7 +1893,7 @@ to Slice 5, because leaving an unreachable send path behind would be dead code u
 `fail_under = 100`.
 
 **One connection-local lock, held through the send.** A single `asyncio.Lock`, owned by the
-connection's adapter instance (upstream constructs exactly one per connection, which is what
+package's consumer instance (Channels constructs exactly one per connection, which is what
 makes "connection-local" structural rather than conventional), spans the whole critical
 section: the window / cache decision, the session read, the revoked-state transition, **and
 the actual send**. Holding it through the send is intentional and is the reason the gate is
@@ -1902,21 +1947,60 @@ package adds a guard at its own boundary, and nothing else: no copy or subclass 
 `MultiPartParser._parse`, no double-read-and-rewind of the body, no monkeypatching of
 `force_str`, and no second multipart parser anywhere in the package.
 
-Two conditions must hold before Strawberry parses `operations` / `map` as JSON:
+An accepted multipart control document must satisfy **three requirements** before Strawberry
+parses `operations` / `map` as JSON. They are independent requirements and emphatically **not
+rungs of a fallback chain**: Django applies no such order, so no requirement may be treated as
+satisfied by another one falling through to it.
 
-1. **The effective multipart form encoding must canonicalize to UTF-8.** The package resolves
-   it the way Django does — the declared top-level `charset` (which Django has already
-   promoted onto `request.encoding` from `content_params`), else `settings.DEFAULT_CHARSET` —
-   and accepts only codec aliases that canonicalize to UTF-8. An explicit `charset=iso-8859-1`,
-   or anything else, is refused with the normal controlled `400`.
-2. **A decoded control value must not carry Django's replacement marker.** After
+1. **The encoding Django will actually decode with must canonicalize to UTF-8.** That encoding
+   is `request.encoding or settings.DEFAULT_CHARSET` — verbatim the value
+   `HttpRequest.parse_file_upload` and `MultiPartParser.__init__` produce between them, and the
+   only value Django decodes a non-file field with. It is checked whatever the client declared,
+   which is the point: `request.encoding` is Django's documented per-request override, so one
+   line of consumer middleware assigning it overwrites the promotion a declared `charset=utf-8`
+   performed, and the declaration must never be allowed to mask that. Validating the
+   declaration *instead* would let a client choose which value was checked while Django decoded
+   with the other one — and because a Latin-1 decode never fails, requirement 3 could not see
+   the substitution either.
+2. **A declared top-level `charset`, when present, must canonicalize to UTF-8 as well.**
+   Requirement 1 does not imply this and cannot. Django consults the declaration exactly
+   **once**, at `HttpRequest._set_content_type_params`, which promotes a *usable* `charset` onto
+   `request.encoding` and silently drops an unusable one; at parse time `content_params` is
+   never read again. So for a codec name Django cannot load, `request.encoding` stays `None`,
+   requirement 1 is satisfied by a UTF-8 `DEFAULT_CHARSET`, and the request would be accepted
+   with its declaration honoured by nobody. The package refuses it instead — and refuses a
+   *usable* non-UTF-8 declaration too, so a client asking for an encoding this endpoint will
+   not honour always gets a controlled `400` rather than a decode in some other encoding, and
+   the two requirements never have to be reasoned about jointly.
+3. **A decoded control value must not carry Django's replacement marker.** After
    `request.POST` is populated, the guard inspects **only** the serialized `operations` and
    `map` values and refuses a literal `U+FFFD` before `json.loads` runs.
 
+All three apply to precisely the requests whose non-file fields Django decodes, which is a
+multipart **POST** and nothing else — the same `views.py::_is_multipart_form_post`
+discriminator that scopes
+[Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)'s
+multipart carve-out. A stale `multipart/form-data` `Content-Type` on a `GET` therefore
+describes a form nothing will parse, and refusing it would be the package inventing a
+rejection for bytes nobody decodes.
+
+Requirements 1 and 2 accept exactly the codec aliases `codecs.lookup` canonicalizes to UTF-8,
+never a name comparison: every UTF-8 alias passes (`utf8`, `U8`, one the package never heard
+of), the near-miss `utf-8-sig` is a *different* codec and is refused because it would swallow
+the BOM [Decision 10](#decision-10--a-utf-8-bom-is-rejected) deliberately rejects, and a name
+Python cannot resolve cannot be proven UTF-8 and is therefore a refusal.
+
+A project that reconfigures `DEFAULT_CHARSET` away from UTF-8 is consequently refused when
+nothing else supplies the encoding, and **accepted** when the client declares UTF-8 — because
+that declaration is promoted onto `request.encoding` and is genuinely what Django decodes with.
+The requirements track Django's real behavior rather than restating a rung order of the
+package's own.
+
 The guard is one shared helper on `_RequestBodyBoundaryMixin`; each view overrides upstream's
-`parse_multipart` with a two-line delegate that runs the helper and then calls `super()` —
-the sync view synchronously, the async view as a coroutine, which is the same forced
-sync/async asymmetry the two `run` overrides already carry. No new module, and the mixin
+`parse_multipart` with a thin delegate that runs the helper and then calls `super()` — the
+sync view synchronously in two statements, the async view as a coroutine in three, because its
+request adapter's form data must be awaited before it can be handed over, which is the same
+forced sync/async asymmetry the two `run` overrides already carry. No new module, and the mixin
 keeps being the single home of the request-body boundary
 ([Decision 6](#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf)).
 
@@ -1930,9 +2014,10 @@ and a malformed UTF-8 byte (`0x80`) was replacement-decoded and also executed wi
 strict decode is therefore *unavailable* at this seam, and the honest options are to detect
 the loss or to own the parser. This decision detects the loss.
 
-**The contract, stated precisely.** An accepted multipart control document must use an
-effective UTF-8 encoding **and** must survive Django's decoding without a replacement marker.
-That is deliberately **slightly narrower** than "every valid UTF-8 document": a document that
+**The contract, stated precisely.** An accepted multipart control document must be decoded by
+Django in UTF-8, must not have *declared* any other encoding, **and** must survive that
+decoding without a replacement marker. That is deliberately **slightly narrower** than "every
+valid UTF-8 document": a document that
 legitimately contains a literal `U+FFFD` character is refused, because the package cannot
 distinguish it from a replacement Django generated. It is also deliberately **much wider**
 than ASCII-only: genuine multibyte UTF-8 passes untouched, so ordinary browser
@@ -1947,9 +2032,13 @@ across Django 5.2 through current.
 | UTF-8, ASCII only | clean | passes | **success** |
 | UTF-8, genuine multibyte (`café`) | clean | passes | **success** |
 | ASCII with a JSON escape (`\u00e9`, or `\ufffd`) | clean | passes | **success** |
-| declared `charset=iso-8859-1` | clean, wrong codec | refused at condition 1 | `400` |
-| no charset, malformed UTF-8 byte | replaced with `U+FFFD` | refused at condition 2 | `400` |
-| UTF-8 containing a literal `U+FFFD` | clean | refused at condition 2 | `400` (the accepted narrowing) |
+| declared `charset=iso-8859-1` (or `utf-16`, or `utf-8-sig`) | clean, wrong codec — a usable declaration is promoted onto `request.encoding` | refused at requirement 2 | `400` |
+| declared `charset=no-such-codec` | Django drops the unusable name and decodes with `DEFAULT_CHARSET` | refused at requirement 2 | `400` (a declaration nobody honoured) |
+| no charset, `DEFAULT_CHARSET` reconfigured to `iso-8859-1` | clean, wrong codec | refused at requirement 1 | `400` |
+| declared `charset=utf-8`, `DEFAULT_CHARSET` reconfigured to `iso-8859-1` | clean UTF-8 — the declaration is what `MultiPartParser` receives | passes | **success** |
+| declared `charset=utf-8`, consumer middleware assigned a non-UTF-8 `request.encoding` | clean, wrong codec | refused at requirement 1 | `400` (the declaration cannot mask the override) |
+| no charset, malformed UTF-8 byte | replaced with `U+FFFD` | refused at requirement 3 | `400` |
+| UTF-8 containing a literal `U+FFFD` | clean | refused at requirement 3 | `400` (the accepted narrowing) |
 
 *Rejected alternatives and change record: [rationale companion, Decision 17][rationale-d17].*
 
@@ -2065,8 +2154,15 @@ answer the same question the same way:
   header fails validation exactly as it does on HTTP rather than being silently reduced to
   one value;
 - include `X-Forwarded-Host`, so `USE_X_FORWARDED_HOST` behaves identically to HTTP;
-- include `scope["server"]` as `SERVER_NAME` / `SERVER_PORT`, Django's normal fallback when
-  no host header is present;
+- include `scope["server"]` as `SERVER_NAME` / `SERVER_PORT`, and when the scope carries no
+  server at all, Django's own literals — `SERVER_NAME = "unknown"` and `SERVER_PORT = "0"`,
+  the exact pair `django/core/handlers/asgi.py::ASGIRequest.__init__` installs — because that
+  pair is what `HttpRequest._get_raw_host` reconstructs the host from when no host header is
+  present. The literals are Django's, not the package's invention, and naming them is what
+  makes the resulting **verdict** derivable rather than assumed: `"unknown"` with port `"0"`
+  reconstructs to `"unknown:0"`, so a handshake carrying no host header, no
+  `X-Forwarded-Host` and no `scope["server"]` is **denied** under any `ALLOWED_HOSTS` that
+  does not contain `"unknown"` or `"*"`;
 - decode header bytes with the **Latin-1** Django/ASGI transport convention, the same codec
   Django's adapter and Channels' `OriginValidator` both use.
 
@@ -2082,8 +2178,15 @@ into "that host is not allowed", which would be indistinguishable from correct o
 
 **Why call Django rather than narrow the claim.**
 `channels.security.websocket.OriginValidator.__call__` reads the `Origin` header and nothing
-else, and `AllowedHostsOriginValidator` is only a factory for
-`OriginValidator(settings.ALLOWED_HOSTS)` — the name is not evidence of behavior. Narrowing
+else, and `AllowedHostsOriginValidator` is a factory that configures it with
+`settings.ALLOWED_HOSTS`, or — under `DEBUG` with that setting empty — with its own hardcoded
+`["localhost", "127.0.0.1", "[::1]"]`; the name is not evidence of behavior. That hardcoded
+list is a second reason to delegate rather than to trust a name: in the same situation
+`HttpRequest.get_host()` substitutes `[".localhost", "127.0.0.1", "[::1]"]`, so the leading
+dot that makes Django accept every `*.localhost` subdomain is absent from Channels' list. Two
+boundaries a reader would both call "allowed hosts" therefore already disagree about what the
+`DEBUG` default means, which is exactly why the package's Host answer must be Django's own
+`get_host()` and never a second expression of its own. Narrowing
 the package's claim to Origin-only is the least surprising correction and is rejected,
 because it leaves the handshake **accepting a hostile `Host`** with nothing else in the
 stack to catch it: Django never sees the WebSocket handshake at all, so unlike HTTP there is
@@ -2125,7 +2228,14 @@ removed in the change that ships the slice — the repo's standing staging disci
 
 - **The settings read goes through `conf.py`'s existing `Settings` reader.** No local
   `getattr(settings, ...)`; `MAX_REQUEST_BODY_BYTES` joins the existing key block with
-  its own module-level key constant, exactly like `NESTED_CONNECTION_STRATEGY`.
+  its own module-level key constant, exactly like `NESTED_CONNECTION_STRATEGY`. The rule is
+  about **package** settings — the `DJANGO_STRAWBERRY_FRAMEWORK` keys. A **Django** setting a
+  decision requires be read verbatim to mirror Django's own expression is not a package
+  setting and is read where the mirroring happens: `views.py::_form_encoding_is_utf8` reads
+  `settings.DEFAULT_CHARSET` directly because
+  [Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)
+  requires the exact pair `MultiPartParser.__init__` resolves, and routing it through
+  `conf.py` would put a layer between the check and the expression it must reproduce.
 - **The construction-time failure is [`ConfigurationError`][glossary-configurationerror]**,
   the package's single typed configuration error — not a new exception class, not
   `ImproperlyConfigured`, not `ValueError`.
@@ -2143,9 +2253,10 @@ removed in the change that ships the slice — the repo's standing staging disci
   write-back, revoke-or-continue) lives in the shared function, and the revoke-and-close
   response is a second shared coroutine both checkpoints reach
   ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
-  The connection-local lock, the revoked flag and the last-validated timestamp are **one**
-  set of state on the adapter instance upstream already creates per connection — not three
-  parallel caches keyed by protocol.
+  The connection-local lock, the revoked flag and the last-validated timestamp are all
+  **connection-scoped**, in the two homes a connection already has: the lock and the flag on
+  the one consumer instance Channels creates per connection, the timestamp on that
+  connection's ASGI `scope` — never three parallel caches keyed by protocol.
 - **The WebSocket Host boundary calls Django and matches nothing itself.**
   `DjangoWebSocketHostValidator` projects the handshake's Host metadata into a minimal
   `HttpRequest` and calls the public `HttpRequest.get_host()`; `ALLOWED_HOSTS` matching,
@@ -2153,9 +2264,11 @@ removed in the change that ships the slice — the repo's standing staging disci
   Django's alone, and no second allowed-host expression exists in the package
   ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
 - **The multipart control-field guard is one helper on the existing mixin.** Both views'
-  `parse_multipart` overrides are two-line delegates over it, in the same shape the two `run`
-  overrides already take, and the `400` they raise reuses the one `_JSON_PARSE_REASON`
-  constant rather than inventing a second reason string
+  `parse_multipart` overrides are thin delegates over it, in the same shape the two `run`
+  overrides already take — the sync one two statements, the async one three, because the async
+  request adapter's form data must be awaited before it can be handed over — and the `400`
+  they raise reuses the one `_JSON_PARSE_REASON` constant rather than inventing a second
+  reason string
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
 - **The CSRF re-entry uses Django's two public decorators and reimplements neither.**
   `csrf_exempt` on the callback `as_view()` returns, `csrf_protect` around the private
@@ -2166,11 +2279,24 @@ removed in the change that ships the slice — the repo's standing staging disci
   existing [Channels request adapter][glossary-channels-request-adapter] and
   [`request_from_info`][glossary-request_from_info] single-siting is preserved; this card
   adds **no** new request-context decoder, per that helper's hard single-siting rule.
-- **The view subclasses upstream rather than reimplementing it.** Two overridden hooks —
-  `run` for the cap and `parse_json` for the wire contract — both on the one private
-  `_RequestBodyBoundaryMixin` the two views share, so the sync and async colours cannot
-  diverge; every other behavior is inherited from `strawberry.django.views.GraphQLView` /
-  `AsyncGraphQLView`.
+- **The view subclasses upstream rather than reimplementing it.** Four overridden hooks, and
+  **every decision body sits once on the one private `_RequestBodyBoundaryMixin` the two views
+  share** — that single-siting, not the placement of the override itself, is what stops the
+  sync and async colours diverging. Two of the four are hosted on the mixin directly, because
+  upstream spells them identically on both views: `as_view` for the CSRF ordering
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry))
+  and `parse_json` for the wire contract
+  ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
+  The other two are declared on each concrete view, because upstream itself splits them by
+  colour and a mixin cannot be both: `run` for the cap
+  ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)) and
+  `parse_multipart` for the control-field guard
+  ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
+  Each of those four per-view overrides is a thin delegate onto a mixin-hosted method, so
+  neither pair may carry policy of its own. The view also sets `request_adapter_class` to the
+  package's own `_RawBodyRequestAdapter`, which is a class-attribute substitution rather than
+  a method override. Every other behavior is inherited from
+  `strawberry.django.views.GraphQLView` / `AsyncGraphQLView`.
 - **The UTF-8 decode is one `parse_json` override that delegates with `super()`**, so
   upstream stays the only JSON parser in the path. `_patched_parse_json` keeps its own
   `UnicodeDecodeError` → `HTTPException(400, ...)` translation and its
@@ -2207,8 +2333,12 @@ removed in the change that ships the slice — the repo's standing staging disci
 ## Edge cases and constraints
 
 - **`APPEND_SLASH` and `POST /graphql`.** With `path("graphql/", ...)`,
-  `CommonMiddleware` answers `GET /graphql` with a `301`; a `POST` to `/graphql` also gets
-  a `301`, which most HTTP clients will not re-`POST`. The migration note must say so and
+  `CommonMiddleware` answers `GET /graphql` with a `301`; under `DEBUG=False` a `POST` to
+  `/graphql` also gets a `301`, which most HTTP clients will not re-`POST`. Under
+  `DEBUG=True` it is not a redirect at all:
+  `CommonMiddleware.get_full_path_with_slash` raises `RuntimeError` for `DELETE` / `POST` /
+  `PUT` / `PATCH` rather than lose the body, so the same request is a `500` on the stack a
+  reader is most likely to test it on. The migration note must say both and
   offer the two deliberate resolutions (post to the trailing slash, or declare both
   patterns). This is the "explicit policy" the card's test plan asks for.
 - **Django's cap may fire before the package's, and it answers `400` on both transports.**
@@ -2260,19 +2390,23 @@ removed in the change that ships the slice — the repo's standing staging disci
   corrupt the read position — and lets `tell()` decide when it does not. Anything narrower
   drops the ASGI spool onto the read branch at exactly the interpreter the floor gate exists
   for: green on the dev stack, guarantee lost where it matters.
-- **An incoherent size probe is a measurement failure, and the direction it fails in is
-  stated.** Neither shape is hypothetical: a wrapper that answers `tell()` in the
-  coordinates of the whole message over-reports the position, and a queue- or
-  iterator-backed stream that can report a position but not take one returns the offset it
-  was handed, under-reporting the end. Both make the probed difference zero or negative,
-  and zero taken at face value reads as "within the limit" with no byte read anywhere — the
-  one answer a size probe must never be believed on. A probe answering zero or less
-  therefore yields no measurement at all and the bounded read supplies the bound. The cost
-  in the
-  over-reporting direction is disclosed rather than papered over: the restored position
-  lands past the end, so the request reaches Strawberry with an **empty** body and is a
-  `400` at the parse — never a bypass. Recovering the true bytes is impossible, and
-  rewinding to zero instead would corrupt a stream that was legitimately mid-position.
+- **An incoherent size probe is a measurement failure, and the direction it fails in
+  decides which refusal it gets.** Neither shape is hypothetical: a wrapper that answers
+  `tell()` in the coordinates of the whole message over-reports the position, and a queue-
+  or iterator-backed stream that can report a position but not take one returns the offset
+  it was handed, under-reporting the end. The two are refused differently, because the
+  restore is verified **before** the two answers are ever subtracted. An over-reported
+  position cannot survive that verification — the restoring seek is issued in the same lying
+  coordinates and the verifying `tell()` disagrees — so the probe reports a position it
+  could not prove it put back and the request is refused with the package's own `413` on
+  **zero bytes read**, plus the one server-side `WARNING` that records a distinction the
+  wire deliberately cannot carry. An under-reported end restores cleanly, so its answer
+  *is* judged, and it comes out at or below zero — where zero taken at face value would read
+  as "within the limit" with no byte read anywhere, the one answer a size probe must never
+  be believed on. A probe answering zero or less therefore yields no measurement at all and
+  the bounded read supplies the bound. Recovering an over-reporting stream's true bytes is
+  impossible, and rewinding to zero instead would corrupt a stream that was legitimately
+  mid-position.
   Neither production stream lies (`ASGIRequest`'s spool and `WSGIRequest`'s `LimitedStream`
   both measure honestly on both supported interpreters); these shapes are consumer
   middleware and custom ASGI servers, which is exactly where a silent fail-open would be
@@ -2284,8 +2418,10 @@ removed in the change that ships the slice — the repo's standing staging disci
   call the probe makes into a stream it did not create — `seekable()`, the seek to the end,
   the restoring seek, and the subtraction of the two answers — is guarded, and the guard
   branches on *what has already been mutated*. A failure before anything moved leaves the
-  original position intact, so the bounded read supplies the bound; a failure of the
-  **restoring** seek leaves the position unknown, so the request is refused with the
+  original position intact, so the bounded read supplies the bound; a **restore the probe
+  cannot prove** — the restoring seek raised, or the `tell()` that verifies it answered
+  something other than the position the probe started from — leaves the position unknown, so
+  the request is refused with the
   package's own controlled rejection rather than read from an unknown offset, guessed back to
   zero, or allowed to escape as an unrelated `500`
   ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
@@ -2313,16 +2449,18 @@ removed in the change that ships the slice — the repo's standing staging disci
   already-materialized-body case gets in
   [Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared).
 - **The multipart control-field guard runs on the values, never on the wire bytes.** Django
-  has already decoded them; the guard checks the *effective form encoding* and the presence
-  of `U+FFFD`, and it accepts a document that legitimately contains a literal `U+FFFD` as
-  the one deliberate false positive of the contract
+  has already decoded them; the guard checks the *declared* encoding, the encoding Django
+  actually decodes with, and the presence of `U+FFFD`, and it **refuses** a document that
+  legitimately contains a literal `U+FFFD` — the one deliberate false positive of the contract
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
   It must not be written as a `bytes` decode, because there are no bytes left to decode.
 - **GET requests carry no body.** The cap is a no-op on GET; the `variables` /
   `extensions` query-param size is a `TODO-ALPHA-066-0.0.16` concern (S4), and the
   existing `_patched_parse_query_params` shield keeps the body contract off those parses.
-- **`ALLOWED_HOSTS = []` with `DEBUG=True`** (fakeshop's shape) makes Django accept
-  `localhost` / `127.0.0.1` only. The hostile-`Host` live test must therefore assert a
+- **`ALLOWED_HOSTS = []` with `DEBUG=True`** (fakeshop's shape) makes Django substitute
+  `[".localhost", "127.0.0.1", "[::1]"]` — so every `*.localhost` subdomain is accepted, by
+  virtue of the leading dot, and so is the IPv6 loopback. The hostile-`Host` live test must
+  therefore assert a
   `400` from Django's own host validation, and must not depend on fakeshop's `DEBUG`
   value; it sets `ALLOWED_HOSTS` explicitly with `override_settings`. The **WebSocket**
   hostile-`Host` row inherits the same constraint for the same reason and through the same
@@ -2454,15 +2592,22 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     and no single requested size exceeds it; a body an earlier middleware already cached is
     refused from that cache with the stream unreadable; and an under-limit control reaches
     Strawberry byte-for-byte, `_body` absent and `_read_started` `False`, through the
-    rewound stream the cap installed. A stream whose `tell()` / `seek` pair is incoherent
-    in either direction — an over-reported position, an under-reported end — is refused a
-    measurement and bounded by the read instead, in both the over-limit direction (`413`,
-    one bounded read) and the genuinely-empty one (allowed, one bounded read), so the
-    probe's zero is never taken on trust. And the **third** probe outcome is pinned
-    separately: a stand-in whose `seekable()` raises, one whose seek-to-end raises, one whose
+    rewound stream the cap installed. The two incoherent `tell()` / `seek` directions get
+    separate rows, because the code refuses them differently. An **over-reported position**
+    is refused outright, with no measurement and no read: `413`, nothing requested of the
+    stream, nothing delivered, `_body` absent, and exactly one `WARNING` naming the probe
+    outcome and the offending stream's class. An **under-reported end** — a full body whose
+    probe answers zero — restores cleanly, so it is refused a *measurement* only and the
+    bounded read supplies the bound: `413` after one bounded read, with bytes demonstrably
+    left unread. Its control is a **genuinely empty** body on an honest stream, allowed after
+    one bounded read of that same `limit + 1` size, so the probe's zero is never taken on
+    trust in either direction. Each guarded capability call gets its own stand-in besides:
+    one whose `seekable()` raises, one whose seek-to-end raises, one whose
     subtraction result cannot be produced, and one whose **restoring** seek raises — the
     first three bounded by the read with the original position intact, the last refused with
-    the package's own controlled rejection and never a raw `500`
+    the package's own controlled rejection and never a raw `500`, which is the same verdict
+    the over-reported position reaches by the other route, since a restore that raises and a
+    restore that cannot be verified are one outcome
     ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
     #"An unmeasurable stream has three outcomes, not two").
 16. Which ceiling fired: package cap vs. Django's `DATA_UPLOAD_MAX_MEMORY_SIZE`, both
@@ -2598,7 +2743,17 @@ live, real multipart requests, **both** package views):
     success; genuine multibyte UTF-8 (the ordinary `JSON.stringify` shape) → success; a
     literal `U+FFFD` in an otherwise-clean document → `400`, the contract's one deliberate
     narrowing. The `map` field carries its own row, so the guard is proven not to inspect
-    `operations` alone.
+    `operations` alone. **Each of the three requirements fails on its own row**, so removing
+    any one of them costs the suite a distinct failure: alongside the usable non-UTF-8
+    declarations (`iso-8859-1`, `utf-16`, and the near-miss `utf-8-sig`), a declared
+    `charset` naming a codec Django **cannot load** → `400` even though the encoding Django
+    would decode with is UTF-8; a `DEFAULT_CHARSET` reconfigured away from UTF-8 with no
+    declaration → `400`; the same reconfiguration **with** a declared `charset=utf-8` →
+    success, because Django genuinely decodes that form as UTF-8; and a consumer-middleware
+    `request.encoding` assignment that a declared `charset=utf-8` must not mask → `400`.
+    Each refusal is paired with the otherwise-identical request that executes normally, so no
+    row can pass on a boundary that refuses everything. Both package views, since the guard's
+    sync and async delegates are different code paths.
 40. The upload path still works: an accepted multipart request with a real file reaches the
     [`Upload` scalar][glossary-upload-scalar] mutation unchanged, so the guard is shown to
     have added a boundary without taking Django's streaming upload handling away.
@@ -2635,7 +2790,16 @@ package, communicator-driven):
     request adapter joins them, so the resulting value fails validation instead of one of the
     two being silently chosen. Header-name casing does not change the outcome.
 46. `X-Forwarded-Host` is honoured **only** under `USE_X_FORWARDED_HOST`, identically to HTTP;
-    with no host header at all, `scope["server"]` supplies Django's normal fallback.
+    with no host header at all, `scope["server"]` supplies `SERVER_NAME` / `SERVER_PORT`. A
+    handshake carrying **no** host header, **no** `X-Forwarded-Host` and **no**
+    `scope["server"]` — which is what `channels.testing.WebsocketCommunicator` synthesizes by
+    default and what a non-conformant ASGI server can produce — falls back to Django's
+    `"unknown"` / `"0"` literals and is **denied**, because `"unknown:0"` is a host no
+    `ALLOWED_HOSTS` in this project allows. That fallback arm gets its **own** row: every other
+    WebSocket row supplies an allowed `Host` and so executes the arm without consulting it,
+    which is statement coverage without behavioral coverage. The row asserts the denial against
+    Django's own projection of the same scope rather than a typed-out expectation, with an
+    allowed-`Host` control so it cannot pass on a router that denies everything.
 47. Only `DisallowedHost` becomes a denial: an unexpected exception raised inside the
     projection propagates rather than being reported as a rejected host, and the row asserts
     the exception type rather than a denial.
@@ -2692,9 +2856,12 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   during authoring.
 - **[`docs/TREE.md`][tree]** via `scripts/build_tree_md.py` — all four modules the earlier
   slices add, in both the current and target package layouts: `views.py`, `_request_body.py`,
-  `consumers.py`, and `utils/sessions.py`; plus `tests/test_views.py` in the test trees. The
-  render reads each module docstring's first line, so a missing docstring fails the
-  regenerate rather than silently dropping a row.
+  `consumers.py`, and `utils/sessions.py`; plus `tests/test_views.py`,
+  `examples/fakeshop/test_query/test_transport_api.py` and `tests/test_prove_failability.py`
+  in the test trees, and corrected `routers.py` / `tests/test_routers.py` rows. The render is
+  source-driven, so that list is what the regenerate publishes rather than a ceiling on it:
+  it reads each module docstring's first line, and a missing docstring fails the regenerate
+  rather than silently dropping a row.
 - **[`README.md`][readme]** and **[`TODAY.md`][today]** — the `0.0.14`
   [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] paragraphs, which
   currently advertise "serving GraphQL on both HTTP and WebSocket in one import" and
@@ -2863,8 +3030,9 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 - [ ] An `application/json` request body is UTF-8-only: UTF-16 / UTF-32 (BOM and BOM-less)
       and a UTF-8 BOM all return `400`; ordinary UTF-8 is unchanged; sync and async behave
       identically; the three live UTF-16/32/BOM success tests are inverted.
-- [ ] A multipart `operations` / `map` control document must use an effective UTF-8 encoding
-      and must survive Django's decoding without a `U+FFFD` replacement marker, enforced
+- [ ] A multipart `operations` / `map` control document must be decoded by Django in UTF-8,
+      must not have declared any other encoding — including a codec name Django cannot load —
+      and must survive that decoding without a `U+FFFD` replacement marker, enforced
       before either value is parsed as JSON, with genuine multibyte UTF-8 and ordinary
       `JSON.stringify` output still accepted — and with Django's `MultiPartParser`,
       `request.POST` / `request.FILES` and the upload handlers still the sole owners of

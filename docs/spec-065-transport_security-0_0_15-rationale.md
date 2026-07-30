@@ -28,6 +28,15 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
   rewind-to-zero direction and the "a probed count of zero is a measurement failure, never an
   empty body" reasoning, both inside [Decision 7][s65-d7]. Guard the answer, not one spelling
   of an incoherent input.
+- Three further `why not …` blocks were audited and **stay** in the spec under the same
+  carve-out, so a later pass does not re-open them: "why not `len(request.body)`"
+  ([Decision 7][s65-d7]) is the canonical statement of the probe order and the
+  zero-is-a-measurement-failure rule; "why not `get_context`"
+  ([Decision 11][s65-d11]) names the per-operation seams and the single-siting requirement;
+  and "why not in `routers.py`" ([Decision 19][s65-d19]) decides which module the Host
+  validator lives in, plus the `build_tree_md.py` consequence of the docstring it widens.
+  A fourth, Decision 12's "why not enforce it", was pure deliberation and did move — see that
+  entry.
 
 ## Program provenance
 
@@ -55,6 +64,105 @@ The two straight fixes named there are discharged by the slices that own the fil
 [`## Slice checklist`][s65-slice-checklist] carries both as normative bullets: the stale
 Strawberry floor in `routers.py`'s broken-install hint (Slice 4) and the unguarded
 stream-capability probe in `_request_body.py` (Slice 2).
+
+### Change record for the spec's non-decision sections
+
+Four corrections outside any numbered decision, kept here because they have no decision entry
+to belong to:
+
+- **The header `Status:` line and the card id.** The status line said Slices 1-4 were built and
+  "Slice 5 remains"; all five are built now, so it states that, plus the fact a reader would
+  otherwise infer wrongly — the version quintet still reads `0.0.14` on disk because the
+  `0.0.15` release is the joint cut's ([Decision 15][s65-d15]). The opener's card id moved
+  `WIP-ALPHA-065-0.0.15` -> `DONE-065-0.0.15` with the card flip. `Planned for 0.0.15` stays: the
+  target release is still a target.
+- **`## Doc updates`, the `docs/TREE.md` bullet.** It read as an exhaustive list of the rows the
+  regenerate publishes and was three rows short of the render's actual output
+  (`examples/fakeshop/test_query/test_transport_api.py`, `tests/test_prove_failability.py`, and
+  corrected `routers.py` / `tests/test_routers.py` rows). Corrected, and the bullet now says the
+  render is source-driven so the list is what it publishes rather than a ceiling on it — an
+  enumeration of a generated artifact goes stale by construction, and saying so is what stops the
+  next reader treating a missing name as a missing row.
+- **`## Slice checklist`, the Slice-5 sub-bullet on the `test_transport_api.py` docstring.** Its
+  premise ("still scopes the file to `(spec-065 Slices 1-2)`") was true when it was written and
+  was falsified by Slice 3's own docstring edit, so the closing slice read a contract describing a
+  state two slices earlier. The instruction was correct and is kept; only the premise is gone, now
+  phrased as the standing requirement (name the file's actual slice scope, before the
+  `docs/TREE.md` regenerate that publishes it). **Rejected alternative:** leaving it, on the
+  precedent that a closed slice's checklist is the record of what was built against. Rejected
+  because that precedent turns on the sentence being *incomplete*, not *false*: a reader cannot
+  tell a false premise from a real regression, and the artifact that carries the sub-bullet
+  verbatim is still the record of what was dispatched.
+- **[`## Borrowing posture`][s65-borrowing-posture], the upstream views' import list.** It said
+  the two subclassed Strawberry views' "imports are `django`, `cross_web`, and `strawberry`
+  only, verified in the installed 0.316.0". `strawberry/django/views.py` also imports the
+  standard library (`json`, `typing`) and, at module level,
+  `from asgiref.sync import markcoroutinefunction`. The list now matches the one `views.py`'s
+  own module docstring already stated correctly — the standard library, `asgiref`, `cross_web`,
+  `django`, `strawberry.http`, and the sibling `strawberry.django.context` — which is another
+  instance of the shipped code documenting the fact more accurately than the spec it was written
+  from. **The conclusion is unaffected and is kept:** no optional-import guard applies, because
+  `asgiref` is Django's own hard dependency and every other name is already a hard dependency of
+  this package, so the `channels`-free property the bullet exists to establish still holds.
+  **Direction of the drift:** an omission rather than an error, but the omitted name is the one a
+  reader would have to check against `pyproject.toml` before trusting the bullet at all.
+
+### Change record for `## Helper-reuse obligations (DRY)`
+
+Spec: [`## Helper-reuse obligations (DRY)`][s65-dry]. Three corrections found by verifying each
+obligation against the shipped code rather than reading it as an assertion — the cross-slice
+integration pass's own duty, and the section had never been re-verified after the two review
+rounds moved what shipped.
+
+- **"Two overridden hooks" was four, and two of them are not on the mixin.** The obligation said
+  `run` and `parse_json` were the overrides and that **both** sat on `_RequestBodyBoundaryMixin`.
+  The shipped view overrides four upstream hooks — `as_view` and `parse_json` on the mixin,
+  `run` and `parse_multipart` on each concrete view — and substitutes `request_adapter_class`
+  besides. The `run` pair was per-view from Slice 2 onward (upstream splits `dispatch` by
+  colour, and `csrf_protect` decides whether to await by inspecting the callable it wraps);
+  `as_view` arrived with [Decision 18][s65-d18] and `parse_multipart` with
+  [Decision 17][s65-d17], and neither round revisited this section. The obligation now states
+  the property that is actually load-bearing and actually true — **every decision body is
+  single-sited on the mixin, and each per-view override is a thin delegate onto it** — because
+  the placement of an override is upstream's choice while the single-siting of the policy is
+  the package's. **Rejected alternative:** naming only the two mixin-hosted hooks and dropping
+  the other two, which would have made the sentence true by narrowing it and left a reader
+  unable to find the cap's own override at all. **Direction of the drift:** the sentence
+  *understated* what the view overrides, so nothing was mis-built from it — but this section is
+  the only place the package states its own reuse contract, and a builder checking a fifth
+  override against it would have read "two" as a ceiling.
+- **The sibling bullet already contradicted it.** The multipart obligation says both
+  `parse_multipart` overrides are delegates "in the same shape the two `run` overrides already
+  take" — i.e. per-view — so the two adjacent bullets disagreed about where the hooks live.
+  Fixed together, and the delegate count is now stated per colour (two statements sync, three
+  async, the async request adapter's form data having to be awaited) instead of "two-line" for
+  both.
+- **"No local `getattr(settings, ...)`" needed its scope.** As written it reads as covering
+  every settings read, and `views.py::_form_encoding_is_utf8` reads `settings.DEFAULT_CHARSET`
+  directly — which [Decision 17][s65-d17] *requires*, because the check must reproduce the exact
+  `encoding or settings.DEFAULT_CHARSET` pair `MultiPartParser.__init__` resolves. The rule is
+  about the `DJANGO_STRAWBERRY_FRAMEWORK` keys and now says so, with the carve-out named at the
+  one site that takes it. **Why it is worth the words:** the unscoped form would have been read
+  as a violation by the next reviewer to sweep this section, and a false finding argued against
+  correct code costs more than the clause does.
+- **The three pieces of connection state are not "one set of state on the adapter instance".**
+  The revalidation obligation said the connection-local lock, the revoked flag and the
+  last-validated timestamp were **one** set of state on the adapter instance upstream creates
+  per connection. None of the three is there. The lock and the flag are assigned in
+  `consumers.py`'s `GraphQLWebSocketConsumer.__init__` (see [Decision 16][s65-d16]'s own
+  correction), and the timestamp is written onto the ASGI `scope` under
+  `consumers.py::_REVALIDATED_AT_SCOPE_KEY` — so the claim was wrong about the object *and*
+  about there being one of them. What is load-bearing, and true, is that all three are
+  **connection-scoped** rather than three parallel caches keyed by protocol, and the obligation
+  now says exactly that, naming the two homes a connection already has. Both are reachable from
+  the one argument the shared decision function is handed — the consumer, whose `scope` it reads
+  — so "one connection, one set of state" survives the split. **Rejected alternative:** moving
+  the timestamp onto the consumer instance so the obligation's original sentence would become
+  true. Rejected on the spot: this is a custodian pass reconciling prose to shipped code, and
+  rewriting working code to make a sentence true inverts which of the two is the contract.
+  **Direction of the drift:** as with the lock's owner, the *scope* claim was right and the
+  *location* claim was wrong, so nothing was mis-built — but a reuse obligation that names the
+  wrong object cannot be verified against the tree, which is the only thing this section is for.
 
 ## Decision entries
 
@@ -237,6 +345,21 @@ reading the URLconf. The subclass keeps one symbol in the URLconf and one place 
   [Decision 8][s65-d8]
   assigns to the deployment layer, where it belongs and already exists.
 
+**Change record — the `APPEND_SLASH` policy is `DEBUG`-dependent and now says so.** Two sites
+stated the consequence of `POST /graphql` against a `path("graphql/", …)` mount without a
+qualifier: the [`## Edge cases and constraints`][s65-edge-cases] bullet ("a `POST` to `/graphql`
+also gets a `301`, which most HTTP clients will not re-`POST`") and the
+[`### Consumer-visible behavior`][s65-consumer-visible] bullet that the migration note is written
+from. That holds under `DEBUG=False` only. `CommonMiddleware.get_full_path_with_slash` raises
+`RuntimeError` for `DELETE`, `POST`, `PUT` and `PATCH` when `settings.DEBUG` is true — rather than
+redirect and lose the body — so the same request is a `500` on a development stack. Both sites now
+carry the split. **Why it earns the words:** the reader most likely to *test* the claim is running
+`DEBUG=True`, would observe a `500`, and would conclude the documented policy is wrong. The
+consumer-facing transport guidance in `docs/README.md` already stated both halves, so this is once
+more the shipped doc being more accurate than the spec it was written from — the direction that
+says the spec is what has to move. **Direction of the drift:** it named the milder of two
+outcomes, and the omitted one is the noisier and more confusing of the pair.
+
 ### Decision 7 — The app-level body cap lives in the package Django view, counted not declared
 
 Spec: [Decision 7][s65-d7]. Cited from the spec's
@@ -302,6 +425,42 @@ The bolded phrase **"An unmeasurable stream has three outcomes, not two"** is lo
 in the spec, not a heading of convenience: four other sites cite it as a `#"substring"`
 reference. It must survive verbatim.
 
+**Change record — the method scoping round 2's L1 introduced.** Step 3's carve-out was stated
+for "a multipart request", while `views.py::_is_multipart_form_post` narrowed it in the same
+round to a multipart **POST**; the decision also never said that a `GET` is outside the cap
+altogether. So the spec answered "hand off to Django's parser" for a request shape the code
+counts like any other body. The scoping is now stated in the decision, keyed to the one named
+discriminator [Decision 17][s65-d17] shares. Nothing was rejected: the only alternative was
+leaving the spec silent about a shape the round had just changed, which is how the divergence
+arose in the first place.
+
+**Change record — the over-reporting direction was described as read, and it is refused.** The
+spec's [`## Edge cases and constraints`][s65-edge-cases] bullet on the incoherent probe said
+that both incoherent shapes "make the probed difference zero or negative", and then disclosed a
+cost the code does not pay: "the restored position lands past the end, so the request reaches
+Strawberry with an **empty** body and is a `400` at the parse". Read against
+`django_strawberry_framework/_request_body.py`, that is the behavior of the *two*-state probe
+this decision's own third outcome replaced. `_measured_remaining` verifies the restore through
+`_position_restored` **before** the subtraction is ever reached, and a `tell()` that
+over-reports the position over-reports it again when the restore is verified, so the verdict is
+`_Probe.CORRUPTED`: `body_exceeds_limit` logs the corrupted-probe `WARNING` and returns `True`,
+which is the package's own `413` with **zero** bytes read.
+`tests/test_views.py::test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read`
+pins exactly that (`413`, `requested == []`, `delivered == 0`, one log record), and its own
+docstring calls the empty-body outcome "what the two-state version did". Only the
+under-reported end and an honest zero ever reach the subtraction. The bullet and test-plan row
+15 now state the two directions separately; the neighbouring capability-call bullet and outcome
+3 of *An unmeasurable stream has three outcomes, not two* now also say that a restore fails when
+the verifying `tell()` disagrees as well as when the seek raises, because `_position_restored`
+returns `False` for both and the caller refuses them identically. **Direction of the drift:** it
+understated how strict the boundary is, so nothing was exposed by it — but it attributed the
+refusal to Strawberry's parser and a `400` where the package answers `413` itself, which is the
+class of drift that sends an operator debugging a real refusal to the wrong layer. **Rejected
+alternative:** deleting the disclosure sentence instead of rewriting it. Rejected because the
+honesty it was reaching for is real — recovering an over-reporting stream's true bytes *is*
+impossible, and rewinding to zero *would* corrupt a legitimately mid-position stream — so both
+facts are kept, attached to the outcome they actually explain.
+
 ### Decision 8 — The deployment-layer cap is a co-requirement, not an alternative
 
 Spec: [Decision 8][s65-d8].
@@ -309,6 +468,34 @@ Spec: [Decision 8][s65-d8].
 **Alternative rejected.** Treating the application cap as sufficient and mentioning the
 proxy in passing. Rejected: it would restate the exact conflation the audit called out,
 and would make the package's own documentation the source of a false guarantee.
+
+**Change record — the "concrete directions" no longer name a header knob as a body cap.**
+The decision listed `--limit-request-field-size` "/ equivalents on the ASGI server" beside
+nginx's `client_max_body_size`. That knob bounds a **header field**, not the body, and no
+mainstream ASGI server bounds the total body at all — so the list implied a layer of
+protection that does not exist, in a decision whose entire purpose is to stop the two layers
+collapsing in the reader's head. It now names `LimitRequestBody` on Apache as the second real
+directive and states the ASGI-server absence outright, which is what makes the proxy line
+load-bearing rather than belt-and-braces. **Rejected alternative:** keeping the knob with a
+qualifier ("bounds headers, not the body"). Rejected because a reader scanning a list of
+"concrete directions" takes the list, not the qualifier — and this class of drift was found
+by the shipped guidance being *more* accurate than the decision it was written from, which is
+the direction that says the decision, not the doc, is what has to move.
+
+**Change record — the multipart carve-out is stated POST-scoped, matching Decision 7.**
+[Decision 7][s65-d7]'s own method-scoping paragraph names `views.py::_is_multipart_form_post`
+as the single discriminator and states that a multipart content type on any other method is
+counted like any other body. Decision 8's parenthetical still said "for a multipart request",
+which is the looser half of that rule stated as the whole of it. The scope is now inside the
+parenthetical, and the obligation to state it is now part of the Slice-5 prose contract rather
+than left to the writer. Direction of the drift: it **understated** enforcement, so nothing
+was exposed by it, and the same unscoped wording had already propagated from here into
+`conf.py`'s key comment, `views.py`'s `**Multipart.**` docstring paragraph, the consumer-facing
+transport guidance and the rendered `Request-body cap` glossary entry — the four surfaces the
+routed follow-up now names one by one. **Rejected alternative:** leaving the sentence
+unscoped because the divergence is in the safe direction. Rejected: an understated boundary
+still teaches a consumer the wrong rule, and this decision is the source every other telling
+was copied from.
 
 ### Decision 9 — The strict UTF-8 wire contract is enforced by the package view: its own body source, one strict decode
 
@@ -385,6 +572,33 @@ paragraph was narrowed to the one document the package receives as *bytes*, and 
 that recorded the narrowing did so in the past tense ("this decision alone **was true only of**
 the ordinary JSON body"); the spec now states the scope directly ("this decision alone
 **governs** the ordinary JSON body").
+
+**Change record — the gate reaches a package mount too, for one of its two halves.** *Which
+docs, by surface* scoped the per-half consequence of disabling `APPLY_UPSTREAM_PATCHES` to
+"**on Strawberry's own view**, the only mount the gate can still reach", and the
+[`## Slice checklist`][s65-slice-checklist] sub-bullet for `_patched_parse_json` said the same.
+That is true of the `cross_web` half and false of the Strawberry half.
+`_strawberry_patches.py::apply` assigns `BaseView.parse_json`, and the mixin's own `parse_json`
+override delegates with `super().parse_json(data)` — which resolves to exactly that patched
+attribute — so the **body-envelope** guard rides the gate on a package mount as well. Measured:
+with the patch installed, `DjangoGraphQLView().parse_json(b"42")` and `…(b"[1,2]")` both raise
+the envelope guard's `HTTPException(400, …)`; with `BaseView.parse_json` restored to the captured
+original they return `42` and `[1, 2]`, and upstream's unguarded `data.get("query")` turns each
+into an unhandled `500` — pinned on the wire against the package mount by
+`examples/fakeshop/test_query/test_transport_api.py::test_the_upstream_bug_workaround_still_respects_its_own_opt_out`.
+What genuinely does **not** ride the gate on either mount is the **wire contract**: the strict
+UTF-8 decode and the body source are view-owned code, which is this decision's whole ownership
+argument and is unchanged. Both patch-module docstrings already carried the corrected scoping,
+`_strawberry_patches.py`'s in the words "What the gate does NOT scope is the **mount**"; the spec
+is what had to move. **Direction of the drift:** this one is in the **unsafe** direction — the
+false scoping told a consumer that disabling the Strawberry patch could not affect a package
+mount, when it turns a controlled `400` into an unhandled `500` there. It is the only one of this
+pass's corrections that overstated a guarantee rather than understating it. **Rejected
+alternative:** rewiring the mixin to call the captured original rather than `super()`, which would
+have made the old sentence true and given the envelope guard the same ungated ownership the wire
+contract has. Rejected as out of scope for a custodian pass and wrong on the merits: the guard is
+a workaround for a specific upstream defect (#3398), so it *should* stay opt-out-able, which is
+[Decision 9][s65-d9]'s own lifecycle rule applied in the other direction.
 
 ### Decision 10 — A UTF-8 BOM is rejected
 
@@ -486,6 +700,28 @@ results after its actor is revoked. The removed framing:
 The spec now states the halves without the chronology: admission is half the boundary, the
 outbound-frame gate is [Decision 16][s65-d16], and together they make the S11 contract whole.
 
+**Change record — the window's cost, priced per checkpoint rather than per operation.** The
+decision's own opening states the window "means the same thing at both checkpoints" and prices
+the trade as "one session read per authorized *event*"; twenty lines later the astronomical-window
+paragraph still priced it as "one session read per authenticated **operation**". That is the
+pre-[Decision 16][s65-d16] single-checkpoint framing surviving inside the decision that replaced
+it, so the decision contradicted itself about its own cost model, and the sentence understated
+the read count by the number of information-bearing frames an operation emits. Now "per
+authenticated **checkpoint**", matching `consumers.py::resolved_revalidation_window`'s own
+wording and both of the decision's other two tellings. **The code was already right** — only
+this sentence and `routers.py`'s public constructor docstring carried the old framing, and the
+docstring is source rather than spec. **Rejected alternative:** deleting the price from this
+paragraph and pointing at the opening instead. Rejected because the paragraph's argument *is*
+the price — it is why the package refuses to invent an upper bound — so a reader who has to
+navigate away to find it loses the reason the astronomical window is accepted at all.
+
+**Change record — the admission subclasses' size.** *Where the revalidation hooks in* called the
+two per-protocol admission subclasses "two two-line subclasses"; each carries a three-line body
+(the awaited revalidation, a bare `return` on refusal, the `super()` delegation). Corrected as
+one site of the three-site "two-line delegate" sweep recorded under [Decision 17][s65-d17]; the
+single-siting claim the sentence exists to make — the logic lives in the shared function and the
+subclasses carry none of it — was verified against `consumers.py` and is unchanged.
+
 ### Decision 12 — Maximum connection lifetime is documented and seamed, not silently enforced
 
 Spec: [Decision 12][s65-d12].
@@ -502,6 +738,20 @@ Spec: [Decision 12][s65-d12].
   [Decision 16][s65-d16]'s
   two checkpoints and nothing else — no polling, no background task, no second setting, no
   maximum-lifetime timer.
+- **Enforce a maximum lifetime in the package at all** — the alternative the decision's title
+  names. Rejected for the reason the spec argued at length and no longer needs to, moved here
+  in full because every normative half of it is stated elsewhere in the decision (the "does
+  not impose" sentence, the Slice 5 documentation items (a)-(d), and the
+  authorization-versus-resource bound paragraph):
+
+  > **Why not enforce it.** A framework-imposed disconnect is a visible behavior change for
+  > every subscription consumer, with no correct default: the right lifetime for a dashboard
+  > subscription and for a short-lived request-response socket differ by orders of magnitude.
+  > The audit asks for "at minimum, document a maximum connection lifetime and a
+  > consumer-class injection seam"; the seam ships in
+  > [Decision 11][s65-d11],
+  > and with revalidation on at both checkpoints, lifetime stops being the bound the
+  > *authorization* boundary depends on.
 
 **Claim this decision may no longer make.** It read:
 
@@ -698,6 +948,23 @@ per-operation revoked-session `error` message with its per-protocol payload spli
 `graphql.GraphQLError` import that formatted them, become unreachable under this decision and
 leave the package in the change that implements it.
 
+**Change record — the lock's owner is the consumer, not the adapter.** *One connection-local
+lock, held through the send* said the single `asyncio.Lock` was "owned by the connection's
+adapter instance (upstream constructs exactly one per connection …)". Nothing of the sort lives
+on the adapter: `consumers.py::build_revalidating_consumer_class`'s
+`GraphQLWebSocketConsumer.__init__` assigns `self._revocation_lock` and
+`self._revocation_observed`, and the generated class's own docstring gives the reason in the
+same words the decision uses — "per-INSTANCE … one consumer instance is exactly one
+connection". The adapter reaches both through `websocket.ws_consumer` in
+`consumers.py::send_revalidated_operation_frame`. Because Channels builds exactly one consumer
+per connection, the parenthetical's *reasoning* was sound and is kept word for word; only the
+named owner and the layer that constructs it changed (`upstream` -> `Channels`). Everything
+after it — holding the lock through the send, and the sibling-task interleaving that closes —
+was re-verified against that coroutine and is unchanged. **Direction of the drift:** it named
+the wrong object for state whose *scope* it stated correctly, so the soundness argument was
+never at risk; what was at risk is a reader looking for the lock on the derived adapter
+subclass, finding none, and concluding the outbound gate is unsynchronized.
+
 ### Decision 17 — Multipart control fields stay Django-parsed, behind a strict loss-detection guard
 
 Spec: [Decision 17][s65-d17]. **A review round 2 decision** (round 2's M1): a multipart
@@ -736,6 +1003,75 @@ genuine literal `U+FFFD` from a replacement-generated one ever becomes mandatory
 fix is **upstream**: a public Django hook for strict, non-file multipart-field decoding. Until
 one exists at the package's supported floor, the package must not own or copy Django's parser
 to get it.
+
+**Rejected — a fallback chain over the encoding sources.** "Resolve the effective encoding the
+way Django does: the declared top-level `charset`, else `request.encoding`, else
+`settings.DEFAULT_CHARSET`, and require whatever wins to canonicalize to UTF-8." It is the
+reading the decision first shipped with, in both code and spec, and it is **wrong about
+Django**, which applies no such rung order: the declaration is consulted exactly once, at
+`HttpRequest._set_content_type_params`, and at parse time only `request.encoding or
+settings.DEFAULT_CHARSET` is ever read. The chain fails in both directions —
+
+- it lets the **declaration** be the value validated while Django decodes with something else,
+  so one line of consumer middleware assigning `request.encoding` is masked by a client
+  sending `charset=utf-8`; and because a Latin-1 decode never fails, the `U+FFFD` check cannot
+  see the substitution either;
+- it **accepts** a declared codec name Django cannot load: the promotion never happens,
+  `request.encoding` stays `None`, and the chain falls through to a UTF-8 `DEFAULT_CHARSET`
+  while the client's declaration was honoured by nobody.
+
+The shipped contract is therefore two **independent** encoding requirements joined with `and`
+(plus the loss check), and the rung-ordered phrasing must not be reintroduced.
+
+**Change record — the round-2 adversarial review (M1).** The chain landed in the round-2
+implementation and in this decision's own condition 1. `bld-review-2-w3_review.md` M1 caught it
+in code — an `or` where the contract needed an `and` — and its `## Notes for Worker 1` item 1
+said the chain described the shipped bug rather than the contract and must not land as spec
+prose. The code was corrected first (`views.py::_form_encoding_is_utf8`, two conditions), and
+the spec caught up in a later custodian pass: condition 1 and condition 2 became three
+requirements, the outcome table gained the unusable-declared-codec, reconfigured-`DEFAULT_CHARSET`
+and middleware-`request.encoding` rows, and the sentence quoted below left the spec.
+
+**Claim this decision may no longer make.** It read:
+
+> **The effective multipart form encoding must canonicalize to UTF-8.** The package resolves
+> it the way Django does — the declared top-level `charset` (which Django has already
+> promoted onto `request.encoding` from `content_params`), else `settings.DEFAULT_CHARSET` —
+> and accepts only codec aliases that canonicalize to UTF-8.
+
+Two things in it are false: that the resolution is a fallback chain at all, and that a declared
+`charset` is *always* promoted onto `request.encoding` (an unusable one never is). One further
+sentence went with it — an edge-case bullet claiming the guard "accepts a document that
+legitimately contains a literal `U+FFFD` as the one deliberate false positive", which inverted
+the decision's own narrowing: such a document is **refused**.
+
+**Change record — which requests the three requirements apply to.** They were stated without a
+scope. They apply to a multipart **POST** and nothing else, through the same
+`views.py::_is_multipart_form_post` discriminator that scopes [Decision 7][s65-d7]'s cap
+carve-out — the guard's original content-type-only scoping answered `400` to a `GET` carrying a
+stale `multipart/form-data` header, i.e. to a form Django never parses (round 2's L1). Stated in
+the decision at final verification; the code and its tests already had it.
+
+**Change record — "two-line delegate", corrected at all three sites that still said it.** Three
+places priced a delegate by a line count the shipped code does not have, and the count had
+already been corrected in a fourth. `views.py`'s sync `parse_multipart` override is two
+statements; the async one is **three**, because `await request.get_form_data()` has to run
+before the guard can be handed a form. This decision's *The guard is one shared helper* sentence
+said "a two-line delegate" for both colours, and so did the
+[`## Slice checklist`][s65-slice-checklist] sub-bullet for the multipart guard. Separately,
+[Decision 11][s65-d11]'s *Where the revalidation hooks in* called the two admission subclasses
+"two two-line subclasses": `consumers.py`'s `_RevalidatingTransportWSHandler.handle_subscribe`
+and `_RevalidatingGraphQLWSHandler.handle_start` each carry a **three**-line body — the awaited
+revalidation, a bare `return` when it refuses, and the `super()` delegation. The telling to match
+was already in [`## Helper-reuse obligations (DRY)`][s65-dry], whose multipart obligation states
+the split per colour ("the sync one two statements, the async one three, because the async
+request adapter's form data must be awaited"); all three sites now agree with it. **Why one
+correction and not three:** the same claim survived an earlier correction pass precisely because
+that pass landed on the DRY bullet and not on its three siblings, so the sweep is the unit of
+work rather than the site. **Direction of the drift:** the count was too small in every case, so
+no builder wrote too little code from it — but "two-line" is the kind of detail a reviewer checks
+literally, and a delegate that reads three lines against a spec that says two is a finding
+argued against correct code.
 
 ### Decision 18 — The body gate runs before Django's multipart parser, via view-local CSRF re-entry
 
@@ -813,9 +1149,11 @@ Spec: [Decision 19][s65-d19]. **A review round 2 decision** (round 2's M4).
 
 **Claim this decision falsified.** `routers.py` and this spec both claimed an injected consumer
 "cannot escape Host/Origin validation". `channels.security.websocket.OriginValidator.__call__`
-reads the `Origin` header and nothing else, and `AllowedHostsOriginValidator` is only a factory
-for `OriginValidator(settings.ALLOWED_HOSTS)` — the class name was not evidence of behavior, and
-a handshake carrying an allowed `Origin` and a hostile `Host` connected successfully. The spec's
+reads the `Origin` header and nothing else, and `AllowedHostsOriginValidator` is a factory that
+configures it with `settings.ALLOWED_HOSTS` (or, under `DEBUG` with that setting empty, with its
+own hardcoded `["localhost", "127.0.0.1", "[::1]"]`) — the class name was not evidence of
+behavior, and a handshake carrying an allowed `Origin` and a hostile `Host` connected
+successfully. The spec's
 own record of the falsified claim, before it was rewritten to argue the mechanism forward rather
 than backward:
 
@@ -829,6 +1167,54 @@ leaves the handshake **accepting a hostile `Host`** with nothing else in the sta
 it: Django never sees the WebSocket handshake at all, so unlike HTTP there is no other owner
 for the question. A boundary the package documents as absent is still absent.
 
+**Change record — the round-2 adversarial review (M3).** The projection was specified "item by
+item", and one item — the verdict when the handshake carries no `Host`, no `X-Forwarded-Host`
+and no `scope["server"]` — was pinned by nothing: every other WebSocket row supplies an allowed
+`Host` and so executes that arm without consulting it, which is statement coverage without
+behavioral coverage and the shape a fail-open expression hides in.
+`bld-review-2-w3_review.md` M3 raised it, and its `## Notes for Worker 1` item 3 added the half
+no builder could supply: the arm's values are **Django's ASGI adapter's literals** and are
+therefore not derivable from a spec that does not name them. The remediation pass added the
+behavioral row; the custodian pass then named `SERVER_NAME = "unknown"` / `SERVER_PORT = "0"`
+in the projection bullet and the resulting denial in test-plan row 46, so a reader can derive
+the verdict instead of taking it on trust. Naming the literals is deliberate rather than
+incidental precision: the reason the handshake is denied is arithmetic on those two values
+(`"unknown:0"` is a host no `ALLOWED_HOSTS` allows), and a spec that says only "Django's normal
+fallback" leaves a reader unable to tell a denial from an accept.
+
+**Change record — `AllowedHostsOriginValidator` is not "only a factory", and the divergence it
+hides is evidence for this decision.** Two spec sites — [`## Current state`][s65-current-state]
+and this decision's *Why call Django rather than narrow the claim* — said
+`AllowedHostsOriginValidator` "is only a factory for `OriginValidator(settings.ALLOWED_HOSTS)`".
+Read at the installed channels 4.3.2 (`channels/security/websocket.py`), it does one thing more:
+when `settings.DEBUG` is true and `ALLOWED_HOSTS` is empty it substitutes its own hardcoded
+`["localhost", "127.0.0.1", "[::1]"]`. That substituted list is **not** the one Django's own
+`HttpRequest.get_host()` substitutes in the identical situation —
+`[".localhost", "127.0.0.1", "[::1]"]`, whose leading dot matches every `*.localhost`
+subdomain — so two boundaries a reader would both call "allowed hosts" already disagree about
+what the `DEBUG` default means. Both sites now state the substitution, and the decision carries
+the divergence, because it is *additional* evidence for the decision rather than a footnote: it
+is the second reason the package's Host answer has to be a call into `get_host()` and never an
+expression of its own. **The operative claim was verified and stands unchanged:**
+`OriginValidator.__call__` reads `Origin` and nothing else and never validates `Host`, so a
+handshake carrying an allowed `Origin` and a hostile `Host` still connects. **Direction of the
+drift:** the claim was too small rather than too large, and in the safe direction for this
+decision's conclusion — but "only a factory" is exactly the kind of dismissal that stops the
+next reader from opening the file, and what is in the file is a `DEBUG` default that does not
+match Django's.
+
+**Change record — the `DEBUG` + empty `ALLOWED_HOSTS` default, stated as Django states it.** The
+[`## Edge cases and constraints`][s65-edge-cases] bullet on fakeshop's shape said that
+combination "makes Django accept `localhost` / `127.0.0.1` only". `django/http/request.py`'s
+`HttpRequest.get_host()` substitutes `[".localhost", "127.0.0.1", "[::1]"]`, identically on 5.2
+and 6.0: the leading dot admits every `*.localhost` subdomain, and the IPv6 loopback is accepted
+too, so the real default is wider than the bullet's in both directions it was wrong about. The
+bullet's remediation is untouched and was correct all along — the hostile-`Host` rows must not
+depend on fakeshop's `DEBUG` value and set `ALLOWED_HOSTS` explicitly with `override_settings`,
+which is what makes the correction cost one clause rather than a test change. **Direction of the
+drift:** it understated what a `DEBUG` deployment accepts, which is the unsafe direction for a
+reader who takes the bullet as a statement about their own development stack.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
@@ -841,6 +1227,9 @@ for the question. A boundary the package documents as absent is still absent.
 [glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
 [glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
 [glossary-request_from_info]: GLOSSARY.md#request_from_info
+[s65-borrowing-posture]: spec-065-transport_security-0_0_15.md#borrowing-posture
+[s65-consumer-visible]: spec-065-transport_security-0_0_15.md#consumer-visible-behavior
+[s65-current-state]: spec-065-transport_security-0_0_15.md#current-state
 [s65-d10]: spec-065-transport_security-0_0_15.md#decision-10--a-utf-8-bom-is-rejected
 [s65-d11]: spec-065-transport_security-0_0_15.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
 [s65-d12]: spec-065-transport_security-0_0_15.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
@@ -860,6 +1249,7 @@ for the question. A boundary the package documents as absent is still absent.
 [s65-d7]: spec-065-transport_security-0_0_15.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
 [s65-d8]: spec-065-transport_security-0_0_15.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
 [s65-d9]: spec-065-transport_security-0_0_15.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[s65-dry]: spec-065-transport_security-0_0_15.md#helper-reuse-obligations-dry
 [s65-edge-cases]: spec-065-transport_security-0_0_15.md#edge-cases-and-constraints
 [s65-non-goals]: spec-065-transport_security-0_0_15.md#non-goals
 [s65-slice-checklist]: spec-065-transport_security-0_0_15.md#slice-checklist

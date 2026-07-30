@@ -1,5 +1,41 @@
 # Spec: Channels ASGI router — `DjangoGraphQLProtocolRouter` in a soft-`channels` `routers.py`, the one-import ASGI / WebSocket migration aid
 
+> **AMENDED by [`spec-065`][spec-065]** (card `065`, transport security). That card
+> **supersedes exactly three items of this spec**:
+>
+> 1. [Decision 6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is)
+>    (constructor parity with upstream's `AuthGraphQLProtocolTypeRouter`) — superseded in
+>    full: `django_application` is now required, `url_pattern` is now
+>    `websocket_url_pattern` and exact rather than a shared prefix, and the byte-compatible
+>    upstream constructor is deliberately broken as an intentional alpha breaking change.
+> 2. The **HTTP half** of
+>    [Decision 2](#decision-2--card-scope-boundary-the-transport-router-ships-websocket-auth-semantics-and-fakeshop-asgi-stay-out)
+>    (the card-scope boundary) — GraphQL over HTTP is no longer this router's concern at
+>    all; it is the package's own Django view (`views.py::DjangoGraphQLView`) declared in
+>    the consumer's URLconf. The WebSocket half of that decision stands.
+> 3. The HTTP-branch and Django-fallback paragraphs of this spec's
+>    [Borrowing posture](#borrowing-posture) — the router serves no `http` GraphQL scope,
+>    so there is no Strawberry HTTP consumer to borrow and no `^` fallback appended behind
+>    one. The `"http"` value **is** the consumer's Django ASGI application, dispatched
+>    directly.
+>
+> Everything else this card shipped survives unchanged: the
+> [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] symbol, its
+> [soft-`channels`][glossary-soft-dependency] guard, its
+> [PEP 562 lazy export][glossary-pep-562-lazy-export], and the WebSocket composition.
+>
+> **Separately, and explicitly NOT a supersession:** the sentences below that described
+> the package's *current* pinned `strawberry-graphql` floor as `>=0.262.0` have been
+> reconciled to the live `>=0.316.0` requirement. Those sentences were factually wrong
+> about live code, not decisions this card made and `spec-065` reversed — the dependency
+> floor in [`pyproject.toml`][pyproject] and the minimum CI matrix node already agree on
+> `0.316.0`, and no new Python 3.10 problem is behind it. Sentences that are explicitly
+> historical ("the export's presence at the `0.262.0` floor itself is upstream history,
+> spot-checked at the dependency gate") stay exactly as they are: they record what was
+> true when this card shipped and make no claim about live code. Checkbox state
+> throughout this spec is likewise untouched — the Status line remains the source of
+> truth, which is this repo's shipped-card closeout convention.
+
 Planned for `0.0.14` (card [`WIP-ALPHA-041-0.0.14`][kanban]). This card adds the
 package's **Channels transport helper**: a new `django_strawberry_framework/routers.py`
 module exposing `DjangoGraphQLProtocolRouter` — a `channels.routing.ProtocolTypeRouter`
@@ -21,7 +57,7 @@ posture [`spec-040`][spec-040] took for the auth module.
 The helper is deliberately **thin and engine-riding**: the GraphQL consumers come
 from Strawberry core (`strawberry.channels`'s `GraphQLHTTPConsumer` /
 `GraphQLWSConsumer` — already inside the package's pinned
-`strawberry-graphql>=0.262.0` floor — export presence verified at the installed
+`strawberry-graphql>=0.316.0` floor — export presence verified at the installed
 `strawberry-graphql` 0.316.0; the floor-version presence is upstream history,
 re-confirmed at the Slice-1 dependency gate), the routing
 and middleware layers (classes and factory functions) come from `channels`, and the package contributes exactly the
@@ -51,7 +87,9 @@ last `0.0.14` card to land), not
 by this card — the same shared-cut posture [`spec-039`][spec-039] Decision 14 took
 for the joint `0.0.13` cut. No slice below bumps the version.
 
-Status: **PLANNED — no slice built yet.**
+Status: **COMPLETE** (card `DONE-041-0.0.14`) — both slices built and the card wrap landed;
+the `0.0.14` release rode the joint cut. Amended by [`spec-065`][spec-065]; see the banner
+above.
 Two slices (the card is a deliberate S): Slice 1 (**the dependency gate +
 `routers.py` + `tests/test_routers.py`** — the `channels` dev-group add with the
 lockfile regenerated, the soft-dependency guard, the router class, and both the
@@ -336,7 +374,7 @@ Revision history (kept inline so the spec is self-contained):
   re-executed module has no cached `_ROUTER_CLASS` and the block actually fires
   (Helper-reuse D3); the incompatible-install wrap is **split** — a channels-half
   failure names `channels>=4.3.2`, a `strawberry.channels` consumer failure
-  names **both** `channels>=4.3.2` and `strawberry-graphql>=0.262.0`
+  names **both** `channels>=4.3.2` and `strawberry-graphql>=0.316.0`
   ([Error shapes](#error-shapes)); and an **authenticated-session communicator
   test** (Test 18) was added to earn the "session user on the scope" claim, with
   a weaken-the-wording fallback tracked in [Risks](#risks-and-open-questions).
@@ -924,7 +962,7 @@ Consumer-visible behavior:
   - a failing `strawberry.channels` consumer import (`GraphQLHTTPConsumer` /
     `GraphQLWSConsumer` absent — a broken or too-old Strawberry, or a partial
     install) names **both** required halves: `channels>=4.3.2` **and**
-    `strawberry-graphql>=0.262.0` with the `strawberry.channels` consumers
+    `strawberry-graphql>=0.316.0` with the `strawberry.channels` consumers
     importable.
   This is a **separate** message from `_CHANNELS_INSTALL_HINT` (which is for
   true top-level `channels` absence only); the Strawberry-floor gate exists
@@ -1145,7 +1183,7 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
    re-raises an actionable one, chaining the original. A failing `channels.*`
    import (a Channels too old for a required symbol) names the `channels>=4.3.2`
    floor; a failing `strawberry.channels` consumer import names **both**
-   `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the consumers
+   `channels>=4.3.2` and `strawberry-graphql>=0.316.0` with the consumers
    importable — so a broken Strawberry install does not send the consumer to
    reinstall Channels. This builder-failure message is **separate** from
    `_CHANNELS_INSTALL_HINT` (top-level channels absence only); deployment-time
@@ -1255,7 +1293,7 @@ Alternatives considered (and rejected):
 
 `GraphQLHTTPConsumer` and `GraphQLWSConsumer` are imported (inside the guard
 boundary) from `strawberry.channels` — Strawberry core's Channels handlers, present
-at the package's pinned `strawberry-graphql>=0.262.0` floor (verified in the
+at the package's pinned `strawberry-graphql>=0.316.0` floor (verified in the
 installed strawberry 0.316.0: `strawberry/channels/__init__.py` exports both —
 the export's presence at the 0.262.0 floor itself is upstream history, spot-checked
 at the dependency gate). The package
@@ -1865,7 +1903,7 @@ contract, not as attribute spelunking.
     - **(b) a blocked `strawberry.channels` consumer import** (evict `routers` +
       block the `strawberry.channels` consumer symbol): symbol access raises the
       **separate** builder-failure `ImportError` naming **both**
-      `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the consumers
+      `channels>=4.3.2` and `strawberry-graphql>=0.316.0` with the consumers
       importable — proving a broken Strawberry install is not misreported as a
       Channels problem.
     Both chain the original `ImportError` (`__cause__`), never a bare transitive
@@ -2128,6 +2166,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 [glossary-testclient]: ../GLOSSARY.md#testclient
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
 [glossary]: ../GLOSSARY.md
+[spec-065]: ../spec-065-transport_security-0_0_15.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->

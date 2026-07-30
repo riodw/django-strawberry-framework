@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-25
+Last refreshed: 2026-07-29
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,11 +81,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**67.2% complete** toward `1.0.0` - 45 of 67 cards done (67.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**68.7% complete** toward `1.0.0` - 46 of 67 cards done (69.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 45/52 (86.5%) | 84.7% |
+| Alpha (pre-0.1.0) | 46/52 (88.5%) | 87.1% |
 | Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
@@ -95,7 +95,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md) |
+| `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md) |
 | `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-064-visibility_boundary-0_0_14.md](docs/spec-064-visibility_boundary-0_0_14.md) |
 | `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
@@ -199,69 +199,6 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
-
-<a id="transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation"></a>
-### [WIP-ALPHA-065-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
-
-- Priority: Critical
-- Status: WIP
-- Relative size: L
-- Spec: [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md)
-
-#### Planning note
-
-Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
-
-#### Scope
-
-- S1: redesign the router protocol split (required Django-ASGI HTTP ownership; remove direct Channels HTTP; exact WebSocket routing via websocket_url_pattern).
-- S2: package-owned cumulative request-body cap on the GraphQL HTTP path + documented proxy/server cap.
-- S9: strict UTF-8 wire decode before json.loads; translate UnicodeDecodeError to the controlled 400; invert UTF-16/32/BOM success tests to 400; decide and document the UTF-8-BOM policy; reconcile _cross_web_patches._patched_body against the new HTTP path.
-- S11: WebSocket consumer-class/factory injection seam + per-operation session revalidation hook (reload the actor before execution; close/reject on an invalid session; optional explicit bounded cache window).
-- S12 (transport slice only): migration note (old vs new asgi.py + the required urlpatterns entry) + transport deployment guidance (CSRF, cache/Vary, security headers, IDE/GET controls). The broader S12 deployment-contract docs belong to the later cards' doc slices.
-
-#### Definition of done
-
-- [ ] Router HTTP branch no longer instantiates GraphQLHTTPConsumer; django_application is required and omitting it fails at construction; websocket_url_pattern exact-matches; WebSocket Origin/auth wrappers + consumer injection seam in place.
-- [ ] Cumulative request-body cap enforced pre-parse on GraphQL HTTP + documented proxy/server cap.
-- [ ] Wire JSON is UTF-8-only; UTF-16/32 success tests inverted to 400.
-- [ ] WebSocket per-operation session revalidation via the injection seam.
-- [ ] Migration note + transport deployment docs authored; spec-041 amended.
-- [ ] Full suite green at 100% coverage (maintainer/CI gate); ruff + trailing-comma clean; manage.py check + makemigrations --check clean.
-
-#### Architectural posture
-
-- RECOMMENDED DIRECTION (maintainer-pinned; the spec turns each bullet into a numbered Decision with alternatives-rejected rationale). Clean protocol split as an explicit alpha breaking change: the 0.0.14 byte-compatible upstream constructor contract is intentionally broken. The documented API freeze begins at 1.0.0, so correcting a confirmed security-boundary error during alpha is preferable to preserving an unsafe migration convenience.
-- HTTP dispatches directly to a REQUIRED consumer-supplied Django ASGI application. The router must NOT instantiate or route to GraphQLHTTPConsumer. The GraphQL HTTP endpoint is declared in the consumer's Django URLconf using the normal Strawberry Django view, so it inherits the full MIDDLEWARE stack.
-- Require django_application rather than deriving it internally; the consumer calls get_asgi_application() at the normal point in asgi.py (avoids Django init-order ambiguity). Omitting django_application must fail clearly at construction -- do not retain an unsafe compatibility fallback.
-- WebSocket remains the package-owned Channels composition: exact GraphQL route -> AllowedHostsOriginValidator -> AuthMiddlewareStack -> Strawberry's WebSocket consumer. Rename/narrow url_pattern to a WebSocket-only websocket_url_pattern with exact matching as the secure default; Django URLconf independently owns HTTP path matching.
-- Add a WebSocket consumer-class/factory injection seam for S11 without implementing a second GraphQL protocol engine; the injected class must still sit inside the package's Host/Origin and authentication wrappers. Per-operation session revalidation is a WebSocket concern layered through that seam and must not delay or complicate the S1 HTTP correction.
-- S1 does not dispose of S2: still define and test an explicit cumulative request-body limit (count received bytes, do not trust Content-Length; reject at the limit before JSON parse / schema execution) and document the reverse-proxy / ASGI-server limit. Routing through Django restores the authoritative middleware lifecycle but must not be represented as automatically providing every transport resource bound.
-
-#### Why it matters
-
-- S1 (Blocker): routers.py wires the HTTP branch as AuthMiddlewareStack(URLRouter([re_path(url_pattern, GraphQLHTTPConsumer.as_asgi(...))])). That turns the session cookie into an authenticated actor but bypasses Django's MIDDLEWARE entirely -- SecurityMiddleware, CsrfViewMiddleware, CommonMiddleware / ALLOWED_HOSTS, and all consumer tenant/rate-limit/audit/cache/security-header middleware. Confirmed by source and a probe (POST Host: evil.example -> 200).
-- S1 route overmatch: url_pattern default '^graphql' is a prefix regex, so /graphql-admin and /graphqlanything are claimed by the GraphQL consumer before the Django fallback -- a path the deployment believes Django owns.
-- S2 (Blocker): the routed AsyncHttpConsumer buffers the whole body via b''.join(self.body) with no application cap; DATA_UPLOAD_MAX_MEMORY_SIZE is never consulted because Django's ASGI handler is bypassed. Unauthenticated memory amplification before JSON parsing or schema execution.
-- S9 (Medium): _cross_web_patches._patched_body returns raw bytes so json.loads auto-detects UTF-16/32; RFC 8259 requires UTF-8 on the wire. Accepting other encodings creates a proxy/WAF/access-log parser differential.
-- S11 (Medium): the WebSocket scope user is captured at handshake and never revalidated; a logout/password-reset/disable/revocation from another request or admin action is not reflected on the established connection.
-- S1 and S2 block moving off the current 'not production' alpha posture; a framework's secure architecture cannot depend on every consumer independently discovering these gaps.
-
-#### Test plan
-
-- Django middleware / configured security headers execute on the GraphQL HTTP route; a project middleware sentinel runs; a hostile Host is rejected on HTTP (not only WebSocket).
-- Cookie-authenticated mutations cover missing, wrong, and correct CSRF tokens (Client(enforce_csrf_checks=True)).
-- An authenticated GET response is non-cacheable or varies on Cookie.
-- /graphql and /graphql/ match per an explicit policy while /graphql-admin and /graphqlanything reach Django or 404.
-- Body cap: no Content-Length; declared below/at/above; declared-small-but-streamed-over; multi-fragment crossing; JSON / malformed JSON / multipart; an early 413 proving neither JSON parse nor schema execution ran; parity across the py3.10 / Django 5.2.0 floor and the current stack.
-- S9: UTF-16/32 (BOM and BOM-less) -> 400; ordinary UTF-8 preserved; malformed UTF-8 -> 400; the chosen UTF-8-BOM direction.
-- S11: establish a socket, revoke/flush/disable via a separate request, prove the next operation is denied without reconnecting; existing WebSocket Origin/auth direction tests remain intact.
-
-#### Open question
-
-- Where the app-level body cap lives on the new Django-view HTTP path (a package GraphQL-view subclass vs. documented DATA_UPLOAD_MAX_MEMORY_SIZE + a thin wrapper): the spec decides.
-- Whether the package ships a thin GraphQL HTTP view wrapper or points consumers directly at strawberry-django's GraphQLView: the spec decides and documents the exact urlpatterns entry.
-- UTF-8 BOM: accept-and-strip vs reject (RFC 8259 permits either): the spec picks one and documents it.
 
 ## To Do - Alpha (0.1.0)
 
@@ -393,7 +330,7 @@ Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
 
 #### Dependencies
 
-- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
@@ -435,7 +372,7 @@ Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
 
 #### Card references
 
-- Dependency: Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Depends on card 065: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
 ### [TODO-ALPHA-067-0.0.17 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
@@ -450,7 +387,7 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 
 #### Dependencies
 
-- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
@@ -492,7 +429,7 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 
 #### Card references
 
-- Dependency: Sequenced behind card 065 in the staged security program (independent code). -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Sequenced behind card 065 in the staged security program (independent code). -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
 ### [TODO-ALPHA-068-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
@@ -507,7 +444,7 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 
 #### Dependencies
 
-- `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
@@ -546,7 +483,7 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 
 #### Card references
 
-- Dependency: Sequenced behind card 065 in the staged security program; S6 independently urgent. -> `WIP-ALPHA-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Sequenced behind card 065 in the staged security program; S6 independently urgent. -> `DONE-065-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 ## To Do - Beta (1.0.0)
 
@@ -1398,6 +1335,111 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 ## Done
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
+
+<a id="transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation"></a>
+### [DONE-065-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
+
+- Priority: Critical
+- Status: Done
+- Relative size: L
+- Spec: [spec-065-transport_security-0_0_15.md](docs/spec-065-transport_security-0_0_15.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
+| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
+| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
+| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
+| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
+| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
+| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
+| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
+| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
+| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
+| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
+| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [Developer-only debug posture](docs/GLOSSARY.md#developer-only-debug-posture) | shipped (`0.0.14`) |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [`DjangoDebugExtension`](docs/GLOSSARY.md#djangodebugextension) | shipped (`0.0.14`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [Cookbook parity](docs/GLOSSARY.md#cookbook-parity) | planned through `1.0.0` |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
+| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+
+#### Planning note
+
+Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
+
+#### Scope
+
+- S1: redesign the router protocol split (required Django-ASGI HTTP ownership; remove direct Channels HTTP; exact WebSocket routing via websocket_url_pattern).
+- S2: package-owned cumulative request-body cap on the GraphQL HTTP path + documented proxy/server cap.
+- S9: strict UTF-8 wire decode before json.loads; translate UnicodeDecodeError to the controlled 400; invert UTF-16/32/BOM success tests to 400; decide and document the UTF-8-BOM policy; reconcile _cross_web_patches._patched_body against the new HTTP path.
+- S11: WebSocket consumer-class/factory injection seam + actor revalidation at TWO checkpoints (operation admission and every information-bearing outbound operation frame), so a revoked actor can neither admit another operation nor emit another next/data/error frame; revocation is connection-scoped and closes the whole socket (4403 Forbidden); optional explicit bounded revalidation window.
+- S12 (transport slice only): migration note (old vs new asgi.py + the required urlpatterns entry) + transport deployment guidance (CSRF, cache/Vary, security headers, IDE/GET controls). The broader S12 deployment-contract docs belong to the later cards' doc slices.
+
+#### Definition of done
+
+- [x] Router HTTP branch no longer instantiates GraphQLHTTPConsumer; django_application is required and omitting it fails at construction; websocket_url_pattern exact-matches; WebSocket Origin/auth wrappers + consumer injection seam in place.
+- [x] Cumulative request-body cap enforced pre-parse on GraphQL HTTP + documented proxy/server cap.
+- [x] Wire JSON is UTF-8-only; UTF-16/32 success tests inverted to 400.
+- [x] WebSocket actor revalidation at both the admission and the outbound-frame checkpoint, with connection-scoped revocation, via the injection seam.
+- [x] Migration note + transport deployment docs authored; spec-041 amended.
+- [ ] Full suite green at 100% coverage (maintainer/CI gate); ruff + trailing-comma clean; manage.py check + makemigrations --check clean.
+
+#### Architectural posture
+
+- RECOMMENDED DIRECTION (maintainer-pinned; the spec turns each bullet into a numbered Decision with alternatives-rejected rationale). Clean protocol split as an explicit alpha breaking change: the 0.0.14 byte-compatible upstream constructor contract is intentionally broken. The documented API freeze begins at 1.0.0, so correcting a confirmed security-boundary error during alpha is preferable to preserving an unsafe migration convenience.
+- HTTP dispatches directly to a REQUIRED consumer-supplied Django ASGI application. The router must NOT instantiate or route to GraphQLHTTPConsumer. The GraphQL HTTP endpoint is declared in the consumer's Django URLconf using the normal Strawberry Django view, so it inherits the full MIDDLEWARE stack.
+- Require django_application rather than deriving it internally; the consumer calls get_asgi_application() at the normal point in asgi.py (avoids Django init-order ambiguity). Omitting django_application must fail clearly at construction -- do not retain an unsafe compatibility fallback.
+- WebSocket remains the package-owned Channels composition: exact GraphQL route -> DjangoWebSocketHostValidator (Host) -> AllowedHostsOriginValidator (Origin) -> AuthMiddlewareStack -> the GraphQL WebSocket consumer, with the Host validator outermost so Host and Origin are two separate checks in that order. Rename/narrow url_pattern to a WebSocket-only websocket_url_pattern with exact matching as the secure default; Django URLconf independently owns HTTP path matching.
+- Add a WebSocket consumer-class/factory injection seam for S11 without implementing a second GraphQL protocol engine; the injected class must still sit inside the package's Host/Origin and authentication wrappers. Per-operation session revalidation is a WebSocket concern layered through that seam and must not delay or complicate the S1 HTTP correction.
+- S1 does not dispose of S2: still define and test an explicit cumulative request-body limit (count received bytes, do not trust Content-Length; reject at the limit before JSON parse / schema execution) and document the reverse-proxy / ASGI-server limit. Routing through Django restores the authoritative middleware lifecycle but must not be represented as automatically providing every transport resource bound.
+
+#### Why it matters
+
+- S1 (Blocker): routers.py wires the HTTP branch as AuthMiddlewareStack(URLRouter([re_path(url_pattern, GraphQLHTTPConsumer.as_asgi(...))])). That turns the session cookie into an authenticated actor but bypasses Django's MIDDLEWARE entirely -- SecurityMiddleware, CsrfViewMiddleware, CommonMiddleware / ALLOWED_HOSTS, and all consumer tenant/rate-limit/audit/cache/security-header middleware. Confirmed by source and a probe (POST Host: evil.example -> 200).
+- S1 route overmatch: url_pattern default '^graphql' is a prefix regex, so /graphql-admin and /graphqlanything are claimed by the GraphQL consumer before the Django fallback -- a path the deployment believes Django owns.
+- S2 (Blocker): the routed AsyncHttpConsumer buffers the whole body via b''.join(self.body) with no application cap; DATA_UPLOAD_MAX_MEMORY_SIZE is never consulted because Django's ASGI handler is bypassed. Unauthenticated memory amplification before JSON parsing or schema execution.
+- S9 (Medium): _cross_web_patches._patched_body returns raw bytes so json.loads auto-detects UTF-16/32; RFC 8259 requires UTF-8 on the wire. Accepting other encodings creates a proxy/WAF/access-log parser differential.
+- S11 (Medium): the WebSocket scope user is captured at handshake and never revalidated; a logout/password-reset/disable/revocation from another request or admin action is not reflected on the established connection.
+- S1 and S2 block moving off the current 'not production' alpha posture; a framework's secure architecture cannot depend on every consumer independently discovering these gaps.
+
+#### Test plan
+
+- Django middleware / configured security headers execute on the GraphQL HTTP route; a project middleware sentinel runs; a hostile Host is rejected on HTTP (not only WebSocket).
+- Cookie-authenticated mutations cover missing, wrong, and correct CSRF tokens (Client(enforce_csrf_checks=True)).
+- An authenticated GET response is non-cacheable or varies on Cookie.
+- /graphql and /graphql/ match per an explicit policy while /graphql-admin and /graphqlanything reach Django or 404.
+- Body cap: no Content-Length; declared below/at/above; declared-small-but-streamed-over; multi-fragment crossing; JSON / malformed JSON / multipart; an early 413 proving neither JSON parse nor schema execution ran; parity across the py3.10 / Django 5.2.0 floor and the current stack.
+- S9: UTF-16/32 (BOM and BOM-less) -> 400; ordinary UTF-8 preserved; malformed UTF-8 -> 400; the chosen UTF-8-BOM direction.
+- S11: establish a socket, revoke/flush/disable via a separate request, prove the next operation is denied without reconnecting; existing WebSocket Origin/auth direction tests remain intact.
+
+#### Open question
+
+- Where the app-level body cap lives on the new Django-view HTTP path (a package GraphQL-view subclass vs. documented DATA_UPLOAD_MAX_MEMORY_SIZE + a thin wrapper): the spec decides.
+- Whether the package ships a thin GraphQL HTTP view wrapper or points consumers directly at strawberry-django's GraphQLView: the spec decides and documents the exact urlpatterns entry.
+- UTF-8 BOM: accept-and-strip vs reject (RFC 8259 permits either): the spec picks one and documents it.
 
 <a id="sealed_get_queryset_visibility_boundary_policy_artifacts"></a>
 ### [DONE-064-0.0.14 - Sealed get_queryset visibility-boundary policy artifacts](KANBAN.html#sealed_get_queryset_visibility_boundary_policy_artifacts)

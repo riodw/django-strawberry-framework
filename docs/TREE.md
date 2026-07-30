@@ -193,10 +193,12 @@ Source: `django_strawberry_framework/`
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── consumers.py                  # The WebSocket Host boundary, the GraphQL consumer, and its two revalidation checkpoints.
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── keyset.py                     # Keyset (value-encoded) stable cursors - the ``Meta.cursor_field`` opt-in.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
@@ -204,10 +206,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # Channels ASGI router: GraphQL on HTTP + WebSocket in one import (spec-041).
+├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
+├── views.py                      # The package's Django GraphQL HTTP endpoint, declared in the consumer's URLconf.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
 │   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
@@ -287,6 +290,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── sessions.py               # The configured session engine's store resolver, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
     ├── write_transaction.py      # Write-transaction plumbing: the managed alias, alias pinning, row locks, and conflicts.
@@ -303,20 +307,23 @@ Source: `django_strawberry_framework/ (+ planned card paths)`
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── consumers.py                  # The WebSocket Host boundary, the GraphQL consumer, and its two revalidation checkpoints.
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── keyset.py                     # Keyset (value-encoded) stable cursors - the ``Meta.cursor_field`` opt-in.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # Channels ASGI router: GraphQL on HTTP + WebSocket in one import (spec-041).
+├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-065).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
+├── views.py                      # The package's Django GraphQL HTTP endpoint, declared in the consumer's URLconf.
 ├── aggregates/    # planned by TODO-BETA-051-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
@@ -399,6 +406,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── sessions.py               # The configured session engine's store resolver, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
     ├── write_transaction.py      # Write-transaction plumbing: the managed alias, alias pinning, row locks, and conflicts.
@@ -438,13 +446,15 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
+├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_routers.py               # Channels router tests for HTTP/WebSocket routing, wrappers, lazy imports, and request context.
+├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
+├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.
@@ -615,6 +625,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
 ├── test_single_parent_fastpath_api.py  # Live GraphQL HTTP tests for the single-parent windowed-prefetch fast path.
+├── test_transport_api.py         # Live ``/graphql/`` transport-boundary acceptance tests (spec-065 Slices 1-3).
 └── test_uploads_api.py           # Live GraphQL HTTP tests for the spec-037 file/image wire contract.
 ```
 
@@ -647,13 +658,15 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
+├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_routers.py               # Channels router tests for HTTP/WebSocket routing, wrappers, lazy imports, and request context.
+├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
+├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-065 Slices 1-3).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.

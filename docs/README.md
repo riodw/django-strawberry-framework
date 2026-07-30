@@ -125,7 +125,8 @@ A quick summary:
 - form-based mutations (new in `0.0.12`) — the form-validated write flavor on the same `class Meta` surface: `DjangoModelFormMutation` (a `ModelForm`, subclassing `DjangoMutation` via the `_resolve_model` seam so it returns the post-save object in the uniform `node` / `result` slot) and `DjangoFormMutation` (a plain model-less `Form` sibling — its own metaclass, returning the pinned `ok: Boolean!` + `errors: [FieldError!]!` payload, with a `perform_mutate` write hook), both declared through `Meta.form_class` (+ optional `fields` / `exclude`). The input shape is derived from the form's declared fields via `forms/converter.py` (reusing the read-side scalar / choice-enum / `Upload` converters where the field types overlap, so a plain `Form` can declare fields a model does not have), and `form.errors` maps onto the same frozen `FieldError` envelope (the form's `NON_FIELD_ERRORS` bucket keyed to `"__all__"`). Relation ids are visibility-checked through the related primary type's `get_queryset` before the form runs; the `ModelForm` `update` locates its row through the target type's `get_queryset` (a hidden row is not-found, no existence leak) and re-fetches optimizer-planned. Sync + async, inside the one `transaction.atomic()` boundary. Both bases are exported from the package root. See [`GLOSSARY.md#djangoformmutation`][glossary-djangoformmutation].
 - DRF serializer mutations (new in `0.0.13`) — `SerializerMutation`, the serializer-validated write flavor via `Meta.serializer_class` over a DRF `Serializer` / `ModelSerializer`. It rides the shipped `DjangoMutation` write pipeline and the same frozen `FieldError` envelope (a `serializer.is_valid()` field error keys to its field; the serializer's non-field errors key to `"__all__"`); `djangorestframework` is a **soft** dependency — `import django_strawberry_framework` and `from django_strawberry_framework import *` both stay DRF-free, and `SerializerMutation` is a lazy root export resolved through the package `__getattr__`, deliberately **not** in `__all__`. See [`GLOSSARY.md#serializermutation`][glossary-serializermutation].
 - session-auth mutations (new in `0.0.13`) — opt-in `login` / `logout` / `register` field factories plus a `current_user` query helper, imported from the `django_strawberry_framework.auth` submodule (**no** package-root re-export — they are absent from `__all__`). All ride the shared `FieldError` envelope; `register` is a `DjangoMutation` rider adding `validate_password` + `set_password` over the shipped create pipeline (the plaintext password is never persisted). The family defaults to `AllowAny` — the documented inversion of the write family's deny-by-default `DjangoModelPermission`, since login/register must serve the anonymous caller — with per-schema `permission_classes=` still available on every factory. `login` and `logout` are supported on Django HTTP and Channels HTTP; over a WebSocket, `login` is rejected (an established socket cannot return the rotated session cookie) and `logout` is supported only on a server-side session engine (signed-cookie WebSocket logout is rejected) — see the transport contract in [Session-auth deployment boundary](#session-auth-deployment-boundary). The user type's field selection is the authenticated read surface, so exclude `password` and privilege columns from it. See [`GLOSSARY.md#auth-mutations`][glossary-auth-mutations].
-- Channels ASGI router (new in `0.0.14`, `DONE-041`) — `DjangoGraphQLProtocolRouter`, imported from `django_strawberry_framework.routers` (a lazy PEP 562 submodule export, never a package-root export): a `channels.routing.ProtocolTypeRouter` subclass serving GraphQL on both HTTP and WebSocket in one import, with `AuthMiddlewareStack` (sessions + `scope["user"]` on both protocols) and the WebSocket `AllowedHostsOriginValidator` composed in — constructor-compatible with upstream `strawberry_django.routers.AuthGraphQLProtocolTypeRouter`, so a migrant changes exactly the import line. `channels` is the package's second **soft** dependency (after `djangorestframework`): importing the package or the submodule stays channels-free, and only symbol access raises the install-hint `ImportError`. See [`GLOSSARY.md#djangographqlprotocolrouter`][glossary-djangographqlprotocolrouter].
+- Channels ASGI router (new in `0.0.14`, `DONE-041`; **redesigned on `main`** by the transport-security card, `065`) — `DjangoGraphQLProtocolRouter`, imported from `django_strawberry_framework.routers` (a lazy PEP 562 submodule export, never a package-root export): a `channels.routing.ProtocolTypeRouter` subclass whose `"http"` value **is** the required `django_application` you pass it, dispatched directly, and whose `"websocket"` value is the package's own three-wrapper composition — `DjangoWebSocketHostValidator` (the `Host` check, a **private** validator in `django_strawberry_framework.consumers`, not a symbol a consumer imports or configures) over `AllowedHostsOriginValidator` (the `Origin` check) over `AuthMiddlewareStack` over a `URLRouter` holding one exact-matched `re_path` onto a GraphQL WebSocket consumer. It no longer serves GraphQL over HTTP and is no longer constructor-compatible with upstream `strawberry_django.routers.AuthGraphQLProtocolTypeRouter`: `django_application` is required, `url_pattern` is renamed to `websocket_url_pattern` (exact, `r"^graphql/?$"`), and the Channels HTTP branch is gone. `channels` is the package's second **soft** dependency (after `djangorestframework`): importing the package or the submodule stays channels-free, and only symbol access raises the install-hint `ImportError`. See [Transport: the GraphQL HTTP endpoint and the ASGI router](#transport-the-graphql-http-endpoint-and-the-asgi-router) for the migration note, and [`GLOSSARY.md#djangographqlprotocolrouter`][glossary-djangographqlprotocolrouter].
+- the package GraphQL HTTP view (**new on `main`**, `065`) — `DjangoGraphQLView` / `AsyncDjangoGraphQLView`, imported from `django_strawberry_framework.views` (a leaf-module import, never a package-root export) and declared in your own `urlpatterns`. Subclasses of Strawberry's Django views adding two boundary policies over the raw request body: a cumulative byte cap enforced before JSON parsing or schema execution (`MAX_REQUEST_BODY_BYTES`, default 1 MiB, per-mount `as_view(max_request_body_bytes=...)`, returning `413`, measured rather than materialized) and a strict UTF-8 wire contract (UTF-16 / UTF-32 and a leading UTF-8 BOM are a controlled `400`), neither of which rides the `APPLY_UPSTREAM_PATCHES` kill switch. The module is `channels`-free, so a WSGI-only project adopts it without the soft dependency.
 - debug-toolbar middleware (new in `0.0.14`, `DONE-042`) — `DebugToolbarMiddleware`, imported from `django_strawberry_framework.middleware.debug_toolbar` (the leaf-module import is the opt-in boundary, never a package-root export): a subclass of the stock `debug_toolbar.middleware.DebugToolbarMiddleware` that teaches `django-debug-toolbar`'s SQL panel to see Strawberry `/graphql/` traffic — `process_view` tags Strawberry-view requests and `_postprocess` appends the GraphiQL bridge template to the IDE's HTML and injects a `debugToolbar` panel payload (per-panel `title` / `nav_subtitle` + the toolbar `requestId`) into JSON operation responses (`IntrospectionQuery` skipped). `django-debug-toolbar` is the package's third **soft** dependency (after `djangorestframework` and `channels`): importing the package stays toolbar-free and only importing this leaf raises the install-hint `ImportError`, while omitting `"debug_toolbar"` from `INSTALLED_APPS` raises `ImproperlyConfigured` at leaf import. See [`GLOSSARY.md#debug-toolbar-middleware`][glossary-debug-toolbar-middleware].
 - test-client family (new in `0.0.14`, `DONE-043`) — `TestClient` / `AsyncTestClient` (sync + async) plus the `GraphQLTestMixin` / `GraphQLTestCase` unittest family, imported from `django_strawberry_framework.testing`: each drives Django's in-process test client against `/graphql/`, decodes the GraphQL response, and returns a typed `Response` carrying `errors` / `data` / `extensions` / the raw Django response. Endpoint selection follows a documented precedence (per-call `url=` → constructor `path=` → `GRAPHQL_URL` → the `TESTING_ENDPOINT` setting → `"/graphql/"`); `TestClient` / `AsyncTestClient` default to `assert_no_errors=True` while the mixin defaults to `False` for `assertResponseNoErrors()` / `assertResponseHasErrors()`, and the helpers carry the multipart-upload ergonomics the `Upload` scalar awaited. See the "Testing GraphQL endpoints" section below and [`GLOSSARY.md#testclient`][glossary-testclient].
 - `DjangoDebugExtension` (new in `0.0.14`, `DONE-044`) — a Strawberry `SchemaExtension` that captures a GraphQL operation's SQL (through Django's own debug cursor, one bracket per `connections.all()` alias) and raised resolver exceptions into the response's `extensions.debug` map — the Strawberry-native equivalent of graphene-django's `DjangoDebugMiddleware` / `_debug` field, which `strawberry-graphql-django` offers nothing to borrow back. It is opt-in by adding the class to the aggregate `strawberry.Schema(...)`'s `extensions=` list (never a package-root export, imported from `django_strawberry_framework.extensions`), one fresh instance per operation (`strawberry-graphql>=0.316.0`). Never enable it on an internet-facing production schema: it returns interpolated SQL values and unmasked exception messages and tracebacks. See the "GraphQL response extension" section below and [`GLOSSARY.md#djangodebugextension`][glossary-djangodebugextension].
@@ -223,11 +224,190 @@ schema = DjangoSchema(
 
 `DjangoSchema` installs `DjangoMutationExecutionContext`, which holds each generated top-level mutation field's `transaction.atomic()` open **through GraphQL response completion**: a payload that cannot be serialized (a non-nullable field completing `null`, a corrupt scalar) rolls the write back instead of committing behind a `data: null` response. Under plain `strawberry.Schema` the write pipeline refuses to run — the mutation fails with a `ConfigurationError` naming this requirement before any database work. Serial top-level mutation fields in one operation each get an independent transaction, per the GraphQL spec's serial-mutation semantics. Query-only schemas are unaffected. A consumer with its own execution context subclasses `DjangoMutationExecutionContext` and passes it via `execution_context_class=`.
 
+## Transport: the GraphQL HTTP endpoint and the ASGI router
+
+GraphQL over **HTTP** is a normal Django view declared in your own URLconf. GraphQL over **WebSocket** is the Channels router. Splitting them is the whole point (spec-065): the router no longer serves HTTP, so every GraphQL HTTP request traverses your project's real `MIDDLEWARE` — the `ALLOWED_HOSTS` host check, `CsrfViewMiddleware`, `SecurityMiddleware`'s headers, `SessionMiddleware` / `AuthenticationMiddleware`, cache policy, and anything you wrote — exactly as it does under WSGI.
+
+You do **not** need `channels` for the HTTP half. `django_strawberry_framework.views` is channels-free; a WSGI-only project adopts `DjangoGraphQLView` without the soft dependency and never imports `routers.py` at all.
+
+### Migrating from `0.0.14` — an intentional breaking change
+
+The `0.0.14` `DjangoGraphQLProtocolRouter` constructor is deliberately broken in three ways. The package's API freeze begins at `1.0.0`; correcting a security-boundary error during alpha is preferred over preserving an unsafe migration convenience.
+
+| `0.0.14` | now | what a migrant hits |
+|---|---|---|
+| `django_application=None`, optional | `django_application`, **required** | omitting it is a `TypeError`; passing `None` (or any non-callable) is a `ConfigurationError` whose message names this migration |
+| `url_pattern="^graphql"` — a prefix, applied to **both** protocols | `websocket_url_pattern=r"^graphql/?$"` — exact at both ends, **WebSocket only** | the keyword is renamed; the default no longer matches `/graphql-admin`, `/graphqlanything`, or `/graphql/extra` |
+| the router served GraphQL over HTTP through Strawberry's `GraphQLHTTPConsumer`, with `django_application` appended behind it as a `^` fallback | the router's `"http"` value **is** your Django ASGI application, dispatched directly with no wrapper | nothing serves GraphQL over HTTP until you add the `urlpatterns` entry below — this is the step with no automatic equivalent |
+
+**Old `asgi.py` (`0.0.14`):**
+
+```python
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+
+from django.core.asgi import get_asgi_application
+
+django_asgi_app = get_asgi_application()
+
+from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+
+from myproject.schema import schema
+
+# The router owned GraphQL on BOTH protocols. `django_application` was an
+# optional `^` fallback appended AFTER the router's own `^graphql` HTTP route,
+# so a GraphQL POST never reached Django's middleware at all. Both of these
+# were valid 0.0.14 spellings:
+application = DjangoGraphQLProtocolRouter(schema)
+application = DjangoGraphQLProtocolRouter(schema, django_asgi_app, url_pattern=r"^graphql")
+```
+
+**New `asgi.py`:**
+
+```python
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+
+from django.core.asgi import get_asgi_application
+
+django_asgi_app = get_asgi_application()
+
+from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+
+from myproject.schema import schema
+
+# `django_asgi_app` IS the "http" value: every HTTP request, GraphQL included,
+# goes through Django. The router composes WebSocket only — Host check >
+# AllowedHostsOriginValidator > AuthMiddlewareStack > URLRouter > the consumer.
+application = DjangoGraphQLProtocolRouter(
+    schema,
+    django_asgi_app,
+    websocket_url_pattern=r"^graphql/?$",  # the default; shown for the rename
+)
+```
+
+**The `urlpatterns` entry the new `asgi.py` depends on** — without it, `/graphql/` is a `404`:
+
+```python
+# myproject/urls.py
+from django.urls import path
+
+from django_strawberry_framework.views import DjangoGraphQLView
+
+from myproject.schema import schema
+
+urlpatterns = [
+    path("graphql/", DjangoGraphQLView.as_view(schema=schema)),
+]
+```
+
+`AsyncDjangoGraphQLView` is the async twin, mounted identically; it is the shape an ASGI deployment generally wants, since `as_view()` returns a coroutine function Django dispatches on the event loop without a thread hop. Both classes are leaf-module imports from `django_strawberry_framework.views` and are deliberately **not** package-root exports.
+
+The Channels ASGI router only becomes necessary when you want GraphQL **subscriptions over WebSocket**. An HTTP-only deployment can drop `asgi.py`'s router entirely and serve `get_asgi_application()` (or WSGI) with just the `urlpatterns` entry above.
+
+**`APPEND_SLASH`.** Mounting at `"graphql/"` means a client that POSTs to `/graphql` (no trailing slash) gets Django's `CommonMiddleware` `301` to `/graphql/` under `DEBUG=False`, and a `RuntimeError` under `DEBUG=True` telling you the POST data would be lost. Most HTTP clients do not re-POST a redirect, so **point your clients at the exact mounted path**. The WebSocket default `r"^graphql/?$"` deliberately accepts both spellings, because a WebSocket handshake has no body to lose. If you prefer the slash-less HTTP spelling, mount at `path("graphql", ...)` and set `TESTING_ENDPOINT` to match.
+
+### Transport deployment guidance
+
+Routing GraphQL through Django restores the authoritative middleware lifecycle. It does **not** automatically supply every transport resource bound — the sections below are the ones a deployment still owns.
+
+**CSRF.** The GraphQL endpoint is now an ordinary CSRF-protected Django view, so cookie-backed session authentication is protected by `CsrfViewMiddleware` on the same terms as the rest of your site. Keep it enabled, follow [Django's CSRF guidance][django-csrf], and exercise the deployed view with `Client(enforce_csrf_checks=True)` ([Django's test-client CSRF checks][django-test-client-csrf]). If you serve the in-browser IDE, wrap the mount in `ensure_csrf_cookie` so the GET that serves GraphiQL sets the `csrftoken` cookie the subsequent POST needs.
+
+One detail of the view's own plumbing reads like a relaxation and is the opposite of one. The view callback is marked `csrf_exempt` on the outside — an **ordering mechanism, not a CSRF bypass**. Its only effect is that the global middleware's `process_view` cannot touch `request.POST`, and so cannot run Django's multipart parser, *before* the body cap has decided whether to accept the request at all. Every request that passes the cap immediately enters a package-owned continuation wrapped in Django's own public `csrf_protect`, so Django's complete CSRF implementation still runs on it, with the same tokens, the same referer checks, and the same `403`. The net effect is stricter than the ordinary arrangement, not looser: because the protection is applied by the view rather than borrowed from the middleware stack, this endpoint stays CSRF-protected even in a project that has omitted `CsrfViewMiddleware` from `MIDDLEWARE` altogether.
+
+WebSocket is the exception and always was: a Channels consumer runs no `CsrfViewMiddleware`, so on that protocol the router's handshake defences are `DjangoWebSocketHostValidator` (`Host`) and `AllowedHostsOriginValidator` (`Origin`) rather than a CSRF token — two separate checks, both reading your project's `ALLOWED_HOSTS`, neither standing in for the other. Keep that setting tight.
+
+**Cache and `Vary`.** An authenticated GraphQL response must never be served from a shared cache to a different actor. Django already patches `Vary: Cookie` once the session is read or the CSRF cookie is set, but a reverse proxy or CDN in front of the endpoint has to honor it. The safest posture for a cookie-authenticated schema is to mark the GraphQL location uncacheable at the edge and let the application decide.
+
+**Security headers.** `SecurityMiddleware`'s configured headers (`X-Content-Type-Options`, `Referrer-Policy`, and HSTS via `SECURE_HSTS_SECONDS` on an HTTPS request) now apply to the GraphQL route because the route is a Django view. Under `0.0.14`'s Channels HTTP branch they did not — verify yours actually land after migrating.
+
+**The IDE and GET queries.** Both are on by default in Strawberry's view. For a production mount, turn them off:
+
+```python
+path(
+    "graphql/",
+    DjangoGraphQLView.as_view(
+        schema=schema,
+        graphql_ide=None,            # no GraphiQL / Pathfinder HTML
+        allow_queries_via_get=False, # POST-only; no query in a URL, no CDN caching of it
+    ),
+),
+```
+
+`multipart_uploads_enabled` is off by default and should stay off unless the schema actually takes an `Upload`.
+
+**The request-body cap is two layers, and you need both.** The package's view enforces a cumulative byte cap before JSON parsing or schema execution (`MAX_REQUEST_BODY_BYTES`, default 1 MiB, overridable per mount with `as_view(max_request_body_bytes=...)`), returning `413`. What that guarantees is precise and limited: the application never parses, allocates a document from, or executes a schema against an over-limit body, it never allocates or reads more than `limit + 1` bytes of one, and the refusal is itself bounded. What it **cannot** guarantee is that the bytes were never received — `django.core.handlers.asgi.ASGIHandler.read_body` has already drained the entire request into a spooled temporary file, rolling to disk past `FILE_UPLOAD_MAX_MEMORY_SIZE`, before any application-level cap can run. The application cap bounds what the application *processes*; only the deployment can bound what the server *accepts*.
+
+So a reverse-proxy / ASGI-server cap is a **co-requirement of the application cap, never an alternative to it**. Set both:
+
+```nginx
+# nginx: refuse the body at the edge, before Django is entered.
+location /graphql/ {
+    client_max_body_size 1m;   # nginx answers 413 itself
+    proxy_pass http://asgi_upstream;
+}
+```
+
+```apache
+# Apache in front of an ASGI upstream:
+LimitRequestBody 1048576
+```
+
+Be aware of what the ASGI servers do and do not give you here. Uvicorn, Hypercorn, and Daphne ship **no total-request-body limit**; the size knobs they do expose bound something else. Uvicorn's `--h11-max-incomplete-event-size`, and Gunicorn's `--limit-request-line` / `--limit-request-field_size` when it fronts an ASGI worker, bound the request line and headers, not the body. Daphne's `request_buffer_size` (a `daphne.server.Server` keyword, default `8192`, with no CLI flag) sets the chunk size Daphne delivers `http.request` fragments in — it changes fragment *delivery*, never the total body the server will accept. That is why the proxy line above is load-bearing rather than belt-and-braces: on a Daphne or Uvicorn deployment with no proxy cap, there is no layer below the application that will stop an oversized body from being spooled.
+
+**Multipart is a carve-out, not a byte count.** For a `multipart/form-data` **POST** the bound is the declared `Content-Length` plus Django's own `MultiPartParser`, and nothing else — the carve-out is POST-scoped, and a multipart content type on any other method is counted like any other body, which is the stricter direction. The body is deliberately never materialized: reading it would defeat Django's streaming upload handlers and break the `Upload`-scalar path this package ships. The declaration is nonetheless enforced **before** that parser and its upload handlers run — an over-limit `Content-Length` on a multipart POST is refused with the same `413`, with no part parsed, no file written, and no upload handler entered. That ordering is a property of the `csrf_exempt` / `csrf_protect` arrangement described under **CSRF** above rather than of the cap itself: without it, the global middleware's CSRF `process_view` would have read `request.POST` and driven the entire parse before the cap could speak. Per-file count, per-file size, and aggregate upload size are **not** bounded by `MAX_REQUEST_BODY_BYTES` — bound them at the proxy, with Django's `DATA_UPLOAD_MAX_NUMBER_FILES` / `FILE_UPLOAD_MAX_MEMORY_SIZE`, or in your own upload validation.
+
+**One UTF-8 wire.** A package view accepts UTF-8 request bodies and only UTF-8. UTF-16 / UTF-32 (BOM'd or BOM-less) and a leading UTF-8 BOM are rejected with the same controlled `400` that a malformed body gets. This is permanent package policy on the view and does not ride the `APPLY_UPSTREAM_PATCHES` kill switch. If a client is sending anything but UTF-8 today, fix the client — the alternative is `strawberry.django.views.GraphQLView`, which keeps upstream's RFC 8259 auto-detection.
+
+**Multipart control documents.** The wire contract reaches the two control fields of a `multipart/form-data` GraphQL request — `operations` and `map` — which Django decodes to text before this package sees them. Two things must hold or the request gets the same controlled `400`. First, the form's **effective** encoding must be UTF-8: an explicit non-UTF-8 `charset` on the form is refused, and so is a `request.encoding` that consumer middleware set to a non-UTF-8 codec, because that attribute — not the declaration — is what `MultiPartParser` decodes with. Second, the decoded value must **survive Django's decode without a replacement marker**: Django decodes form fields with `errors="replace"`, so a malformed byte sequence does not raise, it silently becomes `U+FFFD`. A control value arriving with that marker in it is therefore refused rather than parsed. Both checks run before either value is parsed as JSON. Ordinary browser `JSON.stringify` output is unaffected and genuine multibyte UTF-8 passes through intact; a client that legitimately needs a literal replacement character in its document sends the ASCII JSON escape `\ufffd` instead of the raw character, which is the supported way to carry `U+FFFD` through this boundary. Django's `MultiPartParser`, `request.POST` / `request.FILES`, and the configured upload handlers remain the sole owners of multipart parsing — the package adds these two refusals and nothing else.
+
+**The WebSocket handshake is validated on `Host` and on `Origin`.** Two separate checks, applied by two separate router-owned wrappers, and neither substitutes for the other. `Origin` is Channels' `AllowedHostsOriginValidator`, as it was in `0.0.14`. `Host` is the package's own `DjangoWebSocketHostValidator`, composed outermost: it projects the handshake's host metadata into a minimal Django `HttpRequest` and calls the public `request.get_host()`, so your project's existing `ALLOWED_HOSTS` and `USE_X_FORWARDED_HOST` govern a WebSocket handshake exactly as they govern an HTTP request. **No new setting exists.** Only a `DisallowedHost` becomes a denial, and the denial precedes authentication and consumer construction, so a hostile `Host` never reaches your session middleware or your consumer at all. The validator is private — the router composes it; a project neither imports nor configures it, and an injected consumer cannot escape it.
+
+**WebSocket freshness and revocation.** The package's default WebSocket consumer revalidates the session actor at **two** checkpoints and writes the refreshed actor back onto `scope["user"]`: when an operation is **admitted** (`subscribe` on `graphql-transport-ws`, `start` on legacy `graphql-ws`), and again before every **information-bearing operation frame** an already-admitted operation puts on the wire (`next`, `data`, and the operation-scoped `error` both protocols use). Two checkpoints rather than one because admission alone never sees a running subscription again — both protocols park an admitted operation in their own result loop and keep sending from there without returning through the admission path. What the pair guarantees is that **a revoked actor can neither admit another operation nor emit another information-bearing operation frame** over an already-established socket.
+
+Detection is **event-boundary-driven**: it happens the next time the socket does something, not at the instant an external logout lands. At whichever checkpoint notices first, the *whole connection* is closed with `4403` / `"Forbidden"` — upstream's own code and reason, with no preceding operation error and no reconnect — because the actor is connection-scoped, so the close is the rejection. `websocket_revalidation_window=` (seconds, default `0.0` = revalidate every time) now means the same thing at both checkpoints: the maximum age of a successful validation that may still authorize a new operation or an outbound information-bearing frame. It prices the session read against a named revocation delay:
+
+```python
+application = DjangoGraphQLProtocolRouter(
+    schema,
+    django_asgi_app,
+    websocket_revalidation_window=5.0,  # at most 5s of revocation delay
+)
+```
+
+**The idle-socket residue**, stated rather than left to be inferred: because detection is event-boundary-driven, a revoked socket that never produces another event stays physically open. Its subscription task, its session object, and its stale actor reference keep occupying the server until something makes it act. That is a resource-exhaustion concern and worth budgeting for, and it is **not** an authorization hole — an idle socket exercises no authorization, and the first thing it tries to do is refused and closed. The bound on it is the deployment's, and it is the same set of knobs as connection lifetime below.
+
+**Connection lifetime.** The package does **not** impose a maximum connection lifetime, because there is no correct default: a dashboard subscription and a short-lived request-response socket differ by orders of magnitude. Enforce it in the deployment — Daphne's `--websocket_timeout` (maximum seconds a socket may stay connected; `-1` is infinite) and `--websocket_connect_timeout`, nginx's `proxy_read_timeout` on the WebSocket location, plus Daphne's `--websocket-max-message-size` / `--websocket-max-frame-size`, which are the only body-shaped bounds on the WebSocket side (the HTTP `MAX_REQUEST_BODY_BYTES` cap does not apply to a socket). Upstream's own `connection_init_wait_timeout`, `keep_alive` / `keep_alive_interval`, and `max_subscriptions_per_connection` are set on the consumer class, which you supply through `websocket_consumer_class=`:
+
+```python
+from datetime import timedelta
+
+from strawberry.channels import GraphQLWSConsumer
+
+class MyConsumer(GraphQLWSConsumer):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("connection_init_wait_timeout", timedelta(seconds=10))
+        kwargs.setdefault("keep_alive", True)
+        super().__init__(*args, **kwargs)
+
+application = DjangoGraphQLProtocolRouter(
+    schema,
+    django_asgi_app,
+    websocket_consumer_class=MyConsumer,
+)
+```
+
+An injected consumer still sits inside all three of `DjangoWebSocketHostValidator`, `AllowedHostsOriginValidator`, and `AuthMiddlewareStack` by construction — the wrappers are the router's, not the consumer's — but it opts **out** of the package's revalidation, which is why injecting a class alongside a positive `websocket_revalidation_window` is a construction error rather than a silently ignored argument. With revalidation on, the freshness bound is the revalidation window rather than the connection lifetime.
+
+**Development-only surfaces.** `DjangoDebugExtension` and `DebugToolbarMiddleware` return interpolated SQL and unmasked exception messages. Neither belongs on an internet-facing schema; see [Development debug responses](#development-debug-responses).
+
 ## Session-auth deployment boundary
 
 The opt-in `login_mutation()` authenticates and establishes a Django session, but the framework does **not** provide brute-force throttling, lockout, or rate limiting. Attach a consumer-owned `permission_classes` gate or middleware before exposing login publicly. The login permission gate receives the attempted username for account-scoped controls but never receives the password.
 
-CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberry view and Django middleware around the GraphQL endpoint, not the auth field resolver. Keep Django's CSRF protection enabled for cookie-backed session authentication, follow [Django's CSRF guidance][django-csrf], and exercise the deployed GraphQL view with `Client(enforce_csrf_checks=True)` as described by [Django's test-client CSRF checks][django-test-client-csrf]. CSRF-token rotation on login applies only to the Django HTTP transport (Django's `login` rotates the token); `channels.auth.login` does not rotate the CSRF token (Channels' own behavior), and the Channels GraphQL consumers do not enforce CSRF.
+CSRF enforcement also belongs to the HTTP transport: it depends on the view and Django middleware around the GraphQL endpoint, not the auth field resolver. Since spec-065 the GraphQL HTTP endpoint is a Django view in your own URLconf, so `CsrfViewMiddleware` runs on it like any other view — keep Django's CSRF protection enabled for cookie-backed session authentication, follow [Django's CSRF guidance][django-csrf], and exercise the deployed GraphQL view with `Client(enforce_csrf_checks=True)` as described by [Django's test-client CSRF checks][django-test-client-csrf]. CSRF-token rotation on login applies only to the Django HTTP transport (Django's `login` rotates the token); `channels.auth.login` does not rotate the CSRF token (Channels' own behavior). **WebSocket** is where CSRF is genuinely absent: a Channels consumer runs no `CsrfViewMiddleware`, so the handshake defences on that protocol are the router's own `DjangoWebSocketHostValidator` (`Host`) and `AllowedHostsOriginValidator` (`Origin`) rather than a token — two separate checks, neither standing in for the other; see [Transport: the GraphQL HTTP endpoint and the ASGI router](#transport-the-graphql-http-endpoint-and-the-asgi-router).
 
 `register_mutation()` derives its input from the user model's `USERNAME_FIELD`, distinct `REQUIRED_FIELDS`, and `password`. It refuses to auto-expose Django's account-control fields (`is_active`, `is_staff`, `is_superuser`, `groups`, and `user_permissions`); custom registration flows must initialize privileges and activation state in server-owned logic.
 

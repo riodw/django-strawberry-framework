@@ -2222,6 +2222,55 @@ def test_query_extra_select_executable_sql_fails_closed_before_clone():
     assert fired == []
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["1", ()],
+        ("1",),
+        ("1", (), ()),
+    ],
+)
+def test_query_extra_select_malformed_payload_fails_closed(payload):
+    """A ``Query.extra`` payload that is not an exact ``(sql, params)`` 2-tuple fails closed.
+
+    The scan unpacks ``statement, params = payload`` to type each half, so the SHAPE gate
+    has to run first: a list payload would unpack fine and let a subclass ``__iter__``
+    dispatch during the unpack, and a 1- or 3-element tuple would raise a raw
+    ``ValueError`` out of the unpack past the boundary's typed ``(code, detail)``
+    contract. The neighbouring rows cannot see this arm -- they carry a well-shaped
+    2-tuple and are rejected one line later on the SQL half's type -- so each of the
+    three malformed shapes here is pinned to the same refusal rather than to a crash.
+    """
+    source = Category.objects.all()
+    source.query.extra = {"hostile": payload}
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "query extra['hostile'] has a malformed payload")
+
+
+def test_query_extra_select_hostile_params_fail_closed():
+    """A hostile parameter inside a ``Query.extra`` payload propagates the params defect.
+
+    ``.extra(select=...)`` params are handed straight to the database adapter, so the
+    payload scan delegates the params half to ``_raw_sql_params_defect`` and returns
+    whatever that reports. Reaching the delegation requires a payload that survives BOTH
+    earlier gates (an exact 2-tuple whose SQL half is an exact ``str``), which every
+    other ``extra`` row deliberately fails, so this is the only row that proves the
+    delegated defect is propagated rather than swallowed -- and that it is re-labelled
+    with the offending alias (``query extra['hostile']``) rather than a bare
+    ``RawSQL``-style label.
+    """
+
+    class _HostileParameter:
+        pass
+
+    source = Category.objects.all()
+    source.query.extra = {"hostile": ("%s", [_HostileParameter()])}
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "query extra['hostile'] params carries a _HostileParameter")
+
+
 def test_extra_where_executable_sql_fails_closed_before_clone():
     """An ``ExtraWhere`` raw fragment is validated despite having no expression children."""
     fired = []
@@ -2235,6 +2284,55 @@ def test_extra_where_executable_sql_fails_closed_before_clone():
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause sqls carries a _HostileSQL")
+    assert fired == []
+
+
+def test_extra_where_non_sequence_sqls_fails_closed():
+    """An ``ExtraWhere`` whose ``sqls`` is a sequence-LIKE object is refused before iteration.
+
+    ``ExtraWhere.as_sql`` iterates ``self.sqls`` to build its raw fragment, so a
+    consumer-supplied iterable would run its ``__iter__`` at compile time and could yield
+    different statements than any validation pass saw. The neighbouring row carries a
+    genuine ``list`` and is caught per-ELEMENT, which cannot see this arm: the
+    whole-container type gate runs first, so a hostile ``__iter__`` never fires at all
+    (asserted) -- an element-wise walk would already have dispatched it.
+    """
+    fired = []
+
+    class _EvilSqls:
+        def __iter__(self):  # pragma: no cover - must never run
+            fired.append("iter")
+            return iter(["1 = 1"])
+
+    source = Category.objects.extra(where=_EvilSqls())
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause sqls is a _EvilSqls")
+    assert fired == []
+
+
+def test_extra_where_non_sequence_params_fails_closed():
+    """An ``ExtraWhere`` with genuine ``sqls`` still has its ``params`` validated.
+
+    ``ExtraWhere`` carries TWO raw-SQL slots and the statement walk guards only the
+    first; reaching the params slot requires every statement in ``sqls`` to be an exact
+    ``str``, so a row with a hostile statement (the neighbour above) short-circuits and
+    can never prove the branch validates params too. This row supplies a legitimate
+    ``where`` fragment precisely so the walk falls through to the params delegation,
+    where a sequence-like object -- whose ``__iter__`` would otherwise run when
+    ``as_sql`` builds ``list(self.params or ())`` -- fails closed untouched.
+    """
+    fired = []
+
+    class _EvilParams:
+        def __iter__(self):  # pragma: no cover - must never run
+            fired.append("iter")
+            return iter(["keep"])
+
+    source = Category.objects.extra(where=["name = %s"], params=_EvilParams())
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause params is a _EvilParams")
     assert fired == []
 
 
@@ -2622,6 +2720,26 @@ def test_query_container_non_dict_extra_select_cache_fails_closed():
     query = Category.objects.all().query
     query.__dict__["_extra_select_cache"] = object()
     assert _query_container_defect(query) == ("untrusted", "query _extra_select_cache is a object")
+
+
+def test_extra_select_cache_non_string_key_fails_closed():
+    """A non-string ``_extra_select_cache`` alias fails closed inside the raw-SQL scan.
+
+    ``_extra_select_cache`` is the one raw-SQL dict absent from
+    ``_EXACT_DICT_QUERY_ATTRS``, so the payload scan is the FIRST place its keys are
+    typed -- and it must type them, because the alias is interpolated into the emitted
+    ``SELECT`` list and is ``repr``'d into the defect detail. The same probe driven
+    through ``extra`` cannot see this arm: ``extra`` IS in the exact-container list, so
+    the earlier loop rejects the non-string key first with byte-identical wording. Uses
+    ``_query_container_defect`` directly (like its ``_extra_select_cache`` neighbour
+    above) because no public queryset API populates that private compiler cache.
+    """
+    query = Category.objects.all().query
+    query.__dict__["_extra_select_cache"] = {object(): ("1", ())}
+    assert _query_container_defect(query) == (
+        "untrusted",
+        "query _extra_select_cache has a non-string key",
+    )
 
 
 def test_query_ast_having_tree_defect_fails_closed():

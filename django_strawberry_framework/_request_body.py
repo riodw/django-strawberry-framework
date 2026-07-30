@@ -113,7 +113,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import logger
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.http import HttpRequest
 
 __all__ = ("body_exceeds_limit",)

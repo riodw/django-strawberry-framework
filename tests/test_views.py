@@ -313,8 +313,9 @@ def test_an_invalid_cap_value_raises_configuration_error_on_either_rung(bad, run
     ``0`` is rejected rather than read as "unlimited": it is the near-universal
     unlimited spelling elsewhere, but under this cap's ``>`` comparison it would
     mean "reject every non-empty body", so a loud failure is the only reading
-    that cannot be misread. ``True`` is rejected explicitly because
-    ``isinstance(True, int)`` is ``True`` and a boolean cap is always a mistake.
+    that cannot be misread. ``True`` is rejected because the gate admits the
+    built-in ``int`` exactly - ``bool`` is a subclass, so an ``isinstance`` gate
+    would have let it through - and a boolean cap is always a mistake.
     The message must name the received type AND ``None`` as the documented
     disable, or a consumer who hits it cannot tell which value to reach for.
     """
@@ -352,6 +353,45 @@ def test_a_cap_value_too_large_to_render_still_raises_configuration_error(rung):
                 _resolved_max_request_body_bytes(bad)
         else:
             with _settings_with(bad):
+                _resolved_max_request_body_bytes(None)
+
+
+class _HostileInt(int):
+    """An ``int`` whose ordering raises - the comparison dunder is overridable."""
+
+    def __le__(self, other):
+        raise RuntimeError("hostile comparison")
+
+
+class _WellBehavedInt(int):
+    """An ``int`` subclass that behaves perfectly and is still not an ``int``."""
+
+
+@pytest.mark.parametrize(
+    "subclass_value",
+    [
+        pytest.param(_HostileInt(4096), id="int-subclass-whose-comparison-raises"),
+        pytest.param(_WellBehavedInt(4096), id="well-behaved-int-subclass"),
+    ],
+)
+@pytest.mark.parametrize("rung", ["kwarg", "setting"])
+def test_the_cap_admits_the_builtin_int_exactly(subclass_value, rung):
+    """The cap's type gate is exact: a subclass of ``int`` is not an ``int``.
+
+    A subclass may override ``__le__``, so admitting one would run consumer code
+    inside the resolver and let a raw exception replace the typed
+    ``ConfigurationError`` the boundary promises. The well-behaved row states the
+    resulting contract without hedging: the rejection is about the TYPE, not
+    about whether a particular instance happens to misbehave, because only the
+    type is knowable before the comparison runs. Both precedence rungs are
+    covered because either can carry the value.
+    """
+    with pytest.raises(ConfigurationError, match="None to disable"):
+        if rung == "kwarg":
+            with _settings_with(4096):
+                _resolved_max_request_body_bytes(subclass_value)
+        else:
+            with _settings_with(subclass_value):
                 _resolved_max_request_body_bytes(None)
 
 

@@ -154,8 +154,15 @@ def _resolved_max_request_body_bytes(value: object) -> int | None:
     ``NESTED_CONNECTION_STRATEGY``. ``0`` is rejected rather than treated as
     "unlimited": it is the near-universal unlimited spelling elsewhere, yet
     under this module's ``>`` comparison it would mean "reject every non-empty
-    body", so failing loud is the only reading that cannot be misread. ``bool``
-    is rejected explicitly because ``isinstance(True, int)`` is ``True``.
+    body", so failing loud is the only reading that cannot be misread.
+
+    The type gate admits the built-in ``int`` EXACTLY - never a subclass, and
+    therefore never ``bool`` (``isinstance(True, int)`` is ``True``, so an
+    ``isinstance`` gate needed a second clause to say so; an exact-type gate says
+    it once). Exactness is what makes the ``value <= 0`` arm trustworthy: a
+    subclass may override ``__le__`` to raise, and an admitted subclass would
+    then evaluate consumer code INSIDE this boundary and escape it with a raw
+    exception in place of the promised ``ConfigurationError``.
 
     The ``got`` tail is rendered by ``exceptions.py::describe_value`` rather than
     interpolated directly, because the f-string runs at the RAISE SITE: a
@@ -169,7 +176,7 @@ def _resolved_max_request_body_bytes(value: object) -> int | None:
         value = max_request_body_bytes_setting()
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if type(value) is not int or value <= 0:
         raise ConfigurationError(
             f"max_request_body_bytes must be a positive int of bytes or None to disable "
             f"the package request-body cap; got {describe_value(value)}.",

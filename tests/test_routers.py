@@ -1458,7 +1458,9 @@ def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable):
 def test_the_revalidation_window_rejects_unusable_values(unusable):
     """Spec-046 Decision 11: the window's construction-time domain.
 
-    ``bool`` is rejected explicitly (``isinstance(True, int)`` is ``True``), and
+    ``bool`` is rejected because the gate admits the built-in ``int`` and
+    ``float`` exactly - ``bool`` is a subclass of ``int``, so an ``isinstance``
+    gate would have let it through - and
     both non-finite values are rejected because neither is a usable number of
     seconds: ``nan`` loses every comparison, so it would silently never expire
     and never say why, and ``inf`` is a saturation sentinel rather than a value a
@@ -1494,6 +1496,38 @@ def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
 
     assert isinstance(exc_info.value.__cause__, OverflowError)
     assert "an unprintable int" in str(exc_info.value)
+
+
+class _HostileFloat(float):
+    """A ``float`` whose conversion raises - the numeric dunder is overridable."""
+
+    def __float__(self):
+        raise RuntimeError("hostile conversion")
+
+
+class _WellBehavedInt(int):
+    """An ``int`` subclass that behaves perfectly and is still not an ``int``."""
+
+
+@pytest.mark.parametrize(
+    "subclass_value",
+    [
+        pytest.param(_HostileFloat(1.0), id="float-subclass-whose-conversion-raises"),
+        pytest.param(_WellBehavedInt(30), id="well-behaved-int-subclass"),
+    ],
+)
+def test_the_revalidation_window_admits_the_builtin_numbers_exactly(subclass_value):
+    """The window's type gate is exact: a subclass of ``int`` or ``float`` is not one.
+
+    A subclass may override ``__float__``, so admitting one would run consumer
+    code inside the validator and let a raw exception replace the typed
+    ``ConfigurationError`` the construction boundary promises. The well-behaved
+    row states the resulting contract without hedging: the rejection is about the
+    TYPE, not about whether a particular instance happens to misbehave, because
+    only the type is knowable before the conversion runs.
+    """
+    with pytest.raises(ConfigurationError, match="websocket_revalidation_window"):
+        _router(websocket_revalidation_window=subclass_value)
 
 
 @pytest.mark.parametrize(

@@ -1,51 +1,93 @@
-# Code review: commit `bbd216fc`
+# Adversarial review: spec-046 transport security
 
-## [P1] Validate a lookup's direct RHS before calling its source accessor
+Reviewed the shipped implementation in `django_strawberry_framework/` against
+[spec-046][spec-046] and the package/live transport tests. The major transport
+boundaries are present and fail closed in the ordinary request shapes: Django
+owns HTTP, the cap runs before parsing, JSON and multipart control fields have
+the documented UTF-8 policy, and WebSocket Host/Origin/revalidation wrappers
+are composed in the intended order.
 
-`django_strawberry_framework/utils/querysets.py::_expr_graph_defect` now validates
-four sequence-valued expression state slots before it calls
-`node.get_source_expressions()`, which closes the `Case.cases` iterator gap.
-That does not make the bound accessor generally safe. Django's exact
-`Lookup.get_source_expressions()` first calls `rhs_is_direct_value()`, which
-performs `hasattr(self.rhs, "as_sql")`. An arbitrary direct RHS can therefore
-run its own attribute hook during the proof. When the RHS has no `as_sql`, the
-accessor returns only `lhs`, so that RHS is never passed back through
-`_expr_graph_defect` at all even though the database adapter will consume it
-later.
+## Findings
 
-This contradicts the boundary's promise that every lookup operand is validated
-and gives consumer state a callback before the query is cloned. Validate an
-exact Django lookup's raw `lhs` and `rhs` state directly, without calling a
-bound discovery method first; a direct RHS must satisfy the inert-value rules,
-while an expression RHS must recurse through the graph proof. Add a regression
-using an exact Django lookup whose direct RHS has an attribute hook, and assert
-that the hook is not invoked and the seal returns an `untrusted` defect.
+### [P2] Numeric subclasses can escape the typed configuration boundary
 
-## [P1] Rebuild the complete query graph instead of retaining candidate nodes
+`django_strawberry_framework/consumers.py::resolved_revalidation_window` accepts
+any `isinstance(value, (int, float))` value and then calls its overridable
+`__float__`. Likewise,
+`django_strawberry_framework/views.py::_resolved_max_request_body_bytes` calls
+the overridable comparison `value <= 0` after accepting an `int` subclass.
+Those operations are outside the error boundary. A consumer can reproduce the
+leak without touching the network:
 
-`django_strawberry_framework/utils/querysets.py::_rebuild_query_payloads`
-detaches only the lists stored in `table_map`. The cloned query still shares
-lookup leaves, annotation expressions, joins, `FilteredRelation` objects, and
-raw-SQL parameter containers with the candidate. The function's own docstring
-acknowledges that a retained lookup can have its `rhs` changed after sealing,
-including the lookup that carries the visibility predicate. Consequently the
-result is not a detached execution query: code retaining a reference to the
-candidate graph can still change which rows the sealed queryset selects before
-compilation.
+```python
+class BadFloat(float):
+    def __float__(self):
+        raise RuntimeError("configuration hook")
 
-The root fix is the canonical reconstruction already identified by spec-045:
-derive a validated, inert description of the query and rebuild fresh
-framework-owned AST nodes and payload containers from it. Extending the
-one-container copy does not close the ownership boundary. Add a regression that
-seals a visibility-filtered queryset, mutates a retained candidate leaf and a
-raw parameter container, and proves the sealed SQL and parameters remain
-unchanged.
+class BadInt(int):
+    def __le__(self, other):
+        raise RuntimeError("configuration hook")
+```
+
+Passing `BadFloat(1)` to `resolved_revalidation_window` raises the raw
+`RuntimeError`; passing `BadInt(1)` to `_resolved_max_request_body_bytes` does
+the same. The documented contract is a construction/request-boundary
+`ConfigurationError` for an unusable value, so a hostile or merely surprising
+settings object can instead abort router construction or view dispatch with an
+unrelated exception. This is fail-closed for authorization, but it is still a
+broken public error contract and makes invalid deployment configuration harder
+to diagnose.
+
+The root fix is to reject only the supported built-in numeric types (while
+keeping the explicit `bool` rejection), or to guard every user-defined numeric
+conversion/comparison with `except Exception` and raise the existing typed
+error with the original exception chained. Add rows for a float subclass whose
+conversion raises and an int subclass whose validation comparison raises; both
+must produce `ConfigurationError` rather than a raw exception.
+
+### [P2] The default outbound revalidation path has unbounded per-connection head-of-line blocking
+
+`django_strawberry_framework/consumers.py::send_revalidated_operation_frame`
+holds the connection lock across `_actor_is_current` and the actual send. With
+the default `websocket_revalidation_window=0.0`, every `next`, `data`, or
+operation-scoped `error` frame performs a session-store/user lookup while all
+other protected operations on that socket wait. A slow session backend, a
+database pool exhaustion event, or a stuck synchronous adapter therefore pins
+every active operation task on that connection behind one read; there is no
+timeout or bounded latency at this boundary.
+
+The serialization is deliberate and is required to prevent a validated sibling
+from sending after revocation, so this is not a request to release the lock
+early. It is an unresolved availability budget: the spec calls the path a hot
+path, but the implementation has no measured latency/throughput budget or
+explicit timeout/failure policy for a stalled store. Record a benchmark or an
+explicit maintainer waiver, and decide whether a bounded, fail-closed session
+read timeout belongs in the transport contract before treating this slice as
+fully risk-closed.
+
+## Deliberate risks checked and not raised as defects
+
+- Multipart POSTs without a trustworthy declaration remain bounded only by
+  Django's multipart/upload settings and the deployment proxy/server cap. The
+  spec explicitly makes those co-requirements; the package must not materialize
+  multipart bodies just to impose a second cap.
+- Revocation is event-boundary-driven and does not poll idle sockets. The first
+  later operation or information-bearing frame is revalidated and closes the
+  connection; idle lifetime is intentionally deployment-owned.
+- The body probe relies on Django/Python stream `read(size)` semantics. Its
+  production WSGI/ASGI streams honor that contract, and the code correctly
+  distinguishes safely unmeasurable from position-corrupted streams. A stream
+  implementation that violates the standard read contract would invalidate any
+  application-level byte bound, which is a deployment prerequisite rather than
+  a new HTTP parser branch.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 
 <!-- docs/ -->
+
+[spec-046]: spec-046-transport_security-0_0_15.md
 
 <!-- docs/SPECS/ -->
 

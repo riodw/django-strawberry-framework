@@ -1901,9 +1901,59 @@ sound. Releasing after validation would admit this interleaving: sibling task A 
 validation; sibling task B then detects revocation and begins closing; task A, already
 authorized, emits its payload anyway. The accepted cost is stated rather than discovered: a
 per-connection serialization point on the outbound hot path, so concurrent operations on one
-socket wait behind a session-store read. It serializes **one connection's** protected frames
-only — never a `complete`, never a keep-alive, and never anything on an unrelated
-connection — and an idle or anonymous socket never takes it at all.
+socket wait behind a session-store read. *The lock* serializes **one connection's** protected
+frames only — never a `complete`, never a keep-alive, and never a frame on an unrelated
+connection — and an idle or anonymous socket never takes it at all. What the lock scopes is
+not the whole blocking story, though, and the difference is measured rather than reasoned
+about in the budget immediately below.
+
+**The measured budget, and the one lever that moves it.** Measured on one machine against
+local SQLite with `db` sessions, driving
+`consumers.py::send_revalidated_operation_frame` directly. Treat the *shape* as the finding
+and the absolute numbers as one deployment's price, not a portable guarantee:
+
+- **A revalidated frame costs ~1-2 ms**, against ~1.5 us for a frame served inside a positive
+  window and ~0.5 us for an anonymous socket. One connection sustains roughly **550-670
+  protected frames/s**.
+- **Concurrency on one connection buys nothing**, as designed: eight tasks on a single socket
+  measured at or below the serial rate. That is the lock, and it is the property that makes
+  the gate sound.
+- **Concurrency across *distinct* connections also buys almost nothing**, which is *not* the
+  lock. Aggregate throughput plateaus at roughly **1.0-1.3k protected frames/s per process**
+  no matter how many connections are open — sixteen concurrent authenticated sockets got
+  ~60-80 frames/s each.
+- **The cause is a single shared thread.** `channels.auth.get_user` is a
+  `DatabaseSyncToAsync`, i.e. `thread_sensitive=True`, so every actor revalidation in the
+  process — every connection's — runs on **one** asgiref executor thread. Probing thread
+  identity across eight concurrent connections observed exactly one.
+- **So a stalled store is a process-wide event, not a per-connection one.** Holding one
+  connection's session read inside that thread blocked an *unrelated* connection's protected
+  frame for the full duration of the stall. This is the one place where the per-connection
+  framing of the lock does not describe the observable blast radius.
+- **Changing the session backend is not the lever.** `cached_db` and a pure in-memory
+  `cache` backend land in the same order of magnitude as `db` at the ceiling, because the
+  revalidation still resolves the actor row across the same single thread.
+
+**The lever that does move it is `websocket_revalidation_window`.** A positive window serves
+the frame from the cached validation, which removes the sync boundary altogether — and with
+it both the process-wide ceiling and the cross-connection stall coupling — for two to three
+orders of magnitude. The `0.0` default is therefore a **correctness** default, not a
+throughput one: a deployment whose authenticated subscription fan-out exceeds a few hundred
+protected frames/s per process must price a positive window deliberately, and the docs say so
+in those terms
+([Doc updates](#doc-updates)). Lifting the ceiling *without* a window — by taking the actor
+read off the thread-sensitive executor — is a change to a security boundary's concurrency
+model and is **not** attempted by this card
+([Risks and open questions](#risks-and-open-questions)).
+
+**No package-level timeout on the read**, deliberately. The *behavior* on a failed or slow
+read is already specified — `consumers.py::_actor_is_current` fails closed, so a driver-level
+timeout surfaces as denial and revocation, never as a permitted frame — and only the *bound*
+is deployment-owned, through the session database's own
+`DATABASES[...]["OPTIONS"]` connect / statement timeouts. An `asyncio.wait_for` inside the
+lock would not reclaim anything: the executor thread and its half-open connection would be
+abandoned mid-read while the next frame queues behind the same thread, which makes a stalled
+store strictly worse rather than bounded.
 
 **The window keeps its meaning, expanded consistently across both checkpoints.**
 `websocket_revalidation_window` is **the maximum age of a successful actor validation that
@@ -2827,7 +2877,16 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
     (*a revoked actor cannot admit another operation or emit another information-bearing
     operation frame; detection is event-boundary-driven*), the connection close a client
     should expect, the window's expanded meaning, and — stated, not implied — the
-    idle-socket residue plus the deployment knobs that bound it.
+    idle-socket residue plus the deployment knobs that bound it. It also carries the
+    window's **throughput** role, in the terms
+    [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
+    measured budget establishes and without restating its numbers: that `0.0` is a
+    correctness default rather than a throughput one, that the revalidated-frame ceiling is
+    **per process** rather than per connection, that reaching for a faster session backend
+    does not lift it, and that the bound on a stalled session read is the session database's
+    own `DATABASES[...]["OPTIONS"]` timeouts because the package deliberately adds none. A
+    subscription-heavy deployment must be able to read that paragraph and correctly conclude
+    that the window is the knob to reach for.
   - **WebSocket Host.** That the handshake is validated on `Host` **and** `Origin`, by two
     separate wrappers, that `Host` follows the project's existing `ALLOWED_HOSTS` and
     `USE_X_FORWARDED_HOST` exactly as HTTP does, and that no new setting exists
@@ -2909,22 +2968,29 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   ASGI chooses the async one deliberately. Fallback: ship the sync view only and add the
   async twin when a live async tier exists — rejected for now because an ASGI-shaped card
   that omits the async view would be an odd omission.
-- **The revalidation's per-authorized-event query cost.** One
-  session read per operation is real work on a socket's critical path;
+- **The revalidation's per-authorized-event query cost — now measured, and the measurement
+  moved the answer.** One session read per operation is real work on a socket's critical
+  path;
   [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
   extends it to every information-bearing outbound frame, so a high-rate authenticated
-  subscription at the default window pays one session read **per emitted result**, serialized
-  behind one connection-local lock. The bounded window is the only mitigation this
-  card ships, and it is a consequential knob. Preferred answer:
-  keep the default at `0.0` (always revalidate) because a stale-actor default is the finding
-  being fixed, document the window with the trade stated in one sentence, name the
-  per-result cost explicitly in that sentence, and let a measured deployment price it.
-  Fallback:
-  if a later benchmark shows the read dominating a subscription-heavy workload, a
-  session-store-level cache belongs to [`TODO-ALPHA-047-0.0.16`][kanban]'s resource
-  policy, not to a second knob here. **Flagged for the maintainer** rather than settled:
-  whether a subscription-heavy deployment should be steered toward a non-zero default window
-  in the docs is a product judgement, not a spec one.
+  subscription at the default window pays one session read **per emitted result**. That
+  decision's budget now prices it, and two of this bullet's original premises did not
+  survive contact with the numbers. First, the cost is **not** bounded by the
+  connection-local lock: it is bounded by the single `thread_sensitive` executor thread that
+  every connection's actor read shares, so the ceiling is **per process**, not per socket.
+  Second, the fallback this bullet used to name — a session-store-level cache deferred to
+  [`TODO-ALPHA-047-0.0.16`][kanban] — is **refuted**: an in-memory session backend measured
+  in the same order of magnitude as `db`, because the store was never the bottleneck. Anyone
+  reaching for a faster session store to fix this will buy nothing. Preferred answer,
+  unchanged in substance and now evidence-backed: keep the default at `0.0`, because a
+  stale-actor default is the finding being fixed, and document the window as the throughput
+  lever it actually is. **Still flagged for the maintainer**, and now the sharper question:
+  the only way to lift the per-process ceiling *without* a positive window is to take the
+  actor read off the thread-sensitive executor, which trades a shared thread for
+  per-revalidation database connections and changes the concurrency model of an
+  authorization boundary. That is a deliberate design change, not a tuning knob, and it
+  belongs to a card that can carry the connection-pool and transaction-context analysis with
+  it — not to this one, and not to a silent amendment of Decision 16.
 - **`csrf_protect` on the async view at the Django 5.2.0 floor.** Django's
   `make_middleware_decorator` branches on `iscoroutinefunction(view_func)` and produces an
   async wrapper, verified at the installed 6.0.5; the same branch is expected at the 5.2.0

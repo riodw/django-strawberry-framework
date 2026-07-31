@@ -72,8 +72,21 @@ hidden: this is a per-connection serialization point on the outbound hot path, s
 when a validation needs a session-store read every concurrent operation waiting to
 emit on that socket waits for that read. That head-of-line behavior is accepted
 because it is the mechanism that makes "no sibling payload escapes after
-revocation is observed" true, and it serializes exactly one connection's protected
-frames - never unrelated connections.
+revocation is observed" true, and THE LOCK serializes exactly one connection's
+protected frames - never a keep-alive, never a frame on an unrelated connection.
+
+**The lock's scope is not the whole blocking story**, which matters when sizing a
+deployment. ``channels.auth.get_user`` is thread-sensitive, so every connection's
+actor read in a process runs on ONE shared executor thread: the revalidated-frame
+ceiling is per PROCESS rather than per connection, and a session store that stalls
+one connection's read stalls every other connection's protected frames behind it.
+A positive ``websocket_revalidation_window`` is the lever that removes the read,
+and with it both the shared-thread ceiling and that coupling; a faster session
+backend is not, because the actor read is the shared cost. The bound on a stalled
+read is the session database's own connect / statement timeouts, and this module
+deliberately imposes none of its own: abandoning a half-read executor thread would
+queue the next frame behind that same thread, making a stalled store worse rather
+than bounded. Spec-046 Decision 16 carries the measured budget.
 
 **The window's meaning, expanded consistently.** ``websocket_revalidation_window``
 is the maximum age of a successful actor validation that may authorize a new
@@ -248,9 +261,17 @@ def resolved_revalidation_window(value: object) -> float:
     """Validate ``websocket_revalidation_window`` and return it as a ``float``.
 
     Shaped after ``views.py::_resolved_max_request_body_bytes``: the same typed
-    ``ConfigurationError``, the same explicit ``bool`` rejection (because
-    ``isinstance(True, int)`` is ``True``), and the same ``got {type} {value!r}``
-    tail. A non-finite value (``nan`` / ``inf``) is rejected too, and the reason
+    ``ConfigurationError``, the same EXACT-type admission, and the same
+    ``got {type} {value!r}`` tail. Only the built-in ``int`` and ``float``
+    themselves are admitted - never a subclass, and therefore never ``bool``
+    (``isinstance(True, int)`` is ``True``, so an ``isinstance`` gate needed a
+    second clause to say so; an exact-type gate says it once). The exactness is
+    what makes the arithmetic below trustworthy: a subclass may override
+    ``__float__`` to raise or to return an unrelated number, so an admitted
+    subclass would evaluate consumer code INSIDE this boundary and escape it with
+    a raw exception in place of the promised ``ConfigurationError``.
+
+    A non-finite value (``nan`` / ``inf``) is rejected too, and the reason
     is unusability rather than a ceiling: ``nan`` loses every comparison, so a
     window spelled that way would silently never expire and never say why, and
     ``inf`` is the saturation sentinel a failed computation produces rather than
@@ -279,7 +300,7 @@ def resolved_revalidation_window(value: object) -> float:
     finiteness checks below run on a real ``float``, which is the value the
     consumer will actually compare against.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise _unusable_window_error(value)
     try:
         window = float(value)

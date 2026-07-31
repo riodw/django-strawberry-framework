@@ -47,6 +47,15 @@ Both failures are connection-scoped: the socket is CLOSED with ``4403`` and one
 non-disclosing reason, no operation-level error frame is emitted first, and the
 rows assert the close rather than a rejection frame.
 
+A third group composes the revalidation with the package's OWN ``logout``
+mutation, run on the socket it is sent over rather than through a separate
+request. That is the only revocation shape which also replaces ``scope["user"]``
+with ``AnonymousUser`` and which can complete while a checkpoint's session read
+is suspended, so it is the only one that can exercise the connection's
+authentication provenance and the read token both sides share. Those rows build
+their schema per test, behind a registry-clearing fixture and with every auth
+import function-local, so this module's own import stays auth-free.
+
 The execution schema is module-local and ORM-free: the async consumers execute
 on the event loop, where sync ORM would raise ``SynchronousOnlyOperation`` -
 router behavior is schema-agnostic, so deterministic scalar fields (plus one
@@ -718,6 +727,20 @@ def _flush_the_session(user, session_key):
 
 
 @database_sync_to_async
+def _session_row_still_exists(session_key):
+    """Whether the configured engine still holds a record for ``session_key``.
+
+    The durability half of the same-socket logout rows: they assert what the wire
+    did NOT carry, which is only meaningful alongside proof that the teardown
+    itself completed. Asked through the engine's own ``exists`` rather than the
+    ``Session`` model, so the question stays true for any server-side engine.
+    """
+    from django.conf import settings
+
+    return importlib.import_module(settings.SESSION_ENGINE).SessionStore().exists(session_key)
+
+
+@database_sync_to_async
 def _disable_the_user(user, session_key):
     """Disable the actor out of band; the session row itself stays valid.
 
@@ -787,6 +810,9 @@ class _RevalidationProbe:
         self.hold = None
         self.hold_key = None
         self.invalidate_after = None
+        self.hold_after_read = None
+        self.entered_after_read = asyncio.Event()
+        self.read_actors = []
 
 
 def _instrument_revalidation(monkeypatch):
@@ -817,6 +843,13 @@ def _instrument_revalidation(monkeypatch):
     the only tool when the two checkpoints belong to ONE upstream call the test body
     cannot interleave with - the subscription-limit row's admission and its
     ``error`` frame both happen inside a single ``handle_subscribe``.
+
+    ``probe.hold_after_read`` is the OTHER side of ``probe.hold``, and the
+    difference is the whole point of the row that uses it: it parks the read once
+    it has already loaded the actor, so what resumes is a genuinely stale
+    authenticated actor rather than whatever the store would answer later.
+    ``read_actors`` keeps those loaded objects, which is how "the stale actor was
+    not written back" is asserted by identity rather than by value.
     """
     probe = _RevalidationProbe()
     original = consumers_module._refreshed_actor
@@ -828,7 +861,12 @@ def _instrument_revalidation(monkeypatch):
             await probe.hold.wait()
         if probe.invalidate_after is not None and probe.reads > probe.invalidate_after:
             return AnonymousUser()
-        return await original(scope)
+        actor = await original(scope)
+        probe.read_actors.append(actor)
+        if probe.hold_after_read is not None:
+            probe.entered_after_read.set()
+            await probe.hold_after_read.wait()
+        return actor
 
     monkeypatch.setattr(consumers_module, "_refreshed_actor", counting_refreshed_actor)
     return probe
@@ -3696,3 +3734,295 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     # The guard's direction: the message loop was left to unwind normally.
     assert consumer.run_task.done()
     assert not consumer.run_task.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Channels-present: the package's OWN logout on the socket it is sent over.
+#
+# Every row above revokes from somewhere else - a second HTTP request, a direct
+# store mutation, an invalidating read - which leaves the socket's scope actor
+# authenticated and sends the revalidation down its database-read branch. The
+# rows below revoke through ``auth/mutations.py``'s ``logout`` on the connection
+# ITSELF, which additionally replaces ``scope["user"]`` with ``AnonymousUser``
+# and can complete while a revalidation read is suspended. Those are the two
+# states no external-revocation row can reach.
+#
+# The schema is per-test rather than module-level, and that is load-bearing
+# twice: ``logout_mutation()`` is declared through the package registry (a
+# process-wide ledger the fixture below clears on both sides, the discipline
+# ``tests/auth/test_mutations.py``'s autouse fixture follows), and importing the
+# opt-in auth subsystem at collection time would leave it in ``sys.modules``
+# where ``::test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_package``
+# reads it. Every auth import below is therefore function-local.
+# ---------------------------------------------------------------------------
+
+_LOGOUT_MUTATION = "mutation{ logout{ ok } }"
+
+
+def _build_logout_schema():
+    """Build a schema carrying the package's own ``logout`` beside the controlled operations.
+
+    The logout-only auth surface: no ``DjangoType`` is declared, which the
+    package's structural logout exemption allows (``logout`` resolves no user
+    type), so this adds one mutation field to the module's own ORM-free schema
+    and nothing else. ``Subscription`` comes along because the rows that matter
+    are about an operation admitted BEFORE the logout and still running after it.
+    """
+    from django_strawberry_framework import DjangoSchema, finalize_django_types
+    from django_strawberry_framework.auth import logout_mutation
+
+    @strawberry.type
+    class Mutation:
+        logout = logout_mutation()
+
+    finalize_django_types()
+    return DjangoSchema(query=Query, mutation=Mutation, subscription=Subscription)
+
+
+@pytest.fixture
+def _logout_schema():
+    """Yield the logout-carrying schema, clearing the package registry either side."""
+    from django_strawberry_framework.registry import registry
+
+    registry.clear()
+    try:
+        yield _build_logout_schema()
+    finally:
+        registry.clear()
+
+
+async def _logout_on_this_socket(schema, consumer):
+    """Run the package's ``logout`` mutation against ONE open socket's own scope.
+
+    The real resolver over the real connection: ``request_from_info`` resolves a
+    Channels context whose ``request`` is the WebSocket consumer, and that
+    consumer's ``scope`` is the very dict the revalidation checkpoints read, so
+    this is the package's own mutation mutating the socket under test.
+
+    Executed through the schema rather than pushed in as a protocol frame because
+    the legacy ``graphql-ws`` protocol cannot execute a mutation at all (its
+    handler reaches Strawberry through ``Schema.subscribe``; see
+    ``Subscription.tick``), and the same-socket contract has to hold on both
+    protocols. The frame-driven end-to-end shape is pinned separately, on the
+    protocol that can carry it.
+    """
+    result = await schema.execute(_LOGOUT_MUTATION, context_value={"request": consumer})
+    assert result.errors is None, result.errors
+    assert result.data == {"logout": {"ok": True}}, result.data
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protocols(
+    subprotocol,
+    monkeypatch,
+    _logout_schema,
+):
+    """The package's own logout revokes the connection it was sent over.
+
+    The composition every external-revocation row misses: authenticate, admit a
+    multi-yield subscription, receive result 1, run the package's ``logout`` on
+    THIS socket, then release result 2. The logout flushes the durable session and
+    writes ``AnonymousUser`` onto the scope, so the connection's actor identity
+    changed rather than its session merely expiring - and the already-admitted
+    subscription must not keep emitting into it.
+
+    ``probe.reads`` is the sharpest assertion here. It stays at the two the
+    subscription's own checkpoints paid: the refusal is read-free, because it is
+    the connection's authenticated PROVENANCE - not a fresh session read - that
+    denies an actor which is anonymous now but was not always. An implementation
+    that read the live scope actor would find an anonymous socket, take the
+    read-free carve-out, and send result 2.
+    """
+    _user, cookie, _session_key = await _make_user_and_session(f"same_socket_{subprotocol[:9]}")
+    controller = _controller("same-socket")
+    gate = _record_outbound_gate(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router(_logout_schema)
+    _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+
+    async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
+        await _send_operation(communicator, _controlled_subscription("same-socket"), op_id="1")
+        await _reached(controller.started, "the operation was never admitted")
+
+        controller.release(0)
+        first = await communicator.receive_json_from(timeout=10)
+        assert first["type"] == success_frame, first
+        assert first["payload"]["data"] == {"controlled": "same-socket-1"}
+        assert probe.reads == 2
+
+        consumer = gate.consumers[0]
+        await _logout_on_this_socket(_logout_schema, consumer)
+        # The logout really did change the connection's actor identity.
+        assert consumer.scope["user"].is_anonymous
+
+        controller.release(1)
+        closed, frames = await _drain_until_close(communicator)
+
+    assert frames == [], frames
+    _assert_revoked_close(closed)
+    assert controller.emitted == ["same-socket-1", "same-socket-2"]
+    assert probe.reads == 2
+    assert controller.finalized, "cancellation did not unwind the subscription generator"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_close(
+    monkeypatch,
+    _logout_schema,
+):
+    """The pinned transition contract: the socket ends, so the reply does not arrive.
+
+    The frame-driven end-to-end shape, on the one protocol that can execute a
+    mutation. The logout is an ordinary operation: it is admitted against the
+    still-valid actor, its resolver tears the session down durably, and its
+    ``{ok: true}`` payload then reaches the outbound checkpoint - which is now
+    the FIRST protected checkpoint after the transition, and refuses it like any
+    other post-revocation frame. The client's answer is the same non-disclosing
+    ``4403`` close every other revocation produces.
+
+    That the reply is suppressed rather than exempted is the decision this row
+    exists to pin: exempting one frame type from the gate is the disclosure
+    distinction the gated set exists to avoid, and the teardown has already
+    completed durably - which the deleted session row proves independently of the
+    wire.
+    """
+    _user, cookie, session_key = await _make_user_and_session("logout_frame_probe")
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router(_logout_schema)
+
+    async with _open_ws(router, cookie=cookie) as communicator:
+        first = await _ws_operation(communicator, "{ username }", op_id="1")
+        assert first["type"] == "next", first
+        assert first["payload"]["data"] == {"username": "logout_frame_probe"}
+
+        await _send_operation(communicator, _LOGOUT_MUTATION, op_id="2")
+        closed, frames = await _drain_until_close(communicator)
+
+    assert frames == [], frames
+    _assert_revoked_close(closed)
+    # Admission for both operations, plus the first operation's own result frame;
+    # the refused reply took no read of its own.
+    assert probe.reads == 3
+    # The durable teardown happened even though its payload never went out.
+    assert not await _session_row_still_exists(session_key)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
+    monkeypatch,
+    _logout_schema,
+):
+    """Provenance, not the current actor: a socket that was never authenticated is untouched.
+
+    The control that keeps the carve-out a carve-out. This socket carries no
+    cookie, so it has no authenticated provenance to latch; running the package's
+    ``logout`` on it flushes any residual session data, answers the honest
+    ``{ok: false}``, and changes nothing about the connection. The poisoned store
+    resolver makes "zero session reads" a positive proof rather than an
+    observation - a read would raise, fail closed, and close the socket - and the
+    socket then runs another operation to show it is still fully usable.
+    """
+    _poison_the_session_store(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router(_logout_schema)
+
+    async with _open_ws(router) as communicator:
+        logged_out = await _ws_operation(communicator, _LOGOUT_MUTATION, op_id="1")
+        assert logged_out["type"] == "next", logged_out
+        assert logged_out["payload"]["data"] == {"logout": {"ok": False}}
+
+        after = await _ws_operation(communicator, "{ actor }", op_id="2")
+        assert after["type"] == "next", after
+        assert after["payload"]["data"] == {"actor": "ChannelsRequestAdapter|True"}
+        assert await communicator.receive_nothing(timeout=0.2)
+
+    assert probe.reads == 0
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_revalidation_read_overtaken_by_a_same_socket_logout_commits_nothing(
+    monkeypatch,
+    _logout_schema,
+):
+    """The stale-read ordering: an in-flight read cannot resurrect a logged-out actor.
+
+    The two state machines hold different locks - the checkpoints hold the
+    connection's revocation lock, the logout holds the scope's session lock - and
+    they do not nest, so a session read that has already obtained the
+    still-valid actor can be overtaken by the whole logout teardown before it
+    resumes. Without the shared read token the resumed read would write its stale
+    authenticated actor back onto the scope, refresh the revalidation window from
+    it, and authorize the frame it was validating: a durably logged-out actor,
+    re-authenticated in memory, emitting protected frames.
+
+    The ordering is driven exactly, with no wall-clock waits: the probe parks the
+    read AFTER it has loaded the actor (so what resumes is genuinely stale rather
+    than an anonymous answer the store would give later), the logout then runs to
+    completion on the socket's own scope while the checkpoint still holds the
+    revocation lock, and only then is the read released.
+
+    Why the refusal cannot be the provenance rule wearing this row's clothes: the
+    checkpoint entered - and applied the anonymous test - while the scope actor
+    was still authenticated. What denies it on resume is the read token alone.
+
+    A positive window is configured so the third assertion is observable at all:
+    the window timestamp recorded at admission must still be the admission's, not
+    a fresh one written from the stale read, or every later checkpoint would reuse
+    the resurrected actor until it expired.
+    """
+    _user, cookie, session_key = await _make_user_and_session("stale_read_probe")
+    controller = _controller("stale-read")
+    gate = _record_outbound_gate(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router(_logout_schema, websocket_revalidation_window=3600.0)
+
+    async with _open_ws(router, cookie=cookie) as communicator:
+        await _send_operation(communicator, _controlled_subscription("stale-read"), op_id="1")
+        await _reached(controller.started, "the operation was never admitted")
+
+        # Result 1 rides the admission's read, inside the window.
+        controller.release(0)
+        first = await communicator.receive_json_from(timeout=10)
+        assert first["payload"]["data"] == {"controlled": "stale-read-1"}
+        assert probe.reads == 1
+
+        consumer = gate.consumers[0]
+        admitted_at = consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY]
+
+        # Past the window, so the next frame must revalidate - and that read is
+        # parked after it has loaded the actor the session still resolves to.
+        advanced = time.monotonic() + 7200.0
+        monkeypatch.setattr(consumers_module, "_monotonic", lambda: advanced)
+        probe.hold_after_read = asyncio.Event()
+
+        controller.release(1)
+        await _reached(probe.entered_after_read, "the checkpoint never loaded a stale actor")
+        assert probe.reads == 2
+        assert consumer._revocation_lock.locked()
+        assert probe.read_actors[-1].is_authenticated
+
+        # The logout completes WHILE that read is suspended: it takes the scope's
+        # session lock, which the parked checkpoint does not hold.
+        await _logout_on_this_socket(_logout_schema, consumer)
+        assert not await _session_row_still_exists(session_key)
+
+        probe.hold_after_read.set()
+        closed, frames = await _drain_until_close(communicator)
+
+    # The frame the stale read was validating never went out, and the connection
+    # took the documented revocation transition.
+    assert frames == [], frames
+    _assert_revoked_close(closed)
+    assert controller.emitted == ["stale-read-1", "stale-read-2"]
+    assert controller.finalized
+    # Nothing was committed: the scope still carries the logout's anonymous actor
+    # (never the object the stale read returned), and the window still carries the
+    # admission's timestamp.
+    assert consumer.scope["user"].is_anonymous
+    assert consumer.scope["user"] is not probe.read_actors[-1]
+    assert consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY] == admitted_at
+    # Both edges of the transition were recorded, and it is over.
+    state = session_store_module.connection_actor_state(consumer.scope)
+    assert (state.generation, state.transitions_in_flight) == (1, 0)
+    assert state.authenticated_provenance

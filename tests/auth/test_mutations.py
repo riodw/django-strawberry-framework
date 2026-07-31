@@ -78,6 +78,11 @@ from django_strawberry_framework.registry import (
 )
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 from django_strawberry_framework.utils.querysets import SyncMisuseError
+from django_strawberry_framework.utils.sessions import (
+    actor_read_is_committable,
+    actor_read_token,
+    connection_actor_state,
+)
 from tests.auth._helpers import _drain_until, _session_request
 
 User = get_user_model()
@@ -2034,6 +2039,89 @@ async def test_channels_logout_signal_failure_no_ok_and_scope_anonymized():
     with _raising_logout_receiver(), pytest.raises(RuntimeError, match="logout-signal boom"):
         await auth_mutations._channels_logout(adapter, payload_cls)
     assert isinstance(adapter.scope["user"], AnonymousUser)
+
+
+# --- The shared connection actor state the logout transition publishes --------
+#
+# ``_channels_logout`` is one half of a contract whose other half lives in the
+# transport layer: ``consumers.py``'s revalidation checkpoints read the scope's
+# ``ConnectionActorState`` to decide whether a socket was ever authenticated and
+# whether an in-flight session read may still be committed. The two locks
+# involved never nest, so this state - not either lock - is what keeps a
+# same-connection logout and a concurrent revalidation consistent. These rows pin
+# the auth side of it; the composed socket behaviour is
+# ``tests/test_routers.py``'s same-socket logout group.
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_channels_logout_publishes_the_actor_transition_on_the_scope():
+    """An authenticated teardown latches provenance and closes a transition window."""
+    await _acreate_users(1)
+    payload_cls = await database_sync_to_async(_logout_payload_cls)()
+    user = await get_user_model().objects.aget(username="staff_1")
+    adapter = _channels_adapter(scope_type="websocket", user=user)
+    # A read token captured before the teardown - the shape a checkpoint holds
+    # while its session read is in flight.
+    token = actor_read_token(adapter.scope)
+
+    payload = await auth_mutations._channels_logout(adapter, payload_cls)
+
+    assert payload.ok
+    state = connection_actor_state(adapter.scope)
+    assert state.authenticated_provenance
+    # The window opened and closed exactly once, so the in-flight read that
+    # started before it can no longer be committed.
+    assert (state.generation, state.transitions_in_flight) == (1, 0)
+    assert not actor_read_is_committable(adapter.scope, token)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_anonymous_channels_logout_advances_the_generation_without_provenance():
+    """No actor to revoke, so no provenance - but the window still closes.
+
+    The two halves are independent, and both matter. Nothing was authenticated
+    here, so the socket keeps the read-free carve-out its provenance grants; the
+    teardown still ran, so a read that spanned it is still refused. Latching
+    provenance on an anonymous teardown would silently price every anonymous
+    socket at one session read per protected frame.
+    """
+    payload_cls = await database_sync_to_async(_logout_payload_cls)()
+    adapter = _channels_adapter(scope_type="websocket")
+    token = actor_read_token(adapter.scope)
+
+    payload = await auth_mutations._channels_logout(adapter, payload_cls)
+
+    assert payload.ok is False
+    state = connection_actor_state(adapter.scope)
+    assert not state.authenticated_provenance
+    assert (state.generation, state.transitions_in_flight) == (1, 0)
+    assert not actor_read_is_committable(adapter.scope, token)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_failed_channels_logout_still_closes_its_transition_window():
+    """Fail closed: a raising teardown leaves no window open and no read committable.
+
+    The compensation arm anonymizes the scope actor and re-raises, so the
+    connection is in the state the teardown reached rather than a clean one. A
+    transition left open would refuse every later read forever; one never opened
+    would let a read that spanned the failure commit. Exactly one closed window is
+    the answer, and it is the ``finally`` on the transition - not the success path
+    - that produces it.
+    """
+    await _acreate_users(1)
+    payload_cls = await database_sync_to_async(_logout_payload_cls)()
+    user = await get_user_model().objects.aget(username="staff_1")
+    adapter = _channels_adapter(scope_type="websocket", user=user)
+    token = actor_read_token(adapter.scope)
+
+    with _raising_logout_receiver(), pytest.raises(RuntimeError, match="logout-signal boom"):
+        await auth_mutations._channels_logout(adapter, payload_cls)
+
+    state = connection_actor_state(adapter.scope)
+    assert state.authenticated_provenance
+    assert (state.generation, state.transitions_in_flight) == (1, 0)
+    assert not actor_read_is_committable(adapter.scope, token)
 
 
 # --- Signed-cookie WebSocket logout rejection (before mutation) ---------------

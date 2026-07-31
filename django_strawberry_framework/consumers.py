@@ -63,6 +63,33 @@ be precisely the disclosure distinction the gated set exists to avoid.
 ``scope["user"]`` is never downgraded to anonymous - a revoked session must not
 quietly become an anonymous one.
 
+**A same-connection ``logout`` is a revocation event, and the socket ends.** The
+package's own ``auth/mutations.py::logout`` mutation runs on the connection it is
+sent over, and it both flushes the durable session and replaces ``scope["user"]``
+with ``AnonymousUser``. That is an actor transition, not a downgrade to an
+anonymous socket, so the connection's next protected checkpoint - which is
+normally the ``logout`` payload's own ``next`` / ``data`` frame - refuses and the
+socket closes with the same ``4403`` / ``"Forbidden"``. The pinned consequences,
+stated because a client observes them: the ``logout`` mutation's own reply is
+suppressed like every other post-revocation frame (the teardown has already
+completed durably, so the close is the answer, and exempting that one frame would
+be exactly the disclosure distinction the gated set exists to avoid), and every
+operation admitted before the logout is cancelled and awaited by upstream's own
+disconnect path rather than left emitting against an anonymous scope. A client
+that wants to keep working after logging out opens a new socket, which is also
+the only way it can present a different session.
+
+Two properties make that true, and neither is a lock (see
+``utils/sessions.py``'s connection-actor-state section for both, and for why the
+two locks involved never nest). **Provenance**: the anonymous carve-out below is
+keyed on whether the connection has EVER carried an authenticated actor, not on
+whether it carries one now, so an authenticated -> anonymous change cannot buy
+the read-free path a genuinely anonymous socket gets. **A read token**: the
+revalidation's session read is asynchronous, so it captures the connection's
+actor generation before suspending and refuses to commit the refreshed actor, the
+window timestamp, or the pending frame if an actor transition overlapped it - a
+stale read cannot resurrect a durably logged-out actor in memory.
+
 **One lock, held through the send.** A single connection-local ``asyncio.Lock``
 spans the validation / cache decision, the revoked-state transition, AND the
 actual information-bearing send. Releasing it after validation would let one
@@ -122,8 +149,11 @@ package default or an injected consumer of your own, passed as
 Importing this module is ``channels``-free, which is what lets ``routers.py``
 import it above its own guard: the module level reaches only for the standard
 library, Django's own ``HttpRequest`` / ``DisallowedHost`` (a HARD dependency, and
-the whole point of the Host boundary below), this package's logger, and
-``exceptions.ConfigurationError`` / ``exceptions.describe_value``.
+the whole point of the Host boundary below), this package's logger,
+``exceptions.ConfigurationError`` / ``exceptions.describe_value``, and the
+connection-actor-state helpers from ``utils/sessions.py`` - a module whose own
+imports are ``__future__``, ``contextlib`` and typing names, so it adds nothing to
+the import graph.
 ``channels.auth.get_user`` and the package's session-store resolver are imported
 **inside** the revalidation coroutine (the
 ``auth/mutations.py::_channels_http_login_establish`` precedent),
@@ -134,8 +164,9 @@ class the factory is handed, so an upstream re-point is tracked for free.
 ``views.py`` does not import this module, so the package's Django GraphQL view
 stays adoptable without the soft dependency.
 
-The session-store resolver the revalidation reaches is
-``utils/sessions.py::session_store_class`` and deliberately NOT
+The session-store resolver the revalidation reaches - like the connection actor
+state it shares with the auth layer - is
+``utils/sessions.py``'s and deliberately NOT
 ``auth/sessions.py``'s re-export of it: ``auth`` is structurally opt-in
 (spec-040 Decision 3) and its ``__init__`` eagerly imports ``.mutations`` /
 ``.queries``, so importing that submodule would register the whole GraphQL auth
@@ -187,6 +218,12 @@ from django.http import HttpRequest
 
 from . import logger
 from .exceptions import ConfigurationError, describe_value
+from .utils.sessions import (
+    actor_read_is_committable,
+    actor_read_token,
+    connection_was_authenticated,
+    note_authenticated_actor,
+)
 
 #: The default revalidation window, in seconds: ``0.0`` revalidates at every
 #: security checkpoint. Spelled ONCE here and imported by ``routers.py`` for its
@@ -344,12 +381,14 @@ async def revalidate_operation_actor(handler: Any) -> bool:
     hardcoded ``"default"`` - which is the same authority
     ``utils/permissions.py::resolve_auth_aliases`` reads. It takes no *session*
     lock: ``auth/sessions.py::scope_session_lock`` serializes session
-    *mutations*, while this is a read of a private store, and both interleavings
-    with a concurrent ``logout`` are safe (either the actor is still valid, or it
-    is already gone and the connection is revoked). The lock it does take is the
-    connection's own revocation lock, which exists for a different reason
+    *mutations*, while this is a read of a private store. The lock it does take
+    is the connection's own revocation lock, which exists for a different reason
     entirely: it makes the validate-transition-send sequence atomic against
-    sibling operations on the same socket.
+    sibling operations on the same socket. Correctness against a concurrent
+    same-connection ``logout`` is NOT a property of either lock - the two do not
+    nest, and a read that suspends inside one of them can be overtaken by a
+    transition running under the other - it comes from the shared connection
+    actor state described in the module docstring.
 
     One caveat worth stating: with ``SESSION_ENGINE`` set to Django's
     signed-cookie engine there is no server-side record, so a flush is not
@@ -439,20 +478,32 @@ async def _actor_is_current(consumer: Any) -> bool:
 
     Callers hold the connection's revocation lock, so the window comparison, the
     reload, and the cache write below are atomic against every sibling
-    checkpoint on the same socket.
+    checkpoint on the same socket. They are NOT atomic against a package-owned
+    actor transition on the same connection, which holds a different lock
+    entirely (``auth/sessions.py::scope_session_lock``) - so the shared
+    connection actor state in ``utils/sessions.py``, and not the revocation lock,
+    is what makes this decision correct across a same-connection ``logout``.
     """
     scope = consumer.scope
     actor = scope.get("user")
-    # The anonymous carve-out: no session actor to revalidate, so only an
-    # authenticated socket pays the cost. Same predicate as
-    # ``auth/mutations.py::_authenticated_actor_or_none``, deliberately spelled
-    # rather than imported - that helper is private to the auth-mutation
+    # The anonymous carve-out, keyed on PROVENANCE rather than on the current
+    # actor: a connection that has never carried an authenticated actor has no
+    # session actor to revalidate, so only an authenticated connection pays the
+    # cost. An authenticated -> anonymous change is the opposite of a free pass:
+    # it is the package's own ``logout`` having replaced the scope actor, which
+    # is a connection-scoped revocation event, so it is refused here and the
+    # caller closes the socket.
+    #
+    # The authenticated predicate itself is the one
+    # ``auth/mutations.py::_authenticated_actor_or_none`` applies, deliberately
+    # spelled rather than imported - that helper is private to the auth-mutation
     # surface, and importing it would pull the whole ``auth`` package (and the
     # Strawberry type stack behind it) into a transport-layer coroutine. If a
     # THIRD site ever needs this predicate, promote it to
     # ``utils/permissions.py`` beside ``ChannelsRequestAdapter`` instead.
     if actor is None or not actor.is_authenticated:
-        return True
+        return not connection_was_authenticated(scope)
+    note_authenticated_actor(scope)
 
     # Plain attribute access, deliberately: ``GraphQLWebSocketConsumer.__init__``
     # always assigns ``revalidation_window`` BEFORE ``super().__init__``, and the
@@ -471,6 +522,10 @@ async def _actor_is_current(consumer: Any) -> bool:
     if window > 0.0 and _monotonic() - scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf) < window:
         return True
 
+    # Captured BEFORE the read suspends: the reload below is the one ``await`` on
+    # this path, and a package-owned actor transition on the same connection runs
+    # under a different lock, so it can complete entirely inside that suspension.
+    token = actor_read_token(scope)
     try:
         refreshed = await _refreshed_actor(scope)
     except Exception:
@@ -492,6 +547,17 @@ async def _actor_is_current(consumer: Any) -> bool:
         # would let anything still holding this scope read an anonymous session
         # instead of a revoked one (spec-046 Decision 11); the connection is
         # about to be closed either way.
+        return False
+
+    if not actor_read_is_committable(scope, token):
+        # An actor transition on this connection overlapped the read, so what the
+        # read returned describes a session state that no longer holds - it may
+        # even be the pre-``logout`` actor, loaded microseconds before the flush.
+        # Committing it would re-authenticate the connection in memory after a
+        # durable logout, refresh the revalidation window from a stale read, and
+        # authorize the pending frame. Nothing is written and the checkpoint
+        # denies: the actor that WAS revoked cannot be resurrected by a read that
+        # started before the revocation finished.
         return False
 
     # The write-back (spec-046 Decision 11): ``channels.auth``'s own ``login`` /

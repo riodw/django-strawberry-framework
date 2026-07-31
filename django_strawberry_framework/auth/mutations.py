@@ -68,6 +68,7 @@ from ..mutations.sets import (
 from ..registry import register_subsystem_clear, registry
 from ..utils.permissions import request_from_info
 from ..utils.querysets import run_in_one_sync_boundary
+from ..utils.sessions import actor_transition
 from . import sessions
 
 # The one family label every auth surface resolves its request under (the
@@ -753,18 +754,32 @@ async def _channels_logout(request: Any, payload_cls: type) -> Any:
     connection. On failure the scope actor is made anonymous where possible and the
     error propagates - never a false ``{ok: true}`` and never a claimed clean durable
     state the teardown did not achieve.
+
+    The teardown ALSO runs inside ``utils/sessions.py::actor_transition``, which is
+    the contract the WebSocket revalidation reads (spec-046 Decision 11): the scope
+    lock serializes this teardown against other same-scope session mutations, but
+    the revalidation checkpoints hold a different lock entirely, so without the
+    shared state a revalidation suspended inside its session read could resume
+    after this teardown and write the pre-logout actor back onto the scope. The
+    ``was_authenticated`` latch is read from the ``ok`` observation - the actor
+    captured under this lock, before the teardown replaces it - so a WebSocket
+    connection's provenance survives its own logout. The consequence on a
+    WebSocket, pinned in ``consumers.py``'s module docstring: this teardown is a
+    connection-scoped revocation event, so the socket is closed at its next
+    protected checkpoint and this payload does not reach the client.
     """
     from channels.auth import logout as channels_logout
 
     async with sessions.scope_session_lock(request):
         payload = _logout_observation(request, payload_cls)
-        try:
-            await channels_logout(request.scope)
-        except BaseException:  # incl. asyncio.CancelledError: anonymize where possible + re-raise
-            with contextlib.suppress(Exception):
-                request.scope["user"] = AnonymousUser()
-            raise
-        return payload
+        with actor_transition(request.scope, was_authenticated=payload.ok):
+            try:
+                await channels_logout(request.scope)
+            except BaseException:  # incl. CancelledError: anonymize where possible + re-raise
+                with contextlib.suppress(Exception):
+                    request.scope["user"] = AnonymousUser()
+                raise
+            return payload
 
 
 def _logout_resolve_body(holder_cls: type, info: Any) -> Any:

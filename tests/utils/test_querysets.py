@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 from apps.products.models import Category, Item
 from django.db import models
+from django.db.models.functions import Coalesce
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -35,9 +36,11 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
+    _concrete_or_none,
     _deferred_value_defect,
     _expr_graph_defect,
     _expr_sequence_defect,
+    _GraphWalk,
     _is_inert_value,
     _join_defect,
     _query_container_defect,
@@ -2399,7 +2402,7 @@ def test_join_defect_non_genuine_filtered_relation_fails_closed():
     """A join carrying a non-Django ``filtered_relation`` object fails closed."""
     _frq, alias, join = _filtered_relation_join()
     join.filtered_relation = object()
-    defect = _join_defect(join, alias, set())
+    defect = _join_defect(join, alias, _GraphWalk())
     assert defect == ("untrusted", f"join for alias {alias!r} filtered_relation is a object")
 
 
@@ -2412,7 +2415,7 @@ def test_join_defect_shadowed_filtered_relation_fails_closed():
     """
     _frq, alias, join = _filtered_relation_join()
     join.filtered_relation.__dict__["as_sql"] = lambda *a, **k: None
-    defect = _join_defect(join, alias, set())
+    defect = _join_defect(join, alias, _GraphWalk())
     assert defect == (
         "untrusted",
         f"join for alias {alias!r} filtered_relation shadows the 'as_sql' method",
@@ -2423,7 +2426,7 @@ def test_join_defect_unresolved_filtered_relation_is_clean():
     """A genuine join whose ``filtered_relation`` is not yet resolved carries no defect."""
     _frq, alias, join = _filtered_relation_join()
     join.filtered_relation.resolved_condition = None
-    assert _join_defect(join, alias, set()) is None
+    assert _join_defect(join, alias, _GraphWalk()) is None
 
 
 def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
@@ -2593,27 +2596,357 @@ def test_deferred_filter_wrong_arity_tuple_fails_closed():
     assert defect == ("untrusted", "QuerySet deferred filter is malformed")
 
 
-def test_expr_graph_walk_terminates_on_self_referential_containers():
-    """A cyclic list / dict in an expression slot terminates instead of RecursionError."""
+def test_expr_graph_walk_rejects_self_referential_containers():
+    """A cyclic list / dict in an expression slot fails closed as a typed defect.
+
+    Django never produces a cyclic query graph, so a container reached again while
+    it is still being validated is untrusted state -- not a shared diamond. Accepting
+    it would report the graph trusted and leave the unbounded recursion to resurface
+    downstream as a raw ``RecursionError`` outside the typed contract.
+    """
     cyclic_list: list = []
     cyclic_list.append(cyclic_list)
-    assert _expr_graph_defect(cyclic_list, set(), "where clause") is None
+    assert _expr_graph_defect(cyclic_list, _GraphWalk(), "where clause") == (
+        "untrusted",
+        "where clause contains a reference cycle",
+    )
     cyclic_dict: dict = {}
     cyclic_dict["self"] = cyclic_dict
-    assert _expr_graph_defect(cyclic_dict, set(), "where clause") is None
+    assert _expr_graph_defect(cyclic_dict, _GraphWalk(), "where clause") == (
+        "untrusted",
+        "where clause contains a reference cycle",
+    )
 
 
-def test_deferred_value_walk_terminates_on_self_referential_values():
-    """A cyclic Q / list / dict deferred-filter value terminates instead of RecursionError."""
+def test_expr_graph_walk_accepts_shared_diamond():
+    """A node reached twice AFTER it validated is a legitimate shared diamond, not a cycle."""
+    shared = models.Value(1)
+    shared_list = [shared]
+    shared_map = {"k": shared}
+    assert (
+        _expr_graph_defect(
+            [
+                shared,
+                shared_list,
+                shared_list,
+                shared_map,
+                shared_map,
+            ],
+            _GraphWalk(),
+            "where clause",
+        )
+        is None
+    )
+
+
+def test_deferred_value_walk_rejects_self_referential_values():
+    """A cyclic Q / list / dict deferred-filter value fails closed as a typed defect."""
     cyclic_list: list = []
     cyclic_list.append(cyclic_list)
-    assert _deferred_value_defect(cyclic_list, set(), "deferred arg") is None
+    assert _deferred_value_defect(cyclic_list, _GraphWalk(), "deferred arg") == (
+        "untrusted",
+        "deferred arg contains a reference cycle",
+    )
     cyclic_dict: dict = {}
     cyclic_dict["self"] = cyclic_dict
-    assert _deferred_value_defect(cyclic_dict, set(), "deferred arg") is None
+    assert _deferred_value_defect(cyclic_dict, _GraphWalk(), "deferred arg") == (
+        "untrusted",
+        "deferred arg contains a reference cycle",
+    )
     cyclic_q = models.Q(pk=1)
     cyclic_q.children.append(cyclic_q)
-    assert _deferred_value_defect(cyclic_q, set(), "deferred arg") is None
+    assert _deferred_value_defect(cyclic_q, _GraphWalk(), "deferred arg") == (
+        "untrusted",
+        "deferred arg contains a reference cycle",
+    )
+
+
+def test_deferred_value_walk_accepts_shared_diamond():
+    """A value reached twice after validating stays cheap and is not reported a cycle."""
+    shared: list = [1, 2]
+    shared_map = {"k": 1}
+    shared_q = models.Q(pk=1)
+    assert (
+        _deferred_value_defect(
+            [
+                shared,
+                shared,
+                shared_map,
+                shared_map,
+                shared_q,
+                shared_q,
+            ],
+            _GraphWalk(),
+            "deferred arg",
+        )
+        is None
+    )
+
+
+def test_concrete_or_none_rejects_the_abstract_model_base():
+    """``models.Model`` itself carries no ``_meta``, so it resolves to no concrete model."""
+    assert _concrete_or_none(models.Model) is None
+
+
+def test_where_tree_walk_rejects_self_referential_node():
+    """A ``WhereNode`` that contains itself fails closed rather than validating."""
+    from django.db.models.sql.where import WhereNode
+
+    node = WhereNode()
+    node.children.append(node)
+    assert _where_tree_defect(node, _GraphWalk()) == (
+        "untrusted",
+        "where node contains a reference cycle",
+    )
+
+
+def test_embedded_query_walk_rejects_self_referential_subquery():
+    """An ``sql.Query`` reachable from its own graph fails closed rather than validating."""
+    query = Category.objects.filter(is_private=False).query
+    walk = _GraphWalk()
+    walk.enter(id(query))
+    assert _query_genuineness_defect(query, walk) == (
+        "untrusted",
+        "embedded query contains a reference cycle",
+    )
+
+
+def test_self_referential_genuine_expression_fails_closed():
+    """A genuine expression that lists itself as its own operand fails closed."""
+    expression = Coalesce(models.Value(1), models.Value(2))
+    expression.source_expressions = [expression]
+    assert _expr_graph_defect(expression, _GraphWalk(), "annotation 'x'") == (
+        "untrusted",
+        "annotation 'x' contains a reference cycle",
+    )
+
+
+def test_self_referential_combined_queries_fails_closed():
+    """A ``combined_queries`` branch that is the query itself fails closed, not unbounded.
+
+    The combined-branch recursion is its own three-state walk: without it the seal
+    recursed the self-reference until a raw ``RecursionError`` escaped past the typed
+    ``(code, detail)`` contract, and ``sql.Query.clone`` would have done the same.
+    """
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.combined_queries = (source.query,)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "combined-query branches contain a reference cycle")
+
+
+def test_shared_combined_query_branch_is_validated_once():
+    """The same branch object listed twice is a shared reference, not a cycle."""
+    source = Category.objects.filter(is_private=False)
+    branch = Category.objects.filter(is_private=False).query
+    str(source.query)
+    str(branch)
+    source.query.combined_queries = (branch, branch)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed is not None
+
+
+def test_slotted_genuine_django_node_fails_closed():
+    """A provenance-genuine Django class whose instances have no ``__dict__`` fails closed.
+
+    ``django.utils.safestring.SafeString`` is exported by a ``django.`` module, so it
+    passes the identity provenance proof, and it is a ``str`` SUBCLASS so it is not inert.
+    Its instances are slotted, so the instance-state reads must fail it closed instead of
+    raising a raw ``AttributeError`` past the typed contract.
+    """
+    from django.utils.safestring import SafeString
+
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.annotations["flag"] = SafeString("1")
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "annotation 'flag' is a SafeString with no instance state")
+
+
+def test_hostile_case_container_fails_closed_before_its_iterator_runs():
+    """An exact Django ``Case`` whose ``cases`` is a list SUBCLASS fails closed unrun.
+
+    ``Case.get_source_expressions`` star-unpacks ``self.cases``, so calling that
+    genuine accessor during the proof would run a hostile container's iterator --
+    after the outer ``where`` tree has already been accepted and before
+    ``sql.Query.clone`` runs, which is exactly when a mutation of the accepted tree
+    goes unnoticed. Expression-owned state is validated first, so the iterator never
+    runs.
+    """
+    fired = []
+
+    class _HostileCases(list):
+        def __iter__(self):  # pragma: no cover - must never run
+            fired.append("iter")
+            return super().__iter__()
+
+    source = Category.objects.filter(is_private=False).annotate(
+        flag=models.Case(
+            models.When(is_private=True, then=models.Value(1)),
+            default=models.Value(0),
+            output_field=models.IntegerField(),
+        ),
+    )
+    str(source.query)
+    source.query.annotations["flag"].cases = _HostileCases(
+        source.query.annotations["flag"].cases,
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "annotation 'flag' cases is a _HostileCases")
+    assert fired == []
+
+
+def test_hostile_alias_refcount_payload_fails_closed():
+    """An ``int`` SUBCLASS stored as an ``alias_refcount`` value fails closed unrun.
+
+    The value survives ``sql.Query.clone``'s shallow ``.copy()``, and Django's alias
+    bookkeeping invokes its arithmetic on ordinary downstream ``.filter()``
+    composition -- a consumer callback holding the sealed query. Payloads are pinned
+    to their exact Django shape, not only the container type and its keys.
+    """
+    fired = []
+
+    class _HostileCount(int):
+        def __add__(self, other):  # pragma: no cover - must never run
+            fired.append("add")
+            return self
+
+        def __sub__(self, other):  # pragma: no cover - must never run
+            fired.append("sub")
+            return self
+
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    alias = next(iter(source.query.alias_refcount))
+    source.query.alias_refcount[alias] = _HostileCount(1)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", f"query alias_refcount[{alias!r}] is a _HostileCount")
+    assert fired == []
+
+
+def test_hostile_external_alias_payload_fails_closed():
+    """A non-``bool`` ``external_aliases`` value fails closed."""
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.external_aliases["evil"] = 1
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        "query external_aliases['evil'] is a int",
+    )
+
+
+def test_hostile_table_map_payload_fails_closed():
+    """A ``table_map`` entry that is not an exact list of exact alias strings fails closed."""
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    table = next(iter(source.query.table_map))
+    source.query.table_map[table] = (source.query.table_map[table][0],)
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        f"query table_map[{table!r}] is a tuple",
+    )
+    source.query.table_map[table] = [object()]
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        f"query table_map[{table!r}] carries a object",
+    )
+
+
+def test_hostile_set_container_member_fails_closed():
+    """A non-``str`` member of a retained alias set fails closed."""
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.used_aliases = {object()}
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        "query used_aliases carries a object",
+    )
+
+
+def test_hostile_filtered_relation_payload_fails_closed():
+    """A ``_filtered_relations`` value must be a genuine, unshadowed Django object."""
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query._filtered_relations = {"rel": object()}
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        "query _filtered_relations['rel'] is a object",
+    )
+    relation = models.FilteredRelation("items", condition=models.Q(pk=1))
+    relation.as_sql = lambda *args, **kwargs: None  # pragma: no cover - must never run
+    source.query._filtered_relations = {"rel": relation}
+    assert _query_container_defect(source.query) == (
+        "untrusted",
+        "query _filtered_relations['rel'] shadows the 'as_sql' method",
+    )
+
+
+def test_sealed_queryset_keeps_its_predicate_through_filter_composition():
+    """Ordinary downstream ``.filter()`` composition keeps the sealed predicate."""
+    source = Category.objects.filter(is_private=False)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    composed_sql = str(sealed.filter(name="visible").query)
+    assert "is_private" in composed_sql
+    assert "name" in composed_sql
+
+
+def test_sealed_query_table_map_payload_is_not_shared_with_the_candidate():
+    """The sealed query's ``table_map`` lists are fresh, not the candidate's own objects."""
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    table = next(iter(source.query.table_map))
+    source.query.table_map[table].append("injected")
+    assert "injected" not in sealed.query.table_map[table]
+
+
+def test_non_class_model_with_convincing_meta_fails_closed():
+    """An OBJECT exposing ``_meta.concrete_model`` is not a model and fails closed unrun."""
+    fired = []
+
+    class _HookedMeta:
+        @property
+        def concrete_model(self):  # pragma: no cover - must never run
+            fired.append("concrete_model")
+            return Category
+
+    class _FakeModel:
+        _meta = _HookedMeta()
+
+    source = Category.objects.filter(is_private=False)
+    source.model = _FakeModel()
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("table", "_FakeModel")
+    assert fired == []
+
+
+def test_non_model_class_with_convincing_meta_fails_closed():
+    """A non-model CLASS exposing ``_meta.concrete_model`` fails closed unrun."""
+    fired = []
+
+    class _HookedMeta:
+        @property
+        def concrete_model(self):  # pragma: no cover - must never run
+            fired.append("concrete_model")
+            return Category
+
+    class _FakeModelClass:
+        _meta = _HookedMeta()
+
+    source = Category.objects.filter(is_private=False)
+    source.model = _FakeModelClass
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("table", "_FakeModelClass")
+    assert fired == []
 
 
 class _HostileLeaf:
@@ -2633,19 +2966,19 @@ def test_type_is_genuinely_django_absent_module_fails_closed():
 
 def test_expr_graph_list_member_defect_propagates():
     """A hostile node inside a plain list slot fails closed through the container walk."""
-    defect = _expr_graph_defect([_HostileLeaf()], set(), "annotation 'x'")
+    defect = _expr_graph_defect([_HostileLeaf()], _GraphWalk(), "annotation 'x'")
     assert defect == ("untrusted", "annotation 'x' carries a _HostileLeaf node")
 
 
 def test_expr_graph_dict_non_string_key_fails_closed():
     """A non-string mapping key inside an expression-graph dict slot fails closed."""
-    defect = _expr_graph_defect({1: "v"}, set(), "annotation 'x'")
+    defect = _expr_graph_defect({1: "v"}, _GraphWalk(), "annotation 'x'")
     assert defect == ("untrusted", "annotation 'x' has a non-string mapping key")
 
 
 def test_expr_graph_dict_value_defect_propagates():
     """A hostile value inside an expression-graph dict slot fails closed."""
-    defect = _expr_graph_defect({"k": _HostileLeaf()}, set(), "annotation 'x'")
+    defect = _expr_graph_defect({"k": _HostileLeaf()}, _GraphWalk(), "annotation 'x'")
     assert defect == ("untrusted", "annotation 'x' carries a _HostileLeaf node")
 
 
@@ -2653,22 +2986,23 @@ def test_expr_graph_wherenode_routes_to_where_walker():
     """A ``WhereNode`` reached as an expression graph node routes to the where walker."""
     from django.db.models.sql.where import WhereNode
 
-    assert _expr_graph_defect(WhereNode(), set(), "annotation 'x'") is None
+    assert _expr_graph_defect(WhereNode(), _GraphWalk(), "annotation 'x'") is None
 
 
 def test_expr_sequence_non_sequence_holder_fails_closed():
     """An ``order_by`` slot that is neither None/bool nor list/tuple fails closed."""
-    defect = _expr_sequence_defect(object(), set(), "order_by")
+    defect = _expr_sequence_defect(object(), _GraphWalk(), "order_by")
     assert defect == ("untrusted", "query order_by is a object")
 
 
 def test_where_tree_shared_node_visited_once():
-    """A ``WhereNode`` already in ``seen`` short-circuits to ``None`` (diamond / cycle safe)."""
+    """A ``WhereNode`` already VALIDATED short-circuits to ``None`` (shared diamond)."""
     from django.db.models.sql.where import WhereNode
 
     node = WhereNode()
-    seen = {id(node)}
-    assert _where_tree_defect(node, seen) is None
+    walk = _GraphWalk()
+    walk.leave(id(node))
+    assert _where_tree_defect(node, walk) is None
 
 
 def test_where_tree_non_sequence_children_fails_closed():
@@ -2677,7 +3011,10 @@ def test_where_tree_non_sequence_children_fails_closed():
 
     node = WhereNode()
     node.__dict__["children"] = object()
-    assert _where_tree_defect(node, set()) == ("untrusted", "where node children is a object")
+    assert _where_tree_defect(node, _GraphWalk()) == (
+        "untrusted",
+        "where node children is a object",
+    )
 
 
 def test_join_shadowed_method_fails_closed():
@@ -2686,7 +3023,7 @@ def test_join_shadowed_method_fails_closed():
     str(source.query)
     alias, join = next(iter(source.query.alias_map.items()))
     join.__dict__["as_sql"] = lambda *a, **k: None
-    defect = _join_defect(join, alias, set())
+    defect = _join_defect(join, alias, _GraphWalk())
     assert defect == ("untrusted", f"join for alias {alias!r} shadows the 'as_sql' method")
 
 
@@ -2762,23 +3099,25 @@ def test_query_genuineness_foreign_embedded_query_fails_closed():
     class _Foreign(sql.Query):
         pass
 
-    assert _query_genuineness_defect(_Foreign(Category), set()) == (
+    assert _query_genuineness_defect(_Foreign(Category), _GraphWalk()) == (
         "untrusted",
         "embedded query is a _Foreign",
     )
 
 
 def test_query_genuineness_shared_query_visited_once():
-    """A genuine embedded query already in ``seen`` short-circuits to ``None``."""
+    """A genuine embedded query already VALIDATED short-circuits to ``None``."""
     query = Category.objects.all().query
-    assert _query_genuineness_defect(query, {id(query)}) is None
+    walk = _GraphWalk()
+    walk.leave(id(query))
+    assert _query_genuineness_defect(query, walk) is None
 
 
 def test_query_genuineness_shadowed_query_fails_closed():
     """An embedded query whose ``__dict__`` shadows a method fails closed."""
     query = Category.objects.all().query
     query.__dict__["add_q"] = lambda *a, **k: None
-    assert _query_genuineness_defect(query, set()) == (
+    assert _query_genuineness_defect(query, _GraphWalk()) == (
         "untrusted",
         "subquery instance shadows the 'add_q' method",
     )
@@ -2788,7 +3127,7 @@ def test_query_genuineness_container_defect_fails_closed():
     """An embedded query with a non-exact container fails closed."""
     query = Category.objects.all().query
     query.__dict__["annotations"] = {1: "v"}
-    assert _query_genuineness_defect(query, set()) == (
+    assert _query_genuineness_defect(query, _GraphWalk()) == (
         "untrusted",
         "query annotations has a non-string key",
     )
@@ -2803,14 +3142,17 @@ def test_query_genuineness_combined_branch_defect_fails_closed():
 
     query = Category.objects.all().query
     query.__dict__["combined_queries"] = (_Foreign(Category),)
-    assert _query_genuineness_defect(query, set()) == ("untrusted", "embedded query is a _Foreign")
+    assert _query_genuineness_defect(query, _GraphWalk()) == (
+        "untrusted",
+        "embedded query is a _Foreign",
+    )
 
 
 def test_deferred_value_q_non_kv_child_fails_closed():
     """A ``Q`` child that is neither a nested ``Q`` nor a ``(str, value)`` pair fails closed."""
     bad = models.Q()
     bad.children.append(object())
-    assert _deferred_value_defect(bad, set(), "deferred arg") == (
+    assert _deferred_value_defect(bad, _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg Q child is a object",
     )
@@ -2818,7 +3160,7 @@ def test_deferred_value_q_non_kv_child_fails_closed():
 
 def test_deferred_value_nested_q_child_defect_propagates():
     """A hostile value inside a nested ``Q`` child fails closed."""
-    assert _deferred_value_defect(models.Q(name=_HostileLeaf()), set(), "deferred arg") == (
+    assert _deferred_value_defect(models.Q(name=_HostileLeaf()), _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg is a _HostileLeaf",
     )
@@ -2826,7 +3168,7 @@ def test_deferred_value_nested_q_child_defect_propagates():
 
 def test_deferred_value_container_member_defect_propagates():
     """A hostile member inside a deferred-value container fails closed."""
-    assert _deferred_value_defect([_HostileLeaf()], set(), "deferred arg") == (
+    assert _deferred_value_defect([_HostileLeaf()], _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg is a _HostileLeaf",
     )
@@ -2834,7 +3176,7 @@ def test_deferred_value_container_member_defect_propagates():
 
 def test_deferred_value_dict_non_string_key_fails_closed():
     """A non-string key inside a deferred-value dict fails closed."""
-    assert _deferred_value_defect({1: "v"}, set(), "deferred arg") == (
+    assert _deferred_value_defect({1: "v"}, _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg mapping key is a int",
     )
@@ -2842,7 +3184,7 @@ def test_deferred_value_dict_non_string_key_fails_closed():
 
 def test_deferred_value_dict_member_defect_propagates():
     """A hostile value inside a deferred-value dict fails closed."""
-    assert _deferred_value_defect({"k": _HostileLeaf()}, set(), "deferred arg") == (
+    assert _deferred_value_defect({"k": _HostileLeaf()}, _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg is a _HostileLeaf",
     )
@@ -2850,7 +3192,7 @@ def test_deferred_value_dict_member_defect_propagates():
 
 def test_deferred_value_arbitrary_object_fails_closed():
     """A plain non-model, non-expression object as a deferred value fails closed."""
-    assert _deferred_value_defect(_HostileLeaf(), set(), "deferred arg") == (
+    assert _deferred_value_defect(_HostileLeaf(), _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg is a _HostileLeaf",
     )

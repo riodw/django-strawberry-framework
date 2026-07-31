@@ -868,6 +868,33 @@ def base_locked_queryset(model: type, alias: str, visible_queryset: Any) -> Any:
     )
 
 
+def pipeline_scoped_queryset(queryset: Any, model: type) -> Any:
+    """Apply the active write pipeline's alias pin (+ conditional row lock) to ``queryset``.
+
+    The invariant the shared relation-visibility helpers
+    (``utils/querysets.py``) enforce, single-sited: inside an active write
+    pipeline every relation-visibility read runs on the operation's write alias -
+    a ``get_queryset`` hook that re-routed elsewhere fails closed
+    (``pin_write_queryset``) - and, when the operation locks
+    (``Meta.select_for_update``), that same read doubles as the relation-target
+    row lock (``base_locked_queryset``: a base-manager ``SELECT ... FOR UPDATE``
+    constrained by the pinned queryset's pk subquery), so an FK / M2M target
+    confirmed visible cannot be deleted out from under the write before the
+    transaction commits. On a read surface no pipeline is set and ``queryset``
+    is returned unchanged.
+
+    ``model`` is passed explicitly rather than read off ``queryset.model``: the
+    lock rides the RELATION TARGET's base manager, which the caller knows.
+    """
+    pipeline = current_write_pipeline()
+    if pipeline is None:
+        return queryset
+    queryset = pin_write_queryset(queryset, pipeline.alias)
+    if pipeline.lock:
+        queryset = base_locked_queryset(model, pipeline.alias, queryset)
+    return queryset
+
+
 def conflict_error() -> Any:
     """Build the in-band concurrent-write ``conflict`` ``FieldError`` on ``id``.
 

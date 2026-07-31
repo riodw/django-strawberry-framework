@@ -52,6 +52,7 @@ from django_strawberry_framework.utils.write_transaction import (
     forced_update_conflict_errors,
     not_updated_exceptions,
     pin_write_queryset,
+    pipeline_scoped_queryset,
     pipeline_write_phase,
     require_write_pipeline,
     resolve_write_alias,
@@ -628,6 +629,44 @@ def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch):
     # A None / matching answer passes.
     monkeypatch.setattr(write_transaction.router, "db_for_write", lambda model, **hints: None)
     check_instance_write_alias(product_models.Item, "default", object())
+
+
+def test_pipeline_scoped_queryset_is_a_passthrough_on_a_read_surface():
+    queryset = product_models.Item.objects.all()
+    assert pipeline_scoped_queryset(queryset, product_models.Item) is queryset
+
+
+def test_pipeline_scoped_queryset_pins_without_locking():
+    with write_pipeline("default", lock=False):
+        scoped = pipeline_scoped_queryset(
+            product_models.Item.objects.all(),
+            product_models.Item,
+        )
+    assert scoped._db == "default"
+    assert scoped.query.select_for_update is False
+
+
+def test_pipeline_scoped_queryset_locks_through_the_base_manager():
+    with write_pipeline("default", lock=True):
+        scoped = pipeline_scoped_queryset(
+            product_models.Item.objects.all(),
+            product_models.Item,
+        )
+    assert scoped._db == "default"
+    assert scoped.query.select_for_update is True
+    # The lock rides the base manager with visibility reduced to a pk subquery.
+    assert "In(Col(" in str(scoped.query.where)
+
+
+def test_pipeline_scoped_queryset_fails_closed_on_a_cross_alias_queryset():
+    with (
+        write_pipeline("default", lock=True),
+        pytest.raises(ConfigurationError, match="pinned to alias"),
+    ):
+        pipeline_scoped_queryset(
+            product_models.Item.objects.using("some_other_alias"),
+            product_models.Item,
+        )
 
 
 def test_resolve_write_alias_model_less_default():

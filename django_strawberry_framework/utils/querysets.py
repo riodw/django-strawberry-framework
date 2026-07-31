@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import enum
 import inspect
 import sys
 import uuid
@@ -102,7 +103,11 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError
-from .write_transaction import base_locked_queryset, current_write_pipeline, pin_write_queryset
+from .write_transaction import (
+    current_write_pipeline,
+    pin_write_queryset,
+    pipeline_scoped_queryset,
+)
 
 
 class SyncMisuseError(ConfigurationError, RuntimeError):
@@ -324,7 +329,19 @@ def _concrete_or_none(candidate: Any) -> type[models.Model] | None:
     directly would leak a raw ``AttributeError`` past the boundary's typed
     error contract; this returns ``None`` for anything that is not a Django
     model so the caller can fail it closed as a table defect instead.
+
+    Being a Django MODEL CLASS is the requirement, not merely exposing a
+    ``_meta.concrete_model``: the value that survives this check is installed as
+    the sealed queryset's ``.model``, and every downstream reader treats
+    ``queryset.model`` as a model class (``_meta`` descriptors, ``_default_manager``,
+    ``__name__``). Duck-typing let a non-class object -- or a non-model class --
+    carrying a convincing ``_meta`` pass the public ``QuerySet.model`` comparison and
+    escape the typed boundary as malformed state. So the class-ness and the model
+    ancestry are proven BEFORE any metadata is read, which also means a consumer
+    ``_meta`` property / ``concrete_model`` descriptor on such an object never runs.
     """
+    if not isinstance(candidate, type) or not issubclass(candidate, models.Model):
+        return None
     meta = getattr(candidate, "_meta", None)
     if meta is None:
         return None
@@ -487,8 +504,22 @@ def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
     ``as_<vendor>`` still takes the "compiler method" wording. Genuine Django nodes
     never carry an ``as_*`` INSTANCE attribute (their emitters are class methods), so
     rejecting the prefix costs no legitimate query.
+
+    A node with no instance ``__dict__`` at all fails closed rather than raising. Genuine
+    Django provenance is proven by object identity against ``sys.modules``, and Django
+    modules re-export SLOTTED classes at module level (``django.utils.safestring``
+    ``SafeString``, the ``namedtuple`` helpers in ``django.db.models.query_utils`` /
+    ``django.db.backends.*.introspection``, ``django.db.models.expressions.UUID``), so a
+    provenance-genuine type whose instances carry no ``__dict__`` does reach here; reading
+    the slot unguarded would raise a raw ``AttributeError`` past the boundary's typed
+    ``(code, detail)`` contract. No such object is a clonable / compilable Django node --
+    every ``Expression`` / ``WhereNode`` / ``Join`` / ``sql.Query`` carries an instance
+    ``__dict__`` -- so its presence in a compiler-reachable slot is untrusted state.
     """
-    node_dict = object.__getattribute__(node, "__dict__")
+    try:
+        node_dict = object.__getattribute__(node, "__dict__")
+    except AttributeError:
+        return ("untrusted", f"{label} is a {type(node).__name__} with no instance state")
     node_type = type(node)
     for key in node_dict:
         if type(key) is not str:
@@ -579,7 +610,217 @@ def _raw_sql_node_defect(node: Any, label: str) -> tuple[str, str] | None:
     return None
 
 
-def _expr_graph_defect(node: Any, seen: set[int], label: str) -> tuple[str, str] | None:
+class _WalkState(enum.Enum):
+    """Outcome of admitting one node id to a ``_GraphWalk``.
+
+    ``VALIDATED`` -- the node was already proven trusted on an earlier visit, so the
+    caller returns ``None`` without re-walking it. ``CYCLE`` -- the node is still on the
+    active recursion stack, so the graph closes a cycle and the caller returns its own
+    ``untrusted`` cycle detail. ``ENTERED`` -- the node is newly on the stack and the
+    caller must walk it and then ``leave`` it.
+    """
+
+    VALIDATED = "validated"
+    CYCLE = "cycle"
+    ENTERED = "entered"
+
+
+class _GraphWalk:
+    """Three-state identity bookkeeping shared by the recursive graph proofs.
+
+    The walkers must distinguish two revisits of the same object. A node reached
+    again AFTER it finished validating is a legitimate shared diamond (Django
+    reuses one ``Col`` / ``Value`` across slots) and is cheap to accept. A node
+    reached again while it is still IN PROGRESS closes a cycle -- and Django never
+    produces a cyclic query graph, so such a graph is untrusted state that
+    ``sql.Query.clone`` / the compiler would later recurse until a raw
+    ``RecursionError`` escaped past the typed defect contract. One combined
+    "already visited" set cannot tell the two apart and silently reports the cycle as
+    validated, so the two identity sets are kept separate: ``visiting`` holds the
+    active recursion stack, ``validated`` holds the nodes fully proven trusted.
+
+    A node stays in ``visiting`` when the walk aborts on a defect; the walk
+    unwinds to the caller immediately, so the entry is never consulted again.
+    """
+
+    __slots__ = ("validated", "visiting")
+
+    def __init__(self) -> None:
+        self.visiting: set[int] = set()
+        self.validated: set[int] = set()
+
+    def enter(self, node_id: int) -> None:
+        """Mark ``node_id`` as being validated right now."""
+        self.visiting.add(node_id)
+
+    def begin(self, node_id: int) -> _WalkState:
+        """Classify ``node_id`` against both identity sets, entering it when it is new.
+
+        The single admission point every recursive proof shares. Only the ``ENTERED``
+        outcome puts the node on the ``visiting`` stack, so a caller that short-circuits
+        on ``VALIDATED`` / ``CYCLE`` must NOT call ``leave``. The cycle DETAIL stays with
+        the caller: each walker names the structure it is proving.
+        """
+        if node_id in self.validated:
+            return _WalkState.VALIDATED
+        if node_id in self.visiting:
+            return _WalkState.CYCLE
+        self.enter(node_id)
+        return _WalkState.ENTERED
+
+    def leave(self, node_id: int) -> None:
+        """Promote ``node_id`` from in-progress to fully validated."""
+        self.visiting.discard(node_id)
+        self.validated.add(node_id)
+
+
+def _walk_short_circuit(state: _WalkState, cycle_detail: str) -> tuple[str, str] | None:
+    """Turn a non-``ENTERED`` walk state into the walker's own return value.
+
+    ``VALIDATED`` means the node is already proven trusted, so the walk reports no
+    defect; ``CYCLE`` means the node closes a reference cycle, which is untrusted state
+    under ``cycle_detail`` -- the wording belongs to the call site because each walker
+    names a different structure.
+    """
+    if state is _WalkState.VALIDATED:
+        return None
+    return ("untrusted", cycle_detail)
+
+
+# Instance state a genuine Django ``get_source_expressions`` reads as a CONTAINER --
+# it iterates, star-unpacks, or slices the slot to assemble the operand list it
+# returns: ``Func.source_expressions``, ``Case.cases`` (``[*self.cases, self.default]``),
+# and ``ColPairs.targets`` / ``.sources`` (zipped by ``get_cols``). Calling that genuine
+# accessor is therefore NOT dispatch-free -- a container SUBCLASS planted in one of these
+# slots runs its own ``__iter__`` / ``__getitem__`` during the very proof that is meant to
+# decide whether the graph may be cloned, and by then the outer ``where`` tree has already
+# been accepted, so that iterator can rewrite the accepted tree before
+# ``sql.Query.clone`` runs. Each slot present on the instance must be exactly the builtin
+# sequence Django stores there, proven BEFORE the accessor is invoked.
+_EXPRESSION_SEQUENCE_STATE_ATTRS: tuple[str, ...] = (
+    "source_expressions",
+    "cases",
+    "targets",
+    "sources",
+)
+
+
+def _expression_state_defect(node: Any, label: str) -> tuple[str, str] | None:
+    """Validate expression-owned state that a genuine accessor reads, before calling it.
+
+    ``node`` is already proven an EXACT genuine Django expression type with no
+    instance-``__dict__`` method shadow, so ``node.get_source_expressions()`` resolves to
+    Django's own implementation -- but that implementation still READS the node's own
+    state, and state is consumer-controlled, so the accessor is not dispatch-free. Every
+    slot a genuine accessor iterates, star-unpacks, or slices
+    (``_EXPRESSION_SEQUENCE_STATE_ATTRS``) is therefore pinned to the exact builtin
+    sequence Django stores there BEFORE the accessor is invoked, so no container
+    subclass iterator can run during the proof.
+
+    Slots are read straight from the instance ``__dict__`` so the validation itself
+    dispatches nothing. Genuine Django only ever stores exact builtin sequences in these
+    slots, so the check costs no legitimate query.
+    """
+    node_dict = object.__getattribute__(node, "__dict__")
+    for attr in _EXPRESSION_SEQUENCE_STATE_ATTRS:
+        if attr in node_dict and type(node_dict[attr]) not in (list, tuple):
+            return ("untrusted", f"{label} {attr} is a {type(node_dict[attr]).__name__}")
+    return None
+
+
+def _genuine_node_defect(
+    node: Any,
+    label: str,
+    phrase: str = "is a",
+    suffix: str = "",
+) -> tuple[str, str] | None:
+    """Prove ``node`` an exact genuine Django object, THEN that it carries no method shadow.
+
+    The two proofs are ordered, not merely paired: ``_shadow_defect`` reads the node's
+    ``__dict__`` and compares each key against a callable attribute of ``type(node)``,
+    which is only meaningful once that type is known to be Django's own
+    (``_type_is_genuinely_django``) -- a consumer type could otherwise define whatever
+    callable surface makes its shadow look legitimate. Every compiler-reachable node
+    (expression operands, ``alias_map`` joins and their ``filtered_relation``,
+    ``_filtered_relations`` values) goes through this one ordering.
+
+    The non-genuine detail reads ``"{label} {phrase} {type}{suffix}"`` and is formatted
+    only on rejection, so a trusted node pays no string cost. Callers vary ``phrase`` /
+    ``suffix`` to keep their own wording.
+    """
+    node_type = type(node)
+    if not _type_is_genuinely_django(node_type):
+        return ("untrusted", f"{label} {phrase} {node_type.__name__}{suffix}")
+    return _shadow_defect(node, label)
+
+
+# Plain container types both graph walkers descend into member-wise. Django stores only
+# these exact builtins in the slots they appear in; a SUBCLASS is not a container here,
+# it is an object that must prove genuine-Django provenance like any other node.
+_WALKED_SEQUENCE_TYPES: tuple[type, ...] = (
+    list,
+    tuple,
+    set,
+    frozenset,
+)
+
+
+def _expr_mapping_key_detail(label: str, key: Any) -> str:  # noqa: ARG001 - shared detail signature
+    """Non-string mapping-key detail for the expression-graph walk.
+
+    This walker names the slot, not the offending key type; ``key`` is accepted so both
+    detail formatters share one signature.
+    """
+    return f"{label} has a non-string mapping key"
+
+
+def _deferred_mapping_key_detail(label: str, key: Any) -> str:
+    """Non-string mapping-key detail for the deferred-filter value walk."""
+    return f"{label} mapping key is a {type(key).__name__}"
+
+
+def _container_defect(
+    value: Any,
+    walk: _GraphWalk,
+    label: str,
+    recurse: Any,
+    key_detail: Any,
+) -> tuple[str, str] | None:
+    """Walk a plain sequence / dict member-wise under the shared three-state guard.
+
+    Containers take part in the identity walk exactly like nodes do: Django never nests
+    a container inside itself, so a self-referential list / dict is untrusted state
+    rather than a shared diamond, and accepting it would let the unbounded recursion
+    resurface downstream as a raw ``RecursionError`` past the typed defect contract.
+
+    ``recurse`` is the caller's own ``(value, walk, label)`` walker, so the expression
+    graph and the deferred-filter values share this traversal while each keeps its own
+    element rule. Dict keys must be exact ``str``; ``key_detail`` formats that rejection
+    because the two walkers word it differently. ``leave`` runs only when the whole
+    container proves clean -- a defect returns immediately with the container still on
+    the ``visiting`` stack, which the unwinding walk never consults again.
+    """
+    value_id = id(value)
+    state = walk.begin(value_id)
+    if state is not _WalkState.ENTERED:
+        return _walk_short_circuit(state, f"{label} contains a reference cycle")
+    if type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                return ("untrusted", key_detail(label, key))
+            defect = recurse(item, walk, label)
+            if defect is not None:
+                return defect
+    else:
+        for item in value:
+            defect = recurse(item, walk, label)
+            if defect is not None:
+                return defect
+    walk.leave(value_id)
+    return None
+
+
+def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in an expression graph, or ``None``.
 
     The single recursive, identity-memoized traversal of every compiler-reachable
@@ -587,74 +828,52 @@ def _expr_graph_defect(node: Any, seen: set[int], label: str) -> tuple[str, str]
     ``order_by`` element). It replaces the old top-level-only inventory
     (spec-045 Decision 2): each node must be an inert value, a plain
     container walked member-wise, an EXACT ``WhereNode`` subtree, or an EXACT genuine
-    Django expression that is unshadowed AND whose own operands
-    (``get_source_expressions``) and any inner ``Subquery`` recurse under the same
-    rule. ``seen`` (node ``id``) collapses a shared expression diamond to a single
-    visit and stops a cyclic graph, keeping the walk linear in the graph's unique
-    node count.
+    Django expression that is unshadowed, whose expression-owned state is exact-builtin
+    shaped (``_expression_state_defect``, proven BEFORE the accessor that reads it runs),
+    AND whose own operands (``get_source_expressions``) and any inner ``Subquery``
+    recurse under the same rule. ``walk`` (node ``id``) collapses a shared expression
+    diamond to a single visit, keeping the walk linear in the graph's unique node count,
+    and rejects a cycle as untrusted.
     """
     if _is_inert_value(node):
         return None
     node_type = type(node)
-    if node_type in (
-        list,
-        tuple,
-        set,
-        frozenset,
-    ):
-        # Containers memoize too: a self-referential list / dict would otherwise
-        # recurse without bound and escape as a raw ``RecursionError`` past the
-        # typed defect contract, instead of terminating like a shared diamond.
-        node_id = id(node)
-        if node_id in seen:
-            return None
-        seen.add(node_id)
-        for item in node:
-            defect = _expr_graph_defect(item, seen, label)
-            if defect is not None:
-                return defect
-        return None
-    if node_type is dict:
-        node_id = id(node)
-        if node_id in seen:
-            return None
-        seen.add(node_id)
-        for key, value in node.items():
-            if type(key) is not str:
-                return ("untrusted", f"{label} has a non-string mapping key")
-            defect = _expr_graph_defect(value, seen, label)
-            if defect is not None:
-                return defect
-        return None
+    if node_type in _WALKED_SEQUENCE_TYPES or node_type is dict:
+        return _container_defect(node, walk, label, _expr_graph_defect, _expr_mapping_key_detail)
     # ``WhereNode`` and ``sql.Query`` (a subquery's inner query, surfaced by
     # ``Subquery.get_source_expressions``) route to their dedicated walkers BEFORE this
-    # level touches ``seen`` -- those walkers own the memoization for their node, so
-    # pre-adding the id here would make their own ``id in seen`` guard short-circuit and
-    # skip the subtree (a hostile leaf inside a subquery ``where`` would then escape).
+    # level touches ``walk`` -- those walkers own the bookkeeping for their node, so
+    # pre-marking the id here would make their own revisit guard short-circuit and skip
+    # the subtree (a hostile leaf inside a subquery ``where`` would then escape).
     if node_type is WhereNode:
-        return _where_tree_defect(node, seen)
+        return _where_tree_defect(node, walk)
     if node_type is sql.Query:
-        return _query_genuineness_defect(node, seen)
+        return _query_genuineness_defect(node, walk)
     node_id = id(node)
-    if node_id in seen:
-        return None
-    seen.add(node_id)
-    if not _type_is_genuinely_django(node_type):
-        return ("untrusted", f"{label} carries a {node_type.__name__} node")
-    shadow = _shadow_defect(node, label)
-    if shadow is not None:
-        return shadow
+    state = walk.begin(node_id)
+    if state is not _WalkState.ENTERED:
+        return _walk_short_circuit(state, f"{label} contains a reference cycle")
+    genuine_defect = _genuine_node_defect(node, label, "carries a", " node")
+    if genuine_defect is not None:
+        return genuine_defect
     metadata_defect = _node_metadata_defect(node, label)
     if metadata_defect is not None:
         return metadata_defect
     raw_sql_defect = _raw_sql_node_defect(node, label)
     if raw_sql_defect is not None:
         return raw_sql_defect
+    # Expression-owned state is validated BEFORE the bound accessor below is invoked:
+    # a genuine ``get_source_expressions`` reads that state, so an unvalidated container
+    # subclass there would run consumer code during the proof itself.
+    state_defect = _expression_state_defect(node, label)
+    if state_defect is not None:
+        return state_defect
     if getattr(node_type, "get_source_expressions", None) is not None:
         for child in node.get_source_expressions():
-            defect = _expr_graph_defect(child, seen, label)
+            defect = _expr_graph_defect(child, walk, label)
             if defect is not None:
                 return defect
+    walk.leave(node_id)
     # A ``Subquery`` / ``Exists`` surfaces its wrapped inner ``sql.Query`` through
     # ``get_source_expressions`` (verified for every genuine Django subquery node), so
     # the loop above already routes that inner query to ``_query_genuineness_defect``
@@ -667,7 +886,7 @@ def _expr_graph_defect(node: Any, seen: set[int], label: str) -> tuple[str, str]
     return None
 
 
-def _expr_sequence_defect(holder: Any, seen: set[int], label: str) -> tuple[str, str] | None:
+def _expr_sequence_defect(holder: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return a defect for an ``order_by`` / ``group_by`` / ``select`` sequence, or ``None``.
 
     These slots hold a mix of plain field-reference strings (safe) and expressions
@@ -683,7 +902,7 @@ def _expr_sequence_defect(holder: Any, seen: set[int], label: str) -> tuple[str,
     for item in holder:
         if type(item) is str:
             continue
-        defect = _expr_graph_defect(item, seen, label)
+        defect = _expr_graph_defect(item, walk, label)
         if defect is not None:
             return defect
     return None
@@ -710,7 +929,7 @@ def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
     return None
 
 
-def _join_defect(join: Any, alias: str, seen: set[int]) -> tuple[str, str] | None:
+def _join_defect(join: Any, alias: str, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return a defect if an ``alias_map`` join is not a genuine, unshadowed Django join.
 
     ``sql.Query.clone`` shallow-copies ``alias_map`` (sharing the join objects) and
@@ -726,31 +945,27 @@ def _join_defect(join: Any, alias: str, seen: set[int]) -> tuple[str, str] | Non
     when present the filtered relation must itself be genuine + unshadowed and its
     resolved condition must pass the ``where``-tree walk; otherwise a consumer
     expression buried there would strip / rewrite the visibility predicate at compile
-    time. ``seen`` is shared so a condition reachable two ways is walked once.
+    time. ``walk`` is shared so a condition reachable two ways is walked once.
     """
-    if not _type_is_genuinely_django(type(join)):
-        return ("untrusted", f"join for alias {alias!r} is a {type(join).__name__}")
-    join_shadow = _shadow_defect(join, f"join for alias {alias!r}")
-    if join_shadow is not None:
-        return join_shadow
+    join_defect = _genuine_node_defect(join, f"join for alias {alias!r}")
+    if join_defect is not None:
+        return join_defect
     filtered = getattr(join, "filtered_relation", None)
     if filtered is None:
         return None
-    if not _type_is_genuinely_django(type(filtered)):
-        return (
-            "untrusted",
-            f"join for alias {alias!r} filtered_relation is a {type(filtered).__name__}",
-        )
-    filtered_shadow = _shadow_defect(filtered, f"join for alias {alias!r} filtered_relation")
-    if filtered_shadow is not None:
-        return filtered_shadow
+    filtered_defect = _genuine_node_defect(
+        filtered,
+        f"join for alias {alias!r} filtered_relation",
+    )
+    if filtered_defect is not None:
+        return filtered_defect
     resolved = getattr(filtered, "resolved_condition", None)
     if resolved is None:
         return None
-    return _where_tree_defect(resolved, seen)
+    return _where_tree_defect(resolved, walk)
 
 
-def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
+def _where_tree_defect(node: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in a ``where`` tree, or ``None``.
 
     ``sql.Query.clone`` calls ``self.where.clone()``, which dispatches
@@ -765,11 +980,11 @@ def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
     also fails closed.
     """
     if type(node) is not WhereNode:
-        return _expr_graph_defect(node, seen, "where clause")
+        return _expr_graph_defect(node, walk, "where clause")
     node_id = id(node)
-    if node_id in seen:
-        return None
-    seen.add(node_id)
+    state = walk.begin(node_id)
+    if state is not _WalkState.ENTERED:
+        return _walk_short_circuit(state, "where node contains a reference cycle")
     shadow = _shadow_defect(node, "where node")
     if shadow is not None:
         return shadow
@@ -784,9 +999,10 @@ def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
     if children is not None and type(children) not in (list, tuple):
         return ("untrusted", f"where node children is a {type(children).__name__}")
     for child in children or ():
-        child_defect = _where_tree_defect(child, seen)
+        child_defect = _where_tree_defect(child, walk)
         if child_defect is not None:
             return child_defect
+    walk.leave(node_id)
     return None
 
 
@@ -833,6 +1049,86 @@ _EXACT_SET_QUERY_ATTRS: tuple[str, ...] = (
 )
 
 
+def _query_payload_defect(query: Any) -> tuple[str, str] | None:
+    """Return a defect if a retained container's PAYLOAD is not its exact Django shape.
+
+    The keys of ``alias_refcount`` / ``external_aliases`` / ``table_map`` /
+    ``_filtered_relations`` are proven exact ``str`` by the caller; this proves what the
+    dicts hold. Django's own invariants are narrow and are required exactly:
+
+    - ``alias_refcount`` maps an alias to an exact ``int`` -- ``bool`` included in the
+      rejection, since ``type(x) is int`` excludes it, and Django never stores one. The
+      value is incremented / decremented by ``Query.ref_alias`` / ``unref_alias`` on
+      every join reference, so an ``int`` SUBCLASS turns ordinary downstream query
+      composition into a consumer callback with the sealed query in scope.
+    - ``external_aliases`` maps an alias to an exact ``bool`` -- read as a truth value by
+      the compiler and by ``Query.change_aliases``.
+    - ``table_map`` maps a table name to an exact ``list`` of exact ``str`` aliases; the
+      list itself is shallow-copied by ``clone`` and appended to by ``Query.join``.
+    - ``_filtered_relations`` maps an alias to a ``FilteredRelation`` the compiler
+      dispatches; it must be a genuine, unshadowed Django object like any other
+      compiler-reachable node.
+    """
+    refcount = getattr(query, "alias_refcount", None) or {}
+    for alias, count in refcount.items():
+        if type(count) is not int:
+            return ("untrusted", f"query alias_refcount[{alias!r}] is a {type(count).__name__}")
+    external = getattr(query, "external_aliases", None) or {}
+    for alias, flag in external.items():
+        if type(flag) is not bool:
+            return ("untrusted", f"query external_aliases[{alias!r}] is a {type(flag).__name__}")
+    table_map = getattr(query, "table_map", None) or {}
+    for table, aliases in table_map.items():
+        if type(aliases) is not list:
+            return ("untrusted", f"query table_map[{table!r}] is a {type(aliases).__name__}")
+        for alias in aliases:
+            if type(alias) is not str:
+                return (
+                    "untrusted",
+                    f"query table_map[{table!r}] carries a {type(alias).__name__}",
+                )
+    for alias, relation in (getattr(query, "_filtered_relations", None) or {}).items():
+        relation_defect = _genuine_node_defect(relation, f"query _filtered_relations[{alias!r}]")
+        if relation_defect is not None:
+            return relation_defect
+    return None
+
+
+def _rebuild_query_payloads(query: Any) -> None:
+    """Replace a cloned query's shared mutable payloads with fresh framework-owned ones.
+
+    ``sql.Query.clone`` copies the retained containers only SHALLOWLY, so the clone and
+    the untrusted candidate still share every payload object inside them. The validated
+    shapes are almost all immutable (exact ``str`` / ``int`` / ``bool``), which makes
+    sharing harmless -- except ``table_map``, whose values are mutable lists the
+    candidate can still append to (and ``Query.join`` reads back) after the seal has
+    returned. Each alias list is rebuilt into a fresh ``list`` of the same proven-exact
+    ``str`` aliases, and ``table_map`` itself into a fresh ``dict``, so no post-seal
+    mutation of the RETAINED CONTAINERS reaches the sealed query. Combined branches are
+    rebuilt too: ``clone`` recurses them, and each branch keeps its own ``table_map``.
+
+    This covers the retained CONTAINERS only, not the AST NODES they hold. ``clone``
+    rebuilds the ``where`` tree's ``WhereNode`` wrappers but shares their leaf ``Lookup``
+    objects by reference, and shares ``annotations`` expressions, ``alias_map`` joins, and
+    ``_filtered_relations`` objects the same way. So a candidate that mutates one of those
+    shared nodes after the seal returns still changes the sealed query -- including the
+    leaf that carries the visibility predicate's own comparison value, whose ``rhs`` a
+    retained reference can rewrite between seal and compile. Each such node is proven
+    genuine and unshadowed, so its STRUCTURE stays Django's own compile surface, but the
+    values it carries are not frozen by a container rebuild. Freezing them means
+    reconstructing the leaf graph into fresh framework-owned nodes rather than retaining
+    the candidate's, which is beyond what rebuilding the containers can reach.
+
+    Runs only on the framework-owned clone, after ``_query_container_defect`` has proven
+    every payload exact, so the reads and rebuilds dispatch no consumer code.
+    """
+    table_map = getattr(query, "table_map", None)
+    if type(table_map) is dict:
+        query.table_map = {table: list(aliases) for table, aliases in table_map.items()}
+    for branch in getattr(query, "combined_queries", ()) or ():
+        _rebuild_query_payloads(branch)
+
+
 def _query_container_defect(query: Any) -> tuple[str, str] | None:
     """Return a defect if any container ``sql.Query.clone`` copies is not an exact builtin.
 
@@ -855,6 +1151,20 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
     ``concrete``'s branches during validation and a foreign model's branches during the
     clone / compile (spec-045 Decision 2). An exact tuple's
     iteration is deterministic, so validation and execution see identical branches.
+
+    Container TYPE and KEYS are not sufficient: ``Query.clone``'s ``.copy()`` calls are
+    SHALLOW, so every payload object inside a retained container survives into the sealed
+    query and is later handed to Django's own bookkeeping. An ``int`` SUBCLASS stored as
+    an ``alias_refcount`` value has its arithmetic invoked by ordinary downstream
+    ``.filter()`` composition (``Query.ref_alias`` / ``unref_alias``), and that callback
+    can rewrite the sealed ``where`` tree before the new predicate is added, dropping the
+    visibility predicate from a queryset that already passed the seal. So each retained
+    container is pinned to its COMPLETE Django shape -- exact-``int`` alias refcounts,
+    exact-``bool`` external-alias flags, ``table_map`` entries that are exact lists of
+    exact ``str`` aliases, exact-``str`` set members, genuine unshadowed
+    ``_filtered_relations`` values -- matching the payload validation ``extra`` /
+    ``_extra_select_cache`` already carried. Values whose own graph the AST walk proves
+    (``alias_map`` joins, ``annotations`` expressions) are validated there, not here.
     """
     for attr in _EXACT_DICT_QUERY_ATTRS:
         value = getattr(query, attr, None)
@@ -865,10 +1175,18 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
         for key in value:
             if type(key) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
+    payload_defect = _query_payload_defect(query)
+    if payload_defect is not None:
+        return payload_defect
     for attr in _EXACT_SET_QUERY_ATTRS:
         value = getattr(query, attr, None)
-        if value is not None and type(value) not in (set, frozenset):
+        if value is None:
+            continue
+        if type(value) not in (set, frozenset):
             return ("untrusted", f"query {attr} is a {type(value).__name__}")
+        for member in value:
+            if type(member) is not str:
+                return ("untrusted", f"query {attr} carries a {type(member).__name__}")
     for attr in ("extra", "_extra_select_cache"):
         extra = getattr(query, attr, None)
         if extra is None:
@@ -895,7 +1213,7 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
     return None
 
 
-def _query_ast_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
+def _query_ast_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first untrusted embedded AST node in ``query``, or ``None``.
 
     The complete genuineness walk over EVERY compiler-reachable expression slot the
@@ -910,19 +1228,19 @@ def _query_ast_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
     passed here after the caller proved it is EXACTLY ``sql.Query`` and shadow-checked,
     so attribute access dispatches no consumer code and correctly returns class-default
     slots (``select_related`` is ``False``, ``order_by`` is ``()``) that never reach the
-    instance ``__dict__``; ``seen`` is shared across every slot so a node reachable two
+    instance ``__dict__``; ``walk`` is shared across every slot so a node reachable two
     ways is walked once.
     """
-    where_defect = _where_tree_defect(getattr(query, "where", None), seen)
+    where_defect = _where_tree_defect(getattr(query, "where", None), walk)
     if where_defect is not None:
         return where_defect
     having = getattr(query, "having", None)
     if having is not None:
-        having_defect = _where_tree_defect(having, seen)
+        having_defect = _where_tree_defect(having, walk)
         if having_defect is not None:
             return having_defect
     for name, expr in (getattr(query, "annotations", None) or {}).items():
-        annotation_defect = _expr_graph_defect(expr, seen, f"annotation {name!r}")
+        annotation_defect = _expr_graph_defect(expr, walk, f"annotation {name!r}")
         if annotation_defect is not None:
             return annotation_defect
     for label in (
@@ -932,7 +1250,7 @@ def _query_ast_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
         "select",
         "values_select",
     ):
-        sequence_defect = _expr_sequence_defect(getattr(query, label, None), seen, label)
+        sequence_defect = _expr_sequence_defect(getattr(query, label, None), walk, label)
         if sequence_defect is not None:
             return sequence_defect
     for label in ("extra_order_by", "extra_tables"):
@@ -940,13 +1258,13 @@ def _query_ast_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
         if raw_defect is not None:
             return raw_defect
     for alias, join in (getattr(query, "alias_map", None) or {}).items():
-        join_defect = _join_defect(join, alias, seen)
+        join_defect = _join_defect(join, alias, walk)
         if join_defect is not None:
             return join_defect
     return _select_related_defect(getattr(query, "select_related", False))
 
 
-def _query_genuineness_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
+def _query_genuineness_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first genuineness defect in ``query`` (NO concrete-table check), or ``None``.
 
     A ``Subquery`` / ``Exists`` legitimately targets ANOTHER table, so only the
@@ -954,34 +1272,36 @@ def _query_genuineness_defect(query: Any, seen: set[int]) -> tuple[str, str] | N
     query -- every node it reaches must be genuine, unshadowed, and exact-builtin
     shaped so its clone / compile dispatch is trusted, but its base table is not
     required to be the outer concrete model. Fails closed unless the embedded query
-    is EXACTLY ``sql.Query``; shares the caller's ``seen`` set and recurses combined
+    is EXACTLY ``sql.Query``; shares the caller's ``walk`` state and recurses combined
     branches under the same rule.
     """
     if type(query) is not sql.Query:
         return ("untrusted", f"embedded query is a {type(query).__name__}")
     query_id = id(query)
-    if query_id in seen:
-        return None
-    seen.add(query_id)
+    state = walk.begin(query_id)
+    if state is not _WalkState.ENTERED:
+        return _walk_short_circuit(state, "embedded query contains a reference cycle")
     shadow_defect = _shadow_defect(query, "subquery instance")
     if shadow_defect is not None:
         return shadow_defect
     container_defect = _query_container_defect(query)
     if container_defect is not None:
         return container_defect
-    ast_defect = _query_ast_defect(query, seen)
+    ast_defect = _query_ast_defect(query, walk)
     if ast_defect is not None:
         return ast_defect
     for branch in getattr(query, "combined_queries", ()) or ():
-        branch_defect = _query_genuineness_defect(branch, seen)
+        branch_defect = _query_genuineness_defect(branch, walk)
         if branch_defect is not None:
             return branch_defect
+    walk.leave(query_id)
     return None
 
 
 def _combined_query_table_defect(
     query: Any,
     concrete: type[models.Model],
+    branches: _GraphWalk | None = None,
 ) -> tuple[str, str] | None:
     """Return the first contributing-table / genuineness / foreign-branch defect, or ``None``.
 
@@ -1021,9 +1341,25 @@ def _combined_query_table_defect(
 
     Returns ``(code, detail)`` -- ``code`` in ``{"table", "untrusted"}`` -- for the
     first offending branch, or ``None`` when every contributing table is
-    ``concrete``'s table and the whole graph is trusted. A fresh ``seen`` set backs
+    ``concrete``'s table and the whole graph is trusted. A fresh ``walk`` state backs
     each top-level call so a shared expression diamond is walked once.
+
+    ``branches`` is the three-state bookkeeping for the ``combined_queries`` recursion
+    ITSELF, kept separate from the per-query AST walk: a branch reached again while it is
+    still being validated closes a cycle (Django never builds one, and the recursion --
+    here, in ``sql.Query.clone``, and in the compiler -- would otherwise escape as a raw
+    ``RecursionError`` past the typed defect contract), while a branch already fully
+    validated is a shared reference and is accepted. The AST walk cannot own this state:
+    it deliberately admits an embedded ``sql.Query`` targeting ANOTHER table (a
+    ``Subquery``), so a branch it already visited must still face the base-table proof
+    here.
     """
+    if branches is None:
+        branches = _GraphWalk()
+    query_id = id(query)
+    state = branches.begin(query_id)
+    if state is not _WalkState.ENTERED:
+        return _walk_short_circuit(state, "combined-query branches contain a reference cycle")
     query_model = getattr(query, "model", None)
     if _concrete_or_none(query_model) is not concrete:
         return ("table", getattr(query_model, "__name__", type(query_model).__name__))
@@ -1036,7 +1372,7 @@ def _combined_query_table_defect(
     # The AST walk runs BEFORE the base-table check: it proves every ``alias_map`` join
     # is a genuine, unshadowed Django join, so ``_base_table_defect`` can then read the
     # first join's ``.table_name`` without dispatching consumer code.
-    ast_defect = _query_ast_defect(query, set())
+    ast_defect = _query_ast_defect(query, _GraphWalk())
     if ast_defect is not None:
         return ast_defect
     base_defect = _base_table_defect(query, concrete)
@@ -1045,9 +1381,10 @@ def _combined_query_table_defect(
     for branch in getattr(query, "combined_queries", ()) or ():
         if type(branch) is not sql.Query:
             return ("untrusted", f"combined-query branch is {type(branch).__name__}")
-        defect = _combined_query_table_defect(branch, concrete)
+        defect = _combined_query_table_defect(branch, concrete, branches)
         if defect is not None:
             return defect
+    branches.leave(query_id)
     return None
 
 
@@ -1210,7 +1547,7 @@ def _sealed_prefetch_related_lookups(
     return tuple(sealed_entries), None
 
 
-def _deferred_value_defect(value: Any, seen: set[int], label: str) -> tuple[str, str] | None:
+def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return a defect if a deferred-filter value is neither inert nor genuine-Django.
 
     A pending ``_deferred_filter``'s ``args`` / ``kwargs`` are baked by ``add_q`` ->
@@ -1237,52 +1574,36 @@ def _deferred_value_defect(value: Any, seen: set[int], label: str) -> tuple[str,
         return None
     value_type = type(value)
     if value_type is models.Q:
-        # ``Q`` trees and plain containers memoize by id like the expression walk:
-        # a self-referential ``Q`` / list / dict would otherwise recurse without
-        # bound and escape as a raw ``RecursionError`` past the typed contract.
+        # ``Q`` trees and plain containers take the same three-state walk as the
+        # expression graph: Django never produces a self-referential ``Q`` / list /
+        # dict, so a node reached while it is still being validated closes a cycle and
+        # is untrusted -- accepting it would let the unbounded recursion resurface
+        # downstream as a raw ``RecursionError`` past the typed contract.
         value_id = id(value)
-        if value_id in seen:
-            return None
-        seen.add(value_id)
+        state = walk.begin(value_id)
+        if state is not _WalkState.ENTERED:
+            return _walk_short_circuit(state, f"{label} contains a reference cycle")
         for child in value.children:
             if type(child) is models.Q:
-                child_defect = _deferred_value_defect(child, seen, label)
+                child_defect = _deferred_value_defect(child, walk, label)
             elif type(child) is tuple and len(child) == 2 and type(child[0]) is str:
-                child_defect = _deferred_value_defect(child[1], seen, label)
+                child_defect = _deferred_value_defect(child[1], walk, label)
             else:
                 return ("untrusted", f"{label} Q child is a {type(child).__name__}")
             if child_defect is not None:
                 return child_defect
+        walk.leave(value_id)
         return None
-    if value_type in (
-        list,
-        tuple,
-        set,
-        frozenset,
-    ):
-        value_id = id(value)
-        if value_id in seen:
-            return None
-        seen.add(value_id)
-        for item in value:
-            item_defect = _deferred_value_defect(item, seen, label)
-            if item_defect is not None:
-                return item_defect
-        return None
-    if value_type is dict:
-        value_id = id(value)
-        if value_id in seen:
-            return None
-        seen.add(value_id)
-        for key, item in value.items():
-            if type(key) is not str:
-                return ("untrusted", f"{label} mapping key is a {type(key).__name__}")
-            item_defect = _deferred_value_defect(item, seen, label)
-            if item_defect is not None:
-                return item_defect
-        return None
+    if value_type in _WALKED_SEQUENCE_TYPES or value_type is dict:
+        return _container_defect(
+            value,
+            walk,
+            label,
+            _deferred_value_defect,
+            _deferred_mapping_key_detail,
+        )
     if getattr(value_type, "resolve_expression", None) is not None:
-        return _expr_graph_defect(value, seen, label)
+        return _expr_graph_defect(value, walk, label)
     if isinstance(value, models.Model):
         # A class-level ``resolve_expression`` was handled above; an INSTANCE-level one
         # (in the model instance's own ``__dict__``) is still found by ``build_filter``'s
@@ -1325,15 +1646,15 @@ def _bake_deferred_filter_or_defect(
         return ("untrusted", f"{cls_name} deferred filter args is a {type(args).__name__}")
     if PROHIBITED_FILTER_KWARGS.intersection(kwargs):
         return ("untrusted", f"{cls_name} deferred filter carries prohibited kwargs")
-    seen: set[int] = set()
+    walk = _GraphWalk()
     for value in args:
-        arg_defect = _deferred_value_defect(value, seen, f"{cls_name} deferred filter arg")
+        arg_defect = _deferred_value_defect(value, walk, f"{cls_name} deferred filter arg")
         if arg_defect is not None:
             return arg_defect
     for key, value in kwargs.items():
         if type(key) is not str:
             return ("untrusted", f"{cls_name} deferred filter kwarg key is a {type(key).__name__}")
-        kwarg_defect = _deferred_value_defect(value, seen, f"{cls_name} deferred filter {key!r}")
+        kwarg_defect = _deferred_value_defect(value, walk, f"{cls_name} deferred filter {key!r}")
         if kwarg_defect is not None:
             return kwarg_defect
     try:
@@ -1538,6 +1859,11 @@ def _seal_or_defect(
     # the same source queryset never observes a half-baked predicate, a cleared
     # ``_deferred_filter``, or partial state left after an exception mid-bake.
     rebuilt_query = sql.Query.clone(query)
+    # ``clone``'s container copies are SHALLOW, so the clone still shares the candidate's
+    # mutable payload objects; the validated-exact ones are rebuilt into fresh
+    # framework-owned containers so no post-seal mutation of the candidate reaches the
+    # sealed query.
+    _rebuild_query_payloads(rebuilt_query)
     # A pending ``_deferred_filter`` -- the ``(negate, args, kwargs)`` tuple Django's
     # ``RelatedManager._apply_rel_filters`` leaves on ``instance.rel.all()`` (baked into
     # ``_query`` only on first ``.query`` access) -- is baked onto the CLONE for an EXACT
@@ -2069,11 +2395,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
     the write before the transaction commits. Read surfaces run with no pipeline
     context and are byte-unchanged.
     """
-    pipeline = current_write_pipeline()
-    if pipeline is not None:
-        queryset = pin_write_queryset(queryset, pipeline.alias)
-        if pipeline.lock:
-            queryset = base_locked_queryset(queryset.model, pipeline.alias, queryset)
+    queryset = pipeline_scoped_queryset(queryset, queryset.model)
     return _stringified(queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True))
 
 
@@ -2132,11 +2454,7 @@ def visible_related_object(
     # base-manager ``FOR UPDATE`` constrained by the visibility pk subquery, the
     # same relation-target lock the batched membership check applies.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
-    pipeline = current_write_pipeline()
-    if pipeline is not None:
-        queryset = pin_write_queryset(queryset, pipeline.alias)
-        if pipeline.lock:
-            queryset = base_locked_queryset(related_model, pipeline.alias, queryset)
+    queryset = pipeline_scoped_queryset(queryset, related_model)
     return queryset.filter(pk=pk).first()
 
 

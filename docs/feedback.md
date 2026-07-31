@@ -1,153 +1,115 @@
 # Adversarial review: spec-046 transport security
 
-This pass reviewed [spec-046][spec-046] from a hostile-boundary angle: whether the
-new connection actor state linearizes every protected WebSocket send with an
-in-process identity transition, and whether failures of the foreign request stream
-remain inside the HTTP boundary's controlled error contract. The stale actor
-write-back and authenticated-to-anonymous provenance defects from the previous pass
-are fixed, but the transition state still does not cover two other orderings.
+This pass reviewed [spec-046][spec-046] from a cancellation and task-lifecycle
+angle: whether revocation deterministically stops an operation, whether the
+documented connection close survives cancellation and adapter failure, and whether
+the new actor lease remains sound when either side of an `await` does not complete
+normally. The lease fixes the previously reported same-connection logout
+orderings, but the teardown built on top of it is not failure-atomic.
 
 ## Findings
 
-### [P1] A fresh revalidation window bypasses an actor transition already in progress
-
-`django_strawberry_framework/consumers.py::_actor_is_current` consults the positive
-revalidation-window cache before it captures or validates an actor-state token:
-
-```python
-if window > 0.0 and _monotonic() - scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf) < window:
-    return True
-
-token = actor_read_token(scope)
-```
-
-Consequently, `utils/sessions.py::actor_transition` may already report
-`transitions_in_flight == 1` and the checkpoint still returns `True`. The condition
-is directly reproducible with an authenticated actor, a fresh
-`_REVALIDATED_AT_SCOPE_KEY`, and `_actor_is_current` called inside
-`actor_transition`: the checkpoint authorizes without reading or checking the
-transition state.
-
-A real same-socket ordering is:
-
-1. an authenticated operation successfully revalidates and records a positive
-   window timestamp;
-2. the package's `logout` mutation enters `actor_transition` and suspends inside
-   Channels' thread-backed logout, before Channels replaces `scope["user"]` with
-   `AnonymousUser`;
-3. a sibling operation reaches admission, or a running subscription reaches its
-   outbound gate, while the cached scope actor is still authenticated;
-4. the fresh-window branch returns `True` despite the published transition, so the
-   operation is admitted or its protected frame is sent.
-
-The configured window intentionally delays detection of an *external* session
-revocation. It must not erase the package-owned transition's stronger contract:
-the code and tests now promise that same-connection logout is a connection-scoped
-revocation and that the next protected checkpoint refuses it. The current tests
-miss the combination. The same-socket subscription row uses the default zero
-window, while the stale-read row advances time beyond its positive window before
-starting logout, forcing the token-bearing database-read branch.
-
-The root fix is for every authorization path, including a cache hit, to participate
-in the connection actor-state protocol. Checking only
-`transitions_in_flight` at the top is not sufficient on its own, because a
-transition can begin immediately after that check; the transition and the complete
-validate/send critical section need the shared exclusion described in the next
-finding. Once that exists, the window shortcut may run only while holding the same
-stable actor-state lease as an uncached validation.
-
-Add deterministic admission and outbound regressions with a positive window. Park
-same-socket logout after it opens `actor_transition` but before it changes the scope
-actor, then attempt a new operation and release a running subscription result. Both
-checkpoints must wait for or refuse the transition, perform no cached authorization,
-and end in the documented connection close.
-
-### [P1] A protected send can complete after logout because transitions do not share its lock
+### [P1] Self-cancellation does not stop a subscription whose next result is immediately ready
 
 `django_strawberry_framework/consumers.py::send_revalidated_operation_frame`
-holds `_revocation_lock` through `await send(message)`, but
-`django_strawberry_framework/auth/mutations.py::_channels_logout` never acquires
-that lock. It holds `scope_session_lock` and publishes `actor_transition`, while
-the outbound path merely samples actor state before entering `send`. The new read
-token therefore prevents a transition that overlaps the asynchronous *session
-read* from committing stale data, but it cannot detect a transition that starts
-after `_actor_is_current` returns.
+tries to unwind a revoked operation by calling `asyncio.current_task().cancel()`
+immediately before it returns. The function's commentary assumes that the
+`CancelledError` will be delivered at the subscription's next suspension point,
+inside `result_source.__anext__()`. That assumption is false for an async generator
+whose next value is already available: executing an `await` does not necessarily
+return control to the event loop.
 
-The remaining ordering is deterministic:
+After the first revocation, the whole suppressed-frame path can complete
+synchronously from the task's perspective:
 
-1. an outbound checkpoint validates the authenticated actor and calls the
-   adapter's underlying asynchronous send;
-2. that send suspends before committing the frame to the ASGI channel;
-3. same-socket logout runs under its independent lock, flushes the durable session,
-   replaces the scope actor, closes `actor_transition`, and returns;
-4. the send resumes and emits the already-authorized protected frame after logout
-   completed.
+1. the connection's actor lease is uncontended, so `asyncio.Lock.acquire()`
+   returns without suspending;
+2. `_revocation_observed` short-circuits before `_actor_is_current` performs a
+   session read;
+3. `::_revoke_connection` returns immediately because the flag is already set;
+4. the helper requests cancellation again and returns to upstream's `async for`;
+5. an immediate-yield async generator supplies another result without yielding to
+   the event loop, and the cycle repeats.
 
-This is not hypothetical behavior hidden behind an artificial await. ASGI sends
-are asynchronous, and the existing test helper's own commentary acknowledges that
-a real socket write can suspend. A direct delayed-send harness against the
-production helper emits the `next` frame after a completed actor transition. Holding
-`_revocation_lock` through the send only excludes sibling checkpoints; it provides
-no ordering at all against the logout transition.
+A direct harness around the production helper processed 100,000 suppressed
+`next` frames without one cancellation being delivered and left the current task
+with 100,000 pending cancellation requests. The frames remain suppressed, so this
+is not an authorization disclosure. It is still a process-level availability
+failure at the security boundary: a buffered or otherwise immediate-yield
+subscription can monopolize the event loop precisely when revocation is supposed
+to unwind it, its generator cleanup is not deterministic, and the documented
+disconnect path never gets a chance to cancel the connection's other operations.
+The existing controlled subscription always waits on an event between yields, so
+its next `__anext__()` genuinely suspends and hides this case.
 
-The root fix is one shared, connection-owned synchronization primitive or lease
-that linearizes actor transitions against the entire validate/commit/send sequence.
-Logout must not complete while a pre-transition protected send is still pending,
-and no checkpoint may begin sending while logout owns the transition. A generation
-check after `send` is too late because bytes may already be committed. The lock
-order must remain explicit with `scope_session_lock`; replacing or integrating the
-revocation lock is preferable to adding a third independent lock.
+The root fix is to make operation termination part of an owned lifecycle protocol,
+not a request set on the task that happens to be running the adapter. The package
+needs a seam that can stop the upstream result loop and explicitly close/await its
+result source even when every subsequent value is immediately ready. Merely adding
+`await asyncio.sleep(0)` after `task.cancel()` is not the root fix: it injects
+`CancelledError` inside the `async for` body, the exact location the current
+commentary correctly says does not synchronously close the generator. Likewise,
+repeating `task.cancel()` cannot force a task to yield.
 
-Add a deterministic regression that parks the real outbound delegate before it
-writes. Start same-socket logout while the send is parked and prove logout cannot
-complete across it; after releasing the pre-transition send, let logout linearize,
-then prove every later protected frame is suppressed and the operation is finalized.
-Pair it with the transition-first positive-window test above, which proves the
-opposite ordering cannot enter the send at all.
+Add a regression on both protocols with an async generator that yields a bounded
+but large sequence without awaiting between yields. Revoke on its first outbound
+checkpoint and assert that only a small, deterministic number of results are
+pulled, the generator's `finally` runs before teardown completes, the operation
+task finishes, sibling operations are cancelled and awaited, and the event loop
+remains responsive to an independently scheduled sentinel task.
 
-### [P2] A request-stream read failure escapes the bounded body gate as a 500
+### [P2] A failed or cancelled close is permanently recorded as a completed close
 
-`django_strawberry_framework/_request_body.py::_measured_remaining` guards every
-capability probe, but the fallback it selects does not provide the same error
-boundary. `::_bounded_read_exceeds_limit` calls `request.read(...)` without
-handling its failure. Django converts an underlying stream `OSError` into
-`django.http.request.UnreadablePostError`; that exception propagates through
-`views.py::_RequestBodyBoundaryMixin._enforce_request_body_limit`, and Strawberry's
-Django dispatch catches only `cross_web.HTTPException`.
+`django_strawberry_framework/consumers.py::_revoke_connection` sets
+`consumer._revocation_observed = True` before awaiting `websocket.close(...)`.
+That ordering publishes the authorization decision promptly, but the same boolean
+is also used as proof that the transport close was already sent. If the adapter's
+close raises or the operation task is cancelled while the close is suspended, the
+flag remains true and every later checkpoint returns without another close attempt.
 
-The result is reproducible with an otherwise ordinary POST whose declared length is
-below the package cap and whose non-seekable WSGI input raises `OSError` from
-`read()`: invoking `DjangoGraphQLView` raises `UnreadablePostError` instead of
-returning a controlled client response. Under Django's handler this becomes a `500`
-and error log. The body is not executed, so this is not a cap bypass, but a broken or
-aborted client stream can turn the security boundary into an avoidable server-error
-and logging path. It also contradicts `_request_body.py`'s module contract that a
-foreign stream failure is reported in the fail-closed direction rather than escaping
-as an unrelated `500`.
+The failure is directly reproducible against the production helper: an adapter
+whose first `close` raises `OSError` leaves `_revocation_observed` true, and a
+second call to `_revoke_connection` returns normally with the close-call count
+still equal to one. Cancellation is the more adversarial real-protocol shape. Both
+upstream protocols let a client cancel its operation with `complete` / `stop`; if
+that cancellation lands while the revocation close is back-pressured, the operation
+unwinds through `CancelledError`, no `4403` is committed, and the connection's
+message loop remains alive with a latch that forbids any retry.
 
-The root fix is to make the bounded-read phase as total as the capability probe.
-Failures while reading, measuring returned chunks, closing the consumed stream, or
-installing the replacement stream need an explicit fail-closed outcome that the view
-maps to one controlled response, with an operator-side record if the wire response is
-deliberately indistinguishable from an ordinary size rejection. Do not catch
-`BaseException`; cancellation and process-control exceptions must still propagate.
+Information-bearing frames remain fail-closed because later checkpoints see the
+flag. The observable connection contract does not: the promised non-disclosing
+`4403` close can disappear, retained operations and connection state may remain
+allocated, and control frames can continue on a socket the package claims it
+terminated. Treating "revocation was decided", "a close is in progress", and "the
+close completed" as one bit is the root cause.
 
-Add sync and async view regressions backed by a non-seekable input whose `read`
-raises after zero bytes and after a partial prefix. Assert the selected controlled
-status and reason, no schema execution, no unbounded retry, and no partial body handed
-to Strawberry.
+The root fix is a connection-owned revocation/close state machine. Publish the
+revoked state immediately so no later authorization can pass, but represent the
+single shared close attempt separately and shield its ownership from cancellation
+of whichever operation first observed revocation. Concurrent and later
+checkpoints should await that same completion; an adapter failure needs an explicit
+retry or connection-loop escalation policy rather than being mistaken for success.
+The design must also handle the ambiguous case where an ASGI send commits and its
+awaiter is then cancelled, so simply moving the boolean assignment after the
+`await` is not sufficient.
+
+Add deterministic regressions for both protocols. Park the adapter close, cancel
+the detecting operation through the protocol's own `complete` / `stop` message,
+then prove the shared close still commits exactly one `4403` and the connection
+teardown finishes. Pair that with an adapter that raises on its first close and
+succeeds on the next permitted attempt, proving a later checkpoint cannot silently
+inherit a false "already closed" result.
 
 ## Non-findings from this review angle
 
-- The new provenance latch correctly prevents an authenticated socket changed to
-  `AnonymousUser` from taking the genuinely-anonymous read-free carve-out.
-- The generation token correctly refuses a stale actor loaded before a completed
-  same-socket logout, and it does not refresh the positive-window timestamp from
-  that stale read. The two P1 findings are orderings outside that token's present
-  lifetime, not restatements of the fixed stale-write defect.
-- Host projection, strict JSON UTF-8 decoding, multipart control-field loss
-  detection, and the exact built-in numeric configuration gates remained
-  fail-closed under the hostile inputs reviewed in this pass.
+- The shared actor lease now covers positive-window cache hits, session reads,
+  write-back, protected sends, and the package-owned logout transition. The two
+  logout orderings from the preceding review no longer reproduce.
+- The bounded HTTP read now converts ordinary foreign-stream read, sizing, close,
+  and replacement failures into the documented fail-closed body-limit response.
+- Neither lifecycle finding lets another information-bearing frame reach the
+  client after revocation. They concern deterministic task and connection teardown,
+  not a restatement of the fixed authorization race.
 
 <!-- LINK DEFINITIONS -->
 

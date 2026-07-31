@@ -148,9 +148,11 @@ rounds moved what shipped.
 - **The three pieces of connection state are not "one set of state on the adapter instance".**
   The revalidation obligation said the connection-local lock, the revoked flag and the
   last-validated timestamp were **one** set of state on the adapter instance upstream creates
-  per connection. None of the three is there. The lock and the flag are assigned in
-  `consumers.py`'s `GraphQLWebSocketConsumer.__init__` (see [Decision 16][s65-d16]'s own
-  correction), and the timestamp is written onto the ASGI `scope` under
+  per connection. None of the three is there. The revocation state is assigned in
+  `consumers.py`'s `GraphQLWebSocketConsumer.__init__` — today the whole state machine, as
+  `self._revocation` — the lock is the connection's shared actor lease on the ASGI `scope`
+  (`utils/sessions.py::actor_lease`, so the auth layer's own `logout` can acquire it), and the
+  timestamp is written onto the same `scope` under
   `consumers.py::_REVALIDATED_AT_SCOPE_KEY` — so the claim was wrong about the object *and*
   about there being one of them. What is load-bearing, and true, is that all three are
   **connection-scoped** rather than three parallel caches keyed by protocol, and the obligation
@@ -720,7 +722,11 @@ two per-protocol admission subclasses "two two-line subclasses"; each carries a 
 (the awaited revalidation, a bare `return` on refusal, the `super()` delegation). Corrected as
 one site of the three-site "two-line delegate" sweep recorded under [Decision 17][s65-d17]; the
 single-siting claim the sentence exists to make — the logic lives in the shared function and the
-subclasses carry none of it — was verified against `consumers.py` and is unchanged.
+subclasses carry none of it — was verified against `consumers.py` and is unchanged. The sentence
+moved again when the stop-aware result source landed ([Decision 16][s65-d16]): each subclass now
+carries a second hook, an `__init__` that delegates with `super()` and calls one shared
+installer, so the count is stated of the **admission hook** rather than of the subclass. The
+single-siting claim is what survives, and it now covers two mechanisms instead of one.
 
 ### Decision 12 — Maximum connection lifetime is documented and seamed, not silently enforced
 
@@ -827,6 +833,25 @@ regression.
   ([Decision 7][s65-d7]
   #"An unmeasurable stream has three outcomes, not two").
 
+**Change record — the active-operation rows after the teardown correction.** The
+active-operation gate's row asserted that a revoked operation "is cancelled or completed",
+which was the widest assertion the cancellation-based unwind could support and which a
+never-delivered cancellation request satisfied vacuously — a running task with a pending
+cancellation flag is neither, but the row could not tell. It now asserts what the shipped
+mechanism makes observable: the operation has **ended** and its subscription generator has been
+**finalized** ([Decision 16][s65-d16]). Four rows are added beside it rather than folded into
+it, one per property that a boolean flag or a cancellation request would have hidden: the
+immediate-yield subscription that a cancellation request could never stop (with the disconnect
+completing rather than hanging, which is the legacy protocol's `cleanup_operation` awaiting an
+operation task that never ends); the structural narrowness of the schema substitution; the
+close-attempt failure arms, where a raised close is retried once and then abandoned while
+information-bearing frames stay refused; and the close attempt surviving the cancellation of
+whichever operation started it. **Why separate rows:** each of the four fails on its own, so
+removing any one of the four mechanisms costs the suite a distinct failure — which is the same
+discipline the multipart matrix's "each of the three requirements fails on its own row" applies,
+and the reason a single "revocation works" row was what let the original teardown defects sit
+green.
+
 **Change record — placement.** The placement rule did not change; the paragraph that applied it
 to the round's new rows opened by naming the round, and named the criticism that produced two of
 them. Its original form:
@@ -904,10 +929,13 @@ after its actor was revoked.
   which is backwards. It also reintroduces the background-task lifecycle
   [Decision 11][s65-d11]
   already rejected for the same reason.
-- **Per-operation cancellation without closing the socket.** Rejected: more machinery for a
-  smaller guarantee. The actor is a property of the *connection*, so cancelling one operation
+- **Per-operation revocation without closing the socket.** Rejected: more machinery for a
+  smaller guarantee. The actor is a property of the *connection*, so ending one operation
   leaves a socket whose remaining operations are authorized by an actor that no longer exists,
-  and the package would then owe a per-operation revocation ledger to keep them straight.
+  and the package would then owe a per-operation revocation ledger to keep them straight. This
+  is a rejection of the *scope*, and it is worth separating from the mechanism: the shipped
+  contract does end the revoked operation — through the stop-aware result source, which reads
+  one **connection**-scoped latch and needs no ledger — and it closes the socket as well.
 - **Admission-only, with the S11 claim weakened to match.** Rejected: the stronger contract
   is achievable at this seam, with one derived class and one lock, so weakening the claim
   would be choosing a documented gap over a fix. [`AGENTS.md`][agents] #"always recommend the
@@ -952,10 +980,10 @@ leave the package in the change that implements it.
 lock, held through the send* said the single `asyncio.Lock` was "owned by the connection's
 adapter instance (upstream constructs exactly one per connection …)". Nothing of the sort lives
 on the adapter: `consumers.py::build_revalidating_consumer_class`'s
-`GraphQLWebSocketConsumer.__init__` assigns `self._revocation_lock` and
-`self._revocation_observed`, and the generated class's own docstring gives the reason in the
-same words the decision uses — "per-INSTANCE … one consumer instance is exactly one
-connection". The adapter reaches both through `websocket.ws_consumer` in
+`GraphQLWebSocketConsumer.__init__` assigns the connection's revocation state (today
+`self._revocation`, then a pair of a lock and a flag), and the generated class's own docstring
+gives the reason in the same words the decision uses — "per-INSTANCE … one consumer instance is
+exactly one connection". The adapter reaches it through `websocket.ws_consumer` in
 `consumers.py::send_revalidated_operation_frame`. Because Channels builds exactly one consumer
 per connection, the parenthetical's *reasoning* was sound and is kept word for word; only the
 named owner and the layer that constructs it changed (`upstream` -> `Channels`). Everything
@@ -963,7 +991,172 @@ after it — holding the lock through the send, and the sibling-task interleavin
 was re-verified against that coroutine and is unchanged. **Direction of the drift:** it named
 the wrong object for state whose *scope* it stated correctly, so the soundness argument was
 never at risk; what was at risk is a reader looking for the lock on the derived adapter
-subclass, finding none, and concluding the outbound gate is unsynchronized.
+subclass, finding none, and concluding the outbound gate is unsynchronized. Two of the three
+names that paragraph settled have since moved: the lock became the connection's shared actor
+lease on the ASGI scope (`utils/sessions.py::actor_lease`), because exclusion has to reach the
+auth layer's own `logout`, and the flag became the state machine described immediately below.
+The *owner* claim — the consumer instance, one per connection — survived both moves.
+
+**Change record — the revoked operation is stopped by termination, and the cancellation
+argument that preceded it was false.** The decision's failure response said the package
+"unwinds the current operation through cancellation", and `consumers.py` carried the derivation
+at length: that `asyncio.current_task().cancel()` would deliver the `CancelledError` inside
+`result_source.__anext__()`, so the subscription generator's own `finally` would run and the
+generator would be closed, and that the two protocols would then diverge exactly as their own
+code says (legacy `handle_async_results` catching `asyncio.CancelledError` and sending
+`complete`, transport-ws `run_operation` emitting nothing). The removed reasoning:
+
+> The current operation is then unwound through **cancellation** rather than by raising
+> `asyncio.CancelledError` from this frame. The difference matters: cancelling delivers the
+> error at the operation's next suspension point, which is inside `result_source.__anext__()`
+> — so the subscription generator's own `finally` runs and the generator is closed. […]
+> Upstream's two loops then diverge exactly as their own code says.
+
+**Why it was false.** It assumed a suspension point that does not exist for the case that
+matters. `Task.cancel()` on the *running* task sets a pending-cancellation request that is
+consumed only when the task is next rescheduled, which requires an await that actually yields
+to the loop — and the whole suppressed-frame path has none: an uncontended
+`asyncio.Lock.acquire()` returns without suspending, the revoked short-circuit takes no session
+read, an already-decided close returns immediately, and an async generator whose next value is
+already available hands it over without yielding. For an immediate-yield subscription the
+request was therefore never delivered at all, so the operation kept producing values the gate
+kept suppressing: nothing disclosed, but the loop monopolized and the teardown starved — and on
+the legacy protocol `cleanup_operation` *awaits* the operation task, so the disconnect
+deadlocked rather than lagged. The divergence sentence went with it: on the replacement both
+loops end normally and both send their own `complete`, so there is no per-protocol difference
+left to describe.
+
+**Alternatives rejected on the way to termination.**
+
+- **`await asyncio.sleep(0)` after `task.cancel()`,** to force the request to be delivered.
+  Rejected because it delivers the error in the wrong place: the suspension it creates is in
+  the `async for` **body**, so the `CancelledError` unwinds the body and leaves the generator
+  *suspended* — which is the opposite of closing it, and is precisely the failure mode the
+  original derivation cited as the reason to prefer cancelling over raising. It also converts
+  the outbound checkpoint into a coroutine that yields to the loop while holding the
+  connection's actor lease, on the hot path, to buy nothing.
+- **Repeating `task.cancel()`** — once more, or in a loop. Rejected on mechanics: a repeated
+  request cannot make a task yield. `cancel()` is a request, not a preemption, and issuing it
+  twice from a code path that never suspends leaves exactly the same pending flag unconsumed.
+- **Keeping the self-cancel and its `task is not consumer.run_task` carve-out.** The carve-out
+  existed because cancelling the connection's own message-loop task would have aborted the very
+  disconnect path that has to cancel and await the remaining operations — the protocols'
+  subscription-limit `error` frame being the one path that reaches the checkpoint on that task.
+  Rejected with the mechanism it protected: nothing is cancelled now, so the carve-out has
+  nothing to guard, and a conditional that exists only to keep a broken mechanism from doing
+  damage is worse than no mechanism. The surviving statement is the plain one — that path has
+  no operation of the package's to end, and the close alone is the whole rejection.
+- **Closing the inner source from the checkpoint instead of from the wrapper.** Rejected: the
+  checkpoint does not have the source, and reaching it would mean reading a per-operation
+  registry off the handler — a second bookkeeping surface for a fact the generator already
+  knows. The wrapper's own `finally` is the one place that runs on every exit arm, including
+  the revoked one, upstream's normal end, and legacy's `cleanup_operation`.
+- **Relying on the interpreter's asyncgen finalizer.** Rejected: it runs at an unrelated
+  moment, so a subscription's `finally` — which is where a consumer releases a broker
+  subscription, a cursor, or a lock — would run after the socket had already gone. That the
+  package closes it *at the revocation* is the property worth owning, and it is also why
+  transport-ws's total absence of a close (no `finally`, no `aclosing`, the local going out of
+  scope) is load-bearing evidence rather than a stylistic observation.
+
+**Change record — the revoked flag became a state machine, because a boolean recorded a close
+that never happened.** The decision, `consumers.py::_revoke_connection` and the generated
+class's own docstring all described one connection-scoped boolean (`_revocation_observed`),
+set before the close was awaited, with idempotence argued from it: "both halves are
+idempotent … a socket closed twice would put a second `websocket.close` on the wire after the
+first". The **conclusion** survives — exactly one `4403` ever reaches the wire, and the
+decision still says so — but the boolean was the wrong instrument for it, because it conflated
+three separable facts: that revocation was *decided*, that a close was *in flight*, and that a
+close *completed*. A close that raised, or one that was abandoned mid-flight, was therefore
+recorded permanently as a close that had been committed, and no later checkpoint would ever try
+again. Information-bearing frames stayed fail-closed throughout, so no payload escaped; what
+was lost is the other half of the promise, since the documented non-disclosing `4403` could
+silently never reach the client — leaving it holding a socket the package had stopped writing to
+and would never explain, with every checkpoint that could have retried reading a completed
+close. `consumers.py::_ConnectionRevocation` replaces it with five
+named states, a bounded attempt count, a connection-owned shielded attempt, and an outcome
+written by the attempt after its own `await` returned.
+
+**Alternatives rejected on the way to the state machine.**
+
+- **Moving the boolean's assignment to *after* the `await`.** The minimal edit, and rejected
+  because it does not address the failure it appears to fix. An ASGI `send` is unacknowledged:
+  a close that commits its frame and is then cancelled — or one whose await never returns
+  because the transport is gone — leaves the flag unset, so the *next* checkpoint sends a
+  second `4403` for a close that already happened, which is the mirror of the original defect
+  rather than its repair. Two facts cannot be encoded in one bit however the assignment is
+  ordered; "in flight" is the third, and it is the one both orderings drop.
+- **`asyncio.shield` alone, without a state machine.** Rejected because shielding buys
+  *survival*, never *observability*. It stops a cancelled awaiter from taking the close down
+  with it — which is why the shipped attempt is shielded — but it says nothing about whether
+  the frame reached the transport, because ASGI's `send` returns `None` and offers no
+  acknowledgement. Learning the outcome requires somebody to record what their own `await`
+  returned, which is exactly what the attempt task does and what no amount of shielding
+  supplies.
+- **An unbounded retry.** Rejected: checkpoints are client-driven, so "retry on every
+  checkpoint" hands a client one attempted close per frame it chooses to provoke, and the
+  realistic raise set — a disconnected transport, a server state assertion, an `OSError` — is
+  not transient, so a third attempt cannot succeed where the first two did not. Hence
+  `_MAX_REVOCATION_CLOSE_ATTEMPTS`: the first attempt plus exactly one retry, and then
+  `ABANDONED`.
+- **Retrying a CANCELLED attempt, or giving it a state of its own.** Rejected as a ruling
+  rather than an oversight: the outcome of a cancelled `send` is unobservable, so a retry
+  would risk a second `4403` for a close that probably succeeded. Nothing in the package
+  cancels that attempt, so the only thing that can is the event loop that owns the socket
+  being torn down, at which point no retry could reach a client anyway — and `CLOSING` already
+  permits no new attempt, so the ruling needs no sixth state.
+- **Re-raising the attempt's exception out of the task, so an awaiting checkpoint learns why.**
+  Rejected: an awaiting checkpoint's job is to know the attempt finished, not to inherit its
+  exception, and an attempt whose awaiter was cancelled would then leave an unretrieved
+  exception behind. The failure is logged once, at the attempt, naming the attempt number and
+  the bound.
+- **Making the close a per-operation task.** Rejected: both protocols let a client cancel the
+  operation that first observed the revocation (`complete` / `stop`), so an operation-owned
+  close dies with the operation it happened to be started from. Ownership by the connection is
+  what makes the attempt's lifetime match the thing being closed, and the consumer's
+  `disconnect` is what settles it so a task the connection owns cannot outlive the connection.
+
+**Change record — delegation became conditional on the revocation, and the frame that forced it
+was `complete`.** The decision described the ungated frame types as delegating "to upstream
+unchanged", full stop, and gave `complete` as the example a reader should be least worried
+about — originally on the grounds that it was "what upstream's own cancellation path emits while
+a socket is being torn down". Both halves moved. `complete` is what **both** protocols emit when
+a result loop ends *normally*, which is now exactly how a revoked operation ends, so it is no
+longer an incidental teardown artifact but a frame the revocation itself produces — and
+delegating it would commit a control frame **after** the `4403`, on a socket the package says it
+terminated. It is also not only a contract question: an ASGI send past the protocol's open state
+raises, and the raise surfaces inside upstream's own operation task, which logs it and
+re-raises, so every revoked subscription would report a worker-task error. The decision now
+states the invariant directly — **once revocation is decided the adapter writes nothing further
+to the socket, delegated frames included** — and the frame-type table describes what is
+*gated*, with the connection state deciding what is *written* at all.
+
+**Alternatives rejected for that cut-off.**
+
+- **Exempting `complete` specifically, as an end-of-stream courtesy.** Rejected: it is the
+  disclosure-distinction argument in a new costume — a per-type carve-out on the one path whose
+  whole value is that it has none — and it does not even buy the courtesy, because the frame
+  either races the close or arrives after it. The close *is* the end-of-stream signal on this
+  contract.
+- **Keying the cut-off on the committed close rather than on the decision.** Rejected in both
+  directions. Between the decision and the commit the socket is still physically open, so a
+  frame written in that window goes to a connection the package has already refused; and the
+  close is not guaranteed to commit at all — an attempt may raise, and a connection whose
+  attempt bound is spent stays abandoned — so keying on the commit would leave exactly the
+  connections that *could not* be closed as the ones still emitting. The latch covers all four
+  post-decision states, which is the property the boolean it replaced could not express.
+- **Taking the connection's actor lease for the suppression read.** Rejected: a suppression is
+  not an authorization, and the lease is the protected send's serialization point, so acquiring
+  it would put every `ping`, `pong` and keep-alive behind a session read that the frame does not
+  need — the exact head-of-line cost [Decision 16][s65-d16]'s budget prices for protected frames
+  and deliberately keeps off control traffic. The lease-free read is sound because the state is a
+  latch: it can only be stale in the direction where one frame goes out that a concurrent
+  checkpoint was about to forbid, which is what already happens to any frame racing a checkpoint,
+  while the reverse — writing after the decision was published — cannot happen because `decide()`
+  is synchronous and runs before any await.
+- **Routing the close itself through the same gate.** Rejected as a category error, recorded
+  because the arm would otherwise look asymmetric: the close reaches the transport through the
+  adapter's `close`, not through `send_json`, so it is outside this arm by construction — which
+  is also why an arm that refuses everything cannot deadlock the revocation it exists to serve.
 
 ### Decision 17 — Multipart control fields stay Django-parsed, behind a strict loss-detection guard
 
@@ -1176,7 +1369,7 @@ behavioral coverage and the shape a fail-open expression hides in.
 no builder could supply: the arm's values are **Django's ASGI adapter's literals** and are
 therefore not derivable from a spec that does not name them. The remediation pass added the
 behavioral row; the custodian pass then named `SERVER_NAME = "unknown"` / `SERVER_PORT = "0"`
-in the projection bullet and the resulting denial in test-plan row 46, so a reader can derive
+in the projection bullet and the resulting denial in test-plan row 50, so a reader can derive
 the verdict instead of taking it on trust. Naming the literals is deliberate rather than
 incidental precision: the reason the handshake is denied is arithmetic on those two values
 (`"unknown:0"` is a host no `ALLOWED_HOSTS` allows), and a spec that says only "Django's normal

@@ -83,6 +83,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Prefetch, sql
 from django.db.models.expressions import RawSQL
+from django.db.models.lookups import Lookup
 from django.db.models.query import (
     FlatValuesListIterable,
     ModelIterable,
@@ -550,6 +551,49 @@ _SQL_TEMPLATE_ATTRS: tuple[str, ...] = (
 )
 
 
+# Open-ended SQL-template parameters a genuine Django expression merges into its format
+# context. ``Func`` / ``Case`` / ``Subquery`` collect their surplus constructor keywords
+# into ``self.extra`` and emit ``self.template % {**self.extra, **extra_context}``, so
+# EVERY value in that mapping is interpolated into the SQL string and has its ``__str__``
+# / ``__format__`` invoked at compile time -- including the ``function`` / ``template`` /
+# ``arg_joiner`` names, which ``Func.__init__`` routes into ``extra`` rather than onto the
+# named instance slots ``_SQL_TEMPLATE_ATTRS`` pins. ``extra`` exists only as INSTANCE
+# state (no class supplies it), so validating it needs no class-level proof. Values are
+# pinned to the exact inert scalars Django itself stores there; a consumer object under
+# any key fails closed before the seal returns.
+_TEMPLATE_PARAM_VALUE_TYPES: frozenset[type] = frozenset(
+    {
+        str,
+        int,
+        float,
+        bool,
+    },
+)
+
+
+def _template_params_defect(node_dict: dict[Any, Any], label: str) -> tuple[str, str] | None:
+    """Return a defect unless an expression's ``extra`` template mapping is inert scalars.
+
+    Read straight from the already-validated instance ``__dict__`` so the check itself
+    dispatches nothing: the mapping must be an EXACT ``dict`` (a subclass ``items`` /
+    ``__iter__`` would run consumer code when ``as_sql`` unpacks it into the format
+    context), its keys exact ``str`` (they are the template's format names), and each
+    value an exact inert scalar. Genuine Django only ever stores strings and numbers here,
+    so the rule costs no legitimate query.
+    """
+    if "extra" not in node_dict:
+        return None
+    extra = node_dict["extra"]
+    if type(extra) is not dict:
+        return ("untrusted", f"{label} extra is a {type(extra).__name__}")
+    for key, value in extra.items():
+        if type(key) is not str:
+            return ("untrusted", f"{label} extra has a non-string key")
+        if value is not None and type(value) not in _TEMPLATE_PARAM_VALUE_TYPES:
+            return ("untrusted", f"{label} extra[{key!r}] is a {type(value).__name__}")
+    return None
+
+
 def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
     """Return a defect for compiler-reachable node metadata NOT covered by source expressions.
 
@@ -559,7 +603,12 @@ def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
     name present on the instance ``__dict__`` must be
     an exact ``str``, because it is formatted straight into the SQL string (``template %
     data``) or used as a ``.join`` separator, so a non-``str`` override would run that
-    object's ``__str__`` / ``join`` at compile time.
+    object's ``__str__`` / ``join`` at compile time. The named slots are not the whole
+    template surface: ``Func`` / ``Case`` / ``Subquery`` keep their surplus constructor
+    keywords in an ``extra`` MAPPING that ``as_sql`` merges into the same format context,
+    so ``Func(Value("x"), function=<object>)`` stores the object under ``extra["function"]``
+    rather than on the ``function`` slot. ``_template_params_defect`` pins that mapping to
+    exact-``str`` keys and exact inert scalar values, closing the same interpolation route.
 
     ``node`` is proven an EXACT genuine Django expression type before this runs, so these
     attributes are Django's own string defaults unless the instance ``__dict__`` shadows
@@ -575,7 +624,7 @@ def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
     for attr in _SQL_TEMPLATE_ATTRS:
         if attr in node_dict and type(node_dict[attr]) is not str:
             return ("untrusted", f"{label} {attr} is a {type(node_dict[attr]).__name__}")
-    return None
+    return _template_params_defect(node_dict, label)
 
 
 def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
@@ -820,6 +869,130 @@ def _container_defect(
     return None
 
 
+# Attribute-interception hooks that make a direct lookup RHS attack surface rather than
+# data. Either name defined on the value's own type runs consumer code on EVERY attribute
+# read the lookup and the database adapter perform against the value, so the object is
+# dispatchable in practice even though it exposes no ``as_sql``. Hooks inherited from a
+# trusted data base (``_DIRECT_RHS_TRUSTED_MRO``) are Python's / Django's own -- CPython's
+# ``Decimal`` defines a C ``__getattribute__`` slot -- so only definitions BELOW those bases
+# are consumer-injected.
+_RHS_ATTRIBUTE_HOOKS: tuple[str, ...] = ("__getattr__", "__getattribute__")
+
+# Bases a direct lookup RHS must descend from to count as plain query data. Membership is
+# by SUBCLASS here, not exact type: a direct RHS legitimately carries consumer domain data
+# -- a ``TextChoices`` member (a ``str`` AND ``enum.Enum`` subclass), a model instance in
+# foreign-key position, a ``Decimal`` / ``UUID`` / date subclass -- none of which the
+# compiler dispatches, because a dispatchable RHS is routed to the expression walk before
+# this rule is consulted. The exact-type discipline that governs ``_INERT_VALUE_TYPES``
+# elsewhere would fail-close ordinary consumer schemas here.
+_DIRECT_RHS_DATA_BASES: tuple[type, ...] = (*_INERT_VALUE_TYPES, enum.Enum, models.Model)
+
+# MRO entries whose own hook definitions are trusted: the data bases themselves plus
+# ``object`` (whose ``__getattribute__`` every type inherits).
+_DIRECT_RHS_TRUSTED_MRO: frozenset[type] = frozenset(_DIRECT_RHS_DATA_BASES) | {object}
+
+_ATTR_MISSING = object()
+
+
+def _static_attr_present(value: Any, name: str) -> bool:
+    """Return whether ``name`` resolves on ``value`` WITHOUT running an attribute hook.
+
+    Reproduces the ``hasattr(value, name)`` semantics Django itself uses to classify a
+    lookup RHS (``Lookup.rhs_is_direct_value`` / ``Lookup.process_rhs`` test
+    ``hasattr(rhs, "as_sql")``) -- instance ``__dict__`` first, then the type's MRO --
+    while dispatching nothing: ``inspect.getattr_static`` reads the raw slots and never
+    invokes ``__getattr__`` / ``__getattribute__`` / a descriptor. The real ``hasattr``
+    would run a consumer RHS object's attribute hook DURING the proof, before the query
+    is cloned, which is exactly the dispatch the seal exists to prevent.
+    """
+    return inspect.getattr_static(value, name, _ATTR_MISSING) is not _ATTR_MISSING
+
+
+def _rhs_hook_defect(value_type: type, label: str) -> tuple[str, str] | None:
+    """Return a defect if a direct-RHS type defines an attribute hook below its data bases.
+
+    The MRO is read through ``type.__getattribute__`` and each class's namespace is
+    inspected directly, so a consumer METACLASS overriding ``__getattribute__`` cannot run
+    code (or lie) during the very read meant to reject the type. Classes in
+    ``_DIRECT_RHS_TRUSTED_MRO`` are skipped: their hooks are the interpreter's own.
+    """
+    for klass in type.__getattribute__(value_type, "__mro__"):
+        if klass in _DIRECT_RHS_TRUSTED_MRO:
+            continue
+        klass_dict = type.__getattribute__(klass, "__dict__")
+        for hook in _RHS_ATTRIBUTE_HOOKS:
+            if hook in klass_dict:
+                return ("untrusted", f"{label} lookup rhs defines the {hook!r} attribute hook")
+    return None
+
+
+def _direct_rhs_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+    """Return a defect unless a direct (non-dispatched) lookup RHS is plain query data.
+
+    A direct RHS is never compiled through ``as_sql``; Django binds it as a ``%s``
+    parameter and the database adapter converts it. It is nonetheless consumer-controlled
+    state the adapter will touch, and the old walk never validated it at all -- an exact
+    Django ``Lookup``'s ``get_source_expressions`` returns only ``[lhs]`` when the RHS is
+    direct, so the RHS left the boundary unproven.
+
+    The rule is deliberately the least restrictive one that still rejects dispatchable
+    state: an inert leaf or a plain container of them is data; anything else must define
+    no attribute hook of its own (``_rhs_hook_defect``) and must descend from a plain-data
+    base (``_DIRECT_RHS_DATA_BASES``). That admits the domain values real schemas bind --
+    ``TextChoices`` members, model instances, ``Decimal`` / ``UUID`` / date subclasses,
+    and ``__in`` sequences of them -- while an arbitrary object, or one whose attribute
+    reads run consumer code, fails closed. Every check is type-level, so no hook on the
+    value is invoked while deciding.
+
+    Admission here is not retention: a permitted SUBCLASS instance never reaches the
+    sealed query by reference, because Django and the database adapter invoke ordinary
+    methods on a bound parameter that no hook scan can enumerate. Canonical
+    reconstruction replaces each admitted plain-data subclass with an exact inert value
+    (``_normalized_bound_value``), so this rule decides only what MAY be bound, not which
+    object is.
+    """
+    if _is_inert_value(value):
+        return None
+    value_type = type(value)
+    if value_type in _WALKED_SEQUENCE_TYPES or value_type is dict:
+        return _container_defect(value, walk, label, _direct_rhs_defect, _expr_mapping_key_detail)
+    hook_defect = _rhs_hook_defect(value_type, label)
+    if hook_defect is not None:
+        return hook_defect
+    if not issubclass(value_type, _DIRECT_RHS_DATA_BASES):
+        return ("untrusted", f"{label} lookup rhs is a {value_type.__name__}")
+    return None
+
+
+def _lookup_operands_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+    """Walk an exact genuine Django ``Lookup``'s operands without calling a bound accessor.
+
+    ``Lookup.get_source_expressions`` cannot be used to discover a lookup's children: it
+    first calls ``self.rhs_is_direct_value()``, whose ``hasattr(self.rhs, "as_sql")`` runs
+    an arbitrary consumer RHS object's ``__getattr__`` hook DURING the proof -- while the
+    query is still un-cloned and the boundary has not yet decided whether the graph may be
+    compiled -- and it then returns ``[lhs]`` alone for a direct RHS, leaving that value
+    unproven even though the adapter consumes it later.
+
+    Both operands are therefore read straight from the instance ``__dict__``. ``node`` is
+    already proven an EXACT genuine Django ``Lookup`` with no method shadow, so that read
+    dispatches nothing and cannot raise (``_shadow_defect`` fails closed first on an
+    instance with no ``__dict__``). ``lhs`` is always an expression and recurses through
+    the ordinary graph walk. The RHS is classified STATICALLY -- ``as_sql`` resolved
+    without invoking an attribute hook (``_static_attr_present``), the same slot Django's
+    own ``hasattr`` would find -- so a dispatched RHS recurses like any other node and a
+    direct one must satisfy the inert-data rules.
+    """
+    node_dict = object.__getattribute__(node, "__dict__")
+    lhs_defect = _expr_graph_defect(node_dict.get("lhs"), walk, label)
+    if lhs_defect is not None:
+        return lhs_defect
+    rhs = node_dict.get("rhs")
+    if _static_attr_present(rhs, "as_sql"):
+        return _expr_graph_defect(rhs, walk, label)
+    return _direct_rhs_defect(rhs, walk, label)
+
+
 def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in an expression graph, or ``None``.
 
@@ -830,7 +1003,8 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
     container walked member-wise, an EXACT ``WhereNode`` subtree, or an EXACT genuine
     Django expression that is unshadowed, whose expression-owned state is exact-builtin
     shaped (``_expression_state_defect``, proven BEFORE the accessor that reads it runs),
-    AND whose own operands (``get_source_expressions``) and any inner ``Subquery``
+    AND whose own operands (``get_source_expressions``, or raw ``lhs`` / ``rhs`` state for
+    a ``Lookup`` -- see ``_lookup_operands_defect``) and any inner ``Subquery``
     recurse under the same rule. ``walk`` (node ``id``) collapses a shared expression
     diamond to a single visit, keeping the walk linear in the graph's unique node count,
     and rejects a cycle as untrusted.
@@ -868,7 +1042,14 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
     state_defect = _expression_state_defect(node, label)
     if state_defect is not None:
         return state_defect
-    if getattr(node_type, "get_source_expressions", None) is not None:
+    if issubclass(node_type, Lookup):
+        # A ``Lookup``'s own discovery accessor runs a consumer RHS's attribute hook and
+        # hides a direct RHS from the walk, so its operands are read from raw state
+        # instead (``_lookup_operands_defect``).
+        operands_defect = _lookup_operands_defect(node, walk, label)
+        if operands_defect is not None:
+            return operands_defect
+    elif getattr(node_type, "get_source_expressions", None) is not None:
         for child in node.get_source_expressions():
             defect = _expr_graph_defect(child, walk, label)
             if defect is not None:
@@ -1094,39 +1275,433 @@ def _query_payload_defect(query: Any) -> tuple[str, str] | None:
     return None
 
 
-def _rebuild_query_payloads(query: Any) -> None:
-    """Replace a cloned query's shared mutable payloads with fresh framework-owned ones.
+# Leaf types canonical reconstruction retains BY REFERENCE: the inert query-parameter
+# set minus ``bytearray``, its one mutable member (a shared ``bytearray`` the candidate
+# could still rewrite in place, so it is copied instead). Every other member is immutable,
+# so sharing one between the candidate and the sealed query is unobservable.
+_RETAINED_LEAF_TYPES: frozenset[type] = _INERT_VALUE_TYPES - {bytearray}
 
-    ``sql.Query.clone`` copies the retained containers only SHALLOWLY, so the clone and
-    the untrusted candidate still share every payload object inside them. The validated
-    shapes are almost all immutable (exact ``str`` / ``int`` / ``bool``), which makes
-    sharing harmless -- except ``table_map``, whose values are mutable lists the
-    candidate can still append to (and ``Query.join`` reads back) after the seal has
-    returned. Each alias list is rebuilt into a fresh ``list`` of the same proven-exact
-    ``str`` aliases, and ``table_map`` itself into a fresh ``dict``, so no post-seal
-    mutation of the RETAINED CONTAINERS reaches the sealed query. Combined branches are
-    rebuilt too: ``clone`` recurses them, and each branch keeps its own ``table_map``.
+# Types whose instances reconstruction retains BY REFERENCE, tested INLINE at every
+# traversal step. Seeded with the retained leaves and grown lazily with the SCHEMA classes
+# a query graph is full of -- ``models.Field`` subclasses, model classes (instances of a
+# model metaclass), relation / path descriptors, and genuine Django classes whose
+# instances carry no ``__dict__``. Growth is bounded by the installed schema plus Django's
+# own class surface: a type only enters this set after ``_is_reconstructable_node`` has
+# classified it, which never admits an arbitrary consumer object's type.
+_RETAINED_TYPES: set[type] = set(_RETAINED_LEAF_TYPES)
 
-    This covers the retained CONTAINERS only, not the AST NODES they hold. ``clone``
-    rebuilds the ``where`` tree's ``WhereNode`` wrappers but shares their leaf ``Lookup``
-    objects by reference, and shares ``annotations`` expressions, ``alias_map`` joins, and
-    ``_filtered_relations`` objects the same way. So a candidate that mutates one of those
-    shared nodes after the seal returns still changes the sealed query -- including the
-    leaf that carries the visibility predicate's own comparison value, whose ``rhs`` a
-    retained reference can rewrite between seal and compile. Each such node is proven
-    genuine and unshadowed, so its STRUCTURE stays Django's own compile surface, but the
-    values it carries are not frozen by a container rebuild. Freezing them means
-    reconstructing the leaf graph into fresh framework-owned nodes rather than retaining
-    the candidate's, which is beyond what rebuilding the containers can reach.
+# Positive-only memo of ``_is_reconstructable_node``: exact genuine Django AST classes
+# proven once. Never holds a consumer type, so it cannot grow with consumer-defined
+# classes.
+_RECONSTRUCTABLE_NODE_TYPES: set[type] = set()
 
-    Runs only on the framework-owned clone, after ``_query_container_defect`` has proven
-    every payload exact, so the reads and rebuilds dispatch no consumer code.
+
+def _is_reconstructable_node(node_type: type) -> bool:
+    """Return whether canonical reconstruction rebuilds an object of ``node_type``.
+
+    The reconstruction rebuilds QUERY AST, not schema and not bound data. An object is
+    rebuilt when its type is a genuine Django implementation (proven by object identity
+    against ``sys.modules``, the same provenance rule the graph proofs use) and is
+    neither a class, a ``models.Field``, nor a ``models.Model`` instance:
+
+    - a CLASS is not a node (``Query.model`` and every ``output_field`` class reference
+      are shared schema, and rebuilding a class is meaningless);
+    - a ``models.Field`` is the queried model's OWN column definition -- part of the
+      trusted schema the boundary composes over, not state the visibility hook injected
+      -- and rebuilding it would detach it from ``field.model`` / the descriptor cache
+      the compiler and the row initializer resolve against;
+    - a ``models.Model`` instance in an expression slot is a BOUND PARAMETER (Django
+      extracts its pk), inert with respect to SQL structure.
+
+    Anything whose type is NOT genuine Django is likewise not rebuilt as a node: the only
+    such objects the proofs admit are direct lookup right-hand-side values -- plain query
+    data (``TextChoices`` members, ``Decimal`` / ``UUID`` / date subclasses, model
+    instances) the adapter binds as ``%s`` parameters -- which carry no AST and whose
+    ``__deepcopy__`` / ``__reduce__`` would dispatch consumer code mid-seal if copied.
+    Those values go to ``_normalized_bound_value`` instead, which replaces a plain-data
+    subclass with an exact inert equivalent and retains a model instance as-is.
+
+    A ``True`` verdict is memoized in ``_RECONSTRUCTABLE_NODE_TYPES``: sealing is a hot
+    path and the identity proof walks ``sys.modules``, while the set of classes that can
+    ever answer ``True`` is Django's own bounded AST surface. Only the positive verdict is
+    cached, so a consumer type never enters the cache no matter how many classes it
+    creates, and re-binding a Django module attribute afterwards cannot make an
+    already-proven Django class stop being Django's own code.
     """
-    table_map = getattr(query, "table_map", None)
-    if type(table_map) is dict:
-        query.table_map = {table: list(aliases) for table, aliases in table_map.items()}
-    for branch in getattr(query, "combined_queries", ()) or ():
-        _rebuild_query_payloads(branch)
+    if node_type in _RECONSTRUCTABLE_NODE_TYPES:
+        return True
+    if issubclass(node_type, (type, models.Field, models.Model)):
+        _RETAINED_TYPES.add(node_type)
+        return False
+    if not _type_is_genuinely_django(node_type):
+        return False
+    _RECONSTRUCTABLE_NODE_TYPES.add(node_type)
+    return True
+
+
+def _normalized_str(value: Any) -> str:
+    """Return the exact ``str`` content of a ``str`` subclass instance."""
+    return str.__str__(value)
+
+
+def _normalized_bytes(value: Any) -> bytes:
+    """Return the exact ``bytes`` content of a ``bytes`` subclass instance."""
+    return bytes.__getitem__(value, slice(None))
+
+
+def _normalized_bytearray(value: Any) -> bytearray:
+    """Return a fresh exact ``bytearray`` holding a ``bytearray`` subclass's bytes."""
+    return bytearray.__getitem__(value, slice(None))
+
+
+def _normalized_int(value: Any) -> int:
+    """Return the exact ``int`` value of an ``int`` subclass instance."""
+    return int.__int__(value)
+
+
+def _normalized_float(value: Any) -> float:
+    """Return the exact ``float`` value of a ``float`` subclass instance."""
+    return float.__float__(value)
+
+
+def _normalized_complex(value: Any) -> complex:
+    """Return an exact ``complex`` built from a ``complex`` subclass's component slots."""
+    return complex(complex.real.__get__(value), complex.imag.__get__(value))
+
+
+def _normalized_decimal(value: Any) -> Decimal:
+    """Return an exact ``Decimal`` rebuilt from a ``Decimal`` subclass's coefficient tuple."""
+    return Decimal(Decimal.as_tuple(value))
+
+
+def _normalized_date(value: Any) -> datetime.date:
+    """Return an exact ``datetime.date`` rebuilt from a date subclass's field slots."""
+    return datetime.date(
+        datetime.date.year.__get__(value),
+        datetime.date.month.__get__(value),
+        datetime.date.day.__get__(value),
+    )
+
+
+def _normalized_datetime(value: Any) -> datetime.datetime:
+    """Return an exact ``datetime.datetime`` rebuilt from a datetime subclass's field slots.
+
+    ``tzinfo`` is carried over BY REFERENCE: it is the same object an exact
+    ``datetime.datetime`` would carry, and an exact datetime is already an admitted inert
+    bound value, so normalizing the instance does not widen what the adapter may touch.
+    """
+    base = datetime.datetime
+    return base(
+        base.year.__get__(value),
+        base.month.__get__(value),
+        base.day.__get__(value),
+        base.hour.__get__(value),
+        base.minute.__get__(value),
+        base.second.__get__(value),
+        base.microsecond.__get__(value),
+        base.tzinfo.__get__(value),
+        fold=base.fold.__get__(value),
+    )
+
+
+def _normalized_time(value: Any) -> datetime.time:
+    """Return an exact ``datetime.time`` rebuilt from a time subclass's field slots."""
+    base = datetime.time
+    return base(
+        base.hour.__get__(value),
+        base.minute.__get__(value),
+        base.second.__get__(value),
+        base.microsecond.__get__(value),
+        base.tzinfo.__get__(value),
+        fold=base.fold.__get__(value),
+    )
+
+
+def _normalized_timedelta(value: Any) -> datetime.timedelta:
+    """Return an exact ``datetime.timedelta`` rebuilt from a timedelta subclass's slots."""
+    base = datetime.timedelta
+    return base(
+        days=base.days.__get__(value),
+        seconds=base.seconds.__get__(value),
+        microseconds=base.microseconds.__get__(value),
+    )
+
+
+def _normalized_uuid(value: Any) -> uuid.UUID:
+    """Return an exact ``uuid.UUID`` rebuilt from a UUID subclass's integer slot."""
+    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))
+
+
+# Plain-data bases a bound value may descend from, each paired with the primitive that
+# rebuilds an EXACT instance of that base from a subclass instance. Every primitive reads
+# the base type's OWN slot descriptors / C methods and never an instance-dispatched
+# operation (no ``str(value)``, ``int(value)``, ``value.isoformat()``), so a subclass
+# override -- an overridden ``__str__`` / ``__int__`` / ``__float__``, or a PROPERTY
+# shadowing a field name such as ``year`` -- cannot run during normalization. Order is
+# significant: ``datetime.datetime`` precedes ``datetime.date`` because it is a subclass
+# of it, and the scalar bases precede the ``enum.Enum`` fallback so a ``TextChoices`` /
+# ``IntegerChoices`` member (a ``str`` / ``int`` SUBCLASS) normalizes straight to its
+# underlying exact scalar. ``bool`` is absent because it cannot be subclassed, and
+# ``models.Model`` is absent because a model instance IS the bound foreign-key value.
+_BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Any], ...] = (
+    (str, _normalized_str),
+    (bytes, _normalized_bytes),
+    (bytearray, _normalized_bytearray),
+    (int, _normalized_int),
+    (float, _normalized_float),
+    (complex, _normalized_complex),
+    (Decimal, _normalized_decimal),
+    (datetime.datetime, _normalized_datetime),
+    (datetime.date, _normalized_date),
+    (datetime.time, _normalized_time),
+    (datetime.timedelta, _normalized_timedelta),
+    (uuid.UUID, _normalized_uuid),
+)
+
+
+def _normalized_bound_value(value: Any) -> Any:
+    """Return an EXACT inert replacement for a plain-data SUBCLASS bound value.
+
+    A direct lookup right-hand side is admitted on plain-data ancestry rather than exact
+    type, because real schemas bind ``TextChoices`` members and ``Decimal`` / ``UUID`` /
+    date subclasses. Retaining such an instance BY REFERENCE in the sealed query would
+    leave consumer code on the compile path: the absence of an ``__getattr__`` /
+    ``__getattribute__`` hook does not stop Django or the database adapter from invoking
+    an ordinary overridden method on a bound parameter (``__str__`` on a date, ``__int__``
+    / ``__index__``, ``__float__``, an adapter ``__conform__``), and no enumeration of
+    those methods can be complete. The sealed query therefore binds a framework-owned
+    exact ``str`` / ``int`` / ``date`` / ``Decimal`` / ... whose every method is the
+    interpreter's own, so the bound visibility value cannot change after sealing.
+
+    Normalization itself dispatches nothing consumer-defined: each primitive in
+    ``_BOUND_VALUE_NORMALIZERS`` reads the proven base type's own descriptors and C slots.
+    An ``enum.Enum`` member with no scalar base is normalized to its underlying
+    ``_value_``, read straight from the member's instance ``__dict__`` and normalized in
+    turn. Anything else -- a ``models.Model`` instance in foreign-key position, a
+    ``models.Field``, a schema class -- is returned unchanged; a model instance cannot be
+    normalized because it IS the bound value, and Django's own code extracts its pk from
+    a genuine-metaclass instance.
+
+    A subclass that cannot be reduced to an exact inert value raises, which the
+    reconstruction boundary reports as an ``untrusted`` defect.
+    """
+    value_type = type(value)
+    for base, primitive in _BOUND_VALUE_NORMALIZERS:
+        if issubclass(value_type, base):
+            normalized = primitive(value)
+            break
+    else:
+        if not issubclass(value_type, enum.Enum):
+            return value
+        member_state = object.__getattribute__(value, "__dict__")
+        normalized = _normalized_bound_value(member_state["_value_"])
+    if not _is_inert_value(normalized):
+        raise TypeError("bound value did not normalize to an inert value")
+    return normalized
+
+
+def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
+    """Return a framework-owned reconstruction of one validated query-state value.
+
+    The recursive half of canonical reconstruction. Mutable builtin containers are
+    rebuilt member-wise; every genuine Django AST node (``_is_reconstructable_node``) is
+    re-instantiated as a fresh object of its OWN proven-genuine class via
+    ``object.__new__`` and refilled slot-by-slot from the source instance ``__dict__``,
+    each slot itself reconstructed. Schema objects and bound model instances are retained
+    by reference; every other bound value is an exact inert leaf, or a plain-data subclass
+    normalized to one (``_normalized_bound_value``).
+
+    ``object.__new__`` + raw ``__dict__`` transfer rather than the node's own ``clone()``
+    / ``copy()``: Django's expression ``copy()`` is a SHALLOW ``copy.copy`` (it would keep
+    sharing the child graph, which is the whole point of the exercise) and ``deepcopy``
+    is refused outright -- a direct lookup RHS is consumer plain data whose
+    ``__deepcopy__`` / ``__reduce__`` would DISPATCH consumer code while the seal is
+    still assembling the sealed query. The base allocator runs no ``__new__`` override, no
+    ``__init__``, and no descriptor, and the transferred state is exactly the state the
+    graph proofs validated.
+
+    ``memo`` maps a source object ``id`` to its reconstruction, so a node reached twice
+    (Django reuses one ``Col`` / ``Value`` across ``where``, ``select`` and
+    ``group_by``) reconstructs once and the sealed graph preserves the candidate's own
+    sharing topology. Every source object stays reachable from the query being
+    reconstructed for the whole pass, so an ``id`` cannot be recycled underneath the
+    memo. A node is memoized BEFORE its slots are filled, so the pass terminates on any
+    graph the proofs somehow admitted.
+
+    A slotted genuine-Django object (no instance ``__dict__``) carries no mutable AST
+    state -- Django's module-level slotted exports are namedtuples and string
+    subclasses -- and is retained by reference.
+
+    Per-node SQL-template state needs no special case here, because validation already
+    narrowed it to reconstructable shapes: an expression's ``extra`` mapping is an exact
+    ``dict`` of exact-``str`` keys and exact inert scalar values, so the generic dict
+    branch rebuilds it as a fresh framework-owned mapping whose every member is a bound
+    leaf the interpreter owns. Nothing the compiler interpolates into a SQL template
+    survives the seal as a consumer object.
+    """
+    value_type = type(value)
+    if value is None or value_type in _RETAINED_TYPES:
+        return value
+    # Sealing is a hot path and query state is overwhelmingly retained leaves (alias
+    # strings, flags, marks), so every comprehension below tests ``_RETAINED_TYPES``
+    # INLINE and recurses only for a member that can carry AST, keeping the traversal one
+    # call per non-leaf rather than one call per element.
+    if value_type is tuple or value_type is frozenset:
+        # IMMUTABLE containers take no memo entry: nothing can rewrite one in place, so
+        # only their members need reconstruction, an empty one is already a shared
+        # singleton, and a traversal cycle can only close through a MUTABLE member, which
+        # IS memoized. Skipping the bookkeeping keeps the commonest query-state shape (a
+        # tuple of alias strings) at one call and one allocation.
+        if not value:
+            return value
+        return value_type(
+            [
+                item
+                if item is None or type(item) in _RETAINED_TYPES
+                else _reconstructed_value(item, memo)
+                for item in value
+            ],
+        )
+    value_id = id(value)
+    rebuilt = memo.get(value_id)
+    if rebuilt is not None:
+        return rebuilt
+    if value_type is bytearray:
+        # The one MUTABLE member of the inert-parameter set: copied, never shared.
+        return bytearray(value)
+    # A MUTABLE container is memoized EMPTY before its members are reconstructed, so a
+    # graph that reaches it again mid-traversal terminates on the memo entry instead of
+    # recursing forever.
+    if value_type is list:
+        rebuilt = []
+        memo[value_id] = rebuilt
+        rebuilt.extend(
+            [
+                item
+                if item is None or type(item) in _RETAINED_TYPES
+                else _reconstructed_value(item, memo)
+                for item in value
+            ],
+        )
+        return rebuilt
+    if value_type is dict:
+        rebuilt = {}
+        memo[value_id] = rebuilt
+        rebuilt.update(
+            {
+                key: item
+                if item is None or type(item) in _RETAINED_TYPES
+                else _reconstructed_value(item, memo)
+                for key, item in value.items()
+            },
+        )
+        return rebuilt
+    if value_type is set:
+        rebuilt = set()
+        memo[value_id] = rebuilt
+        rebuilt.update(
+            [
+                item
+                if item is None or type(item) in _RETAINED_TYPES
+                else _reconstructed_value(item, memo)
+                for item in value
+            ],
+        )
+        return rebuilt
+    if not _is_reconstructable_node(value_type):
+        # Not query AST: either trusted schema / a bound model instance (returned
+        # unchanged) or a plain-data SUBCLASS bound value, which is replaced by an exact
+        # inert equivalent so no consumer method stays on the compile path.
+        return _normalized_bound_value(value)
+    try:
+        source_state = object.__getattribute__(value, "__dict__")
+    except AttributeError:
+        # A genuine Django class whose instances are slotted (the module-level namedtuple
+        # and string-subclass exports) holds no mutable AST state.
+        _RETAINED_TYPES.add(value_type)
+        return value
+    # ``object.__new__``, never ``value_type.__new__``: the base allocator only, so a
+    # class-level ``__new__`` (Django's ``@deconstructible`` wrapper, or any other) is not
+    # dispatched during reconstruction and cannot observe or alter the fresh node before
+    # its validated state is transferred.
+    rebuilt = object.__new__(value_type)
+    memo[value_id] = rebuilt
+    rebuilt_state = object.__getattribute__(rebuilt, "__dict__")
+    rebuilt_state.update(
+        {
+            key: item
+            if item is None or type(item) in _RETAINED_TYPES
+            else _reconstructed_value(item, memo)
+            for key, item in source_state.items()
+        },
+    )
+    if value_type is sql.Query:
+        # ``base_table`` is a ``cached_property``; ``sql.Query.clone`` drops it so the
+        # copy recomputes the first ``alias_map`` alias, and a reconstructed embedded
+        # query must recompute it the same way.
+        rebuilt_state.pop("base_table", None)
+    return rebuilt
+
+
+def _rebuild_query_payloads(query: Any) -> None:
+    """Rebuild a cloned query's whole payload + AST graph as fresh framework-owned objects.
+
+    ``sql.Query.clone`` is a SHALLOW copy: it rebuilds the ``where`` tree's ``WhereNode``
+    wrappers and ``.copy()``s the retained dicts / sets, but the copy still shares, by
+    identity, every leaf ``Lookup`` in the ``where`` tree, every ``annotations``
+    expression, every ``alias_map`` join, every ``_filtered_relations`` object, every
+    raw-SQL parameter container, and the lists inside ``table_map``. A consumer holding a
+    reference into the candidate graph could therefore rewrite the sealed query AFTER the
+    seal returned and BEFORE it compiled -- including the leaf that carries the
+    visibility predicate itself, whose ``rhs`` a retained reference can flip.
+
+    So the clone's state is CANONICALLY RECONSTRUCTED instead: every slot of the query's
+    own ``__dict__`` is replaced by ``_reconstructed_value``, which rebuilds each mutable
+    builtin container and each genuine Django AST node into a fresh framework-owned
+    object of the same proven-genuine class. Afterwards the sealed query shares no
+    mutable object with the candidate: not a ``WhereNode``, a ``Lookup``, an annotation
+    expression, a ``Join`` / ``BaseTable``, a ``FilteredRelation`` and its resolved
+    condition, a ``RawSQL`` / ``ExtraWhere`` parameter container, a ``table_map`` alias
+    list, nor an embedded subquery ``sql.Query``. Combined branches are reconstructed by
+    the same recursion, each keeping its own graph.
+
+    What stays shared is deliberately inert: exact-``str`` / ``int`` / ``bool`` /
+    ``Decimal`` / date / ``UUID`` leaves are BOUND PARAMETERS the adapter renders as
+    ``%s``, never AST, and their every method is the interpreter's own. A plain-data
+    SUBCLASS leaf (a ``TextChoices`` member, a ``Decimal`` / date subclass) is NOT shared
+    -- it is normalized to an exact inert equivalent, because an ordinary overridden
+    method on it (``__str__``, ``__int__``, an adapter hook) would otherwise run consumer
+    code at compile time and could change the bound value after sealing. A model instance
+    in foreign-key position IS the bound value and is retained, its pk extracted by
+    Django's own code from a genuine-metaclass instance; ``models.Field`` instances and
+    model classes are the trusted schema the boundary composes over, and rebuilding them
+    would detach the compiler from the model's own descriptors.
+
+    Runs only on the framework-owned clone, after the whole graph is proven genuine,
+    unshadowed and exact-builtin shaped, so every read comes from validated state and
+    reconstruction dispatches no consumer ``__init__``, descriptor, or copy hook.
+    """
+    memo: dict[int, Any] = {}
+    state = object.__getattribute__(query, "__dict__")
+    for key in tuple(state):
+        state[key] = _reconstructed_value(state[key], memo)
+
+
+def _reconstruction_defect(query: Any, cls_name: str) -> tuple[str, str] | None:
+    """Canonically reconstruct ``query`` in place, surfacing any failure as a typed defect.
+
+    Reconstruction reads validated state and builds fresh builtins, so no consumer
+    ``__init__`` / descriptor / copy hook runs -- but rebuilding a ``set`` or a ``dict``
+    re-hashes its members, and a proven plain-data key / member still owns its
+    ``__hash__``. The typed-defect contract holds across the whole seal path, so a raw
+    exception from that (or from any other reconstruction step) is converted into an
+    ``untrusted`` defect rather than escaping the boundary.
+    """
+    try:
+        _rebuild_query_payloads(query)
+    except Exception:
+        return ("untrusted", f"{cls_name} query state cannot be reconstructed")
+    return None
 
 
 def _query_container_defect(query: Any) -> tuple[str, str] | None:
@@ -1811,7 +2386,11 @@ def _seal_or_defect(
     compile) ``as_sql`` on the graph, so the seal first proves via
     ``_combined_query_table_defect`` that EVERY compiler-reachable node is a genuine,
     unshadowed Django implementation and every cloned container an exact builtin -- only then
-    does the clone provably dispatch trusted code alone.
+    does the clone provably dispatch trusted code alone. The clone is then CANONICALLY
+    RECONSTRUCTED (``_rebuild_query_payloads``): every container and every AST node in it is
+    rebuilt as a fresh framework-owned object of the same proven-genuine class, so the sealed
+    query shares no mutable object with the candidate graph and a retained consumer reference
+    cannot rewrite the visibility predicate between seal and compile.
     """
     if not isinstance(candidate, models.QuerySet):
         return None, ("type", type(candidate).__name__)
@@ -1859,11 +2438,14 @@ def _seal_or_defect(
     # the same source queryset never observes a half-baked predicate, a cleared
     # ``_deferred_filter``, or partial state left after an exception mid-bake.
     rebuilt_query = sql.Query.clone(query)
-    # ``clone``'s container copies are SHALLOW, so the clone still shares the candidate's
-    # mutable payload objects; the validated-exact ones are rebuilt into fresh
-    # framework-owned containers so no post-seal mutation of the candidate reaches the
-    # sealed query.
-    _rebuild_query_payloads(rebuilt_query)
+    # ``clone`` is SHALLOW, so the clone still shares the candidate's mutable containers
+    # AND its AST nodes -- ``where`` leaves, annotation expressions, joins, filtered
+    # relations, raw-SQL parameter containers. The validated state is therefore
+    # canonically reconstructed into fresh framework-owned objects, so no post-seal
+    # mutation of the candidate graph can reach the sealed query before it compiles.
+    reconstruction_defect = _reconstruction_defect(rebuilt_query, cls_name)
+    if reconstruction_defect is not None:
+        return None, reconstruction_defect
     # A pending ``_deferred_filter`` -- the ``(negate, args, kwargs)`` tuple Django's
     # ``RelatedManager._apply_rel_filters`` leaves on ``instance.rel.all()`` (baked into
     # ``_query`` only on first ``.query`` access) -- is baked onto the CLONE for an EXACT

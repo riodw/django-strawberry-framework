@@ -22,11 +22,17 @@ own through-schema coverage lives in the same surface suites plus
 ``__in`` member drop).
 """
 
+import datetime
+import enum
+import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Item
 from django.db import models
+from django.db.models import FilteredRelation, Q
+from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce
 
 from django_strawberry_framework import DjangoType
@@ -1741,6 +1747,341 @@ def test_shadowed_leaf_as_sql_never_dispatches():
     assert fired == []
 
 
+def test_lookup_direct_rhs_attribute_hook_never_dispatches():
+    """A direct lookup RHS carrying an attribute hook fails closed, hook unfired.
+
+    Discovering a lookup's children through ``get_source_expressions`` would call
+    ``rhs_is_direct_value`` -> ``hasattr(self.rhs, "as_sql")``, running the RHS
+    object's own ``__getattr__`` while the query is still un-cloned; and a direct
+    RHS is then omitted from the returned operands entirely. The raw ``lhs`` /
+    ``rhs`` walk classifies the value statically instead.
+    """
+    fired = []
+
+    class _HookedRhs:
+        def __init__(self, log):
+            self.log = log
+
+        def __getattr__(self, name):  # pragma: no cover - must never run
+            self.log.append(name)
+            return None
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = _HookedRhs(fired)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == (
+        "untrusted",
+        "where clause lookup rhs defines the '__getattr__' attribute hook",
+    )
+    assert fired == []
+
+
+def test_lookup_direct_rhs_plain_object_fails_closed():
+    """A direct lookup RHS that is not plain query data fails closed.
+
+    An arbitrary object reaches the database adapter as a bound parameter; only values
+    descending from a plain-data base are admitted.
+    """
+
+    class _PlainRhs:
+        """Hookless, but no plain-data ancestry."""
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = _PlainRhs()
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause lookup rhs is a _PlainRhs")
+
+
+def test_lookup_direct_rhs_sequence_members_are_walked():
+    """An ``__in`` lookup's direct RHS list is walked member-wise.
+
+    The sequence itself is plain state, so each member is proven under the same
+    direct-RHS rule; a hostile member fails the whole seal closed.
+    """
+    source = Category.objects.filter(pk__in=[1, 2])
+    str(source.query)
+    assert type(source.query.where.children[0].rhs) is list
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert type(sealed) is models.QuerySet
+
+    hostile = Category.objects.filter(pk__in=[1, 2])
+    str(hostile.query)
+    hostile.query.where.children[0].rhs = [1, object()]
+    sealed, defect = _seal_or_defect(hostile, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause lookup rhs is a object")
+
+
+def test_lookup_direct_rhs_enum_member_seals():
+    """A ``TextChoices`` member in RHS position is plain query data and seals cleanly.
+
+    Enum members are ``str`` / ``int`` SUBCLASSES, so the exact-type inert rule that
+    governs expression leaves would fail-close ordinary consumer schemas here; a direct
+    RHS is admitted on plain-data ancestry plus the absence of its own attribute hooks.
+    """
+
+    class _SealChoices(models.TextChoices):
+        KEEP = "keep", "Keep"
+
+    source = Category.objects.filter(name=_SealChoices.KEEP)
+    str(source.query)
+    assert type(source.query.where.children[0].rhs) is _SealChoices
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert type(sealed) is models.QuerySet
+
+
+def test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date():
+    """A date-subclass RHS is bound as an EXACT ``datetime.date``, its override unfired.
+
+    Admitting a plain-data subclass is not retaining it. Django and the database adapter
+    invoke ordinary methods on a bound parameter (``str(value)`` during date adaptation,
+    ``__int__`` / ``__index__``, an adapter hook), none of which an attribute-hook scan
+    can enumerate, so a subclass instance left in the sealed query would run consumer code
+    at compile time and could change the bound visibility value AFTER sealing. Canonical
+    reconstruction replaces it with a framework-owned exact ``datetime.date`` whose
+    methods are the interpreter's own.
+    """
+    fired = []
+
+    class _LoudDate(datetime.date):
+        def __str__(self):  # pragma: no cover - must never run
+            fired.append("__str__")
+            return "1999-12-31"
+
+    source = Category.objects.filter(created_date__date=_LoudDate(2020, 1, 2))
+    assert type(source.query.where.children[0].rhs) is _LoudDate
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_rhs = sealed.query.where.children[0].rhs
+    assert type(sealed_rhs) is datetime.date
+    assert sealed_rhs == datetime.date(2020, 1, 2)
+    assert fired == []
+
+    expected = Category.objects.filter(created_date__date=datetime.date(2020, 1, 2))
+    assert sealed.query.sql_with_params() == expected.query.sql_with_params()
+    assert fired == []
+    # The candidate keeps its own value: normalization applies to the sealed query only.
+    assert type(source.query.where.children[0].rhs) is _LoudDate
+
+
+def test_lookup_direct_rhs_str_subclass_normalizes_to_exact_str():
+    """A ``TextChoices`` member RHS binds as an exact ``str`` with unchanged SQL.
+
+    Enum members are ``str`` / ``int`` SUBCLASSES, so normalizing one to its underlying
+    exact scalar keeps the bound parameter byte-identical while removing every
+    consumer-defined method from the compile path.
+    """
+
+    class _NormChoices(models.TextChoices):
+        KEEP = "keep", "Keep"
+
+    source = Category.objects.filter(name=_NormChoices.KEEP)
+    assert type(source.query.where.children[0].rhs) is _NormChoices
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_rhs = sealed.query.where.children[0].rhs
+    assert type(sealed_rhs) is str
+    assert sealed_rhs == "keep"
+
+    expected = Category.objects.filter(name="keep")
+    assert sealed.query.sql_with_params() == expected.query.sql_with_params()
+
+
+def test_lookup_direct_rhs_property_shadowed_subclass_normalizes_safely():
+    """A subclass PROPERTY shadowing a base field name never runs during normalization.
+
+    A plain-data subclass can shadow ``year`` (or any other field name) with a property
+    even though it defines no attribute hook, so normalization reads the BASE type's own
+    slot descriptors explicitly rather than by attribute name -- the shadowing property is
+    never resolved, and the exact value rebuilt from the base slots is the one the
+    interpreter itself would report.
+    """
+    fired = []
+
+    class _ShadowedDate(datetime.date):
+        @property
+        def year(self):  # pragma: no cover - must never run
+            fired.append("year")
+            return 1999
+
+        @property
+        def month(self):  # pragma: no cover - must never run
+            fired.append("month")
+            return 12
+
+        @property
+        def day(self):  # pragma: no cover - must never run
+            fired.append("day")
+            return 31
+
+    source = Category.objects.filter(created_date__date=_ShadowedDate(2020, 1, 2))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_rhs = sealed.query.where.children[0].rhs
+    assert type(sealed_rhs) is datetime.date
+    assert sealed_rhs == datetime.date(2020, 1, 2)
+    assert fired == []
+
+
+def test_lookup_direct_rhs_every_plain_data_base_normalizes_to_its_exact_type():
+    """Every admitted plain-data base normalizes to the exact inert type of that base.
+
+    One member per base, carried in an ``__in`` sequence so the whole set is proven and
+    reconstructed in a single seal. Each rebuilt value is an exact inert type and compares
+    equal to the subclass instance it replaced, so the bound parameter is unchanged while
+    every consumer-defined method leaves the compile path. ``bool`` is absent because it
+    cannot be subclassed, and a model instance is the bound value itself so it is retained.
+    """
+
+    class _Str(str):
+        pass
+
+    class _Bytes(bytes):
+        pass
+
+    class _ByteArray(bytearray):
+        pass
+
+    class _Int(int):
+        pass
+
+    class _Float(float):
+        pass
+
+    class _Complex(complex):
+        pass
+
+    class _Dec(Decimal):
+        pass
+
+    class _DateTime(datetime.datetime):
+        pass
+
+    class _Time(datetime.time):
+        pass
+
+    class _Delta(datetime.timedelta):
+        pass
+
+    class _Uuid(uuid.UUID):
+        pass
+
+    class _PlainChoices(enum.Enum):
+        KEEP = "keep"
+
+    members = [
+        _Str("keep"),
+        _Bytes(b"keep"),
+        _ByteArray(b"keep"),
+        _Int(3),
+        _Float(1.5),
+        _Complex(1, 2),
+        _Dec("1.50"),
+        _DateTime(2020, 1, 2, 3, 4, 5, 6),
+        _Time(3, 4, 5, 6),
+        _Delta(days=1, seconds=2, microseconds=3),
+        _Uuid(int=5),
+        _PlainChoices.KEEP,
+    ]
+    expected_types = [
+        str,
+        bytes,
+        bytearray,
+        int,
+        float,
+        complex,
+        Decimal,
+        datetime.datetime,
+        datetime.time,
+        datetime.timedelta,
+        uuid.UUID,
+        str,
+    ]
+
+    source = Category.objects.filter(name__in=["keep"])
+    str(source.query)
+    source.query.where.children[0].rhs = members
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_rhs = sealed.query.where.children[0].rhs
+    assert [type(item) for item in sealed_rhs] == expected_types
+    assert sealed_rhs[:11] == members[:11]
+    assert sealed_rhs[11] == "keep"
+
+
+def test_lookup_direct_rhs_unnormalizable_enum_member_fails_closed():
+    """An enum member whose underlying value is not inert data fails the seal closed.
+
+    A hookless ``enum.Enum`` member with no scalar base is normalized to its ``_value_``,
+    read straight from the member's instance state. When that value cannot itself be
+    reduced to an exact inert leaf there is no framework-owned parameter to bind, so the
+    seal reports a typed defect rather than retaining the member by reference.
+    """
+
+    class _OpaqueValue:
+        """Plain data to the enum machinery, not an inert bound parameter."""
+
+    class _OpaqueChoices(enum.Enum):
+        KEEP = _OpaqueValue()
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = _OpaqueChoices.KEEP
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet query state cannot be reconstructed")
+
+
+def test_lookup_expression_rhs_still_recurses():
+    """A hostile expression hidden in lookup-RHS position fails closed.
+
+    An RHS whose type exposes ``as_sql`` is what Django dispatches at compile time, so
+    it recurses through the ordinary expression walk rather than the inert-data rules.
+    """
+    fired = []
+
+    class _HostileRhs(models.Func):
+        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+            fired.append("rhs.as_sql")
+            return "1", []
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = _HostileRhs(models.F("name"))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause carries a _HostileRhs node")
+    assert fired == []
+
+
+def test_lookup_hostile_lhs_fails_closed():
+    """A hostile expression in lookup-LHS position fails closed.
+
+    The LHS is always an expression the compiler dispatches, so the raw-state operand
+    walk recurses it under the same rule as any other node.
+    """
+    fired = []
+
+    class _HostileLhs(models.Func):
+        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+            fired.append("lhs.as_sql")
+            return "1", []
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].lhs = _HostileLhs(models.F("name"))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause carries a _HostileLhs node")
+    assert fired == []
+
+
 def test_hostile_order_by_expression_fails_closed():
     """A consumer ``order_by`` expression (never walked before) fails closed.
 
@@ -2154,6 +2495,88 @@ def test_func_arg_joiner_metadata_non_string_fails_closed():
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "annotation 'c' arg_joiner is a _EvilJoiner")
+
+
+def test_func_extra_template_parameter_object_fails_closed():
+    """A ``Func`` carrying a dispatchable object under ``extra`` never reaches the compiler.
+
+    ``Func.__init__`` routes every surplus constructor keyword into ``self.extra`` -- so
+    ``function=<object>`` lands in the mapping, not on the ``function`` slot the named
+    template-attribute rule pins -- and ``Func.as_sql`` formats ``self.template %
+    {**self.extra, **extra_context}``, which invokes each interpolated value's ``__str__``
+    while the compiler assembles SQL, after the seal returned. The template-parameter rule
+    admits only exact inert scalars there, so the seal fails closed and nothing dispatches.
+    """
+    fired = []
+
+    class _HostileTemplateParam:
+        def __str__(self):  # pragma: no cover - must never run
+            fired.append("__str__")
+            return "UPPER"
+
+    source = Category.objects.all()
+    ann = models.Func(
+        models.Value("x"),
+        function=_HostileTemplateParam(),
+        output_field=models.TextField(),
+    )
+    source.query.annotations = {"c": ann}
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "annotation 'c' extra['function'] is a _HostileTemplateParam")
+    assert fired == []
+
+
+def test_func_extra_string_template_parameter_seals():
+    """A legitimate string ``function=`` keyword -- real Django usage -- still seals.
+
+    Inert scalar template parameters beside it (a number, an explicit ``None``) are equally
+    admitted: they are rendered by the interpreter's own formatting, not by consumer code.
+    """
+    source = Category.objects.all()
+    source.query.annotations = {
+        "c": models.Func(
+            models.Value("x"),
+            function="UPPER",
+            output_field=models.TextField(),
+            precision=1,
+            suffix=None,
+        ),
+    }
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed is not None
+    assert sealed.query.annotations["c"].extra == {
+        "function": "UPPER",
+        "precision": 1,
+        "suffix": None,
+    }
+    assert type(sealed.query.annotations["c"].extra) is dict
+    assert sealed.query.annotations["c"].extra is not source.query.annotations["c"].extra
+
+
+@pytest.mark.parametrize(
+    ("extra", "detail"),
+    [
+        (SimpleNamespace(), "annotation 'c' extra is a SimpleNamespace"),
+        ({5: "UPPER"}, "annotation 'c' extra has a non-string key"),
+        ({"function": b"UPPER"}, "annotation 'c' extra['function'] is a bytes"),
+    ],
+)
+def test_func_extra_non_inert_template_state_fails_closed(extra, detail):
+    """The ``extra`` mapping itself, its keys, and its values are each pinned exactly.
+
+    A ``dict`` SUBCLASS would run its own ``items`` when ``as_sql`` unpacks the format
+    context, a non-string key is not a template format name, and a value outside the exact
+    inert scalars is state the ``%`` interpolation would render through its own protocol.
+    """
+    source = Category.objects.all()
+    ann = models.Func(models.Value("x"), output_field=models.TextField())
+    ann.__dict__["extra"] = extra
+    source.query.annotations = {"c": ann}
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", detail)
 
 
 def test_where_node_non_string_connector_fails_closed():
@@ -2905,6 +3328,156 @@ def test_sealed_query_table_map_payload_is_not_shared_with_the_candidate():
     table = next(iter(source.query.table_map))
     source.query.table_map[table].append("injected")
     assert "injected" not in sealed.query.table_map[table]
+
+
+def _join_with_filtered_relation(query):
+    """Return the one ``alias_map`` join carrying a ``FilteredRelation``."""
+    return next(join for join in query.alias_map.values() if join.filtered_relation is not None)
+
+
+def test_mutating_a_candidate_where_leaf_cannot_change_the_sealed_predicate():
+    """A retained ``where`` leaf's ``rhs`` is the visibility predicate's own value."""
+    source = Category.objects.filter(is_private=False)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    before = sealed.query.sql_with_params()
+    source.query.where.children[0].rhs = True
+    assert sealed.query.sql_with_params() == before
+    assert 'NOT "products_category"."is_private"' in before[0]
+
+
+def test_mutating_a_candidate_annotation_expression_cannot_change_the_sealed_sql():
+    """A retained annotation expression cannot rewrite the sealed SQL or its params."""
+    source = Category.objects.annotate(
+        bonus=RawSQL("1 + %s", [7], output_field=models.IntegerField()),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    before = sealed.query.sql_with_params()
+    annotation = source.query.annotations["bonus"]
+    annotation.sql = "1 + %s + 1000"
+    annotation.params[0] = 99
+    assert sealed.query.sql_with_params() == before
+    assert before[1] == (7,)
+
+
+def test_mutating_a_candidate_filtered_relation_cannot_change_the_sealed_join():
+    """A retained ``FilteredRelation`` condition cannot rewrite the sealed join's ON clause."""
+    source = Category.objects.annotate(
+        visible=FilteredRelation("items", condition=Q(items__is_private=False)),
+    ).filter(visible__name="widget")
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    before = sealed.query.sql_with_params()
+    source_join = _join_with_filtered_relation(source.query)
+    source_join.filtered_relation.resolved_condition.children[0].rhs = True
+    assert sealed.query.sql_with_params() == before
+    assert 'NOT visible."is_private"' in before[0]
+
+
+def test_mutating_a_candidate_raw_sql_parameter_container_cannot_change_the_sealed_params():
+    """A retained ``ExtraWhere`` sql / params container cannot rewrite the sealed statement."""
+    source = Category.objects.extra(where=["is_private = %s"], params=[False])
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    before = sealed.query.sql_with_params()
+    extra_where = source.query.where.children[0]
+    extra_where.sqls[0] = "1 = 1"
+    extra_where.params[0] = True
+    assert sealed.query.sql_with_params() == before
+    assert before[1] == (False,)
+
+
+def test_sealed_query_shares_no_ast_node_with_the_candidate():
+    """No sealed ``where`` node, annotation, join, or filtered relation IS the candidate's."""
+    source = (
+        Category.objects.annotate(
+            visible=FilteredRelation("items", condition=Q(items__is_private=False)),
+            bonus=RawSQL("1 + %s", [7], output_field=models.IntegerField()),
+        )
+        .filter(visible__name="widget")
+        .filter(is_private=False)
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed.query.where is not source.query.where
+    for sealed_child, source_child in zip(
+        sealed.query.where.children,
+        source.query.where.children,
+        strict=True,
+    ):
+        assert sealed_child is not source_child
+    assert sealed.query.annotations["bonus"] is not source.query.annotations["bonus"]
+    assert sealed.query.annotations["bonus"].params is not source.query.annotations["bonus"].params
+    assert (
+        sealed.query._filtered_relations["visible"]
+        is not source.query._filtered_relations["visible"]
+    )
+    sealed_join = _join_with_filtered_relation(sealed.query)
+    source_join = _join_with_filtered_relation(source.query)
+    assert sealed_join is not source_join
+    assert sealed_join.filtered_relation is not source_join.filtered_relation
+    assert (
+        sealed_join.filtered_relation.resolved_condition
+        is not source_join.filtered_relation.resolved_condition
+    )
+
+
+def test_sealed_query_retains_its_schema_objects_by_reference():
+    """Reconstruction rebuilds AST, never the model's own fields / classes."""
+    source = Category.objects.filter(is_private=False)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_lhs = sealed.query.where.children[0].lhs
+    source_lhs = source.query.where.children[0].lhs
+    assert sealed_lhs is not source_lhs
+    assert sealed_lhs.target is source_lhs.target
+    assert sealed_lhs.output_field is source_lhs.output_field
+    assert sealed.query.model is Category
+
+
+def test_mutating_a_candidate_bytearray_parameter_cannot_change_the_sealed_params():
+    """The one MUTABLE inert parameter type is copied, never shared with the candidate."""
+    source = Category.objects.extra(where=["is_private = %s"], params=[bytearray(b"\x00")])
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_param = sealed.query.where.children[0].params[0]
+    source_param = source.query.where.children[0].params[0]
+    assert sealed_param == source_param
+    assert sealed_param is not source_param
+    source_param[0] = 1
+    assert sealed.query.where.children[0].params[0] == bytearray(b"\x00")
+
+
+def test_query_state_that_cannot_be_reconstructed_fails_closed_typed():
+    """A reconstruction failure surfaces as a typed defect, never a raw exception."""
+
+    class _ArmedKey:
+        """A mapping key whose ``__hash__`` refuses once its container is built."""
+
+        def __init__(self):
+            self.armed = False
+
+        def __hash__(self):
+            if self.armed:
+                raise TypeError("hash refused")
+            return 1
+
+        def __eq__(self, other):
+            return self is other
+
+    key = _ArmedKey()
+    # ``_constructor_args`` is deconstruction bookkeeping no compiler path reaches, so the
+    # graph proofs never constrain its mapping keys -- but reconstruction rebuilds the
+    # dict, which re-hashes them.
+    annotation = RawSQL("1", [], output_field=models.IntegerField())
+    annotation._constructor_args = ((), {key: 1})
+    source = Category.objects.filter(is_private=False)
+    source.query.annotations["boom"] = annotation
+    key.armed = True
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet query state cannot be reconstructed")
 
 
 def test_non_class_model_with_convincing_meta_fails_closed():

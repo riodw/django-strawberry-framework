@@ -1131,25 +1131,61 @@ def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
     assert hasattr(request, "_body") is False
 
 
-def _assert_the_corrupted_probe_was_recorded(caplog, stream):
-    """Exactly one ``WARNING`` naming the probe outcome and the stream that caused it.
+def _assert_one_unmeasurable_body_was_recorded(
+    caplog,
+    stream,
+    message,
+    *,
+    exc_type,
+):
+    """The shape BOTH of the body gate's operator signals share, asserted once.
 
-    This refusal is by design indistinguishable from an ordinary
-    over-limit one on the wire (Decision 9's non-attributability), so an operator
-    debugging a ``413`` for a request that is not oversized has nothing to go on
-    unless the server records the distinction. The message object is asserted by
-    IDENTITY rather than by a re-typed string, so a reworded record still pins the
-    contract, and the ``args`` assertion is what keeps the stream's own class name -
-    the only actionable detail, since the culprit is whatever the ASGI server or a
-    middleware installed - from being dropped in a later edit.
+    ``_request_body.py`` refuses two ways it cannot describe on the wire - an
+    incoherent size probe and a bounded read that could not complete - and each is
+    by design indistinguishable from an ordinary over-limit rejection to the client
+    (Decision 9's non-attributability). So an operator debugging a ``413`` for a
+    request that is not oversized has nothing to go on unless the server records
+    the distinction, and the two records are therefore held to one contract: one
+    record, at ``WARNING``, carrying the specific message object and the stream's
+    own class name.
+
+    The message is asserted by IDENTITY rather than by a re-typed string, so a
+    reworded record still pins the contract; ``args`` is what keeps the class name
+    - the only actionable detail, since the culprit is whatever the ASGI server or
+    a middleware installed - from being dropped in a later edit; and the level
+    keeps either signal from drifting to ``logger.exception``'s ``ERROR``, which
+    would file a broken client as a package failure.
+
+    ``exc_type`` is the ONE axis the two differ on, so it is a parameter rather
+    than a second copy of the function: ``None`` asserts no traceback was attached,
+    an exception class asserts the attached one is it.
     """
     records = [record for record in caplog.records if record.name == "django_strawberry_framework"]
 
     assert len(records) == 1, caplog.records
     assert records[0].levelno == logging.WARNING
-    assert records[0].msg is _CORRUPTED_PROBE_LOG_MESSAGE
+    assert records[0].msg is message
     assert records[0].args == (type(stream).__name__,)
-    assert records[0].exc_info is None
+    if exc_type is None:
+        assert records[0].exc_info is None
+    else:
+        assert isinstance(records[0].exc_info[1], exc_type)
+
+
+def _assert_the_corrupted_probe_was_recorded(caplog, stream):
+    """Exactly one ``WARNING`` naming the probe outcome and the stream that caused it.
+
+    No traceback, and that is the difference from the bounded read's twin rather
+    than an omission: a restore that returned the wrong position never raised, so
+    there is no exception to attach and ``exc_info is None`` is the assertion that
+    keeps this from being "fixed" into one that carries a stale traceback.
+    """
+    _assert_one_unmeasurable_body_was_recorded(
+        caplog,
+        stream,
+        _CORRUPTED_PROBE_LOG_MESSAGE,
+        exc_type=None,
+    )
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
@@ -1306,21 +1342,18 @@ def _assert_the_unreadable_stream_was_recorded(caplog, stream):
     """Exactly one ``WARNING`` naming the unreadable stream, with its traceback attached.
 
     The bounded read's twin of :func:`_assert_the_corrupted_probe_was_recorded`,
-    and the ``exc_info`` assertion is the difference between them: a failed read
-    always has a live exception, and WHICH exception it is - Django's own
+    and the attached traceback is the difference between them: a failed read always
+    has a live exception, and WHICH exception it is - Django's own
     ``UnreadablePostError``, wrapping the stream's ``OSError`` - is the only thing
-    that tells an operator the client's stream died rather than the package's
-    limit being wrong. Asserting the level too keeps this from drifting to
-    ``logger.exception``'s ``ERROR``, which would file an aborted upload as a
-    package failure.
+    that tells an operator the client's stream died rather than the package's limit
+    being wrong.
     """
-    records = [record for record in caplog.records if record.name == "django_strawberry_framework"]
-
-    assert len(records) == 1, caplog.records
-    assert records[0].levelno == logging.WARNING
-    assert records[0].msg is _UNREADABLE_STREAM_LOG_MESSAGE
-    assert records[0].args == (type(stream).__name__,)
-    assert isinstance(records[0].exc_info[1], UnreadablePostError)
+    _assert_one_unmeasurable_body_was_recorded(
+        caplog,
+        stream,
+        _UNREADABLE_STREAM_LOG_MESSAGE,
+        exc_type=UnreadablePostError,
+    )
 
 
 @pytest.mark.parametrize(

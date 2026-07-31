@@ -46,16 +46,16 @@ compared after ``send`` is too late, because by then the frame is on the wire.
 ``ConnectionActorState`` therefore carries two facts, and the first of them IS
 the missing lock:
 
-* ``lock`` - the connection's actor lease. ``actor_lease`` holds it across a
-  revalidation checkpoint's ENTIRE validate / commit / send sequence, and
-  ``actor_transition`` holds it across the whole native teardown that changes the
-  actor, so the two are mutually exclusive **by construction**: a transition
-  cannot begin while a protected frame is still being written, and no checkpoint
-  can authorize anything - from a session read OR from a positive-window cache
-  hit - while a transition owns the connection. Both directions are load-bearing,
-  and the cache hit is the half a lease-free design silently omits: reusing a
-  timestamp is an authorization decision like any other, so it happens under the
-  same lease an uncached validation holds.
+* ``lock`` - the connection's actor lease, reached through ``actor_lease``. A
+  revalidation checkpoint holds it across its ENTIRE validate / commit / send
+  sequence, and ``actor_transition`` holds it across the whole native teardown
+  that changes the actor, so the two are mutually exclusive **by construction**:
+  a transition cannot begin while a protected frame is still being written, and
+  no checkpoint can authorize anything - from a session read OR from a
+  positive-window cache hit - while a transition owns the connection. Both
+  directions are load-bearing, and the cache hit is the half a lease-free design
+  silently omits: reusing a timestamp is an authorization decision like any
+  other, so it happens under the same lease an uncached validation holds.
 * ``authenticated_provenance`` - whether this connection has EVER carried an
   authenticated actor. Immutable once latched, because the question the
   revalidation asks is "was this socket ever authenticated", and the current
@@ -187,9 +187,8 @@ def connection_was_authenticated(scope: MutableMapping[str, Any]) -> bool:
     return connection_actor_state(scope).authenticated_provenance
 
 
-@contextlib.asynccontextmanager
-async def actor_lease(scope: MutableMapping[str, Any]) -> AsyncIterator[None]:
-    """Hold the connection's actor lease for the duration of the ``async with`` block.
+def actor_lease(scope: MutableMapping[str, Any]) -> asyncio.Lock:
+    """Return the connection's actor lease, to be held with ``async with``.
 
     The transport side of the shared primitive: ``consumers.py``'s two
     revalidation checkpoints wrap their whole critical section in this - the
@@ -201,6 +200,17 @@ async def actor_lease(scope: MutableMapping[str, Any]) -> AsyncIterator[None]:
     in which a same-connection ``logout`` runs to completion and the
     already-authorized frame is then committed to the socket behind it.
 
+    The lease is handed back rather than wrapped in an ``asynccontextmanager``,
+    which reads the same at every call site and costs strictly less at the one
+    place per-acquisition cost multiplies: an ``asyncio.Lock`` IS an async context
+    manager, so wrapping it would build an async generator and an
+    ``_AsyncGeneratorContextManager`` per acquisition, and drive that generator
+    once on the way in and once on the way out - on the outbound hot path, per
+    protected frame, inside the serialization point this whole design accepts. It
+    also keeps the lease usable as a plain object where that is what a caller
+    needs, which is how ``auth/sessions.py::scope_session_lock`` already yields
+    its own lock rather than only its scope.
+
     Deliberately NOT re-entrant (an ``asyncio.Lock`` never is): a checkpoint that
     reached a second checkpoint on the same connection in the same task would be
     a control-flow bug, and deadlocking on it is a better outcome than silently
@@ -208,8 +218,7 @@ async def actor_lease(scope: MutableMapping[str, Any]) -> AsyncIterator[None]:
     holds this together with ``auth/sessions.py::scope_session_lock`` and for the
     order the two observe.
     """
-    async with connection_actor_state(scope).lock:
-        yield
+    return connection_actor_state(scope).lock
 
 
 @contextlib.asynccontextmanager

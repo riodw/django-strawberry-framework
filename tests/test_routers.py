@@ -808,11 +808,13 @@ def _package_logger_records(caplog):
 def _actor_lease(consumer):
     """The ``asyncio.Lock`` object serving as this connection's actor lease.
 
-    Read through the production accessor rather than off a scope key spelled here,
-    so a row asserting "these two sockets hold two different leases" is asserting
-    it about the objects the production code locks.
+    Literally the expression the production checkpoints acquire, not a second one
+    spelled here from a scope key and an attribute name: a row asserting "these
+    two sockets hold two different leases", or "the lease is held right now", is
+    then asserting it about the object the production code locks, and cannot drift
+    from it.
     """
-    return session_store_module.connection_actor_state(consumer.scope).lock
+    return session_store_module.actor_lease(consumer.scope)
 
 
 def _actor_lease_held(consumer):
@@ -821,8 +823,7 @@ def _actor_lease_held(consumer):
     The lease lives on the ASGI scope rather than on the consumer instance, which
     is the structural point of it: the auth layer's own ``logout`` has to be able
     to acquire the very lock the revalidation checkpoints hold, and it can only
-    reach the scope. Asked through the production accessor so the rows below
-    observe the object the production code locks, not a second one they built.
+    reach the scope. Which object that is comes from :func:`_actor_lease`.
 
     Its ONE stated limit, recorded so it is never "strengthened" into something
     weaker: ``asyncio.Lock.locked()`` is a property of the LOCK, not of the holder,

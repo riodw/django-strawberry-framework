@@ -1959,9 +1959,16 @@ local SQLite with `db` sessions, driving
 `consumers.py::send_revalidated_operation_frame` directly. Treat the *shape* as the finding
 and the absolute numbers as one deployment's price, not a portable guarantee:
 
-- **A revalidated frame costs ~1-2 ms**, against ~1.5 us for a frame served inside a positive
+- **A revalidated frame costs ~1-2 ms**, against ~0.55 us for a frame served inside a positive
   window and ~0.5 us for an anonymous socket. One connection sustains roughly **550-670
   protected frames/s**.
+- **Both read-free paths are dominated by acquiring the lease**, which is why
+  `utils/sessions.py::actor_lease` hands the lock back instead of wrapping it in an
+  `asynccontextmanager`: the wrapper builds an async generator and an
+  `_AsyncGeneratorContextManager` per acquisition and drives that generator once each way,
+  measured at ~0.8 us per frame on the same harness - more than half of either figure above,
+  on the two paths that have nothing else in them. The revalidated frame is unaffected,
+  because a session read is three orders of magnitude larger.
 - **Concurrency on one connection buys nothing**, as designed: eight tasks on a single socket
   measured at or below the serial rate. That is the lease, and it is the property that makes
   the gate sound.

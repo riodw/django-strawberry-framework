@@ -1487,10 +1487,15 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 
 - The sealed boundary changed the accepted queryset shapes, identity/cache behavior, aliases, errors, and query execution of the framework's single data-leak-critical seam. Repository policy requires a governing numbered security decision, a KANBAN card, a spec, and a GLOSSARY update for exactly such a change; commit 60998b17 and the adversarial review rounds recorded in `spec-045-visibility_boundary-0_0_14` closed the correctness work but deferred these artifacts. This card discharges that deferral so the standing documentation matches the implemented security contract.
 
+#### Decision
+
+- **Threat model: a mistaken hook, not an in-process adversary.** The boundary defends against a `get_queryset` hook that returns wrong query state - a dropped predicate, a foreign or shadowed object, a wrong table, a sliced or projected shape, an injected cache, a re-routed alias, or AST the sealed query would share with the candidate. A consumer who deliberately crafts an object to reach a Django or adapter dispatch site is OUT of scope: they already execute code in the process, so no in-interpreter walk is a trust boundary against them (the same stance the framework takes on process-wide monkeypatching). Canonical reconstruction is the terminating mechanism - the sealed query is a framework-owned rebuild with every bound value normalized to an exact inert copy, not the candidate graph proven safe - so the boundary is CLOSED to further dispatch-path expansion. Decision 8 of `spec-045-visibility_boundary-0_0_14`.
+
 #### Note
 
 - Documents: commit 60998b17 - sealed get_queryset visibility boundary.
 - Closes: the [P2] residual "The standing guarantee and historical note declare the unsafe boundary complete", recorded in `spec-045-visibility_boundary-0_0_14` (the deferred policy-artifact residual only; the correctness findings were closed by the adversarial review rounds).
+- Post-ship: Decision 8 added after the 0.0.14 cut. It records canonical reconstruction (superseding the prove-then-retain limitation Decision 2 shipped with), closes the two bound-parameter residuals (`Lookup.rhs`, `Value.value`) rather than carrying them to a further card, and ends the crafted-object review loop. A newly found dispatch path reachable only by a deliberately crafted object is no longer a defect of this boundary; an ordinary-consumer path that loses the predicate, a Django release adding a slot legitimate queries populate, or a demonstrated row leak still is.
 
 <a id="response_extensions_debug_middleware"></a>
 ### [DONE-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)

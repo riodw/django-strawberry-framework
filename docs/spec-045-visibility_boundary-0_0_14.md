@@ -5,7 +5,11 @@ slice over an already-landed implementation: commit `60998b17`
 ("feat(visibility): seal get_queryset hook results into framework-owned
 querysets") shipped the sealed [visibility boundary][glossary-visibility-boundary].
 Successive adversarial review rounds closed their P1/P2 correctness findings on
-2026-07-20; Decisions 1–6 below are the durable record of those conclusions. Only the
+2026-07-20; Decisions 1–6 below are the durable record of those conclusions.
+[Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion)
+was added after the `0.0.14` cut: it states the threat model the boundary is
+answerable to and records canonical reconstruction, which supersedes the
+prove-then-retain limitation Decision 2 shipped with. Only the
 policy artifacts — a governing set of numbered security decisions, this spec, a
 KANBAN card, and the [glossary][glossary] fold-in — were deferred to a shipping
 slice. This card discharges that deferral so the standing documentation matches
@@ -108,10 +112,11 @@ consumer object at all.
 
 - **No behavior change.** This card is documentation only; the sealing code
   already shipped and is unchanged by it.
-- **No new abstraction adopted here.** Canonical-reconstruction (rebuilding the
-  SQL from a validated canonical form rather than proving-then-cloning Django's
-  live objects) is flagged as the future root fix, not adopted
-  ([Risks](#risks-and-open-questions)).
+- **No new abstraction adopted here.** Canonical reconstruction (rebuilding the
+  query from validated state rather than proving-then-cloning Django's live
+  objects) is flagged by this card as the future root fix, not adopted by it. It
+  has since landed in the boundary and is recorded in
+  [Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion).
 - **No version bump.** `0.0.14` was already cut by the joint release
   ([Decision 7](#decision-7--no-version-bump-the-0014-cut-already-landed)).
 
@@ -125,8 +130,10 @@ borrowing posture to pin. The contract is derived entirely from Django's own
 
 ## Architectural decisions
 
-The first six decisions below are the governing security decisions for the
-boundary; Decision 7 records release bookkeeping. Each is pinned to the enforcing symbols in
+Decisions 1–6 and 8 below are the governing security decisions for the boundary
+— 1–6 the contract as `0.0.14` shipped it, 8 the threat model that bounds it and
+the canonical reconstruction that terminates it; Decision 7 records release
+bookkeeping. Each is pinned to the enforcing symbols in
 [`django_strawberry_framework/utils/querysets.py`][querysets] and the tests that
 hold it.
 
@@ -380,6 +387,101 @@ follow-on documentation card at an already-cut patch line owns no bump; the
 lone-card version-bump shape) — rejected because the `0.0.14` cut demonstrably
 already landed before this documentation card was authored.
 
+### Decision 8 — Threat model: a mistaken hook, not an in-process adversary; canonical reconstruction terminates the dispatch-path expansion
+
+**Decision.** The [visibility boundary][glossary-visibility-boundary] defends
+against a consumer [`get_queryset` visibility
+hook][glossary-get_queryset-visibility-hook] that is **wrong**, not against an
+attacker who is already executing arbitrary Python inside the server process.
+
+*In scope* — any query state the framework cannot prove it owns: a dropped or
+rewritten visibility predicate, a foreign or instance-shadowed queryset /
+`Query` object, a contributing table or `Query.model` that is not the registered
+concrete one, a sliced or `.values()` shape on a recomposing surface, an
+injected `_result_cache`, a re-routed alias, an unprovable node anywhere in the
+compiler-reachable graph, and any mutable AST node or payload container the
+sealed query would otherwise SHARE with the candidate graph.
+
+*Out of scope* — a consumer who deliberately crafts an object to reach a Django
+or database-adapter dispatch site. That party already runs code in the process:
+they can rewrite the compiler, the ORM, or this boundary itself, so no walk
+performed inside the same interpreter is a trust boundary against them. This is
+the same stance the framework already takes on process-wide monkeypatching,
+which is unsupported by contract for exactly this reason.
+
+**Consequently the boundary is CLOSED to further dispatch-path expansion.** A
+newly identified way for a deliberately crafted object to reach `__str__`,
+`__index__`, an adapter hook, or any other dispatch site is **not** a defect of
+this boundary and does not justify widening the walk. What still does justify a
+change: a path reachable by ORDINARY consumer code that loses the visibility
+predicate or returns rows the hook excluded; a Django release adding a
+compiler-reachable slot that LEGITIMATE queries populate; or a demonstrated
+row-visibility leak.
+
+The mechanism that makes this termination sound — rather than a decision to stop
+looking — is **canonical reconstruction**, flagged by this card as the future
+root fix and since adopted. The sealed query is no longer the candidate's object
+graph proven safe; it is a framework-owned rebuild. After the graph proofs pass,
+every mutable builtin container and every genuine Django AST node is
+re-instantiated as a fresh object of its own proven class, and each admitted
+plain-data bound value is normalized to an EXACT inert value (a `TextChoices`
+member becomes an exact `str`, a `date` subclass an exact `datetime.date`), read
+through the base type's own descriptors so no subclass override runs during
+normalization. What remains shared with the candidate is deliberately inert:
+exact scalar leaves, the trusted schema (`models.Field` instances, model
+classes), and a `models.Model` instance in foreign-key position, which IS the
+bound value and from which Django's own code extracts a pk. So the sealed query
+carries no consumer-owned AST, no consumer-owned container, and no bound
+parameter whose methods are not the interpreter's own — closing the class of
+gap generically instead of one dispatch site at a time.
+
+**Why.** Extending the walk per finding is unbounded in both directions: Django's
+compile surface is open-ended, so the search never terminates, while each round
+adds seal latency (canonical reconstruction alone measured at roughly 1.7x on
+simple and medium queries and 2.3x on an annotation-heavy shape) and a
+per-Django-version maintenance surface. Without a stated threat model every
+crafted-object report reads as a `[P1]`, which is precisely the whack-a-mole this
+card warned about under [prove-then-clone AST
+trust][glossary-prove-then-clone-ast-trust]. Naming the model converts an
+unbounded review loop into a decidable question, and canonical reconstruction
+supplies the generic answer the loop was groping toward.
+
+**Residuals this decision subsumes.** Two questions previously left open — what a
+bound `Lookup.rhs` may be, and the unvalidated `Value.value` in the same category
+— are closed by normalization plus the model above: a bound parameter may be any
+plain-data value, because the sealed query binds an exact inert copy of it rather
+than the consumer's instance.
+
+**Alternative rejected.** Keeping the boundary open to every crafted-object
+finding and extending the recursive walk each time — rejected as unbounded work
+against a party the boundary cannot defeat anyway, at a compounding cost to a hot
+path. Also rejected: reverting the post-`0.0.14` hardening as over-engineering —
+canonical reconstruction fixes an OWNERSHIP defect (a retained leaf could flip the
+sealed predicate after sealing) that non-adversarial code reaches too, so it earns
+its cost independently of the threat model.
+
+**Enforcing symbols.** [`utils/querysets.py::_rebuild_query_payloads`][querysets]
+(the reconstruction pass over the clone's state);
+[`::_reconstructed_value`][querysets] and
+[`::_is_reconstructable_node`][querysets] (the rebuild-versus-retain policy);
+[`::_reconstruction_defect`][querysets] (keeps reconstruction inside the typed
+fail-closed contract); [`::_normalized_bound_value`][querysets] and
+`::_BOUND_VALUE_NORMALIZERS` (exact-value normalization through base-type
+descriptors); [`::_lookup_operands_defect`][querysets],
+[`::_direct_rhs_defect`][querysets], [`::_rhs_hook_defect`][querysets] and
+[`::_static_attr_present`][querysets] (a lookup's operands read from raw state
+instead of its own discovery accessor); [`::_template_params_defect`][querysets]
+(the `extra` template mapping `as_sql` interpolates).
+
+**Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]:
+`test_mutating_a_candidate_where_leaf_cannot_change_the_sealed_predicate` and its
+annotation / filtered-relation / raw-SQL-parameter / `bytearray` siblings,
+`test_sealed_query_shares_no_ast_node_with_the_candidate`,
+`test_sealed_query_retains_its_schema_objects_by_reference`,
+`test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date`,
+`test_lookup_direct_rhs_attribute_hook_never_dispatches`, and
+`test_func_extra_template_parameter_object_fails_closed`.
+
 ## Error shapes
 
 The defect-code table the shared checker emits, in canonical evaluation order,
@@ -431,15 +533,16 @@ already shipped.
 
 ## Risks and open questions
 
-- **Prove-then-clone is whack-a-mole over Django's compile surface.** The review's
-  architectural note stands: proving-then-cloning Django's live objects is a
-  moving target because every Django version can add a new compiler-reachable
-  slot. The flagged future root fix is **canonical reconstruction** — deriving a
-  validated canonical description of the intended query and rebuilding the SQL
-  from that, rather than trusting Django's object graph and cloning it. Preferred
-  answer for a future card: adopt canonical reconstruction once the boundary's
-  surface is stable; fallback: keep extending the recursive walk as Django's
-  compile surface grows. Not adopted in `0.0.14`.
+- **Prove-then-clone is whack-a-mole over Django's compile surface.** *Resolved
+  after `0.0.14`.* The architectural note stood: proving-then-cloning Django's
+  live objects is a moving target because every Django version can add a new
+  compiler-reachable slot, and a proven-then-retained node stays mutable through
+  the candidate's own reference. The flagged root fix — **canonical
+  reconstruction**, rebuilding the query from validated state instead of
+  retaining Django's object graph — has since been adopted, together with the
+  threat model that bounds what the walk is responsible for. Both are recorded in
+  [Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion);
+  the rejected fallback was to keep extending the recursive walk per finding.
 - **Consumer-defined expressions / lookups are unsupported across the boundary.**
   A genuinely custom `Func` or `Lookup` fails closed as `untrusted`. This is a
   deliberate constraint, not a bug — a consumer needing a custom expression in a
@@ -450,8 +553,11 @@ already shipped.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Canonical-reconstruction rearchitecture — flagged above as the future root fix;
-  no card yet.
+- Canonical-reconstruction rearchitecture — flagged above as the future root fix
+  and since adopted in the boundary
+  ([Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion)),
+  which also closes the bound-parameter residuals rather than carrying them to a
+  further card.
 - Any behavior change to the boundary — this card is documentation only; the
   code shipped in commit `60998b17`.
 

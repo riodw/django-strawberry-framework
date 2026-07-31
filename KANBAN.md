@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-30
+Last refreshed: 2026-07-31
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -521,7 +521,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Definition of done
 
-- [ ] Add `docs/spec-fieldset.md` covering the `resolve_<field>` override contract, the `check_<field>_permission` denial-vs-redaction guidance, the computed-field annotation discipline (`display_name: str | None = strawberry.field(...)`), and the optimizer `depends_on` contract.
+- [ ] Add `docs/spec-053-fieldset-0_1_1.md` covering the `resolve_<field>` override contract, the `check_<field>_permission` denial-vs-redaction guidance, the computed-field annotation discipline (`display_name: str | None = strawberry.field(...)`), and the optimizer `depends_on` contract.
 - [ ] Implement `django_strawberry_framework/fieldset/` (package, mirroring the `filters/` shape) with `base.py` (FieldSet class + metaclass), `factories.py` (resolver-binding factory), and a per-fieldset finalizer hook in `types/finalizer.py` phase 2.5.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` only; field declarations are method-based (`resolve_<field>`, `check_<field>_permission`) plus class-level computed-field annotations. No `Meta.fields` on the FieldSet itself — the owning `DjangoType.Meta.fields` is the single source of truth for the model-field surface.
 - [ ] Optimizer `Meta.depends_on` contract: when a `resolve_<field>` reads model columns the owning type's `Meta.fields` does not surface, the FieldSet declares them via `Meta.depends_on`; the optimizer adds those columns to the `only_fields` projection.
@@ -555,7 +555,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Note
 
-- the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-fieldset.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
+- the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-053-fieldset-0_1_1.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
 
 #### Card references
 
@@ -599,6 +599,8 @@ Plus Decision 14 multi-type migration mechanics (Meta.primary, separate FilterSe
 
 Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Part 1 plan bumped to Rev 7 — prior-art statement corrected (admin lookup_spawns_duplicates DOES detect reverse FK via PathInfo.m2m; old "misses reverse FK" reading was false), PathInfo named Slice A SQL-multiplicity authority beside relation_kind() semantic topology (many_side = any(path_info.m2m), target from path_infos[-1].to_opts; frozen plan keeps package-owned values only), admin helper banned from production (test differential oracle only, valid paths, never sole oracle), reverse-FK category rationale recast detection->compilation, exact acceptance floor Python 3.10 + Django==5.2.0 in sequencing steps 4/9. Spec-054: Decision 7 gains the finding-4 rationale (fixture exists because detection is insufficient; runtime consumes frozen plan, never calls admin helper, never a search_requires_distinct boolean); Test plan + DoD gain the exact-floor live reproduction requirement. Architecture unchanged per review verdict.
 
+Coverage-gap audit (2026-07-31): a cross-check of the spec against the to-many search reproduction guide found two acceptance items with no home in the card -- consumer .only() / .defer() compatibility, and proof that selection-driven N+1 optimization is unchanged by the row-preserving predicate compiler (search + selected relations against a no-search control). Both are now scope + definition-of-done bullets here and Test-plan/DoD entries in the spec, and Slice 4 lists them among the composability cases. The spec's Slice 5 now enumerates the four Slice-0 fold-in obligations with their state (OptimizerError raise site, docs/TREE.md predicate modules, test_query/README.md paragraphs, and the GLOSSARY filterset multiset paragraph all landed with the Part 1 groundwork -- Slice 5 audits them present rather than rewriting them), leaving only the KANBAN fold-in outstanding. Same audit: this card's spec bullet named the pre-convention `docs/spec-search_fields.md`, which never existed; it now names the real spec. The stale-pointer sweep corrected the same defect on cards 34, 36, 39, 53, 55, 56, and 58.
+
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem
@@ -610,10 +612,11 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 - Argument shape: a single `search: String` argument on the connection field. Empty/null/whitespace-only input is a no-op (queryset passes through unchanged). Non-empty input produces a single Q-object that OR's `<path>__icontains=<input>` across every declared path. Paths that traverse a to-many relation (reverse FK, M2M, generic) compile as correlated EXISTS branches OR'd with the direct-path predicates — one root row stays one SQL row through counting and pagination; JOIN-plus-DISTINCT is rejected as the implementation strategy.
 - Composition with `filterset_class`: `search` and `filter` compose by intersection — the resulting queryset matches every declared filter AND the search OR-clause. The argument-factory machinery is shared between `filterset_class` and `search_fields`, so adding `search` does not duplicate the factory infrastructure.
 - Composition with `get_queryset`: search runs against the post-visibility queryset (visibility narrows first), so a user cannot search for hidden rows by guessing field values. Relational search is additionally visibility-AWARE: every to-many hop composes the hop target type's own visibility queryset inside the correlated EXISTS body, so a visible parent can never match through a related row hidden on its own GraphQL surface.
+- Composition with the selection optimizer: search contributes NOTHING to the cached OptimizationPlan (no request value, no only/select_related/prefetch_related entry) and the plan contributes no predicate. An active search must leave selection-driven N+1 optimization observably unchanged (live search + selected-relations case paired against a no-search control on query count and select_related/prefetch_related work), and must compose onto a consumer .only() / .defer() queryset without widening or discarding the deferred field set or adding a selected column -- the correlated EXISTS attaches through .alias(), never .annotate(), so the reserved _dst_ name never reaches the SELECT list.
 
 #### Definition of done
 
-- [ ] Add `docs/spec-search_fields.md`.
+- [ ] `docs/spec-054-search_fields-0_1_2.md` is the card's spec of record (written).
 - [ ] Search-fields argument generation lives in `django_strawberry_framework/filters/` and reuses the same DRF-style Meta surface and argument-factory machinery as `filterset_class`.
 - [ ] Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path, compiled row-preserving: direct paths as plain Q predicates, to-many paths as correlated EXISTS branches via the shared predicate compiler; no search-driven `.distinct()`; root `alias_map` free of membership joins; `totalCount` counts the row-preserving queryset directly.
 - [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-057-0.1.3`).
@@ -622,6 +625,7 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 - [ ] SQL-shape regression tests pin the row-preserving compilation: root query `alias_map` excludes membership/child tables, `query.distinct is False`, EXISTS present exactly when a declared path is to-many, and the `totalCount` SQL has no distinct-wrapper subquery.
 - [ ] Relational search is visibility-aware (per-hop related-type visibility composed into the EXISTS body via the shared apply_type_visibility_sync/_async helpers) and honors FilterSet check_<field>_permission gates for every declared path (shared utils/permissions.py machinery, loud raise) — proven live with anonymous/staff Category-name-gate tests and a hidden-related-row test.
 - [ ] Input hygiene ships the shared active_search predicate (single definition consumed by the pipeline no-op gate AND the non-queryset sidecar guard, so whitespace input is never an observable error), the documented SEARCH_MAX_LENGTH=256 cap with a typed GraphQL error, and one typed combined-queryset preflight for direct-only and to-many plans alike.
+- [ ] Predicate/selection independence is proven: with an active to-many search the built OptimizationPlan is identical to the no-search plan for the same selection and carries no request value; the live search + selected-relations case matches its no-search control on query count and select_related/prefetch_related work; and search composes onto consumer .only() / .defer() querysets without widening the deferred set or adding a selected column.
 
 #### Files likely touched
 
@@ -678,6 +682,8 @@ Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Par
 
 Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-054-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
 
+Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut for card 054's `Meta.search_fields` surface -- the version quintet, the CHANGELOG entry (explicit maintainer grant required), README / docs README shipped-surface wording, GOAL/TODAY release status, and the glossary promotion out of card 054's intermediate status. That ownership previously lived only in card 054's spec text, so it was invisible from this card; it is now a scope + definition-of-done bullet. Same audit: this card's spec bullet named the pre-convention `docs/spec-pg_full_text_search.md`; it now names the AGENTS.md spec-<NNN>-<topic>-<version> path.
+
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem
@@ -692,15 +698,17 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
 - Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
 - Prefix-shortcut operators are owned by this card. Card 054 deliberately ships only unprefixed OR-of-`icontains` search and rejects declarations beginning with `^`, `=`, `@`, or `$`. This card decides which shortcuts enter the ported surface and must pin a clear fail-closed non-Postgres contract for `@`; none of the four is considered shipped by card 054.
+- Joint `0.1.2` release cut is owned by this card. Card 054 ships `Meta.search_fields` to `main` but deliberately touches no release-state artifact, so this card carries them for BOTH cards: the `0.1.2` version quintet, the CHANGELOG entry (which needs the maintainer's explicit grant per AGENTS.md), README / docs README shipped-surface wording, GOAL/TODAY release status, and the promotion of the `Meta.search_fields` glossary entry from "implemented on main; release pending the joint 0.1.2 cut" to shipped.
 
 #### Definition of done
 
-- [ ] Add `docs/spec-pg_full_text_search.md`.
+- [ ] Add `docs/spec-055-pg_full_text_search-0_1_2.md`.
 - [ ] `AnnotatedFilter` + `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` ship in `django_strawberry_framework/filters/` and reuse the shared DRF-style Meta surface + argument-factory machinery from `DONE-027-0.0.8`.
 - [ ] Paired input types (`SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType`) generate with stable class-derived names.
 - [ ] Backend guard: a clear typed error on non-Postgres backends rather than a malformed query.
 - [ ] Tests under `tests/filters/test_pg_full_text.py` covering each filter, the weight/config options, and the non-Postgres guard.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` against a Postgres-backed model (gated on a Postgres test backend; skipped under the default SQLite run).
+- [ ] The joint `0.1.2` cut ships for both cards: the `0.1.2` version quintet is bumped, the CHANGELOG entry is written under the maintainer's explicit grant, README / docs README shipped-surface wording and GOAL/TODAY release status are moved for `Meta.search_fields` AND this card's full-text surface, and the `Meta.search_fields` glossary entry is promoted from its card-054 intermediate status to shipped.
 
 #### Files likely touched
 
@@ -774,7 +782,7 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 - [ ] Decide result type naming and grouping semantics.
 - [ ] Validate generated queryset aggregation paths.
 - [ ] Keep aggregation declarations composable with filters, ordering, and connection field behavior.
-- [ ] Add `docs/spec-aggregates.md` covering: `AggregateSet` / `RelatedAggregate` class shape; the `count`/`min`/`max`/`mode`/`uniques` built-in stat surface; `Meta.custom_stats` + `compute_<field>_<statname>` contract; per-stat `check_<field>_<statname>_permission` gating; `get_child_queryset` cascade hook; sync/async `compute` / `acompute` split; selection-set-aware computation; output-type emission and the `aggregates.outputs` namespace.
+- [ ] Add `docs/spec-056-aggregates-0_1_3.md` covering: `AggregateSet` / `RelatedAggregate` class shape; the `count`/`min`/`max`/`mode`/`uniques` built-in stat surface; `Meta.custom_stats` + `compute_<field>_<statname>` contract; per-stat `check_<field>_<statname>_permission` gating; `get_child_queryset` cascade hook; sync/async `compute` / `acompute` split; selection-set-aware computation; output-type emission and the `aggregates.outputs` namespace.
 - [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real cookbook-shaped aggregate: a parent type with `RelatedAggregate` traversal, a custom stat, a per-stat permission gate, and a selection-set test confirming only the selected stats are computed.
 - [ ] Composability with the shipped sidecars: filter narrows first → order is a no-op for aggregate output → aggregate computes against the filtered + cascade-permissioned queryset. Pinned by a single test that exercises all three at once.
 
@@ -794,7 +802,7 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 
 #### Note
 
-- full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests.
+- full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-056-aggregates-0_1_3.md` + tests.
 
 #### Card references
 
@@ -851,7 +859,7 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 #### Definition of done
 
-- [ ] Add `docs/spec-node-sentinel.md` covering the `Meta.redaction_mode` switch, sentinel-chain semantics, the `isRedacted` SDL contract, the `get_node` override, and reconciliation with `apply_cascade_permissions`; state the existence-leak trade-off and why the tier is opt-in.
+- [ ] Add `docs/spec-058-node_sentinel-0_1_4.md` covering the `Meta.redaction_mode` switch, sentinel-chain semantics, the `isRedacted` SDL contract, the `get_node` override, and reconciliation with `apply_cascade_permissions`; state the existence-leak trade-off and why the tier is opt-in.
 - [ ] Implement the sentinel-row factory and node-resolution hook (extending the `permissions/` surface) plus the `isRedacted` field and `Meta.redaction_mode` wiring on `DjangoType`.
 - [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
 - [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
@@ -2000,7 +2008,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 
 #### Definition of done
 
-- [x] Add `docs/spec-serializer_mutations.md`.
+- [x] Add `docs/SPECS/spec-039-serializer_mutations-0_0_13.md`.
 - [x] Implement `django_strawberry_framework/rest_framework/` exposing `SerializerMutation` (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
 - [x] Serializer-field → Strawberry input mapping lives in `rest_framework/serializer_converter.py`, dual-purposed for inputs and outputs (mirroring graphene's `is_input=True` flag).
 - [x] `rest_framework` is a soft dependency: package import must succeed without DRF installed; the helper raises `ImportError` with an install hint when actually called.
@@ -2274,7 +2282,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 
 #### Definition of done
 
-- [x] Add `docs/spec-mutations.md`.
+- [x] Add `docs/SPECS/spec-036-mutations-0_0_11.md`.
 - [x] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [x] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
 - [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `DONE-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
@@ -2535,7 +2543,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - [x] Check all permission-related ORM paths for N+1 behavior.
 - [x] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
 - [x] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
-- [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/spec-permissions.md` before the implementation pass starts; tests pin both shapes.
+- [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/SPECS/spec-034-permissions-0_0_10.md` before the implementation pass starts; tests pin both shapes.
 - [x] Cascade composes with `DjangoConnectionField` (`DONE-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
 - [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
 
@@ -2563,14 +2571,14 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Open question
 
-- Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
+- Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/SPECS/spec-034-permissions-0_0_10.md`.
 - Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
 - Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
 - Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-053-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
 
 #### Note
 
-- full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/spec-permissions.md` + tests.
+- full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/SPECS/spec-034-permissions-0_0_10.md` + tests.
 
 #### Card references
 

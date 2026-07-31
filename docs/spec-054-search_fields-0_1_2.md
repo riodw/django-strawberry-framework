@@ -147,14 +147,17 @@ is the audit ledger. Load-bearing entries:
   related-row visibility, phrase semantics, literals, cache isolation,
   nested-connection fallback), composability tests (`search` + `filter:`,
   `search` + visibility, `search` + `totalCount`, `search` + keyset
-  cursors), and the non-gating PostgreSQL plan-evidence artifact.
+  cursors, `search` + selected relations, `search` + a consumer
+  `.only()` / `.defer()` queryset), and the non-gating PostgreSQL
+  plan-evidence artifact.
 - [ ] **Slice 5 — card-local docs + card wrap.** Regenerate `docs/TREE.md`
   for the new module, update
   `examples/fakeshop/test_query/README.md`'s suite descriptions for the
   new live search coverage, update the glossary DB so
   [`Meta.search_fields`][glossary-metasearch_fields] reads "implemented on
   `main`; release pending the joint `0.1.2` cut" and regenerate
-  `docs/GLOSSARY.md`, flip card 054 + regenerate the board. Leave
+  `docs/GLOSSARY.md`, **audit the four Slice-0 fold-in obligations named
+  in the opener** (below), flip card 054 + regenerate the board. Leave
   README/docs README shipped-surface wording, GOAL/TODAY release status,
   `CHANGELOG.md`, and the version quintet untouched — all are owned by the
   `TODO-BETA-055-0.1.2` joint cut
@@ -1329,6 +1332,23 @@ query-object inspection only):
   already-distinct / annotated consumer queryset without corrupting its
   count (no flat-`COUNT(*)` assertion there — the invariant is only that
   search adds no wrapper).
+- **Deferred-loading compatibility.** Search composes onto a consumer
+  queryset carrying `.only()` and onto one carrying `.defer()` without
+  widening or discarding the deferred field set, and the to-many branch
+  adds no selected column — the existence test attaches through
+  `.alias()`, never `.annotate()`, so `query.annotations` gains no
+  search entry and the reserved `_dst_` name never reaches the `SELECT`
+  list (Decision 7). Asserted for a direct-only and a to-many plan.
+- **Selection-optimizer boundary (the two subsystems stay
+  independent).** With an active to-many search, the built
+  `OptimizationPlan` for the same selection compares equal to the
+  no-search plan — the predicate compiler contributes no
+  `only_fields` / `select_related` / `prefetch_related` entry, and no
+  request value (search string, database alias, queryset) enters the
+  cached plan. Conversely the plan's `apply()` adds no `.filter()`,
+  `.alias()`, or `.distinct()` to the searched queryset. This is the
+  package-side half of the live "search + selected relations" case
+  below.
 - Combined-queryset preflight: direct-only and to-many plans both raise
   the one typed error naming the combinator; inactive search does not.
 - Multi-database routing: an explicit non-default alias survives through
@@ -1368,6 +1388,14 @@ library cases in `test_library_api.py`, inline creates):
 - Direct-only, forward-relation (`category__name`-shaped), and to-many
   search; `filter:` + `search:` intersection; `search` + `orderBy` +
   `totalCount`, first and second page, and keyset mode.
+- **`search` + selected relations** — an active to-many search on an
+  operation that also selects a forward relation and a list relation
+  emits the same query count and the same `select_related` /
+  `prefetch_related` work as the identical operation with search omitted
+  (only the root predicate differs): selection-driven N+1 optimization is
+  unchanged by the predicate compiler and remains independently
+  observable. The paired no-search execution is the control, so a
+  regression in either subsystem fails the case.
 - Null / empty / whitespace-only / raw leading-and-trailing-space input;
   multi-word phrase semantics (the deliberate upstream divergence,
   including the distinct multi-field case where separate words match
@@ -1491,6 +1519,30 @@ compiler shape.
   activations, the library to-many and loan reverse-FK surfaces) so the
   tier guide stays accurate.
 - `KANBAN.md` / `KANBAN.html`: card flip via DB + regen only.
+- **Slice-0 fold-in audit (the opener's card-owned bookkeeping,
+  enumerated so no item can be silently dropped OR silently redone).**
+  The Part 1 landing already discharged four of them itself; Slice 5
+  re-verifies each is present and still accurate, and does not rewrite
+  what is already correct:
+  1. `django_strawberry_framework/exceptions.py::OptimizerError`'s
+     docstring carries the row-preserving predicate-attachment raise site
+     (the three `attach_exists` caller-contract guards) — **landed with
+     Part 1**; verify only.
+  2. `docs/TREE.md` carries `optimizer/predicates.py` and
+     `tests/optimizer/test_predicates.py` — **landed with Part 1**; the
+     Slice 5 regen for `filters/search.py` re-renders them from the tree,
+     so the check is that their one-line descriptions still read true.
+  3. `examples/fakeshop/test_query/README.md` describes the Part 1 live
+     coverage (the loan reverse-FK surface, the flat-leaf regressions) —
+     **landed with Part 1**; Slice 5 appends the search coverage rather
+     than replacing those paragraphs.
+  4. `docs/GLOSSARY.md#filterset` carries the row-preserving
+     multiset-contract paragraph — **landed with Part 1** through the
+     glossary DB + `scripts/build_glossary_md.py` re-render; Slice 5's
+     only glossary write is the [`Meta.search_fields`][glossary-metasearch_fields]
+     status move above.
+  What Slice 5 still owes on top of the four: the `KANBAN.md` fold-in for
+  the shipped multiset-contract change (card flip + regen, above).
 
 ## Risks and open questions
 
@@ -1605,12 +1657,24 @@ compiler shape.
   root, multi-DB, multi-type exact owner, guard threading); the live tier
   covers every reachable behavior per the Test plan, including the
   library to-many proof over `allLibraryGenresConnection`.
+- [ ] The two subsystems are proven independent: with an active to-many
+  search the `OptimizationPlan` is identical to the no-search plan and
+  carries no request value, the live `search` + selected-relations case
+  matches its no-search control on query count and
+  `select_related` / `prefetch_related` work, and search composes onto
+  consumer `.only()` / `.defer()` querysets without widening the deferred
+  set or adding a selected column (the `EXISTS` attaches through
+  `.alias()`).
 - [ ] The non-gating PostgreSQL plan-evidence artifact is retained.
 - [ ] The exact compatibility floor is proven: the live Medtrics-shaped
   search reproduction passes under Python 3.10 + `Django==5.2.0`, and
   the current-version job stays green (follow-up review, finding 5).
 - [ ] Slice 5 card-local docs updated; GLOSSARY moves to the precise
-  intermediate status; no release-cut artifact is changed.
+  intermediate status; the four Slice-0 fold-in obligations are audited
+  present and accurate (`OptimizerError` raise site, `docs/TREE.md`
+  predicate modules, `test_query/README.md` Part 1 paragraphs,
+  `GLOSSARY.md#filterset` multiset contract) rather than dropped or
+  rewritten; no release-cut artifact is changed.
 - [ ] **No release-cut edit** — the `0.1.2` quintet, README shipped-surface
   moves, and CHANGELOG entry belong to the
   `TODO-BETA-055-0.1.2` joint cut (Decision 10).

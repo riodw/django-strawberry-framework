@@ -14,6 +14,8 @@ from apps.kanban import models as kanban_models
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 SPEC_PATH_MARKER = "docs/"
+# Subfolder holding an archived spec's companion files, beside the archived spec
+COMPANION_DIRNAME = "appx"
 
 
 @dataclass(frozen=True)
@@ -45,9 +47,18 @@ def _spec_path_from_url(url: str) -> str:
 
 
 def _terms_path(repo_root: Path, spec_path: str) -> Path:
-    """Return the companion ``*-terms.csv`` path for ``spec_path``."""
+    """Return the companion ``*-terms.csv`` path for ``spec_path``.
+
+    A live spec keeps its companion beside it; an archived one keeps it in the
+    spec directory's ``appx/`` subfolder. The sibling wins when it exists, so a
+    missing companion is reported at the authoring location.
+    """
     path = repo_root / spec_path
-    return path.with_name(f"{path.stem}-terms.csv")
+    sibling = path.with_name(f"{path.stem}-terms.csv")
+    if sibling.is_file():
+        return sibling
+    archived = path.parent / COMPANION_DIRNAME / sibling.name
+    return archived if archived.is_file() else sibling
 
 
 def _resolve_spec_path(repo_root: Path, spec_path: str) -> str:

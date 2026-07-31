@@ -1312,7 +1312,7 @@ Each item names a preferred answer for the current cut and a fallback if impleme
 [spec-025]: spec-025-scalar_map_helper-0_0_7.md
 [spec-027]: spec-027-filters-0_0_8.md
 [spec-028]: spec-028-orders-0_0_8.md
-[spec-028-terms]: spec-028-orders-0_0_8-terms.csv
+[spec-028-terms]: appx/spec-028-orders-0_0_8-terms.csv
 
 <!-- docs/builder/ -->
 

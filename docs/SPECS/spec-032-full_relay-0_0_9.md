@@ -753,7 +753,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [spec-030]: spec-030-connection_field-0_0_9.md
 [spec-031]: spec-031-globalid_encoding-0_0_9.md
 [spec-032]: spec-032-full_relay-0_0_9.md
-[spec-032-terms]: spec-032-full_relay-0_0_9-terms.csv
+[spec-032-terms]: appx/spec-032-full_relay-0_0_9-terms.csv
 
 <!-- docs/builder/ -->
 

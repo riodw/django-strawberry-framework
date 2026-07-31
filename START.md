@@ -72,6 +72,8 @@ Why: when a file moves — archiving a spec to `docs/SPECS/`, restructuring `exa
 
 Group = where the **target** lives, NOT the source. A README at `examples/fakeshop/` linking to `docs/GLOSSARY.md` puts the def under `<!-- docs/ -->`. Empty groups stay so a reader can confirm "this file links to nothing in `tests/`" in one scan.
 
+The ten headers are a closed list (`LINK_DEF_CATEGORIES` in [scripts/check_trailing_commas.py][check-commas]), so a subdirectory shares its parent's group rather than earning an eleventh: an archived spec's companions live at `docs/SPECS/appx/` and their defs sit under `<!-- docs/SPECS/ -->`.
+
 Stays inline (NOT converted):
 
 - URLs (`https://...`, `http://...`).

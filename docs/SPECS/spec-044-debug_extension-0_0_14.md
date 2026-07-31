@@ -510,7 +510,7 @@ doc breadth.
            glossary-status, and version DB updates — the GLOSSARY status
            flips cover **every** spec-044 glossary term whose `planned for
            0.0.14` status changes, derived from the companion
-           `docs/SPECS/spec-044-debug_extension-0_0_14-terms.csv`, not only the
+           `docs/SPECS/appx/spec-044-debug_extension-0_0_14-terms.csv`, not only the
            four headline release surfaces;
         2. flip `044` → Done with the `DONE-044-0.0.14` id and its
            `SpecDoc` pointing at this spec (the importer processes only
@@ -2775,21 +2775,21 @@ against a real ASGI-request prototype rather than prose:
 
 <!-- docs/SPECS/ -->
 [next]: NEXT.md
-[rationale]: spec-044-debug_extension-0_0_14-rationale.md
-[rationale-d1]: spec-044-debug_extension-0_0_14-rationale.md#decision-1--spec-filename-and-canonical-naming
-[rationale-d10]: spec-044-debug_extension-0_0_14-rationale.md#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each
-[rationale-d11]: spec-044-debug_extension-0_0_14-rationale.md#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics
-[rationale-d12]: spec-044-debug_extension-0_0_14-rationale.md#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump
-[rationale-d2]: spec-044-debug_extension-0_0_14-rationale.md#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring
-[rationale-d3]: spec-044-debug_extension-0_0_14-rationale.md#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field
-[rationale-d4]: spec-044-debug_extension-0_0_14-rationale.md#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port
-[rationale-d5]: spec-044-debug_extension-0_0_14-rationale.md#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root
-[rationale-d6]: spec-044-debug_extension-0_0_14-rationale.md#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160
-[rationale-d7]: spec-044-debug_extension-0_0_14-rationale.md#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash
-[rationale-d8]: spec-044-debug_extension-0_0_14-rationale.md#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports
-[rationale-d9]: spec-044-debug_extension-0_0_14-rationale.md#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping
-[rationale-nondecision]: spec-044-debug_extension-0_0_14-rationale.md#change-record-for-the-specs-non-decision-sections
-[rationale-risks]: spec-044-debug_extension-0_0_14-rationale.md#change-record-for-risks-and-open-questions
+[rationale]: appx/spec-044-debug_extension-0_0_14-rationale.md
+[rationale-d1]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d10]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each
+[rationale-d11]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics
+[rationale-d12]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump
+[rationale-d2]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring
+[rationale-d3]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field
+[rationale-d4]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port
+[rationale-d5]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root
+[rationale-d6]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160
+[rationale-d7]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash
+[rationale-d8]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports
+[rationale-d9]: appx/spec-044-debug_extension-0_0_14-rationale.md#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping
+[rationale-nondecision]: appx/spec-044-debug_extension-0_0_14-rationale.md#change-record-for-the-specs-non-decision-sections
+[rationale-risks]: appx/spec-044-debug_extension-0_0_14-rationale.md#change-record-for-risks-and-open-questions
 [spec-038]: spec-038-form_mutations-0_0_12.md
 [spec-041]: spec-041-channels_router-0_0_14.md
 [spec-042]: spec-042-debug_toolbar-0_0_14.md

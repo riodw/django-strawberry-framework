@@ -27,9 +27,13 @@ Usage::
 Only ``--spec`` is required. ``--terms`` defaults to the spec path with
 ``-terms.csv`` appended to the stem (e.g.
 ``docs/spec-018-meta_primary-0_0_6.md`` ->
-``docs/spec-018-meta_primary-0_0_6-terms.csv``). ``--glossary``
-defaults to ``docs/GLOSSARY.md`` and accepts an override for testing or
-for validating against a fork's renamed glossary.
+``docs/spec-018-meta_primary-0_0_6-terms.csv``). An archived spec keeps
+its companions one level down in ``appx/`` (e.g.
+``docs/SPECS/spec-018-meta_primary-0_0_6.md`` ->
+``docs/SPECS/appx/spec-018-meta_primary-0_0_6-terms.csv``), so the
+sibling is preferred when it exists and ``appx/`` is the fallback.
+``--glossary`` defaults to ``docs/GLOSSARY.md`` and accepts an override
+for testing or for validating against a fork's renamed glossary.
 
 Pass ``--auto-link`` to also rewrite the spec in place: for every term
 listed as missing a link, the script finds the first prose mention
@@ -70,6 +74,8 @@ REF_USE_PATTERN = re.compile(r"\]\[([^\[\]]+)\]")
 REF_TARGET_GLOSSARY_ANCHOR = re.compile(r"GLOSSARY\.md#(\S+)")
 # Docs/ group header inside the unified link-definitions block
 DOCS_GROUP_HEADER = "<!-- docs/ -->"
+# Subfolder holding an archived spec's companion files, beside the archived spec
+COMPANION_DIRNAME = "appx"
 
 
 def github_anchor(heading: str) -> str:
@@ -355,8 +361,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _default_terms_path(spec_path: Path) -> Path:
-    """Derive ``<spec-stem>-terms.csv`` alongside the spec when ``--terms`` is omitted."""
-    return spec_path.with_name(f"{spec_path.stem}-terms.csv")
+    """Derive ``<spec-stem>-terms.csv`` for the spec when ``--terms`` is omitted.
+
+    A live spec keeps its companion beside it; an archived one keeps it in the
+    spec directory's ``appx/`` subfolder. The sibling wins when it exists, so a
+    missing companion is reported at the authoring location.
+    """
+    sibling = spec_path.with_name(f"{spec_path.stem}-terms.csv")
+    if sibling.is_file():
+        return sibling
+    archived = spec_path.parent / COMPANION_DIRNAME / sibling.name
+    return archived if archived.is_file() else sibling
 
 
 def main(argv: list[str] | None = None) -> int:

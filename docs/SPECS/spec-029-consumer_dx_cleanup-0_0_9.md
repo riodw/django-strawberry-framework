@@ -775,7 +775,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [spec-027]: spec-027-filters-0_0_8.md
 [spec-028]: spec-028-orders-0_0_8.md
 [spec-029]: spec-029-consumer_dx_cleanup-0_0_9.md
-[spec-029-terms]: spec-029-consumer_dx_cleanup-0_0_9-terms.csv
+[spec-029-terms]: appx/spec-029-consumer_dx_cleanup-0_0_9-terms.csv
 
 <!-- docs/builder/ -->
 

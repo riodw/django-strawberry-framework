@@ -766,7 +766,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [spec-029]: spec-029-consumer_dx_cleanup-0_0_9.md
 [spec-030]: spec-030-connection_field-0_0_9.md
 [spec-031]: spec-031-globalid_encoding-0_0_9.md
-[spec-031-terms]: spec-031-globalid_encoding-0_0_9-terms.csv
+[spec-031-terms]: appx/spec-031-globalid_encoding-0_0_9-terms.csv
 
 <!-- docs/builder/ -->
 

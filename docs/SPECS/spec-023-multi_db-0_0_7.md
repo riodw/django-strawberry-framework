@@ -675,7 +675,7 @@ The card is complete when all of the following are true:
 [spec-017]: spec-021-apps-0_0_7.md
 [spec-018]: spec-022-export_schema-0_0_7.md
 [spec-019]: spec-023-multi_db-0_0_7.md
-[spec-019-terms]: spec-023-multi_db-0_0_7-terms.csv
+[spec-019-terms]: appx/spec-023-multi_db-0_0_7-terms.csv
 
 <!-- docs/builder/ -->
 

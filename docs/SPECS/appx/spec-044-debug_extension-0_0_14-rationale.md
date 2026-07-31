@@ -624,34 +624,34 @@ honest "async SQL is typically empty" limitation stands either way.)
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[goal]: ../../GOAL.md
-[kanban]: ../../KANBAN.md
+[goal]: ../../../GOAL.md
+[kanban]: ../../../KANBAN.md
 
 <!-- docs/ -->
-[glossary-django-trac-37064]: ../GLOSSARY.md#django-trac-37064-hardening
+[glossary-django-trac-37064]: ../../GLOSSARY.md#django-trac-37064-hardening
 
 <!-- docs/SPECS/ -->
-[next]: NEXT.md
-[s44-d1]: spec-044-debug_extension-0_0_14.md#decision-1--spec-filename-and-canonical-naming
-[s44-d10]: spec-044-debug_extension-0_0_14.md#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each
-[s44-d11]: spec-044-debug_extension-0_0_14.md#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics
-[s44-d12]: spec-044-debug_extension-0_0_14.md#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump
-[s44-d2]: spec-044-debug_extension-0_0_14.md#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring
-[s44-d3]: spec-044-debug_extension-0_0_14.md#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field
-[s44-d4]: spec-044-debug_extension-0_0_14.md#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port
-[s44-d5]: spec-044-debug_extension-0_0_14.md#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root
-[s44-d6]: spec-044-debug_extension-0_0_14.md#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160
-[s44-d7]: spec-044-debug_extension-0_0_14.md#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash
-[s44-d8]: spec-044-debug_extension-0_0_14.md#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports
-[s44-d9]: spec-044-debug_extension-0_0_14.md#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping
-[s44-dry]: spec-044-debug_extension-0_0_14.md#helper-reuse-obligations-dry
-[s44-edge-cases]: spec-044-debug_extension-0_0_14.md#edge-cases-and-constraints
-[s44-error-shapes]: spec-044-debug_extension-0_0_14.md#error-shapes
-[s44-non-goals]: spec-044-debug_extension-0_0_14.md#non-goals
-[s44-risks]: spec-044-debug_extension-0_0_14.md#risks-and-open-questions
-[s44-test-plan]: spec-044-debug_extension-0_0_14.md#test-plan
-[spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-044]: spec-044-debug_extension-0_0_14.md
+[next]: ../NEXT.md
+[s44-d1]: ../spec-044-debug_extension-0_0_14.md#decision-1--spec-filename-and-canonical-naming
+[s44-d10]: ../spec-044-debug_extension-0_0_14.md#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each
+[s44-d11]: ../spec-044-debug_extension-0_0_14.md#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics
+[s44-d12]: ../spec-044-debug_extension-0_0_14.md#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump
+[s44-d2]: ../spec-044-debug_extension-0_0_14.md#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring
+[s44-d3]: ../spec-044-debug_extension-0_0_14.md#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field
+[s44-d4]: ../spec-044-debug_extension-0_0_14.md#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port
+[s44-d5]: ../spec-044-debug_extension-0_0_14.md#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root
+[s44-d6]: ../spec-044-debug_extension-0_0_14.md#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160
+[s44-d7]: ../spec-044-debug_extension-0_0_14.md#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash
+[s44-d8]: ../spec-044-debug_extension-0_0_14.md#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports
+[s44-d9]: ../spec-044-debug_extension-0_0_14.md#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping
+[s44-dry]: ../spec-044-debug_extension-0_0_14.md#helper-reuse-obligations-dry
+[s44-edge-cases]: ../spec-044-debug_extension-0_0_14.md#edge-cases-and-constraints
+[s44-error-shapes]: ../spec-044-debug_extension-0_0_14.md#error-shapes
+[s44-non-goals]: ../spec-044-debug_extension-0_0_14.md#non-goals
+[s44-risks]: ../spec-044-debug_extension-0_0_14.md#risks-and-open-questions
+[s44-test-plan]: ../spec-044-debug_extension-0_0_14.md#test-plan
+[spec-038]: ../spec-038-form_mutations-0_0_12.md
+[spec-044]: ../spec-044-debug_extension-0_0_14.md
 
 <!-- docs/builder/ -->
 
@@ -660,13 +660,13 @@ honest "async SQL is typically empty" limitation stands either way.)
 <!-- tests/ -->
 
 <!-- examples/ -->
-[config-schema]: ../../examples/fakeshop/config/schema.py
+[config-schema]: ../../../examples/fakeshop/config/schema.py
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
 
 <!-- External -->
-[upstream-cookbook-recipes-schema]: ../../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-[upstream-cookbook-schema]: ../../../django-graphene-filters/examples/cookbook/cookbook/schema.py
-[upstream-debug-middleware]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py
+[upstream-cookbook-recipes-schema]: ../../../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[upstream-cookbook-schema]: ../../../../django-graphene-filters/examples/cookbook/cookbook/schema.py
+[upstream-debug-middleware]: ../../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py

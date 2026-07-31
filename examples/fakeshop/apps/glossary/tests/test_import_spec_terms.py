@@ -15,9 +15,21 @@ from apps.kanban import factories as kf
 from apps.kanban import models as kanban_models
 
 
-def _write_terms_csv(repo_root: Path, spec_path: str, rows: list[tuple[str, str, str]]) -> None:
-    """Write a companion terms CSV under a temporary repo root."""
-    path = repo_root / Path(spec_path).with_name(f"{Path(spec_path).stem}-terms.csv")
+def _write_terms_csv(
+    repo_root: Path,
+    spec_path: str,
+    rows: list[tuple[str, str, str]],
+    *,
+    appx: bool = False,
+) -> None:
+    """Write a companion terms CSV under a temporary repo root.
+
+    ``appx=True`` uses the archived layout (the spec directory's ``appx/``
+    subfolder) instead of writing the companion beside the spec.
+    """
+    name = f"{Path(spec_path).stem}-terms.csv"
+    parent = repo_root / Path(spec_path).parent
+    path = parent / "appx" / name if appx else parent / name
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -109,6 +121,35 @@ def test_import_spec_terms_check_rejects_mismatched_done_card_links(tmp_path):
             "--check",
             stdout=StringIO(),
         )
+
+
+@pytest.mark.django_db
+def test_import_spec_terms_reads_archived_companion_from_appx(tmp_path):
+    spec_path = "docs/SPECS/spec-099-example-0_0_9.md"
+    gf.make_glossary_term(title="`DjangoType`", title_sort="djangotype", anchor="djangotype")
+    card = _make_done_card_with_spec(spec_path)
+    _write_terms_csv(
+        tmp_path,
+        spec_path,
+        [("DjangoType", "djangotype", "Primary type surface.")],
+        appx=True,
+    )
+
+    call_command("import_spec_terms", "--repo-root", str(tmp_path), stdout=StringIO())
+
+    mentions = glossary_models.GlossarySpecMention.objects.filter(spec_path=spec_path)
+    assert [(mention.term.anchor, mention.term_text) for mention in mentions] == [
+        ("djangotype", "DjangoType"),
+    ]
+    assert [link.term.anchor for link in card.glossary_links.all()] == ["djangotype"]
+
+    call_command(
+        "import_spec_terms",
+        "--repo-root",
+        str(tmp_path),
+        "--check",
+        stdout=StringIO(),
+    )
 
 
 @pytest.mark.django_db

@@ -1269,7 +1269,7 @@ The card is complete when all of the following are true:
 [spec-018]: spec-022-export_schema-0_0_7.md
 [spec-019]: spec-023-multi_db-0_0_7.md
 [spec-020]: spec-025-scalar_map_helper-0_0_7.md
-[spec-021-terms]: spec-027-filters-0_0_8-terms.csv
+[spec-021-terms]: appx/spec-027-filters-0_0_8-terms.csv
 [spec-021]: spec-027-filters-0_0_8.md
 
 <!-- docs/builder/ -->

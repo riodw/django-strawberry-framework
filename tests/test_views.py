@@ -53,7 +53,7 @@ from cross_web import (
     DjangoHTTPRequestAdapter,
     HTTPException,
 )
-from django.http import HttpRequest, RawPostDataException
+from django.http import HttpRequest, RawPostDataException, UnreadablePostError
 from django.test import AsyncRequestFactory, RequestFactory, override_settings
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 from strawberry.http.base import BaseView
@@ -61,7 +61,10 @@ from strawberry.http.base import BaseView
 import django_strawberry_framework
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as patches
-from django_strawberry_framework._request_body import _CORRUPTED_PROBE_LOG_MESSAGE
+from django_strawberry_framework._request_body import (
+    _CORRUPTED_PROBE_LOG_MESSAGE,
+    _UNREADABLE_STREAM_LOG_MESSAGE,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
@@ -815,6 +818,42 @@ class _UnrestorableStream(_UndeclaredSeekableStream):
         raise OSError("this stream cannot seek back")
 
 
+class _ReadRaisingStream(_RecordingNonSeekableStream):
+    """A non-seekable request stream whose ``read`` fails before delivering anything.
+
+    The aborted client at the earliest possible moment. ``OSError`` is what a
+    socket that went away actually raises, and what
+    ``django/http/request.py::HttpRequest.read`` re-raises as
+    ``UnreadablePostError`` - so this reaches the cap through Django's own
+    translation rather than around it, which is the point: the package's boundary
+    has to be total against the exception Django produces, not against a
+    hand-rolled one.
+    """
+
+    def read(self, size=-1):
+        self.requested.append(size)
+        raise OSError("this stream cannot be read")
+
+
+class _ReadRaisingAfterPrefixStream(_RecordingNonSeekableStream):
+    """Delivers one short chunk, then fails - the client that hung up mid-upload.
+
+    The harder half, because the loop is already holding bytes when the failure
+    arrives: the collected prefix must not become the request's body and the loop
+    must not go back for more. The chunk is deliberately smaller than the cap, so
+    the failure lands INSIDE the bounded loop rather than after it has already
+    satisfied its own ``limit + 1`` bound and stopped.
+    """
+
+    def read(self, size=-1):
+        self.requested.append(size)
+        if len(self.requested) > 1:
+            raise OSError("this stream stopped part way")
+        chunk = self._buffer.read(min(size, _PROBE_CAP // 4))
+        self.delivered += len(chunk)
+        return chunk
+
+
 @contextlib.contextmanager
 def _spooled(raw, *, spool_class=_UnreadableSpool, max_size=1 << 20):
     """A rewound ``SpooledTemporaryFile`` holding ``raw``, closed on the way out.
@@ -1261,6 +1300,87 @@ def test_a_genuinely_empty_body_is_allowed_by_one_bounded_read(view_class):
     assert stream.delivered == 0
     assert stream.closed is True
     assert request.body == b""
+
+
+def _assert_the_unreadable_stream_was_recorded(caplog, stream):
+    """Exactly one ``WARNING`` naming the unreadable stream, with its traceback attached.
+
+    The bounded read's twin of :func:`_assert_the_corrupted_probe_was_recorded`,
+    and the ``exc_info`` assertion is the difference between them: a failed read
+    always has a live exception, and WHICH exception it is - Django's own
+    ``UnreadablePostError``, wrapping the stream's ``OSError`` - is the only thing
+    that tells an operator the client's stream died rather than the package's
+    limit being wrong. Asserting the level too keeps this from drifting to
+    ``logger.exception``'s ``ERROR``, which would file an aborted upload as a
+    package failure.
+    """
+    records = [record for record in caplog.records if record.name == "django_strawberry_framework"]
+
+    assert len(records) == 1, caplog.records
+    assert records[0].levelno == logging.WARNING
+    assert records[0].msg is _UNREADABLE_STREAM_LOG_MESSAGE
+    assert records[0].args == (type(stream).__name__,)
+    assert isinstance(records[0].exc_info[1], UnreadablePostError)
+
+
+@pytest.mark.parametrize(
+    "stream_class",
+    [
+        pytest.param(_ReadRaisingStream, id="raises-at-zero-bytes"),
+        pytest.param(_ReadRaisingAfterPrefixStream, id="raises-after-a-partial-prefix"),
+    ],
+)
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_request_stream_that_cannot_be_read_is_refused_rather_than_escaping(
+    view_class,
+    stream_class,
+    caplog,
+):
+    """A broken client stream is the controlled ``413``, never an unhandled ``500``.
+
+    The bounded read is the fallback the capability probe *selects*, so it has to
+    be as total as the probe is. It was not: ``request.read`` was called unguarded,
+    and Django turns a stream ``OSError`` into ``UnreadablePostError``, which is
+    not an ``HTTPException`` - so it propagated through the boundary, past
+    upstream's ``except HTTPException``, and out of the view. Under Django's
+    handler an ordinary client that hung up mid-POST therefore produced a ``500``
+    and an error log from the one code path whose entire job is to refuse
+    politely. Nothing was executed and no cap was bypassed, which is why this is
+    the response and the attribution being wrong rather than a hole - and why the
+    fix is the module's documented fail-closed ``bool``, not a new exception type.
+
+    Both failure moments are covered because they leave different residue: raising
+    at zero bytes leaves nothing collected, while raising after a partial prefix
+    leaves the loop holding a fragment of a body it must not pass on. The
+    assertions are the whole contract - the selected status and reason, a read
+    count that shows the loop stopped at the failure instead of retrying, and a
+    request from which NO body can be obtained at all: ``_body`` was never filled,
+    the consumed stream was not swapped for the collected prefix, and
+    ``request.body`` therefore raises Django's own ``RawPostDataException``. That
+    last one is what makes "no partial body reached Strawberry" a proof rather than
+    an inference about ordering.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = stream_class(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException) as excinfo:
+            view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    # No unbounded retry: the loop asked once more than it had already succeeded
+    # at, and stopped on the failure.
+    assert len(stream.requested) <= 2
+    assert max(stream.requested) <= _PROBE_CAP + 1
+    # No partial body is handed on, in either of the two ways it could have been.
+    assert hasattr(request, "_body") is False
+    assert request._stream is stream
+    assert stream.closed is False
+    with pytest.raises(RawPostDataException):
+        request.body  # the raise IS the assertion
+    _assert_the_unreadable_stream_was_recorded(caplog, stream)
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)

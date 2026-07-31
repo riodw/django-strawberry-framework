@@ -169,6 +169,14 @@ Each top-level item maps to one commit / PR.
         escape as an unrelated `500`
         ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
         #"An unmeasurable stream has three outcomes, not two").
+  - [ ] `_request_body.py::_bounded_read_exceeds_limit` is total in the same way and for the
+        same reason: reading, sizing the returned chunks, closing the consumed stream and
+        installing the replacement are all calls into a foreign object, so a failure in any
+        of them is the module's fail-closed `True` plus one operator-side `WARNING` — never
+        an `UnreadablePostError` escaping past upstream's `except HTTPException` as a `500`
+        for a client that simply hung up mid-upload
+        ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+        #"The bounded read is guarded for the same reason the probe is").
   - [ ] One new settings key, `MAX_REQUEST_BODY_BYTES`, in
         `django_strawberry_framework/conf.py`, with a per-mount view-kwarg override
         (constructor > setting > default) — the shipped
@@ -1159,6 +1167,26 @@ depends on, and a package that quietly continued would be processing a request i
 longer describe. Rewinding to zero instead was rejected explicitly: a stream legitimately
 mid-position would then be misread from its start.
 
+**The bounded read is guarded for the same reason the probe is.** Outcome 2 does not answer
+the question, it *delegates* it — so the delegate has to be as total as the probe, or the
+guarantee only holds on the branch that never runs in production. Everything the bounded read
+touches is foreign too: `request.read` (a stream `OSError`, which Django re-raises as
+`django.http.request.UnreadablePostError`), the chunk objects handed back, the consumed
+stream's `close`, and the replacement stream installed in its place. Any of those failing means
+the same thing — the package cannot prove this body is within the limit — so all of them
+produce the same **fail-closed** answer and the same controlled rejection, with one
+operator-side `WARNING` carrying the traceback because the wire deliberately cannot say why.
+The shape this closes is not exotic: an ordinary client that hangs up mid-POST made
+`UnreadablePostError` propagate through `views.py::_RequestBodyBoundaryMixin` and past
+upstream's `except HTTPException`, turning the boundary whose whole job is to refuse politely
+into a `500` and an error log. Nothing was executed and no cap was bypassed, which is why this
+is the *response* and the *attribution* being wrong rather than a hole — and why the fix is
+this module's documented `bool`, not a new exception type. A partially collected prefix is
+dropped with the request rather than installed: `_read_started` stays `True` and `_body` is
+never written, so anything that did reach for the body would get Django's own
+`RawPostDataException`, never a fragment of a body nobody sent. `BaseException` stays uncaught
+in both phases, so cancellation and process control still propagate.
+
 **Why its own key rather than `DATA_UPLOAD_MAX_MEMORY_SIZE`.** Django's knob is
 project-wide and shared with file uploads: a project that raises it to accommodate an
 upload endpoint silently raises the GraphQL body ceiling to match. A GraphQL request body
@@ -1892,20 +1920,39 @@ that formatted them. That deletion belongs to the change that implements this de
 to Slice 5, because leaving an unreachable send path behind would be dead code under
 `fail_under = 100`.
 
-**One connection-local lock, held through the send.** A single `asyncio.Lock`, owned by the
-package's consumer instance (Channels constructs exactly one per connection, which is what
-makes "connection-local" structural rather than conventional), spans the whole critical
-section: the window / cache decision, the session read, the revoked-state transition, **and
-the actual send**. Holding it through the send is intentional and is the reason the gate is
-sound. Releasing after validation would admit this interleaving: sibling task A passes
-validation; sibling task B then detects revocation and begins closing; task A, already
-authorized, emits its payload anyway. The accepted cost is stated rather than discovered: a
-per-connection serialization point on the outbound hot path, so concurrent operations on one
-socket wait behind a session-store read. *The lock* serializes **one connection's** protected
-frames only — never a `complete`, never a keep-alive, and never a frame on an unrelated
-connection — and an idle or anonymous socket never takes it at all. What the lock scopes is
-not the whole blocking story, though, and the difference is measured rather than reasoned
-about in the budget immediately below.
+**One connection-local lease, held through the send, shared with the auth layer.** A single
+`asyncio.Lock` spans the whole critical section: the window / cache decision, the session
+read, the revoked-state transition, **and the actual send**. Holding it through the send is
+intentional and is the reason the gate is sound. Releasing after validation would admit this
+interleaving: sibling task A passes validation; sibling task B then detects revocation and
+begins closing; task A, already authorized, emits its payload anyway.
+
+It lives on the **ASGI scope** (`utils/sessions.py::actor_lease`, keyed into
+`ConnectionActorState`) rather than on the consumer instance, and that placement is
+load-bearing rather than incidental. A lock private to the consumer is still exactly one per
+connection, but it is unreachable by the one revocation the package performs *itself*: a
+same-connection `logout` (`auth/mutations.py::_channels_logout`) holds only
+`auth/sessions.py::scope_session_lock`, so two private locks give **no ordering at all**
+between the two state machines. Since an ASGI send is asynchronous, that left an interleaving
+no after-the-fact check can repair — a checkpoint authorizes a frame, suspends inside `send`,
+the whole logout completes through that suspension, and the frame is committed to a socket
+whose identity no longer exists; a generation compared after `send` returns is checked against
+bytes already on the wire. `utils/sessions.py::actor_transition` therefore takes the same
+lease for the duration of the native teardown, which makes the two mutually exclusive in both
+directions and puts the positive-window cache hit — an authorization decision that performs no
+read, and therefore leaves no trace in the read budget below — under the same lease as an
+uncached validation. **Lock order: `scope_session_lock` OUTER, the actor lease INNER**, with
+`_channels_logout` the only site that holds both and nothing holding the lease ever entering
+the auth layer.
+
+The accepted cost is stated rather than discovered: a per-connection serialization point on
+the outbound hot path, so concurrent operations on one socket wait behind a session-store read,
+a same-connection `logout` waits behind an in-flight protected frame, and that frame's
+successor waits behind the `logout`. *The lease* serializes **one connection** only — never a
+`complete`, never a keep-alive, and never a frame on an unrelated connection — and an idle
+socket never takes it at all (an anonymous socket takes it, then refuses or proceeds without a
+read). What the lease scopes is not the whole blocking story, though, and the difference is
+measured rather than reasoned about in the budget immediately below.
 
 **The measured budget, and the one lever that moves it.** Measured on one machine against
 local SQLite with `db` sessions, driving
@@ -1916,10 +1963,10 @@ and the absolute numbers as one deployment's price, not a portable guarantee:
   window and ~0.5 us for an anonymous socket. One connection sustains roughly **550-670
   protected frames/s**.
 - **Concurrency on one connection buys nothing**, as designed: eight tasks on a single socket
-  measured at or below the serial rate. That is the lock, and it is the property that makes
+  measured at or below the serial rate. That is the lease, and it is the property that makes
   the gate sound.
 - **Concurrency across *distinct* connections also buys almost nothing**, which is *not* the
-  lock. Aggregate throughput plateaus at roughly **1.0-1.3k protected frames/s per process**
+  lease. Aggregate throughput plateaus at roughly **1.0-1.3k protected frames/s per process**
   no matter how many connections are open — sixteen concurrent authenticated sockets got
   ~60-80 frames/s each.
 - **The cause is a single shared thread.** `channels.auth.get_user` is a
@@ -1929,7 +1976,7 @@ and the absolute numbers as one deployment's price, not a portable guarantee:
 - **So a stalled store is a process-wide event, not a per-connection one.** Holding one
   connection's session read inside that thread blocked an *unrelated* connection's protected
   frame for the full duration of the stall. This is the one place where the per-connection
-  framing of the lock does not describe the observable blast radius.
+  framing of the lease does not describe the observable blast radius.
 - **Changing the session backend is not the lever.** `cached_db` and a pure in-memory
   `cache` backend land in the same order of magnitude as `db` at the ceiling, because the
   revalidation still resolves the actor row across the same single thread.
@@ -2260,7 +2307,7 @@ wants a different Host policy configures `ALLOWED_HOSTS`, exactly as they would 
 | 1 | S1 | `routers.py`, new `views.py`, `tests/test_routers.py`, new `tests/test_views.py`, live tier | protocol split; required `django_application`; `websocket_url_pattern`; the package view; rewrite 5 router tests; live middleware / Host / CSRF / header / cache / routing proofs | **HIGH** — the breaking change; every downstream slice builds on the new shape |
 | 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper and its **three** probe outcomes ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)); `csrf_exempt` / `csrf_protect` re-entry so the gate really precedes `MultiPartParser` ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)); `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, the CSRF re-entry reorders a security middleware, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
 | 3 | S9 | `views.py` (the mixin's `parse_json`, the multipart control-field guard, **and** `_RawBodyRequestAdapter`), both patch modules' docstrings, `_strawberry_patches.py`, `test_products_api.py`, `test_transport_api.py`, `tests/test_cross_web_patches.py`, `tests/test_views.py` | strict UTF-8 decode on the view's `parse_json`, fed by the view's own `request_adapter_class`; the multipart control-document encoding + loss guard behind two `parse_multipart` delegates ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)); the patch gate narrowed to upstream defects; invert 3 live tests; re-aim 2 package tests; the kill-switch matrix in both opt-out spellings | LOW-MED — the JSON-body half is measured behavior with one rejection branch; the multipart half adds a second boundary on a path Django decodes first |
-| 4 | S11 | `routers.py`, `consumers.py` (WS consumer + 2 handler pre-hooks + the derived outbound-frame adapter + the private Host validator), `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; the shared revalidation decision function; the adapter-level outbound-frame gate, its connection-local lock and its one close code ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)); `DjangoWebSocketHostValidator` ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)); window kwarg and its typed domain; the shared safe value-describer; the multi-yield revoke-mid-subscription matrix on both protocols; the `0.316.0` install-hint correction | **HIGH** — async, per-frame, communicator-driven, and the lock is held across a send |
+| 4 | S11 | `routers.py`, `consumers.py` (WS consumer + 2 handler pre-hooks + the derived outbound-frame adapter + the private Host validator), `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; the shared revalidation decision function; the adapter-level outbound-frame gate, its connection-scoped actor lease and its one close code ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)); `DjangoWebSocketHostValidator` ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)); window kwarg and its typed domain; the shared safe value-describer; the multi-yield revoke-mid-subscription matrix on both protocols; the `0.316.0` install-hint correction | **HIGH** — async, per-frame, communicator-driven, and the lease is held across a send |
 | 5 | S12 | `docs/`, `spec-041`, glossary DB, kanban DB | migration note; transport guidance; `spec-041` amendment **plus** its stale `0.262.0` floor prose; GLOSSARY + TREE regen; card wrap | mechanical breadth; **no version quintet, no `CHANGELOG.md`** |
 
 Sequencing inside the card is strict: **Slice 1 first and alone.** Slices 2 and 4 both
@@ -2303,10 +2350,14 @@ removed in the change that ships the slice — the repo's standing staging disci
   write-back, revoke-or-continue) lives in the shared function, and the revoke-and-close
   response is a second shared coroutine both checkpoints reach
   ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)).
-  The connection-local lock, the revoked flag and the last-validated timestamp are all
-  **connection-scoped**, in the two homes a connection already has: the lock and the flag on
-  the one consumer instance Channels creates per connection, the timestamp on that
-  connection's ASGI `scope` — never three parallel caches keyed by protocol.
+  The actor lease, the revoked flag and the last-validated timestamp are all
+  **connection-scoped**, in the two homes a connection already has: the flag on the one
+  consumer instance Channels creates per connection, the timestamp and the lease on that
+  connection's ASGI `scope` — never three parallel caches keyed by protocol. The lease is on
+  the scope rather than the instance for the reason
+  [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)
+  gives: it is the one piece of this state the opt-in `auth` layer must also be able to
+  acquire, and neither layer may import the other.
 - **The WebSocket Host boundary calls Django and matches nothing itself.**
   `DjangoWebSocketHostValidator` projects the handshake's Host metadata into a minimal
   `HttpRequest` and calls the public `HttpRequest.get_host()`; `ALLOWED_HOSTS` matching,
@@ -2659,7 +2710,16 @@ Maintainer-invoked gates only, per [`AGENTS.md`][agents].
     the over-reported position reaches by the other route, since a restore that raises and a
     restore that cannot be verified are one outcome
     ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
-    #"An unmeasurable stream has three outcomes, not two").
+    #"An unmeasurable stream has three outcomes, not two"). The **bounded read's own** failure
+    gets two rows on both views, backed by a non-seekable stream whose `read` raises after zero
+    bytes and after a partial prefix: the package's own controlled rejection with its exact
+    reason (never `UnreadablePostError` escaping as a `500`), a read count showing the loop
+    stopped at the failure rather than retrying, `_body` absent, the consumed stream neither
+    closed nor replaced, `request.body` raising Django's `RawPostDataException` so no partial
+    body can reach Strawberry, and exactly one `WARNING` naming the stream's class and
+    carrying the `UnreadablePostError` traceback
+    ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
+    #"The bounded read is guarded for the same reason the probe is").
 16. Which ceiling fired: package cap vs. Django's `DATA_UPLOAD_MAX_MEMORY_SIZE`, both
     directions.
 17. `max_request_body_bytes=` view kwarg beats `MAX_REQUEST_BODY_BYTES`; the setting beats
@@ -2777,8 +2837,36 @@ package, communicator-driven, **once per protocol**):
     class keeps its own adapter untouched.
 37. Serialization: two concurrent operations on one socket cannot interleave a passed
     validation with a sibling's revocation — the losing task's payload is never emitted. And
-    the lock's blast radius is bounded: a second connection is unaffected while the first is
-    inside the critical section.
+    the lease's blast radius is bounded: a second connection is unaffected while the first is
+    inside the critical section (two distinct scopes, asserted to hold two distinct leases by
+    identity). The **same-connection `logout`** is the case a second HTTP request cannot
+    reach, and it needs both directions of the exclusion, each driven deterministically with
+    no wall-clock waits:
+    - the subscription composition on **both** protocols — authenticate, admit a multi-yield
+      subscription, receive result 1, run the package's own `logout` on this socket, release
+      result 2, and prove the socket closes `4403` with result 2 suppressed and the generator
+      finalized, at **no additional session read**: the refusal is the connection's
+      authenticated provenance, which is what an implementation reading the live (now
+      anonymous) scope actor would get wrong by taking the read-free carve-out and sending;
+    - the frame-driven twin, on the protocol that can carry a mutation, proving the `logout`'s
+      own `{ok: true}` reply is suppressed like any other post-revocation frame while the
+      deleted session row proves the teardown completed durably;
+    - the **anonymous control**, with the session-store resolver poisoned so zero reads is a
+      positive proof: a socket that was never authenticated logs out, keeps the carve-out, and
+      stays fully usable;
+    - **logout cannot complete across an authorized send** — park the checkpoint's real send
+      delegate (authorization granted, bytes uncommitted), start the `logout`, and prove it
+      reaches the scope session lock and stops: session row intact, scope actor untouched, task
+      not done. Releasing the park lets the pre-transition frame out, the `logout` linearizes
+      behind it, and every later protected frame is refused;
+    - **a transition in flight denies both checkpoints, inside a positive window** — park the
+      `logout` inside `actor_transition` before Channels replaces the scope actor, with the
+      three preconditions asserted (transition open, scope actor still authenticated, window
+      timestamp still fresh), then drive a NEW operation into admission and a running
+      subscription's next result into the outbound gate. Neither proceeds, asserted positively
+      rather than as wire silence: the new operation's resolver never starts and the read count
+      never moves — the shape a cache hit outside the lease would satisfy invisibly, since a
+      cache hit performs no read to count.
 38. The window at the frame checkpoint: with a positive window a revoked subscription keeps
     emitting until the window elapses and is then closed at the next frame, with exactly one
     session read per window rather than per frame.

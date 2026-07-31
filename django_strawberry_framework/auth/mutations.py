@@ -756,23 +756,37 @@ async def _channels_logout(request: Any, payload_cls: type) -> Any:
     state the teardown did not achieve.
 
     The teardown ALSO runs inside ``utils/sessions.py::actor_transition``, which is
-    the contract the WebSocket revalidation reads (spec-046 Decision 11): the scope
-    lock serializes this teardown against other same-scope session mutations, but
-    the revalidation checkpoints hold a different lock entirely, so without the
-    shared state a revalidation suspended inside its session read could resume
-    after this teardown and write the pre-logout actor back onto the scope. The
-    ``was_authenticated`` latch is read from the ``ok`` observation - the actor
+    the exclusion the WebSocket revalidation shares (spec-046 Decision 11): the
+    scope lock serializes this teardown against other same-scope session
+    mutations, and it is the only lock the auth layer owns, so on its own it gives
+    NO ordering at all against the transport layer's revalidation checkpoints.
+    ``actor_transition`` acquires the connection's actor lease, which those
+    checkpoints hold across their whole validate / commit / send sequence, so the
+    two state machines are mutually exclusive in both directions: a checkpoint
+    cannot authorize a frame - by a session read or from its positive-window cache
+    - anywhere inside this teardown, and this teardown cannot complete while a
+    frame authorized before it is still being written to the socket.
+
+    **Lock order.** This is the ONE site that holds both, and the order is the
+    scope session lock OUTER, the actor lease INNER; nothing holding the lease ever
+    reaches the auth layer, so the order is acyclic (see
+    ``utils/sessions.py``'s connection-actor-lease section). The lease is held
+    across the native teardown, so a ``user_logged_out`` receiver must not itself
+    wait on a WebSocket send for this connection.
+
+    The ``was_authenticated`` latch is read from the ``ok`` observation - the actor
     captured under this lock, before the teardown replaces it - so a WebSocket
-    connection's provenance survives its own logout. The consequence on a
-    WebSocket, pinned in ``consumers.py``'s module docstring: this teardown is a
-    connection-scoped revocation event, so the socket is closed at its next
-    protected checkpoint and this payload does not reach the client.
+    connection's provenance survives its own logout, and the next checkpoint can
+    refuse it without a session read. The consequence on a WebSocket, pinned in
+    ``consumers.py``'s module docstring: this teardown is a connection-scoped
+    revocation event, so the socket is closed at its next protected checkpoint and
+    this payload does not reach the client.
     """
     from channels.auth import logout as channels_logout
 
     async with sessions.scope_session_lock(request):
         payload = _logout_observation(request, payload_cls)
-        with actor_transition(request.scope, was_authenticated=payload.ok):
+        async with actor_transition(request.scope, was_authenticated=payload.ok):
             try:
                 await channels_logout(request.scope)
             except BaseException:  # incl. CancelledError: anonymize where possible + re-raise

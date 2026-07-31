@@ -50,11 +50,15 @@ rows assert the close rather than a rejection frame.
 A third group composes the revalidation with the package's OWN ``logout``
 mutation, run on the socket it is sent over rather than through a separate
 request. That is the only revocation shape which also replaces ``scope["user"]``
-with ``AnonymousUser`` and which can complete while a checkpoint's session read
-is suspended, so it is the only one that can exercise the connection's
-authentication provenance and the read token both sides share. Those rows build
-their schema per test, behind a registry-clearing fixture and with every auth
-import function-local, so this module's own import stays auth-free.
+with ``AnonymousUser``, and the only one that runs IN this process against the
+very connection a checkpoint is validating, so it is the only one that can
+exercise the two things a separate request cannot reach: the connection's
+authentication provenance, and the actor lease that keeps a transition and a
+checkpoint's whole validate/commit/send sequence mutually exclusive - in both
+directions, which is why the group carries a parked-send row and a
+parked-transition row rather than one of them. Those rows build their schema per
+test, behind a registry-clearing fixture and with every auth import
+function-local, so this module's own import stays auth-free.
 
 The execution schema is module-local and ORM-free: the async consumers execute
 on the event loop, where sync ORM would raise ``SynchronousOnlyOperation`` -
@@ -801,6 +805,34 @@ def _package_logger_records(caplog):
     return [record for record in caplog.records if record.name == "django_strawberry_framework"]
 
 
+def _actor_lease(consumer):
+    """The ``asyncio.Lock`` object serving as this connection's actor lease.
+
+    Read through the production accessor rather than off a scope key spelled here,
+    so a row asserting "these two sockets hold two different leases" is asserting
+    it about the objects the production code locks.
+    """
+    return session_store_module.connection_actor_state(consumer.scope).lock
+
+
+def _actor_lease_held(consumer):
+    """Whether ANYONE holds this connection's shared actor lease.
+
+    The lease lives on the ASGI scope rather than on the consumer instance, which
+    is the structural point of it: the auth layer's own ``logout`` has to be able
+    to acquire the very lock the revalidation checkpoints hold, and it can only
+    reach the scope. Asked through the production accessor so the rows below
+    observe the object the production code locks, not a second one they built.
+
+    Its ONE stated limit, recorded so it is never "strengthened" into something
+    weaker: ``asyncio.Lock.locked()`` is a property of the LOCK, not of the holder,
+    so this reads "someone holds this connection's lease" rather than "this task
+    does". It discriminates in the rows that read it because those rows have no
+    contender at that instant, or because they name the contender independently.
+    """
+    return _actor_lease(consumer).locked()
+
+
 class _RevalidationProbe:
     """Count the revalidation's session reads, and optionally hold or poison one."""
 
@@ -810,9 +842,6 @@ class _RevalidationProbe:
         self.hold = None
         self.hold_key = None
         self.invalidate_after = None
-        self.hold_after_read = None
-        self.entered_after_read = asyncio.Event()
-        self.read_actors = []
 
 
 def _instrument_revalidation(monkeypatch):
@@ -843,13 +872,6 @@ def _instrument_revalidation(monkeypatch):
     the only tool when the two checkpoints belong to ONE upstream call the test body
     cannot interleave with - the subscription-limit row's admission and its
     ``error`` frame both happen inside a single ``handle_subscribe``.
-
-    ``probe.hold_after_read`` is the OTHER side of ``probe.hold``, and the
-    difference is the whole point of the row that uses it: it parks the read once
-    it has already loaded the actor, so what resumes is a genuinely stale
-    authenticated actor rather than whatever the store would answer later.
-    ``read_actors`` keeps those loaded objects, which is how "the stale actor was
-    not written back" is asserted by identity rather than by value.
     """
     probe = _RevalidationProbe()
     original = consumers_module._refreshed_actor
@@ -861,59 +883,54 @@ def _instrument_revalidation(monkeypatch):
             await probe.hold.wait()
         if probe.invalidate_after is not None and probe.reads > probe.invalidate_after:
             return AnonymousUser()
-        actor = await original(scope)
-        probe.read_actors.append(actor)
-        if probe.hold_after_read is not None:
-            probe.entered_after_read.set()
-            await probe.hold_after_read.wait()
-        return actor
+        return await original(scope)
 
     monkeypatch.setattr(consumers_module, "_refreshed_actor", counting_refreshed_actor)
     return probe
 
 
 class _OutboundGateProbe:
-    """What the outbound checkpoint did: who entered, whose lock, and when it sent."""
+    """What the outbound checkpoint did: who entered, whose lease, and when it sent."""
 
     def __init__(self):
         self.entries = []
         self.frame_types = []
         self.from_run_task = []
         self.consumers = []
-        self.sends_under_lock = []
+        self.sends_under_lease = []
+        self.reached_send = asyncio.Event()
+        self.hold_before_send = None
 
 
 def _record_outbound_gate(monkeypatch):
     """Observe the outbound checkpoint from the outside; return the probe.
 
-    Two observations, both of the real production objects at the real moments the
+    Every observation is of the real production objects at the real moments the
     production code reaches them.
 
     ``entries`` records gate entry. The gate's first act is to acquire the
-    connection's revocation lock, so "operation B entered the gate while operation
-    A holds the lock" is exactly the observation "B is queued at the lock" - the
+    connection's actor lease, so "operation B entered the gate while operation
+    A holds the lease" is exactly the observation "B is queued at the lease" - the
     contention the design accepts, and otherwise invisible from outside.
 
-    ``sends_under_lock`` records whether the lock was still held at the instant
+    ``sends_under_lease`` records whether the lease was still held at the instant
     the checkpoint called ``send``. That is the one thing no wire assertion can
-    show: releasing the lock after validation instead of after the send is
+    show: releasing the lease after validation instead of after the send is
     indistinguishable in-process here, because ``channels.testing``'s ``base_send``
     puts onto an unbounded queue and never suspends, so no sibling can interleave
     into the window that mutation opens (a real ASGI server's socket write does
     suspend, which is precisely why the design closes the window). The wrapper
     delegates to the checkpoint's own ``send`` argument, so what is measured is the
-    production lock at the production call site, not a stand-in for either.
+    production lease at the production call site, not a stand-in for either. See
+    ``_actor_lease_held`` for what ``locked()`` can and cannot say.
 
-    Its ONE stated limit, recorded so it is never "strengthened" into something
-    weaker: ``asyncio.Lock.locked()`` is a property of the LOCK, not of the holder, so
-    the assertion reads "someone holds this connection's lock" rather than "this task
-    does". It discriminates in the rows that read it because those rows have no
-    contender at that instant - the control rows run a single operation, and the
-    blast-radius row's second socket holds a DIFFERENT lock, asserted by identity. A
-    row that added a contending sibling and kept only this assertion would be
-    satisfied by the very interleaving the mutation opens; such a row must assert the
-    sibling's exclusion (``entries`` + zero reads of its own) the way the sibling row
-    does, not just ``locked()``.
+    ``probe.hold_before_send``, when set to an ``Event``, additionally parks the
+    checkpoint's own send delegate at exactly that point - authorization granted,
+    bytes not yet committed - which is the state a real socket write occupies and
+    the state the ``base_send`` queue otherwise never leaves the process in. It is
+    the only park point from which "a same-connection logout cannot complete
+    across an authorized send" is observable at all, and ``reached_send`` is how
+    the row knows the park was reached rather than skipped.
 
     ``frame_types`` and ``from_run_task`` record which frame reached the checkpoint
     and whether it arrived on the connection's own message-loop task - the two facts
@@ -930,7 +947,10 @@ def _record_outbound_gate(monkeypatch):
         probe.consumers.append(consumer)
 
         async def observing_send(payload):
-            probe.sends_under_lock.append(consumer._revocation_lock.locked())
+            probe.sends_under_lease.append(_actor_lease_held(consumer))
+            probe.reached_send.set()
+            if probe.hold_before_send is not None:
+                await probe.hold_before_send.wait()
             await send(payload)
 
         return await original(websocket, message, observing_send)
@@ -3255,8 +3275,8 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
     checkpoint, so admission plus two results is three.
 
     This is also the only row where information-bearing frames actually go out, so
-    it is where the lock's placement is pinned: both sends happened while the
-    connection's revocation lock was still HELD. Releasing the lock after
+    it is where the lease's placement is pinned: both sends happened while the
+    connection's actor lease was still HELD. Releasing the lease after
     validation instead - the mutation the design explicitly rules out - changes
     nothing observable on the wire in this harness (see ``_record_outbound_gate``),
     so without this assertion that mutation would pass the whole suite.
@@ -3285,9 +3305,9 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
 
     assert probe.reads == 3
     assert controller.emitted == ["control-1", "control-2"]
-    # Every frame that DID go out went out under the connection lock.
+    # Every frame that DID go out went out under the connection's actor lease.
     assert gate.entries == ["1", "1"]
-    assert gate.sends_under_lock == [True, True]
+    assert gate.sends_under_lease == [True, True]
     # Upstream's teardown cancelled the still-running subscription on disconnect.
     assert controller.finalized
 
@@ -3373,26 +3393,26 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
 async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revocation(
     monkeypatch,
 ):
-    """Decision 11, the lock held through the send: the sibling race.
+    """Decision 11, the lease held through the send: the sibling race.
 
     The race the design exists to close: two operations on one socket, both
     authorized when they started. Operation ``a`` reaches the outbound checkpoint
     first and is held INSIDE its validation read; operation ``b`` produces its own
-    result and queues at the connection lock behind it; the session is then revoked
-    while ``a`` is still holding. If the lock were released after validation rather
+    result and queues at the connection's lease behind it; the session is then revoked
+    while ``a`` is still holding. If the lease were released after validation rather
     than after the send, ``b`` could pass validation, ``a`` could observe the
     revocation and begin closing, and ``b``'s previously authorized payload would
     still go out.
 
-    "``b`` is queued at the lock" is asserted rather than assumed: the recorded
-    gate entries show ``b`` inside the checkpoint while ``a`` holds the lock, and
+    "``b`` is queued at the lease" is asserted rather than assumed: the recorded
+    gate entries show ``b`` inside the checkpoint while ``a`` holds the lease, and
     the read count shows ``b`` performed no read of its own - it cannot have got
-    past the lock. After the release, ``a`` fails, the connection closes, and
+    past the lease. After the release, ``a`` fails, the connection closes, and
     ``b``'s frame is refused from the connection-local flag with no extra read at
-    all: three reads for two admissions and one validated result. Dropping the lock
+    all: three reads for two admissions and one validated result. Dropping the lease
     altogether is what that count catches - ``b`` would then validate concurrently
     and the row would see four reads - while the *placement* of the release is
-    pinned by the control row's ``sends_under_lock``.
+    pinned by the control row's ``sends_under_lease``.
     """
     user, cookie, session_key = await _make_user_and_session("sibling_probe")
     first_controller = _controller("sibling-a")
@@ -3419,9 +3439,9 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
         assert gate.entries == ["a"], gate.entries
         assert probe.reads == 3
         consumer = gate.consumers[0]
-        assert consumer._revocation_lock.locked()
+        assert _actor_lease_held(consumer)
 
-        # ``b`` produces its result and can only wait for the lock.
+        # ``b`` produces its result and can only wait for the lease.
         second_controller.release(0)
         await _wait_until(
             lambda: gate.entries == ["a", "b"],
@@ -3429,7 +3449,7 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
         )
         assert probe.reads == 3
 
-        # The session is revoked while ``a`` still holds the lock.
+        # The session is revoked while ``a`` still holds the lease.
         await _flush_the_session(user, session_key)
         probe.hold.set()
 
@@ -3493,15 +3513,15 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
 
 @pytest.mark.django_db(transaction=True)
 async def test_the_connection_lock_never_serializes_a_second_connection(monkeypatch):
-    """Decision 16, the lock's blast radius: one socket, not the process.
+    """Decision 16, the lease's blast radius: one socket, not the process.
 
     The other half of the head-of-line tradeoff, and the half that makes it
     acceptable. While socket 1 is parked INSIDE its critical section - holding its
-    own revocation lock across a session read - socket 2 runs a complete operation
+    own actor lease across a session read - socket 2 runs a complete operation
     to a delivered result. A lock at module or class scope (the shape a "simpler"
     implementation reaches for) would have made socket 2 wait on a stranger's
-    database read; a per-connection lock cannot, and the two distinct consumer
-    instances holding two distinct locks are what that rests on.
+    database read; a per-connection lease cannot, and the two distinct scopes
+    holding two distinct leases are what that rests on.
 
     ``probe.hold_key`` is why socket 2's own reads are not parked by the same probe:
     only socket 1's session key is held.
@@ -3528,18 +3548,19 @@ async def test_the_connection_lock_never_serializes_a_second_connection(monkeypa
         controller.release(0)
         await _reached(probe.entered, "socket 1 never reached its validation read")
         first_consumer = gate.consumers[0]
-        assert first_consumer._revocation_lock.locked()
+        assert _actor_lease_held(first_consumer)
 
-        # A DIFFERENT connection is unaffected: full round trip, its own lock.
+        # A DIFFERENT connection is unaffected: full round trip, its own lease.
         async with _open_ws(router, cookie=second_cookie) as second_socket:
             message = await _ws_operation(second_socket, "{ username }", op_id="1")
             assert message["type"] == "next", message
             assert message["payload"]["data"] == {"username": "blast_radius_two"}
             second_consumer = gate.consumers[-1]
             assert second_consumer is not first_consumer
-            # Socket 1 is still parked, and its lock is still the only one held.
-            assert first_consumer._revocation_lock.locked()
-            assert not second_consumer._revocation_lock.locked()
+            assert _actor_lease(second_consumer) is not _actor_lease(first_consumer)
+            # Socket 1 is still parked, and its lease is still the only one held.
+            assert _actor_lease_held(first_consumer)
+            assert not _actor_lease_held(second_consumer)
 
         # Socket 1 then finishes normally - it was never revoked, only slow.
         probe.hold.set()
@@ -3547,7 +3568,7 @@ async def test_the_connection_lock_never_serializes_a_second_connection(monkeypa
         assert first["type"] == "next", first
         assert first["payload"]["data"] == {"controlled": "blast-radius-1"}
 
-    assert gate.sends_under_lock == [True, True]
+    assert gate.sends_under_lease == [True, True]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3639,7 +3660,7 @@ async def test_connection_control_frames_never_reach_the_outbound_checkpoint(mon
 
         assert probe.reads == 2
         assert gate.entries == ["1"]
-        assert gate.sends_under_lock == [True]
+        assert gate.sends_under_lease == [True]
 
 
 #: Upstream's OWN default for ``max_subscriptions_per_connection``
@@ -3941,88 +3962,186 @@ async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_revalidation_read_overtaken_by_a_same_socket_logout_commits_nothing(
+async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_send(
     monkeypatch,
     _logout_schema,
 ):
-    """The stale-read ordering: an in-flight read cannot resurrect a logged-out actor.
+    """The send ordering: an authorized frame and a logout are serialized, not raced.
 
-    The two state machines hold different locks - the checkpoints hold the
-    connection's revocation lock, the logout holds the scope's session lock - and
-    they do not nest, so a session read that has already obtained the
-    still-valid actor can be overtaken by the whole logout teardown before it
-    resumes. Without the shared read token the resumed read would write its stale
-    authenticated actor back onto the scope, refresh the revalidation window from
-    it, and authorize the frame it was validating: a durably logged-out actor,
-    re-authenticated in memory, emitting protected frames.
+    The one interleaving no after-the-fact check can repair, and therefore the one
+    that has to be excluded rather than detected. An ASGI send is asynchronous, so
+    a checkpoint can have validated the actor, entered ``send``, and suspended with
+    the bytes not yet committed. If the logout ran under a lock of its own it would
+    flush the durable session, replace the scope actor and return THROUGH that
+    suspension, and the already-authorized frame would then land on a socket whose
+    identity no longer exists. Comparing a generation after ``send`` returns is too
+    late; the frame has gone out.
 
-    The ordering is driven exactly, with no wall-clock waits: the probe parks the
-    read AFTER it has loaded the actor (so what resumes is genuinely stale rather
-    than an anonymous answer the store would give later), the logout then runs to
-    completion on the socket's own scope while the checkpoint still holds the
-    revocation lock, and only then is the read released.
+    So the row parks the checkpoint's own send delegate - authorization granted,
+    nothing written - and asserts the exclusion from the auth side: the logout
+    reaches the scope session lock, and stops. Its durable teardown has NOT run
+    (the session row is still there) and the scope actor is untouched, which is
+    what distinguishes "the logout is waiting" from "the logout is slow".
 
-    Why the refusal cannot be the provenance rule wearing this row's clothes: the
-    checkpoint entered - and applied the anonymous test - while the scope actor
-    was still authenticated. What denies it on resume is the read token alone.
-
-    A positive window is configured so the third assertion is observable at all:
-    the window timestamp recorded at admission must still be the admission's, not
-    a fresh one written from the stale read, or every later checkpoint would reuse
-    the resurrected actor until it expired.
+    Releasing the park then shows the linearization in the other direction: the
+    pre-transition frame - which was legitimately authorized, and is not
+    suppressed - goes out first, the logout completes behind it, and only then does
+    the connection carry an anonymous actor. Every LATER protected frame is refused
+    and the socket takes the documented close, at no session read: the refusal is
+    the connection's authenticated provenance, not a fresh lookup.
     """
-    _user, cookie, session_key = await _make_user_and_session("stale_read_probe")
-    controller = _controller("stale-read")
+    from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
+
+    _user, cookie, session_key = await _make_user_and_session("parked_send_probe")
+    controller = _controller("parked-send")
+    gate = _record_outbound_gate(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router(_logout_schema)
+
+    async with _open_ws(router, cookie=cookie) as communicator:
+        await _send_operation(communicator, _controlled_subscription("parked-send"), op_id="1")
+        await _reached(controller.started, "the operation was never admitted")
+        assert probe.reads == 1
+
+        # Result 1 is validated and then parked with its bytes uncommitted.
+        gate.hold_before_send = asyncio.Event()
+        controller.release(0)
+        await _reached(gate.reached_send, "the checkpoint never reached its send delegate")
+        assert probe.reads == 2
+        consumer = gate.consumers[0]
+        assert _actor_lease_held(consumer)
+
+        # The logout takes the scope session lock and can get no further: the lease
+        # it needs next is the one the parked send is holding.
+        logout_task = asyncio.create_task(_logout_on_this_socket(_logout_schema, consumer))
+        await _wait_until(
+            lambda: (
+                consumer.scope.get(_SCOPE_LOCK_KEY) is not None
+                and consumer.scope[_SCOPE_LOCK_KEY].locked()
+            ),
+            lambda: "the logout never reached the scope session lock",
+        )
+        assert consumer.scope["user"].is_authenticated
+        # A real round trip through the executor thread, so the logout has had
+        # every chance to finish if nothing were holding it back.
+        assert await _session_row_still_exists(session_key)
+        assert not logout_task.done()
+
+        # Released, the authorized frame goes out and the logout linearizes behind it.
+        gate.hold_before_send.set()
+        first = await communicator.receive_json_from(timeout=10)
+        assert first["payload"]["data"] == {"controlled": "parked-send-1"}
+        await logout_task
+        assert not await _session_row_still_exists(session_key)
+        assert consumer.scope["user"].is_anonymous
+
+        controller.release(1)
+        closed, frames = await _drain_until_close(communicator)
+
+    assert frames == [], frames
+    _assert_revoked_close(closed)
+    assert gate.sends_under_lease == [True]
+    assert controller.emitted == ["parked-send-1", "parked-send-2"]
+    assert controller.finalized
+    # The post-transition refusal is provenance, so it cost no read of its own.
+    assert probe.reads == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_window(
+    monkeypatch,
+    _logout_schema,
+):
+    """The other ordering: a positive window's cache hit is not a bypass.
+
+    The reverse of the parked-send row, and the reason a fresh window timestamp
+    cannot be a shortcut around the exclusion. Reusing a timestamp IS an
+    authorization decision, so it has to happen under the same lease an uncached
+    validation holds; a cache hit evaluated outside it would authorize against a
+    connection whose actor was already being replaced, and would do so *silently* -
+    the read counter, which every other row in this group leans on, does not move
+    for a cache hit at all.
+
+    The logout is parked inside its own transition and BEFORE Channels replaces the
+    scope actor, which is the worst moment for both checkpoints: the durable
+    session is going away, the scope still says "authenticated", and the window
+    timestamp is fresh. The row asserts all three of those preconditions, so it
+    cannot degrade into a row where the window had simply expired.
+
+    Both checkpoints are then driven at once - a NEW operation reaches admission,
+    and the running subscription's next result reaches the outbound gate - and
+    neither may proceed. "Neither proceeded" is asserted positively rather than as
+    wire silence: the new operation's resolver never started (so admission did not
+    delegate to upstream), and the read count is unchanged (so nothing revalidated
+    either). When the transition finally releases the lease both refuse on
+    provenance, still read-free, and the connection takes the documented close.
+    """
+    import channels.auth
+
+    _user, cookie, session_key = await _make_user_and_session("transition_window_probe")
+    running = _controller("transition-running")
+    blocked = _controller("transition-blocked")
     gate = _record_outbound_gate(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
     router = _router(_logout_schema, websocket_revalidation_window=3600.0)
+    native_logout = channels.auth.logout
+    inside_transition = asyncio.Event()
+    release_transition = asyncio.Event()
+
+    async def parked_logout(scope):
+        """Park inside ``actor_transition``, before the scope actor is replaced."""
+        inside_transition.set()
+        await release_transition.wait()
+        await native_logout(scope)
+
+    monkeypatch.setattr(channels.auth, "logout", parked_logout)
 
     async with _open_ws(router, cookie=cookie) as communicator:
-        await _send_operation(communicator, _controlled_subscription("stale-read"), op_id="1")
-        await _reached(controller.started, "the operation was never admitted")
+        await _send_operation(
+            communicator,
+            _controlled_subscription("transition-running"),
+            op_id="1",
+        )
+        await _reached(running.started, "the running operation was never admitted")
+        assert probe.reads == 1
 
-        # Result 1 rides the admission's read, inside the window.
-        controller.release(0)
+        # Result 1 rides the admission's read from the window cache.
+        running.release(0)
         first = await communicator.receive_json_from(timeout=10)
-        assert first["payload"]["data"] == {"controlled": "stale-read-1"}
+        assert first["payload"]["data"] == {"controlled": "transition-running-1"}
         assert probe.reads == 1
 
         consumer = gate.consumers[0]
-        admitted_at = consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY]
+        logout_task = asyncio.create_task(_logout_on_this_socket(_logout_schema, consumer))
+        await _reached(inside_transition, "the logout never opened its actor transition")
 
-        # Past the window, so the next frame must revalidate - and that read is
-        # parked after it has loaded the actor the session still resolves to.
-        advanced = time.monotonic() + 7200.0
-        monkeypatch.setattr(consumers_module, "_monotonic", lambda: advanced)
-        probe.hold_after_read = asyncio.Event()
+        # The three preconditions that make a cache hit genuinely available here.
+        assert _actor_lease_held(consumer)
+        assert consumer.scope["user"].is_authenticated
+        window_age = time.monotonic() - consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY]
+        assert 0.0 <= window_age < 3600.0, window_age
 
-        controller.release(1)
-        await _reached(probe.entered_after_read, "the checkpoint never loaded a stale actor")
-        assert probe.reads == 2
-        assert consumer._revocation_lock.locked()
-        assert probe.read_actors[-1].is_authenticated
+        # Admission and the outbound gate, both driven into the open transition.
+        await _send_operation(
+            communicator,
+            _controlled_subscription("transition-blocked"),
+            op_id="2",
+        )
+        running.release(1)
+        assert await communicator.receive_nothing(timeout=0.2)
+        assert not blocked.started.is_set(), "admission authorized an operation from the cache"
+        assert probe.reads == 1
 
-        # The logout completes WHILE that read is suspended: it takes the scope's
-        # session lock, which the parked checkpoint does not hold.
-        await _logout_on_this_socket(_logout_schema, consumer)
+        release_transition.set()
+        await logout_task
         assert not await _session_row_still_exists(session_key)
 
-        probe.hold_after_read.set()
         closed, frames = await _drain_until_close(communicator)
 
-    # The frame the stale read was validating never went out, and the connection
-    # took the documented revocation transition.
     assert frames == [], frames
     _assert_revoked_close(closed)
-    assert controller.emitted == ["stale-read-1", "stale-read-2"]
-    assert controller.finalized
-    # Nothing was committed: the scope still carries the logout's anonymous actor
-    # (never the object the stale read returned), and the window still carries the
-    # admission's timestamp.
-    assert consumer.scope["user"].is_anonymous
-    assert consumer.scope["user"] is not probe.read_actors[-1]
-    assert consumer.scope[consumers_module._REVALIDATED_AT_SCOPE_KEY] == admitted_at
-    # Both edges of the transition were recorded, and it is over.
-    state = session_store_module.connection_actor_state(consumer.scope)
-    assert (state.generation, state.transitions_in_flight) == (1, 0)
-    assert state.authenticated_provenance
+    # Neither checkpoint authorized anything, and neither paid a read to refuse.
+    assert not blocked.started.is_set()
+    assert probe.reads == 1
+    assert running.emitted == ["transition-running-1", "transition-running-2"]
+    assert running.finalized

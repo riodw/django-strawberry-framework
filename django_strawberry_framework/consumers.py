@@ -79,28 +79,37 @@ disconnect path rather than left emitting against an anonymous scope. A client
 that wants to keep working after logging out opens a new socket, which is also
 the only way it can present a different session.
 
-Two properties make that true, and neither is a lock (see
-``utils/sessions.py``'s connection-actor-state section for both, and for why the
-two locks involved never nest). **Provenance**: the anonymous carve-out below is
-keyed on whether the connection has EVER carried an authenticated actor, not on
-whether it carries one now, so an authenticated -> anonymous change cannot buy
-the read-free path a genuinely anonymous socket gets. **A read token**: the
-revalidation's session read is asynchronous, so it captures the connection's
-actor generation before suspending and refuses to commit the refreshed actor, the
-window timestamp, or the pending frame if an actor transition overlapped it - a
-stale read cannot resurrect a durably logged-out actor in memory.
+Two properties make that true (see ``utils/sessions.py``'s connection-actor-lease
+section for both, and for the order the two locks involved observe).
+**Provenance**: the anonymous carve-out below is keyed on whether the connection
+has EVER carried an authenticated actor, not on whether it carries one now, so an
+authenticated -> anonymous change cannot buy the read-free path a genuinely
+anonymous socket gets - which is also what makes the refusal after a logout cost
+no session read at all. **The shared actor lease**: a transition and a
+checkpoint's whole critical section are mutually exclusive, so a stale read cannot
+be overtaken by a logout, a logout cannot complete underneath a protected send
+that was authorized before it, and no checkpoint can authorize anything while a
+transition owns the connection.
 
-**One lock, held through the send.** A single connection-local ``asyncio.Lock``
-spans the validation / cache decision, the revoked-state transition, AND the
-actual information-bearing send. Releasing it after validation would let one
-sibling task pass validation, another detect revocation and begin closing, and the
-first then emit its previously authorized payload. The cost is stated rather than
-hidden: this is a per-connection serialization point on the outbound hot path, so
-when a validation needs a session-store read every concurrent operation waiting to
-emit on that socket waits for that read. That head-of-line behavior is accepted
-because it is the mechanism that makes "no sibling payload escapes after
-revocation is observed" true, and THE LOCK serializes exactly one connection's
-protected frames - never a keep-alive, never a frame on an unrelated connection.
+**One lease, held through the send, shared with the auth layer.** The connection's
+actor lease (``utils/sessions.py::actor_lease``) spans the validation / cache
+decision, the revoked-state transition, AND the actual information-bearing send.
+Releasing it after validation would let one sibling task pass validation, another
+detect revocation and begin closing, and the first then emit its previously
+authorized payload - and, because an ASGI send is asynchronous, it would equally
+let a same-connection ``logout`` run to completion inside the window between
+"authorized" and "written". The lease is deliberately NOT private to this module
+for exactly that second reason: a lock the auth layer cannot acquire gives no
+ordering against the one revocation the package itself performs.
+
+The cost is stated rather than hidden: this is a per-connection serialization
+point on the outbound hot path, so when a validation needs a session-store read
+every concurrent operation waiting to emit on that socket waits for that read,
+and a same-connection ``logout`` waits behind an in-flight protected frame (as
+that frame's successor waits behind the ``logout``). That head-of-line behavior is
+accepted because it is the mechanism that makes "no payload escapes after
+revocation is observed" true, and THE LEASE serializes exactly one connection -
+never a keep-alive, never a frame on an unrelated connection.
 
 **The lock's scope is not the whole blocking story**, which matters when sizing a
 deployment. ``channels.auth.get_user`` is thread-sensitive, so every connection's
@@ -151,9 +160,9 @@ import it above its own guard: the module level reaches only for the standard
 library, Django's own ``HttpRequest`` / ``DisallowedHost`` (a HARD dependency, and
 the whole point of the Host boundary below), this package's logger,
 ``exceptions.ConfigurationError`` / ``exceptions.describe_value``, and the
-connection-actor-state helpers from ``utils/sessions.py`` - a module whose own
-imports are ``__future__``, ``contextlib`` and typing names, so it adds nothing to
-the import graph.
+connection-actor-lease helpers from ``utils/sessions.py`` - a module whose own
+imports are ``__future__``, ``asyncio``, ``contextlib`` and typing names, so it
+adds nothing to the import graph.
 ``channels.auth.get_user`` and the package's session-store resolver are imported
 **inside** the revalidation coroutine (the
 ``auth/mutations.py::_channels_http_login_establish`` precedent),
@@ -165,7 +174,7 @@ class the factory is handed, so an upstream re-point is tracked for free.
 stays adoptable without the soft dependency.
 
 The session-store resolver the revalidation reaches - like the connection actor
-state it shares with the auth layer - is
+lease it shares with the auth layer - is
 ``utils/sessions.py``'s and deliberately NOT
 ``auth/sessions.py``'s re-export of it: ``auth`` is structurally opt-in
 (spec-040 Decision 3) and its ``__init__`` eagerly imports ``.mutations`` /
@@ -219,8 +228,7 @@ from django.http import HttpRequest
 from . import logger
 from .exceptions import ConfigurationError, describe_value
 from .utils.sessions import (
-    actor_read_is_committable,
-    actor_read_token,
+    actor_lease,
     connection_was_authenticated,
     note_authenticated_actor,
 )
@@ -381,14 +389,13 @@ async def revalidate_operation_actor(handler: Any) -> bool:
     hardcoded ``"default"`` - which is the same authority
     ``utils/permissions.py::resolve_auth_aliases`` reads. It takes no *session*
     lock: ``auth/sessions.py::scope_session_lock`` serializes session
-    *mutations*, while this is a read of a private store. The lock it does take
-    is the connection's own revocation lock, which exists for a different reason
-    entirely: it makes the validate-transition-send sequence atomic against
-    sibling operations on the same socket. Correctness against a concurrent
-    same-connection ``logout`` is NOT a property of either lock - the two do not
-    nest, and a read that suspends inside one of them can be overtaken by a
-    transition running under the other - it comes from the shared connection
-    actor state described in the module docstring.
+    *mutations*, while this is a read of a private store. What it does take is the
+    connection's shared actor lease, which serves both purposes at once - it makes
+    the validate-transition-send sequence atomic against sibling operations on the
+    same socket, AND, because ``utils/sessions.py::actor_transition`` holds the
+    same lease, against the one revocation the package performs itself. A read that
+    suspends inside the lease can no longer be overtaken by a same-connection
+    ``logout``, because that ``logout`` is waiting for it.
 
     One caveat worth stating: with ``SESSION_ENGINE`` set to Django's
     signed-cookie engine there is no server-side record, so a flush is not
@@ -403,7 +410,7 @@ async def revalidate_operation_actor(handler: Any) -> bool:
         return True
 
     consumer = handler.view
-    async with consumer._revocation_lock:
+    async with actor_lease(consumer.scope):
         if consumer._revocation_observed:
             # Already revoked and already closed by whichever checkpoint saw it
             # first. A client can still have pipelined this frame before the
@@ -427,10 +434,15 @@ async def send_revalidated_operation_frame(
     The ENTIRE critical section lives here rather than in the adapter, which is
     what lets the derived adapter stay a two-line delegation (the shape the two
     handler subclasses already have) and what puts the lock discipline in one
-    place: the lock spans the validation / cache decision, the revoked-state
-    transition, and ``send`` itself. See the module docstring for why holding it
-    through the send - and the per-connection head-of-line blocking that buys -
-    is the point rather than an oversight.
+    place: the connection's actor lease spans the validation / cache decision, the
+    revoked-state transition, and ``send`` itself. See the module docstring for why
+    holding it through the send - and the per-connection head-of-line blocking that
+    buys - is the point rather than an oversight. ``send`` is the LAST thing inside
+    the lease deliberately: it is asynchronous, so any window left open after the
+    authorization and before the bytes are committed is a window a
+    same-connection ``logout`` can complete inside, and a generation compared
+    after ``send`` returns would be checked against a frame that has already gone
+    out.
 
     ``send`` is the adapter's own ``super().send_json`` bound method, so the
     delegation is upstream's serialize-and-write path, unchanged.
@@ -450,13 +462,13 @@ async def send_revalidated_operation_frame(
     ``shutdown()`` / ``cleanup()`` on disconnect.
     """
     consumer = websocket.ws_consumer
-    async with consumer._revocation_lock:
+    async with actor_lease(consumer.scope):
         if not consumer._revocation_observed and await _actor_is_current(consumer):
             await send(message)
             return
         await _revoke_connection(websocket)
 
-    # Outside the lock, and only ever the OPERATION task: cancelling the
+    # Outside the lease, and only ever the OPERATION task: cancelling the
     # connection's own message-loop task (upstream's ``run_task``) would abort
     # the very disconnect/shutdown path that has to cancel and await the
     # remaining operations. The main task reaches this function for the
@@ -476,13 +488,15 @@ async def _actor_is_current(consumer: Any) -> bool:
     callers own the response to a ``False``, which is what keeps admission and
     the outbound gate from drifting apart.
 
-    Callers hold the connection's revocation lock, so the window comparison, the
-    reload, and the cache write below are atomic against every sibling
-    checkpoint on the same socket. They are NOT atomic against a package-owned
-    actor transition on the same connection, which holds a different lock
-    entirely (``auth/sessions.py::scope_session_lock``) - so the shared
-    connection actor state in ``utils/sessions.py``, and not the revocation lock,
-    is what makes this decision correct across a same-connection ``logout``.
+    Callers hold the connection's actor lease, so the provenance test, the window
+    comparison, the reload, and the cache write below are atomic against every
+    sibling checkpoint on the same socket AND against a package-owned actor
+    transition on the same connection - ``utils/sessions.py::actor_transition``
+    holds that same lease for the whole teardown. Every arm below therefore runs
+    on a connection whose actor identity cannot change underneath it, which is
+    what licenses the one arm that authorizes without reading anything: the
+    positive-window cache hit is an authorization decision, so it must not be
+    reachable outside the lease that every other arm holds.
     """
     scope = consumer.scope
     actor = scope.get("user")
@@ -522,10 +536,6 @@ async def _actor_is_current(consumer: Any) -> bool:
     if window > 0.0 and _monotonic() - scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf) < window:
         return True
 
-    # Captured BEFORE the read suspends: the reload below is the one ``await`` on
-    # this path, and a package-owned actor transition on the same connection runs
-    # under a different lock, so it can complete entirely inside that suspension.
-    token = actor_read_token(scope)
     try:
         refreshed = await _refreshed_actor(scope)
     except Exception:
@@ -549,17 +559,6 @@ async def _actor_is_current(consumer: Any) -> bool:
         # about to be closed either way.
         return False
 
-    if not actor_read_is_committable(scope, token):
-        # An actor transition on this connection overlapped the read, so what the
-        # read returned describes a session state that no longer holds - it may
-        # even be the pre-``logout`` actor, loaded microseconds before the flush.
-        # Committing it would re-authenticate the connection in memory after a
-        # durable logout, refresh the revalidation window from a stale read, and
-        # authorize the pending frame. Nothing is written and the checkpoint
-        # denies: the actor that WAS revoked cannot be resurrected by a read that
-        # started before the revocation finished.
-        return False
-
     # The write-back (spec-046 Decision 11): ``channels.auth``'s own ``login`` /
     # ``logout`` replace ``scope["user"]`` the same way, and the Channels request
     # adapter reads that key - so every surface reached through
@@ -574,7 +573,7 @@ async def _revoke_connection(websocket: Any) -> None:
     """Mark the connection revoked and close the socket - exactly once.
 
     The transition is set BEFORE the close is awaited, so a sibling task that
-    acquires the revocation lock next observes "revoked" immediately and takes
+    acquires the connection's actor lease next observes "revoked" immediately and takes
     neither a second session read nor a second close. Idempotence is not a
     nicety here: both checkpoints call this, and a socket that is closed twice
     would make upstream emit a second ``websocket.close`` after the first.
@@ -692,10 +691,15 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
 
         ``revalidation_window`` rides as an ``as_asgi()`` initkwarg rather than a
         class attribute, so one cached consumer class serves every router
-        instance and two routers may carry two different windows. The revocation
-        lock and the revoked flag are per-INSTANCE for the same structural
-        reason: revocation is connection-scoped, and one consumer instance is
-        exactly one connection.
+        instance and two routers may carry two different windows. The revoked flag
+        is per-INSTANCE for the same structural reason: revocation is
+        connection-scoped, and one consumer instance is exactly one connection.
+        The lock that guards it is NOT an instance attribute, and the asymmetry is
+        the point: exclusion has to reach a second state machine this class cannot
+        see, so it lives on the ASGI scope
+        (``utils/sessions.py::actor_lease``) - which is the same
+        one-object-per-connection lifetime, reachable from the auth layer's own
+        ``logout`` without either layer importing the other.
 
         **Maximum connection lifetime** (spec-046 Decision 12). The package
         imposes none, and that is a decision rather than an omission: there is no
@@ -731,13 +735,9 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             **kwargs: Any,
         ) -> None:
             # Stored BEFORE ``super().__init__``: upstream's initializer starts
-            # the consumer's own machinery, and the checkpoints read all three of
-            # these off the view / adapter's consumer. ``asyncio.Lock()`` binds
-            # its loop lazily on first use (Python 3.10+), and Channels builds one
-            # consumer instance per connection inside the serving loop, so the
-            # lock is always this connection's.
+            # the consumer's own machinery, and the checkpoints read both of these
+            # off the view / adapter's consumer.
             self.revalidation_window = revalidation_window
-            self._revocation_lock = asyncio.Lock()
             self._revocation_observed = False
             super().__init__(*args, **kwargs)
 

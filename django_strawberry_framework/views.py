@@ -403,7 +403,12 @@ class _RequestBodyBoundaryMixin:
     instead: a seekable ASGI spool is size-probed with ``seek`` / ``tell`` and
     refused with nothing read, a non-seekable stream is read in bounded chunks up
     to ``limit + 1`` bytes and no further, and a body an earlier middleware
-    already cached is measured from that cache and still refused. An allowed body
+    already cached is measured from that cache and still refused. A body the
+    package cannot measure at all - an incoherent size probe, or a request stream
+    whose read fails part way, which is what an aborted client looks like - is
+    refused by the same ``413`` rather than escaping as a ``500``: that module
+    answers a ``bool`` in the fail-closed direction and records the distinction
+    server side, because the wire deliberately cannot carry it. An allowed body
     is handed back as a rewound stream rather than as a pre-filled cache, so
     ``HttpRequest.body`` still runs in full: Strawberry receives the original bytes
     byte-for-byte, and Django's own ``DATA_UPLOAD_MAX_MEMORY_SIZE`` ceiling still

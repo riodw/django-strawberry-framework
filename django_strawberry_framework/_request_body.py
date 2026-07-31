@@ -62,7 +62,7 @@ Note which attribute this module never writes: ``_body``. Filling Django's cache
 would make ``HttpRequest.body`` short-circuit past its own
 ``DATA_UPLOAD_MAX_MEMORY_SIZE`` check, so the bounded branch hands its bytes back
 as a *stream* instead and leaves the property fully in charge (see
-:func:`_bounded_read_exceeds_limit`). The package's job is to add a ceiling, never
+:func:`_measured_by_bounded_read`). The package's job is to add a ceiling, never
 to remove Django's.
 
 Seekability, measured rather than assumed
@@ -98,10 +98,23 @@ also never touches a multipart request; ``views.py`` returns before calling here
 because reading a multipart body would defeat Django's streaming upload handlers
 (spec-046 Decision 7 step 3).
 
-The one thing it does emit is a single ``WARNING`` record on the
-:attr:`_Probe.CORRUPTED` verdict (see :data:`_CORRUPTED_PROBE_LOG_MESSAGE`),
-because that is the one refusal whose *reason* is deliberately invisible to the
-client and therefore invisible to an operator too. It changes nothing on the wire.
+That totality covers **both** phases, which is the whole reason the two are
+written the same way. The capability probe guards every call it makes into a
+foreign stream (:func:`_measured_remaining`), and so does the bounded read it
+falls back to (:func:`_bounded_read_exceeds_limit`) - reading, sizing the chunks
+that come back, closing the consumed stream, and installing the replacement are
+all calls into objects this module did not construct. A foreign stream that fails
+mid-read is a compatibility fact about a broken or aborted client, exactly like a
+probe method that raises, so an ``OSError`` from the socket (which Django's own
+``HttpRequest.read`` re-raises as ``UnreadablePostError``) must come out as this
+module's fail-closed ``True`` rather than escape the boundary and become a ``500``
+and an error log for a request the package simply could not measure.
+
+What it does emit is one ``WARNING`` record per refusal it cannot describe on the
+wire: the :attr:`_Probe.CORRUPTED` verdict (:data:`_CORRUPTED_PROBE_LOG_MESSAGE`)
+and a failed bounded read (:data:`_UNREADABLE_STREAM_LOG_MESSAGE`). Both are
+refusals whose *reason* is deliberately invisible to the client and therefore
+invisible to an operator too, and neither changes anything on the wire.
 """
 
 from __future__ import annotations
@@ -137,7 +150,8 @@ _READ_CHUNK_BYTES = 64 * 1024
 #: ``optimizer/nested_planner.py``). ``consumers.py``'s fail-closed revalidation
 #: uses ``logger.exception`` instead because it runs inside an ``except`` block and
 #: has a traceback worth carrying; a failed restore may simply have returned the
-#: wrong position without raising, so there is no exception to attach.
+#: wrong position without raising, so there is no exception to attach - unlike the
+#: bounded read's own failure below, which always has one.
 _CORRUPTED_PROBE_LOG_MESSAGE = (
     "The GraphQL request-body size probe moved this request's stream (%s) and could not "
     "verify that it restored the original position, so the body is reported as over-limit "
@@ -145,6 +159,25 @@ _CORRUPTED_PROBE_LOG_MESSAGE = (
     "ordinary body-limit rejection, which says nothing about this condition by design - so if "
     "a request that is NOT oversized was refused, the stream installed by the ASGI server or "
     "by a middleware is what does not report positions coherently, not the configured limit."
+)
+
+#: The server-side record of a bounded read that could not complete, and the
+#: second of this module's two signals. It shares the probe's ``WARNING`` level for
+#: the probe's reason - a broken client stream is a condition a deployment should
+#: be able to see, not this process's error - but carries ``exc_info`` where the
+#: probe cannot: this arm always has a live exception, and the traceback is the
+#: actionable part, because it is what names whether the request stream died, the
+#: consumed stream refused to close, or the replacement could not be installed.
+#: ``logger.exception`` would say the same thing at ``ERROR``, which would classify
+#: an aborted upload as a package failure.
+_UNREADABLE_STREAM_LOG_MESSAGE = (
+    "The GraphQL request-body size probe could not read this request's stream (%s) to "
+    "measure it, so the body is reported as over-limit (fail closed) rather than passed on "
+    "unmeasured or allowed to escape as a server error. The client sees the endpoint's "
+    "ordinary body-limit rejection, which says nothing about this condition by design - so a "
+    "burst of these for requests that are NOT oversized is a broken or aborted client stream, "
+    "or a stream installed by the ASGI server or by a middleware that cannot be read, not the "
+    "configured limit."
 )
 
 
@@ -202,15 +235,21 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
        rewound stream, so ``HttpRequest.body`` still runs normally over the
        original bytes and Django's own ceiling still applies.
 
-    4. **Not safely readable at all** - the probe moved a stream it could not
-       prove it put back (:attr:`_Probe.CORRUPTED`). The request is refused as
+    4. **Not measurable at all**, in either of the two ways that can happen: the
+       probe moved a stream it could not prove it put back
+       (:attr:`_Probe.CORRUPTED`), or the bounded read that rung 3 selected could
+       not complete - a broken or aborted client stream, a ``close`` that raises,
+       a replacement that cannot be installed (see
+       :func:`_bounded_read_exceeds_limit`). Both refuse the request as
        over-limit: reading from an unknown offset would hand Strawberry bytes
-       that are not the request's, and an application that cannot measure a body
-       must not process it. This is the one branch that answers ``True`` without
-       a measurement, and it is the fail-closed direction. It is
-       also the one branch that logs: the client cannot be told this refusal is
-       different from an ordinary over-limit one, so the operator is
-       (:data:`_CORRUPTED_PROBE_LOG_MESSAGE`).
+       that are not the request's, an unfinished read proves nothing about the
+       body's size, and an application that cannot measure a body must not
+       process it. These are the two branches that answer ``True`` without a
+       measurement, both in the fail-closed direction, and they are also the two
+       that log - the client cannot be told either refusal is different from an
+       ordinary over-limit one, so the operator is
+       (:data:`_CORRUPTED_PROBE_LOG_MESSAGE`,
+       :data:`_UNREADABLE_STREAM_LOG_MESSAGE`).
 
     Returns ``False`` without measuring anything in two states the package
     cannot bound and must not pretend to: no ``_stream`` at all (a synthetic
@@ -377,12 +416,49 @@ def _position_restored(stream: Any, position: Any) -> bool:
 
 
 def _bounded_read_exceeds_limit(request: HttpRequest, stream: Any, limit: int) -> bool:
+    """Measure by reading, and answer fail-closed if the stream will not be read.
+
+    The bounded read's error boundary, kept separate from the read itself so that
+    the measurement below can be written as the straight line it is while the
+    verdict stays as total as the capability probe's
+    (:func:`_measured_remaining`). Everything the measurement touches is foreign:
+    the request stream, the chunk objects it hands back, its ``close``, and the
+    replacement this module installs in its place. A failure in any of them means
+    the same thing - the package cannot prove this body is within the limit - so
+    it produces the same fail-closed ``True``, and the caller's ordinary ``413``.
+
+    The concrete shape this closes is an ordinary aborted or broken client: a
+    non-seekable request stream whose ``read`` raises ``OSError``, which Django
+    re-raises as ``django.http.request.UnreadablePostError``. Unguarded, that
+    propagated through ``views.py::_RequestBodyBoundaryMixin`` and past upstream's
+    ``except HTTPException``, so a client that hung up mid-upload turned this
+    security boundary into a ``500`` and an error log. Nothing was executed and no
+    cap was bypassed, but the response was wrong and the failure was attributed to
+    the wrong party.
+
+    ``Exception``, never ``BaseException`` - cancellation and process-control
+    exceptions still propagate, exactly as in the probe. A partially consumed
+    stream is left as it is: ``_read_started`` stays ``True`` and ``_body`` is
+    never written, so if anything downstream did reach for the body it would get
+    Django's own ``RawPostDataException`` rather than the prefix this function
+    happened to collect. The caller refuses the request instead, and the prefix is
+    dropped with the request.
+    """
+    try:
+        return _measured_by_bounded_read(request, stream, limit)
+    except Exception:
+        logger.warning(_UNREADABLE_STREAM_LOG_MESSAGE, type(stream).__name__, exc_info=True)
+        return True
+
+
+def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:
     """Read at most ``limit + 1`` bytes of ``stream``; report whether that exceeds ``limit``.
 
     Reads through ``request.read`` rather than ``stream.read`` so Django keeps
     ownership of its own bookkeeping: ``read`` sets ``_read_started`` and
-    translates a stream ``OSError`` into ``UnreadablePostError``, which is what a
-    consumer's error handling already expects on this path.
+    translates a stream ``OSError`` into ``UnreadablePostError`` - which the caller
+    turns into this module's fail-closed answer, so the translation is kept for
+    Django's sake rather than for an error contract of its own.
 
     Over the limit, the loop stops as soon as ``limit + 1`` bytes have arrived
     and the collected chunks are **never joined** - the remainder of the request

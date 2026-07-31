@@ -1,129 +1,153 @@
 # Adversarial review: spec-046 transport security
 
-This pass reviewed [spec-046][spec-046] from a cross-feature angle: the default
-revalidating WebSocket consumer composed with the package's own authentication
-mutations, rather than revalidation exercised only through an external HTTP
-logout. The isolated external-revocation path is well covered. The combined
-same-connection path is not, and it breaks the connection-scoped revocation
-invariant in two ways.
+This pass reviewed [spec-046][spec-046] from a hostile-boundary angle: whether the
+new connection actor state linearizes every protected WebSocket send with an
+in-process identity transition, and whether failures of the foreign request stream
+remain inside the HTTP boundary's controlled error contract. The stale actor
+write-back and authenticated-to-anonymous provenance defects from the previous pass
+are fixed, but the transition state still does not cover two other orderings.
 
 ## Findings
 
-### [P1] Same-socket logout turns off revalidation for already-running authenticated operations
+### [P1] A fresh revalidation window bypasses an actor transition already in progress
 
-`django_strawberry_framework/auth/mutations.py::_channels_logout` delegates to
-Channels' logout, which flushes the durable session and replaces
-`scope["user"]` with `AnonymousUser`. The next protected frame reaches
-`django_strawberry_framework/consumers.py::_actor_is_current`, whose first
-decision is:
+`django_strawberry_framework/consumers.py::_actor_is_current` consults the positive
+revalidation-window cache before it captures or validates an actor-state token:
 
 ```python
-actor = scope.get("user")
-if actor is None or not actor.is_authenticated:
+if window > 0.0 and _monotonic() - scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf) < window:
     return True
+
+token = actor_read_token(scope)
 ```
 
-That carve-out is correct only for a connection that was anonymous before it
-admitted work. It is not correct after an authenticated connection changes
-identity. A deterministic exploit is:
+Consequently, `utils/sessions.py::actor_transition` may already report
+`transitions_in_flight == 1` and the checkpoint still returns `True`. The condition
+is directly reproducible with an authenticated actor, a fresh
+`_REVALIDATED_AT_SCOPE_KEY`, and `_actor_is_current` called inside
+`actor_transition`: the checkpoint authorizes without reading or checking the
+transition state.
 
-1. open an authenticated socket and admit a long-running subscription;
-2. execute the package's `logout` mutation on the same socket;
-3. let logout flush the session and replace the scope actor with
+A real same-socket ordering is:
+
+1. an authenticated operation successfully revalidates and records a positive
+   window timestamp;
+2. the package's `logout` mutation enters `actor_transition` and suspends inside
+   Channels' thread-backed logout, before Channels replaces `scope["user"]` with
    `AnonymousUser`;
-4. release another result from the already-authorized subscription.
+3. a sibling operation reaches admission, or a running subscription reaches its
+   outbound gate, while the cached scope actor is still authenticated;
+4. the fresh-window branch returns `True` despite the published transition, so the
+   operation is admitted or its protected frame is sent.
 
-The outbound gate now classifies the connection as an anonymous socket, performs
-no session read, and sends the old subscription's `next` / `data` frame. This is
-the exact state the spec says must never occur: a revoked session has quietly
-become an anonymous actor that keeps executing. A subscription may also have
-captured its authenticated principal or completed its visibility/permission
-checks at admission, so reading the now-anonymous scope later does not make its
-result anonymous-safe.
+The configured window intentionally delays detection of an *external* session
+revocation. It must not erase the package-owned transition's stronger contract:
+the code and tests now promise that same-connection logout is a connection-scoped
+revocation and that the next protected checkpoint refuses it. The current tests
+miss the combination. The same-socket subscription row uses the default zero
+window, while the stale-read row advances time beyond its positive window before
+starting logout, forcing the token-bearing database-read branch.
 
-The test split hides the composition bug.
-`tests/auth/test_mutations.py::test_websocket_server_side_logout_invalidates_and_survives_reconnect`
-proves that same-socket logout makes a later `me` query anonymous, but it has no
-operation admitted before logout.
-`tests/test_routers.py::test_a_running_subscription_cannot_emit_a_result_after_revocation`
-does have a running operation, but revokes through a second HTTP request; that
-leaves the socket's cached actor authenticated, so `_actor_is_current` takes the
-database-read branch and closes correctly. Neither row exercises both halves
-together.
+The root fix is for every authorization path, including a cache hit, to participate
+in the connection actor-state protocol. Checking only
+`transitions_in_flight` at the top is not sufficient on its own, because a
+transition can begin immediately after that check; the transition and the complete
+validate/send critical section need the shared exclusion described in the next
+finding. Once that exists, the window shortcut may run only while holding the same
+stable actor-state lease as an uncached validation.
 
-The root fix is to stop using the mutable current actor as proof that the
-connection has always been anonymous. Track immutable connection authentication
-provenance or an actor generation, and make an authenticated-to-anonymous
-transition a connection-scoped revocation event. If the public contract must
-keep the socket open after logout, the consumer must atomically cancel and await
-every pre-logout operation before admitting anonymous work; otherwise, close the
-socket after the logout transition. In either design, the logout response
-semantics must be explicit rather than obtained by letting the anonymous
-carve-out authorize every pending frame.
+Add deterministic admission and outbound regressions with a positive window. Park
+same-socket logout after it opens `actor_transition` but before it changes the scope
+actor, then attempt a new operation and release a running subscription result. Both
+checkpoints must wait for or refuse the transition, perform no cached authorization,
+and end in the documented connection close.
 
-Add communicator regressions for both WebSocket protocols: start a controlled
-authenticated subscription, receive one result, run the package logout mutation
-on that socket, release the next result, and prove that the old result is
-suppressed and the operation generator is finalized. A control should then pin
-whichever post-logout socket behavior the chosen transition contract promises.
+### [P1] A protected send can complete after logout because transitions do not share its lock
 
-### [P1] Revalidation and logout use disjoint locks, so a stale read can resurrect the logged-out actor
-
-The same integration has a separate race.
-`django_strawberry_framework/consumers.py::revalidate_operation_actor` and
 `django_strawberry_framework/consumers.py::send_revalidated_operation_frame`
-serialize through the consumer's `_revocation_lock`.
-`django_strawberry_framework/auth/mutations.py::_channels_logout` serializes
-through `django_strawberry_framework/auth/sessions.py::scope_session_lock`.
-Neither lock participates in the other state machine.
+holds `_revocation_lock` through `await send(message)`, but
+`django_strawberry_framework/auth/mutations.py::_channels_logout` never acquires
+that lock. It holds `scope_session_lock` and publishes `actor_transition`, while
+the outbound path merely samples actor state before entering `send`. The new read
+token therefore prevents a transition that overlaps the asynchronous *session
+read* from committing stale data, but it cannot detect a transition that starts
+after `_actor_is_current` returns.
 
-The lock held through `send` is therefore atomic only against another
-revalidation checkpoint, not against the revocation operation itself. Logout
-can flush the session while a frame that already passed `_actor_is_current` is
-still inside `_revocation_lock`, and that frame can then be sent after logout
-has completed.
+The remaining ordering is deterministic:
 
-The asynchronous refresh also permits a stronger stale-write ordering:
+1. an outbound checkpoint validates the authenticated actor and calls the
+   adapter's underlying asynchronous send;
+2. that send suspends before committing the frame to the ASGI channel;
+3. same-socket logout runs under its independent lock, flushes the durable session,
+   replaces the scope actor, closes `actor_transition`, and returns;
+4. the send resumes and emits the already-authorized protected frame after logout
+   completed.
 
-1. `_actor_is_current` observes the authenticated scope actor and starts
-   `_refreshed_actor`;
-2. the session/user read obtains the still-valid actor;
-3. same-socket logout flushes the session and writes `AnonymousUser` to the
-   scope;
-4. the suspended revalidation resumes, unconditionally writes its stale actor
-   back to `scope["user"]`, records a fresh window timestamp when configured,
-   and authorizes the pending frame.
+This is not hypothetical behavior hidden behind an artificial await. ASGI sends
+are asynchronous, and the existing test helper's own commentary acknowledges that
+a real socket write can suspend. A direct delayed-send harness against the
+production helper emits the `next` frame after a completed actor transition. Holding
+`_revocation_lock` through the send only excludes sibling checkpoints; it provides
+no ordering at all against the logout transition.
 
-The connection is therefore re-authenticated in memory after durable logout and
-can emit a protected frame after revocation. With a positive revalidation
-window, the stale write also refreshes the cache timestamp, allowing subsequent
-checkpoints to reuse the resurrected actor until the window expires.
+The root fix is one shared, connection-owned synchronization primitive or lease
+that linearizes actor transitions against the entire validate/commit/send sequence.
+Logout must not complete while a pre-transition protected send is still pending,
+and no checkpoint may begin sending while logout owns the transition. A generation
+check after `send` is too late because bytes may already be committed. The lock
+order must remain explicit with `scope_session_lock`; replacing or integrating the
+revocation lock is preferable to adding a third independent lock.
 
-The root fix is one actor-state synchronization contract shared by session
-mutation and revalidation, not another local lock. A connection-owned actor
-generation is one viable shape: capture the generation before the asynchronous
-session read, increment it during logout under the shared state lock, and refuse
-to commit the refreshed actor or timestamp when the generation changed. The
-validate/commit/send sequence and the logout transition must have a documented
-lock order so neither a stale write-back nor a pre-transition payload can cross
-the boundary.
+Add a deterministic regression that parks the real outbound delegate before it
+writes. Start same-socket logout while the send is parked and prove logout cannot
+complete across it; after releasing the pre-transition send, let logout linearize,
+then prove every later protected frame is suppressed and the operation is finalized.
+Pair it with the transition-first positive-window test above, which proves the
+opposite ordering cannot enter the send at all.
 
-Add a deterministic race test that pauses revalidation after it has obtained the
-old actor, completes same-socket logout, then resumes revalidation. The assertions
-must prove that the old actor is not written back, the pending frame is not sent,
-the connection takes the chosen revocation transition, and a positive window is
-not refreshed from the stale read.
+### [P2] A request-stream read failure escapes the bounded body gate as a 500
+
+`django_strawberry_framework/_request_body.py::_measured_remaining` guards every
+capability probe, but the fallback it selects does not provide the same error
+boundary. `::_bounded_read_exceeds_limit` calls `request.read(...)` without
+handling its failure. Django converts an underlying stream `OSError` into
+`django.http.request.UnreadablePostError`; that exception propagates through
+`views.py::_RequestBodyBoundaryMixin._enforce_request_body_limit`, and Strawberry's
+Django dispatch catches only `cross_web.HTTPException`.
+
+The result is reproducible with an otherwise ordinary POST whose declared length is
+below the package cap and whose non-seekable WSGI input raises `OSError` from
+`read()`: invoking `DjangoGraphQLView` raises `UnreadablePostError` instead of
+returning a controlled client response. Under Django's handler this becomes a `500`
+and error log. The body is not executed, so this is not a cap bypass, but a broken or
+aborted client stream can turn the security boundary into an avoidable server-error
+and logging path. It also contradicts `_request_body.py`'s module contract that a
+foreign stream failure is reported in the fail-closed direction rather than escaping
+as an unrelated `500`.
+
+The root fix is to make the bounded-read phase as total as the capability probe.
+Failures while reading, measuring returned chunks, closing the consumed stream, or
+installing the replacement stream need an explicit fail-closed outcome that the view
+maps to one controlled response, with an operator-side record if the wire response is
+deliberately indistinguishable from an ordinary size rejection. Do not catch
+`BaseException`; cancellation and process-control exceptions must still propagate.
+
+Add sync and async view regressions backed by a non-seekable input whose `read`
+raises after zero bytes and after a partial prefix. Assert the selected controlled
+status and reason, no schema execution, no unbounded retry, and no partial body handed
+to Strawberry.
 
 ## Non-findings from this review angle
 
-- External logout, session deletion, user disabling, and password rotation are
-  correctly detected while the scope still carries its authenticated actor.
-  The defect is the package-owned mutation of that scope and its missing
-  synchronization with the revalidation state machine.
-- Allowing a socket that was anonymous from its initial authenticated-middleware
-  state to avoid session reads is still a valid performance carve-out. The fix
-  needs provenance, not unconditional database reads for genuinely anonymous
-  connections.
+- The new provenance latch correctly prevents an authenticated socket changed to
+  `AnonymousUser` from taking the genuinely-anonymous read-free carve-out.
+- The generation token correctly refuses a stale actor loaded before a completed
+  same-socket logout, and it does not refresh the positive-window timestamp from
+  that stale read. The two P1 findings are orderings outside that token's present
+  lifetime, not restatements of the fixed stale-write defect.
+- Host projection, strict JSON UTF-8 decoding, multipart control-field loss
+  detection, and the exact built-in numeric configuration gates remained
+  fail-closed under the hostile inputs reviewed in this pass.
 
 <!-- LINK DEFINITIONS -->
 

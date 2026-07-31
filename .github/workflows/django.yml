@@ -92,11 +92,18 @@ jobs:
         run: uv sync --python ${{ matrix.python }}
 
       - name: Install Django ${{ matrix.django }}
+        # ``--upgrade-package Django`` is not redundant with the pin beside it:
+        # a bare constraint is a no-op whenever the synced version already
+        # satisfies it, so ``Django==5.2.*`` resolves to the newest 5.2 patch on
+        # Python 3.12+ (where uv.lock gives 6.0.x) but leaves 3.11 on the locked
+        # 5.2.14 -- one matrix label, two versions under test. Scoping the
+        # upgrade to Django alone, rather than a bare ``--upgrade``, keeps every
+        # transitive pin at its uv.lock version.
         run: |
           if [ "${{ matrix.django }}" == "latest" ]; then
-            uv pip install "Django" --upgrade
+            uv pip install --upgrade-package Django "Django"
           else
-            uv pip install "Django==${{ matrix.django }}"
+            uv pip install --upgrade-package Django "Django==${{ matrix.django }}"
           fi
           uv run --no-sync django-admin --version
 

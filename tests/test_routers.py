@@ -101,6 +101,7 @@ import importlib
 import inspect
 import json
 import logging
+import re
 import sys
 import time
 from collections import defaultdict
@@ -175,6 +176,33 @@ _TRANSPORT_WS = "graphql-transport-ws"
 _LEGACY_WS = "graphql-ws"
 _PROTOCOL_FRAMES = {_TRANSPORT_WS: ("subscribe", "next"), _LEGACY_WS: ("start", "data")}
 
+#: The frame types the outbound checkpoint gates. RE-TYPED, like every other
+#: contract literal in this module, so a drift fails a row instead of asserting
+#: itself; the structural row that pins the production set against these same three
+#: names reads the constant itself.
+_GATED_FRAME_TYPES = frozenset({"next", "data", "error"})
+
+#: The frame each protocol gives a CLIENT to cancel one of its own operations
+#: (``handle_complete`` / ``handle_stop``, both reaching ``cleanup_operation``).
+#: A client can therefore cancel the operation that happened to observe a
+#: revocation, at any moment including while the close is still being written -
+#: which is why the close attempt is owned by the connection rather than by that
+#: operation.
+_PROTOCOL_CANCEL_FRAMES = {_TRANSPORT_WS: "complete", _LEGACY_WS: "stop"}
+
+#: Per protocol, a client frame that provokes a DELEGATED (non-information-bearing)
+#: reply on an open socket, and the type of the reply upstream writes for it.
+#:
+#: ``graphql-transport-ws`` has ``ping`` -> ``pong`` (``handle_ping``). The legacy
+#: protocol has no ping this router can reach - its ``ka`` keep-alive needs a
+#: ``keep_alive`` knob the router does not expose - so the equivalent there is
+#: ``stop``, which cancels the named operation's task, whose own
+#: ``except asyncio.CancelledError`` answers with ``complete``. Both replies take
+#: the adapter's delegated path, which is the one the suppression rows are about;
+#: an ``id`` rides both frames because the legacy one needs it and neither
+#: protocol's dispatcher rejects an extra key.
+_PROTOCOL_PROVOKED_CONTROL = {_TRANSPORT_WS: ("ping", "pong"), _LEGACY_WS: ("stop", "complete")}
+
 
 # ---------------------------------------------------------------------------
 # Module-local execution schema (ORM-free; see module docstring)
@@ -196,7 +224,15 @@ class _OperationController:
     suppressed payload from a payload that was never generated; asserting that
     result 2 exists in ``emitted`` and never appeared on the wire is what pins the
     gate. ``finalized`` records that the subscription generator's ``finally`` ran,
-    i.e. that cancellation really unwound it rather than abandoning it.
+    i.e. that the operation was really unwound rather than abandoned to the
+    interpreter's asyncgen finalizer.
+
+    There is deliberately no operation-task handle here. ``asyncio.current_task()``
+    inside a subscription resolver is NOT the operation's task - graphql-core drives
+    each value through its own short-lived ``asend`` task, so a handle captured in
+    the resolver is already ``done()`` by the time the value reaches the wire, and a
+    row waiting on it would prove nothing. ``_OutboundGateProbe.tasks`` is where the
+    operation's real task is observable.
     """
 
     def __init__(self):
@@ -209,6 +245,13 @@ class _OperationController:
         """Let the operation produce its ``index``-th (0-based) result."""
         self.gates[index].set()
 
+
+#: How many results the burst subscription below offers. Large enough that an
+#: implementation which cannot stop a revoked operation whose next value is already
+#: available drives thousands of suppressed frames instead of one, and small enough
+#: that the row stays under a second either way. The number itself pins nothing -
+#: the rows assert that exactly ONE value was ever produced.
+_BURST_RESULTS = 2000
 
 #: Live controllers, keyed by the ``channel`` argument the controlled resolvers
 #: receive. A module-level registry rather than a resolver closure because the
@@ -232,6 +275,10 @@ def _controller(channel):
 
 def _controlled_subscription(channel):
     return f'subscription {{ controlled(channel: "{channel}") }}'
+
+
+def _burst_subscription(channel, count=_BURST_RESULTS):
+    return f'subscription {{ burst(channel: "{channel}", count: {count}) }}'
 
 
 def _controlled_query(channel):
@@ -310,7 +357,7 @@ class Subscription:
         is exactly the state the admission checkpoint cannot see again. The loop
         is deliberately unbounded rather than two-shot - after the last released
         result the generator parks on the NEXT gate, so a row can prove the
-        ``finally`` ran because cancellation unwound it and not because the
+        ``finally`` ran because the operation was unwound and not because the
         generator happened to be exhausted.
         """
         controller = _CONTROLLERS[channel]
@@ -320,6 +367,31 @@ class Subscription:
             while True:
                 await controller.gates[index].wait()
                 index += 1
+                value = f"{channel}-{index}"
+                controller.emitted.append(value)
+                yield value
+        finally:
+            controller.finalized = True
+
+    @strawberry.subscription
+    async def burst(self, channel: str, count: int) -> AsyncIterator[str]:
+        """A subscription whose every later result is ALREADY available.
+
+        The shape ``controlled`` cannot be. Every gate in ``controlled`` is an
+        ``await`` that suspends, so a revoked operation there always reaches a
+        suspension point on its own. This resolver has none between its yields, so
+        the whole loop - resolve, gate, suppress, ask for the next value - can run
+        without ever handing control back to the event loop. That is the state a
+        revoked operation has to be stopped in, and the one a cancellation REQUEST
+        can never reach: the request is only consumed when the task is rescheduled.
+
+        Bounded rather than infinite so that a regressed implementation reports the
+        defect instead of hanging the suite.
+        """
+        controller = _CONTROLLERS[channel]
+        controller.started.set()
+        try:
+            for index in range(1, count + 1):
                 value = f"{channel}-{index}"
                 controller.emitted.append(value)
                 yield value
@@ -647,12 +719,11 @@ async def _drain_until_close(communicator, *, timeout=10):
     close is decoded and handed back so a row can assert what did *not* appear
     there, which is the actual security property.
 
-    An exact frame SEQUENCE is deliberately not asserted by these rows: a
-    cancelled legacy operation still emits upstream's own ``complete`` (its
-    ``handle_async_results`` catches ``asyncio.CancelledError`` and sends one)
-    while a cancelled transport-ws operation emits nothing, and both land after
-    the close. Draining stops at the close, so that protocol asymmetry stays
-    upstream's business.
+    Draining stops AT the close, so this helper says nothing about what came after
+    it - and something always tries to: a revoked operation's result loop ends
+    normally, so both protocols carry on to their own ``complete``. That nothing is
+    written for it is a separate contract, measured against the ordered transport
+    log by ``_record_the_transport``'s rows rather than from this queue.
     """
     frames = []
     while True:
@@ -890,6 +961,162 @@ def _instrument_revalidation(monkeypatch):
     return probe
 
 
+class _CloseProbe:
+    """What reached the transport's own close, and whether it may complete.
+
+    ``calls`` records every ``(code, reason)`` that reached Channels' own
+    ``AsyncWebsocketConsumer.close`` - the call the adapter's ``close`` delegates
+    to, and the last package-visible point before the ASGI ``send``. Nothing
+    upstream records that a close was sent (not the consumer, not the adapter,
+    not either handler), so this list is the only place "how many closes actually
+    reached the transport" is observable, and it is what separates "a close was
+    decided" from "a close was committed".
+
+    ``park``, when set to an ``Event``, holds the close open with its bytes
+    uncommitted - the state a back-pressured socket write occupies and the one an
+    in-process queue otherwise never produces. ``failures`` makes the first N
+    attempts raise ``OSError`` instead, which is the realistic transport failure
+    (beside a disconnected socket and a server state assertion) and the shape that
+    must not be recorded as a completed close.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.entered = asyncio.Event()
+        self.park = None
+        self.failures = 0
+
+
+def _instrument_consumer_close(monkeypatch):
+    """Observe - and optionally park or break - the close the revocation performs.
+
+    Patched on Channels' own ``AsyncWebsocketConsumer.close`` rather than on any
+    package seam: the package's close path is
+    ``_ConnectionRevocation`` -> the adapter's ``close`` -> ``consumer.close``, so
+    this is the real production chain with only its final ASGI hop replaced. The
+    rows that use it are about what the package does when that hop misbehaves,
+    which is unobservable from any other vantage point - a second close is a
+    silent no-op under a real server and a second output message under
+    ``channels.testing``, and neither tells the caller anything.
+    """
+    from channels.generic.websocket import AsyncWebsocketConsumer
+
+    probe = _CloseProbe()
+    native = AsyncWebsocketConsumer.close
+
+    async def recording_close(consumer, code=None, reason=None):
+        probe.calls.append((code, reason))
+        probe.entered.set()
+        if probe.park is not None:
+            await probe.park.wait()
+        if len(probe.calls) <= probe.failures:
+            raise OSError("the transport refused the close frame")
+        await native(consumer, code=code, reason=reason)
+
+    monkeypatch.setattr(AsyncWebsocketConsumer, "close", recording_close)
+    return probe
+
+
+class _TransportLog:
+    """Every ASGI message this connection committed to the transport, in order.
+
+    ``_CloseProbe`` records the closes and the communicator's own queue can be
+    drained up to one; neither can answer what the package wrote AFTER a close.
+    A frame committed past the ``4403`` is invisible to any assertion that stops
+    draining at the close, and ``receive_nothing`` cannot say whether what it found
+    arrived before the close or after it. This is the ordered log, so the close's
+    position in it is the only reference point the rows need.
+    """
+
+    def __init__(self):
+        self.messages = []
+
+    @property
+    def frame_types(self):
+        """The type of every JSON frame committed, in order."""
+        return [
+            json.loads(message["text"])["type"]
+            for message in self.messages
+            if message["type"] == "websocket.send"
+        ]
+
+    def after_the_revocation_close(self):
+        """Every message committed AFTER the ``4403``; fails if there was no close.
+
+        Failing loudly is the point: "nothing followed the close" is trivially
+        true of a connection that never closed, which is the one way an assertion
+        on this tail could pass while proving nothing at all.
+        """
+        for index, message in enumerate(self.messages):
+            if message["type"] == "websocket.close" and message.get("code") == (
+                _REVOKED_CLOSE_CODE
+            ):
+                return self.messages[index + 1 :]
+        raise AssertionError(
+            f"no {_REVOKED_CLOSE_CODE} close reached the transport at all: {self.messages}",
+        )
+
+
+def _record_the_transport(monkeypatch):
+    """Record every ASGI message the consumer commits; return the log.
+
+    Patched on Channels' own ``AsyncConsumer.send`` - the one call every outbound
+    message funnels through whatever wrote it, since
+    ``AsyncWebsocketConsumer.send`` (where upstream's serialized frames arrive)
+    and ``AsyncWebsocketConsumer.close`` both delegate to it. One seam therefore
+    yields the frames and the closes interleaved in the order the transport saw
+    them, which is what a contract about "after the close" is measured against;
+    ``_instrument_consumer_close``'s narrower seam is the right one whenever the
+    subject is the close alone.
+    """
+    from channels.consumer import AsyncConsumer
+
+    log = _TransportLog()
+    native = AsyncConsumer.send
+
+    async def recording_send(consumer, message):
+        log.messages.append(message)
+        await native(consumer, message)
+
+    monkeypatch.setattr(AsyncConsumer, "send", recording_send)
+    return log
+
+
+class _LoopSentinel:
+    """A tick count from a task nobody involved in the operation under test knows about."""
+
+    def __init__(self):
+        self.ticks = 0
+
+
+@contextlib.asynccontextmanager
+async def _loop_sentinel():
+    """Run an independent ticking task for the duration of the block.
+
+    The liveness half of the stop-protocol rows. A revoked operation that cannot be
+    stopped does not merely misbehave locally - it holds the event loop, so nothing
+    else on that loop runs, including the connection's own teardown. A task that
+    only ever ``await asyncio.sleep(0)``s advances once per loop pass, so a nonzero
+    count means the loop kept scheduling while the revoked operation was being
+    stopped. Cancelled and awaited on the way out, so it cannot outlive the block
+    under a suite that treats a lingering task as an error.
+    """
+    sentinel = _LoopSentinel()
+
+    async def tick():
+        while True:
+            await asyncio.sleep(0)
+            sentinel.ticks += 1
+
+    task = asyncio.create_task(tick())
+    try:
+        yield sentinel
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 class _OutboundGateProbe:
     """What the outbound checkpoint did: who entered, whose lease, and when it sent."""
 
@@ -897,6 +1124,7 @@ class _OutboundGateProbe:
         self.entries = []
         self.frame_types = []
         self.from_run_task = []
+        self.tasks = []
         self.consumers = []
         self.sends_under_lease = []
         self.reached_send = asyncio.Event()
@@ -936,6 +1164,15 @@ def _record_outbound_gate(monkeypatch):
     ``frame_types`` and ``from_run_task`` record which frame reached the checkpoint
     and whether it arrived on the connection's own message-loop task - the two facts
     the subscription-limit row needs, and the only place either is observable.
+
+    ``tasks`` records the task each frame arrived ON, which for every frame but the
+    subscription-limit one IS the operation's own task: upstream awaits
+    ``send_next`` / ``send_data_message`` directly inside ``run_operation`` /
+    ``handle_async_results``, i.e. inside the task it created for that operation. It
+    is the only handle on that object a test can get - the one place a resolver
+    could look is misleading (see ``_OperationController``) - and the rows that need
+    it are asserting that a revoked operation FINISHED rather than merely fell
+    silent.
     """
     probe = _OutboundGateProbe()
     original = consumers_module.send_revalidated_operation_frame
@@ -945,6 +1182,7 @@ def _record_outbound_gate(monkeypatch):
         probe.entries.append(message["id"])
         probe.frame_types.append(message.get("type"))
         probe.from_run_task.append(asyncio.current_task() is consumer.run_task)
+        probe.tasks.append(asyncio.current_task())
         probe.consumers.append(consumer)
 
         async def observing_send(payload):
@@ -3223,12 +3461,12 @@ async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
 
     The three tail assertions are the rest of the contract. ``emitted`` proves the
     payload existed and was suppressed rather than never generated. ``finalized``
-    proves the operation was unwound through **cancellation** - the generator's
-    ``finally`` ran, at the ``await`` on its next gate - rather than left suspended
-    for the interpreter's asyncgen finalizer. And the empty task set proves
-    upstream's own disconnect / shutdown path finished the teardown: no operation
-    task, no unawaited coroutine, no lingering async generator, under a suite that
-    treats every warning as an error.
+    proves the operation was unwound - the generator's ``finally`` ran, because the
+    stop-aware result source ended the loop and closed it - rather than left
+    suspended for the interpreter's asyncgen finalizer. And the empty task set
+    proves upstream's own disconnect / shutdown path finished the teardown: no
+    operation task, no close attempt still in flight, no unawaited coroutine, no
+    lingering async generator, under a suite that treats every warning as an error.
     """
     _user, cookie, session_key = await _make_user_and_session("running_probe")
     controller = _controller("running")
@@ -3256,7 +3494,7 @@ async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
     _assert_revoked_close(closed)
     assert controller.emitted == ["running-1", "running-2"]
     assert probe.reads == 3
-    assert controller.finalized, "cancellation did not unwind the subscription generator"
+    assert controller.finalized, "the subscription generator was never unwound"
     assert [task for task in asyncio.all_tasks() if task is not asyncio.current_task()] == []
 
 
@@ -3682,11 +3920,14 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
 ):
     """The outbound checkpoint reached from ``run_task``.
 
-    ``send_revalidated_operation_frame``'s tail branches on whether the current task is
-    the connection's own message-loop task, and this is the ONE production path that
-    arrives there from ``run_task``: both protocols emit their subscription-limit
-    ``error`` frame from inside ``handle_subscribe`` / ``handle_start``, i.e. from the
-    message loop itself, after the package's admission hook has already passed.
+    The ONE production path that reaches the outbound checkpoint from the
+    connection's own message-loop task rather than from an operation task: both
+    protocols emit their subscription-limit ``error`` frame from inside
+    ``handle_subscribe`` / ``handle_start``, i.e. from the message loop itself,
+    after the package's admission hook has already passed. There is no operation of
+    the package's to stop here, so the close alone is the whole rejection - and the
+    message loop must be left to unwind normally, because it is what cancels and
+    awaits the hundred operations still registered.
 
     Reaching it needs no new seam and no injected consumer - only upstream's own
     default limit, which is ``100`` rather than ``None``. So the row opens
@@ -3705,11 +3946,11 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     - ``frames == []`` plus the ``4403`` close - the limit message never reached the
       wire, and the client's answer is the same non-disclosing close every other
       revocation produces. Upstream would have sent ``"Subscription limit reached"``.
-    - ``run_task`` finished normally rather than cancelled - the guard's DIRECTION.
-      Cancelling the connection's own task here would abort the disconnect/shutdown
-      path that has to cancel and await the remaining operations, and would surface
-      ``CancelledError`` out of the ASGI application. With 100 operations still
-      registered, that is not a theoretical difference.
+    - ``run_task`` finished normally rather than cancelled. Aborting the connection's
+      own task here would abort the disconnect/shutdown path that has to cancel and
+      await the remaining operations, and would surface ``CancelledError`` out of the
+      ASGI application. With 100 operations still registered, that is not a
+      theoretical difference.
 
     Deliberately NOT lowered: the limit is upstream's, so the cost of the row (a
     hundred admissions, ~1s) is the cost of testing the real path rather than a
@@ -3756,6 +3997,501 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     # The guard's direction: the message loop was left to unwind normally.
     assert consumer.run_task.done()
     assert not consumer.run_task.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Channels-present: how a revoked operation STOPS, and how its close SETTLES.
+#
+# The rows above all revoke an operation that was suspended on an ``await`` of
+# its own - a released gate, a session read - so they can be satisfied by an
+# implementation that only ever unwinds an operation at a suspension point it was
+# already sitting on. The rows below remove both of those conveniences: an
+# operation whose every later result is already available (nothing suspends, so
+# nothing delivers), and a close the transport holds open or refuses outright
+# (so "revoked" and "closed" are visibly different facts).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_a_revoked_operation_stops_when_its_every_later_result_is_already_available(
+    subprotocol,
+    monkeypatch,
+):
+    """A revoked operation ends deterministically, without a suspension point.
+
+    The hard case for stopping an admitted operation, on both protocols. The burst
+    subscription has no ``await`` between its yields, so the whole
+    produce-gate-suppress-produce cycle can run without handing control back to the
+    event loop - and a stop protocol built on requesting cancellation never gets a
+    reschedule to deliver the request on. Such an implementation drives every one of
+    the ``_BURST_RESULTS`` results into the gate, holds the loop while it does, and
+    lets the generator's ``finally`` run only when the sequence is exhausted.
+
+    So the assertions are about WHEN it stopped, not merely that the wire stayed
+    quiet:
+
+    - ``emitted`` is exactly one value. The revocation is decided while the FIRST
+      result is at the outbound checkpoint, and the result source is asked for
+      nothing after that - the suppressed frame's own value is the last one the
+      resolver ever produces.
+    - the generator's ``finally`` ran, and the operation's own task finished, both
+      before the socket's teardown has begun (the assertions are inside the open
+      socket, and the sibling below is still running).
+    - the sentinel task advanced, so the loop kept scheduling other work throughout.
+    - the sibling operation - admitted while the session was valid, and holding a
+      payload of its own - is left to upstream's disconnect path, which cancels and
+      awaits it; its ``finally`` runs only after the socket is torn down.
+    """
+    _user, cookie, _key = await _make_user_and_session(f"burst_probe_{subprotocol[:9]}")
+    controller = _controller("burst")
+    sibling = _controller("burst-sibling")
+    gate = _record_outbound_gate(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router()
+
+    async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
+        await _send_operation(communicator, _controlled_subscription("burst-sibling"), op_id="1")
+        await _reached(sibling.started, "the sibling operation was never admitted")
+        assert probe.reads == 1
+
+        # The burst's admission is read 2 and succeeds; its first outbound frame is
+        # read 3 and does not.
+        probe.invalidate_after = 2
+        async with _loop_sentinel() as sentinel:
+            await _send_operation(communicator, _burst_subscription("burst"), op_id="2")
+            closed, frames = await _drain_until_close(communicator)
+            await _wait_until(
+                lambda: gate.tasks and gate.tasks[0].done(),
+                lambda: f"the revoked operation never finished: {gate.tasks}",
+            )
+
+        assert frames == [], frames
+        _assert_revoked_close(closed)
+        # Only the burst's own suppressed frame reached the checkpoint, on the
+        # burst operation's task rather than the connection's message loop.
+        assert gate.entries == ["2"], gate.entries
+        assert gate.from_run_task == [False], gate.from_run_task
+        assert controller.emitted == ["burst-1"], len(controller.emitted)
+        assert controller.finalized, "the burst generator was not closed at the revocation"
+        assert sentinel.ticks > 0, "the event loop was monopolized by the revoked operation"
+        # The sibling is still parked on its own gate: stopping the revoked
+        # operation is not stopping the connection's other work.
+        assert not sibling.finalized
+        assert sibling.emitted == []
+
+    # Upstream's own teardown finished the siblings, as it always did.
+    assert sibling.finalized
+    assert probe.reads == 3
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_a_client_cancelling_the_detecting_operation_cannot_abandon_the_close(
+    subprotocol,
+    monkeypatch,
+):
+    """The close belongs to the CONNECTION, not to whichever operation observed it.
+
+    Both protocols let a client cancel one of its own operations - ``complete`` on
+    graphql-transport-ws, ``stop`` on legacy graphql-ws - and both reach
+    ``cleanup_operation``, which cancels that operation's task. So the operation
+    that happens to detect a revocation can be taken away by the client at any
+    moment, including while the transport still has the ``4403`` back-pressured with
+    its bytes uncommitted. If the close ran on that operation's task, the promised
+    non-disclosing close would simply never arrive, while the message loop kept
+    serving control frames on a socket the package claims it terminated.
+
+    The row drives exactly that: park the transport's close, cancel the detecting
+    operation through the protocol's OWN cancel frame, then release the park.
+    Afterwards the close has been committed EXACTLY once - one attempt reached the
+    transport, one ``4403`` reached the wire - and the teardown completes. One
+    attempt is the whole point in both directions: a later checkpoint must not
+    inherit a false "already closed", and the ordinary path must never put two
+    ``4403`` frames on the wire.
+    """
+    _user, cookie, _key = await _make_user_and_session(f"parked_close_{subprotocol[:9]}")
+    controller = _controller("parked-close")
+    close_probe = _instrument_consumer_close(monkeypatch)
+    close_probe.park = asyncio.Event()
+    gate = _record_outbound_gate(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router()
+
+    async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
+        await _send_operation(communicator, _controlled_subscription("parked-close"), op_id="1")
+        await _reached(controller.started, "the operation was never admitted")
+        assert probe.reads == 1
+
+        # Its first result reaches the gate on a read that fails, and the close it
+        # starts parks with nothing written.
+        probe.invalidate_after = 1
+        controller.release(0)
+        await _reached(close_probe.entered, "the revocation never reached the transport close")
+        assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+        detecting_task = gate.tasks[0]
+        assert not detecting_task.done()
+
+        # The client cancels the very operation that observed the revocation.
+        await communicator.send_json_to(
+            {"type": _PROTOCOL_CANCEL_FRAMES[subprotocol], "id": "1"},
+        )
+        await _wait_until(
+            lambda: detecting_task.done(),
+            lambda: f"the client's cancel frame never reached the operation: {detecting_task}",
+        )
+        # Gone, and gone while the transport still has the close open.
+        assert len(close_probe.calls) == 1
+
+        close_probe.park.set()
+        closed, frames = await _drain_until_close(communicator)
+
+    # No payload escaped, and the gated set is what this row measures: the park
+    # holds the close open long enough for the client's cancellation to be
+    # acknowledged, and on the legacy protocol that acknowledgement is upstream's
+    # own ``complete`` - a delegated frame, whose fate on an already-revoked
+    # connection belongs to the suppression rows below rather than to this one.
+    assert [frame for frame in frames if frame["type"] in _GATED_FRAME_TYPES] == [], frames
+    _assert_revoked_close(closed)
+    # One attempt, one 4403: the cancellation neither abandoned the close nor
+    # earned the connection a second one.
+    assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    assert probe.reads == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_close_that_raised_is_retried_by_the_next_permitted_checkpoint(
+    monkeypatch,
+    caplog,
+):
+    """A failed close is not a completed close.
+
+    Nothing upstream records that a close was sent, so the package has to - and a
+    single flag standing for "revocation decided" AND "close committed" records a
+    close that RAISED as one that succeeded. Every later checkpoint then reads
+    "already closed" and sends nothing, so the promised ``4403`` never arrives even
+    though the transport is still there and would accept it.
+
+    Here the first attempt raises ``OSError`` - a disconnected transport, a server
+    state assertion and an ``OSError`` being the realistic set - and the failure is
+    reported through the package logger with its traceback rather than swallowed.
+    Operation 3, the next permitted checkpoint, then starts exactly ONE new attempt,
+    which succeeds and puts the documented close on the wire. Two attempts, one
+    ``4403``, one log record.
+
+    The information-bearing gate never depended on any of this: operation 2's own
+    payload was suppressed before the close was ever attempted, which is why a
+    failing close is a connection-contract defect rather than a disclosure.
+    """
+    user, cookie, session_key = await _make_user_and_session("close_retry_probe")
+    close_probe = _instrument_consumer_close(monkeypatch)
+    close_probe.failures = 1
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router()
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        async with _open_ws(router, cookie=cookie) as communicator:
+            first = await _ws_operation(communicator, "{ username }", op_id="1")
+            assert first["type"] == "next", first
+
+            await _flush_the_session(user, session_key)
+
+            # Refused, and the close that should have followed it raised.
+            await _send_operation(communicator, "{ username }", op_id="2")
+            await _reached(close_probe.entered, "the revocation never reached the transport close")
+            assert await communicator.receive_nothing(timeout=0.2)
+            assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+
+            # The next permitted checkpoint cannot inherit a false "already closed".
+            await _send_operation(communicator, "{ username }", op_id="3")
+            closed, frames = await _drain_until_close(communicator)
+
+    assert frames == [], frames
+    _assert_revoked_close(closed)
+    assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)] * 2
+    records = _package_logger_records(caplog)
+    assert [record.levelname for record in records] == ["ERROR"]
+    assert all(record.exc_info is not None for record in records)
+    # Both refusals were read-free: only operation 1's two checkpoints and
+    # operation 2's failing revalidation paid a session read.
+    assert probe.reads == 3
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_revocation_close_retry_is_bounded_and_still_refuses_every_payload(
+    monkeypatch,
+    caplog,
+):
+    """The retry is bounded, because checkpoints are client-driven.
+
+    The other half of the retry policy. Checkpoints happen when a client sends
+    something, so an unbounded retry would hand a client one attempted close per
+    frame it chooses to provoke; and the realistic failures are not transient, so a
+    third attempt cannot succeed where two did not. This adapter refuses every
+    close, and the connection spends exactly two attempts however many checkpoints
+    arrive afterwards.
+
+    What must NOT degrade with it is the property the close was never carrying:
+    every information-bearing frame stays refused. The last operation's resolver
+    never runs and the socket emits nothing, on a connection the package could not
+    close - which is why the gate is the security boundary and the close is the
+    connection contract.
+    """
+    user, cookie, session_key = await _make_user_and_session("close_bound_probe")
+    close_probe = _instrument_consumer_close(monkeypatch)
+    close_probe.failures = 99
+    probe = _instrument_revalidation(monkeypatch)
+    refused = _controller("close-bound-refused")
+    router = _router()
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        async with _open_ws(router, cookie=cookie) as communicator:
+            first = await _ws_operation(communicator, "{ username }", op_id="1")
+            assert first["type"] == "next", first
+
+            await _flush_the_session(user, session_key)
+
+            for op_id in ("2", "3", "4"):
+                close_probe.entered.clear()
+                await _send_operation(communicator, "{ username }", op_id=op_id)
+                assert await communicator.receive_nothing(timeout=0.2)
+
+            # Still fail-closed, with no close of its own left to spend.
+            await _send_operation(
+                communicator,
+                _controlled_subscription("close-bound-refused"),
+                op_id="5",
+            )
+            assert await communicator.receive_nothing(timeout=0.2)
+            assert not refused.started.is_set(), "a revoked connection admitted another operation"
+
+    assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)] * 2
+    records = _package_logger_records(caplog)
+    assert [record.levelname for record in records] == ["ERROR", "ERROR"]
+    # One failing revalidation, and every refusal behind it read-free.
+    assert probe.reads == 3
+
+
+# ---------------------------------------------------------------------------
+# Channels-present: what the package writes to a socket it has REFUSED.
+#
+# Every row above measures the frames the client can read up to the close. These
+# measure the ordered TRANSPORT log instead, which is the only vantage point from
+# which "the 4403 was the last thing written" is a statement at all - and the one
+# the delegated frame path can be judged from, since a delegated frame never
+# reaches the outbound checkpoint and so leaves no trace in ``_OutboundGateProbe``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_nothing_is_written_to_the_socket_after_the_revocation_close(
+    subprotocol,
+    monkeypatch,
+):
+    """The connection contract: the ``4403`` is the LAST thing the package writes.
+
+    A revoked operation's result loop ends NORMALLY - the stop-aware result source
+    returns rather than cancelling - so upstream carries straight on to its own
+    end-of-operation frame: ``run_operation``'s ``complete`` on
+    graphql-transport-ws, ``handle_async_results``' ``complete`` on legacy
+    graphql-ws. That frame is not information-bearing, so it takes the adapter's
+    delegated path, and without the revoked check on that path it is committed
+    AFTER the close - a control frame arriving on a socket the package says it
+    terminated.
+
+    Under this harness that is one extra output message. On a real server it is a
+    write past the protocol's open state, which raises inside upstream's own
+    operation task - where ``run_operation``'s ``except Exception`` logs it as a
+    worker-task failure and re-raises - so every revoked subscription would report
+    an error. Neither consequence is visible to a row that stops draining at the
+    close, which is why this one reads the ordered transport log.
+
+    The tail is checked twice, and the second check is the load-bearing one: the
+    teardown that follows the socket's disconnect cancels every registered
+    operation, and on the legacy protocol a cancelled operation answers with a
+    ``complete`` of its own. So "nothing after the close" has to survive the
+    teardown, not merely the revocation.
+    """
+    user, cookie, session_key = await _make_user_and_session(f"after_close_{subprotocol[:9]}")
+    controller = _controller("after-close")
+    log = _record_the_transport(monkeypatch)
+    probe = _instrument_revalidation(monkeypatch)
+    router = _router()
+    _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+
+    async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
+        await _send_operation(communicator, _controlled_subscription("after-close"), op_id="1")
+        await _reached(controller.started, "the operation was never admitted")
+
+        controller.release(0)
+        first = await communicator.receive_json_from(timeout=10)
+        assert first["type"] == success_frame, first
+
+        await _flush_the_session(user, session_key)
+
+        controller.release(1)
+        closed, frames = await _drain_until_close(communicator)
+        _assert_revoked_close(closed)
+        assert frames == [], frames
+        assert log.after_the_revocation_close() == [], log.messages
+
+    # The teardown wrote nothing either, and the payload really was produced and
+    # suppressed rather than never generated.
+    assert log.after_the_revocation_close() == [], log.messages
+    assert controller.emitted == ["after-close-1", "after-close-2"]
+    assert controller.finalized
+    assert probe.reads == 3
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_a_delegated_control_frame_is_suppressed_once_the_revocation_is_decided(
+    subprotocol,
+    monkeypatch,
+):
+    """The cut-off is the DECISION, not the committed close - and it is not a mute.
+
+    The window that distinguishes the two rulings, held open on purpose: the
+    transport's close is parked, so the connection is decided-revoked with a close
+    in flight and NOTHING yet committed. The socket is still physically open and
+    upstream's message loop is still serving frames on it, because the parked close
+    is awaited by the operation that observed the revocation rather than by the
+    loop. A delegated frame written in that window is a frame written to a
+    connection the package has already refused, so it is refused too. Keying the
+    cut-off on the committed close instead would let every frame in this window
+    out, and would let them out forever on a connection whose close attempts all
+    failed.
+
+    Both halves are the SAME provoked frame on the SAME socket, which is what makes
+    this a gate rather than a mute: before the revocation the client asks for it and
+    upstream's reply is committed; after the revocation the client asks again and
+    nothing reaches the transport at all. The frame is per protocol only because the
+    protocols differ in what a client can provoke (see
+    ``_PROTOCOL_PROVOKED_CONTROL``); the path it takes through the adapter is the
+    same delegated one on both.
+
+    Reading the transport log rather than the communicator is what pins "suppressed
+    rather than merely late": ``receive_nothing`` would be satisfied by a frame
+    still queued behind the parked close.
+    """
+    _user, cookie, _key = await _make_user_and_session(f"delegated_{subprotocol[:9]}")
+    warm = _controller("delegated-warm")
+    controller = _controller("delegated-refused")
+    log = _record_the_transport(monkeypatch)
+    close_probe = _instrument_consumer_close(monkeypatch)
+    close_probe.park = asyncio.Event()
+    probe = _instrument_revalidation(monkeypatch)
+    provoke_type, reply_type = _PROTOCOL_PROVOKED_CONTROL[subprotocol]
+    router = _router()
+    _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+
+    async with _open_ws(router, cookie=cookie, subprotocol=subprotocol) as communicator:
+        # A live operation, so the legacy protocol has something to cancel, and one
+        # delivered result, so its task is parked between two values.
+        await _send_operation(
+            communicator,
+            _controlled_subscription("delegated-warm"),
+            op_id="warm",
+        )
+        await _reached(warm.started, "the warm-up operation was never admitted")
+        warm.release(0)
+        assert (await communicator.receive_json_from(timeout=10))["type"] == success_frame
+
+        # Before any revocation: the client provokes the delegated frame and it is
+        # committed, upstream's own reply, untouched.
+        await communicator.send_json_to({"type": provoke_type, "id": "warm"})
+        reply = await communicator.receive_json_from(timeout=10)
+        assert reply["type"] == reply_type, reply
+        permitted = log.frame_types
+        assert permitted[-1] == reply_type, permitted
+
+        # The next operation's first frame is refused, and the close it starts parks
+        # with nothing written: decided, not closed. Reads so far are the warm-up
+        # operation's two checkpoints - the provoked frame paid nothing - so read 3
+        # is the new operation's admission and read 4 is its refused result.
+        probe.invalidate_after = 3
+        await _send_operation(
+            communicator,
+            _controlled_subscription("delegated-refused"),
+            op_id="1",
+        )
+        await _reached(controller.started, "the second operation was never admitted")
+        controller.release(0)
+        await _reached(close_probe.entered, "the revocation never reached the transport close")
+        assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+
+        # The same provoked frame, on the same still-open socket: nothing at all is
+        # committed for it.
+        await communicator.send_json_to({"type": provoke_type, "id": "1"})
+        assert await communicator.receive_nothing(timeout=0.2)
+        assert log.frame_types == permitted, log.frame_types
+
+        close_probe.park.set()
+        closed, frames = await _drain_until_close(communicator)
+
+    _assert_revoked_close(closed)
+    assert [frame for frame in frames if frame["type"] in _GATED_FRAME_TYPES] == [], frames
+    assert log.after_the_revocation_close() == [], log.messages
+    # One attempt, one 4403, and the refused operation's own payload never went out.
+    assert close_probe.calls == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    assert controller.emitted == ["delegated-refused-1"]
+    assert probe.reads == 4
+
+
+def _upstream_handler_sources():
+    """The source text of upstream's two WebSocket protocol handler modules.
+
+    Read off disk rather than described here, so the transparency row below judges
+    the INSTALLED upstream rather than a remembered one.
+    """
+    from strawberry.subscriptions.protocols.graphql_transport_ws import (
+        handlers as transport_ws_handlers,
+    )
+    from strawberry.subscriptions.protocols.graphql_ws import handlers as legacy_ws_handlers
+
+    return [
+        Path(inspect.getfile(module)).read_text()
+        for module in (transport_ws_handlers, legacy_ws_handlers)
+    ]
+
+
+def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
+    """The substituted schema is transparent, measured against upstream's own source.
+
+    The stop protocol works by replacing the handler's own ``self.schema`` with a
+    per-connection wrapper, and a wrapper is only safe while everything upstream
+    asks of that object still resolves to the real one. So the name set is DERIVED
+    from the installed handler modules rather than asserted from memory: every
+    ``self.schema.<name>`` either is the wrapper's own ``subscribe`` - the one call
+    whose result has to become stoppable - or resolves through ``__getattr__`` to
+    the identical attribute of the real schema.
+
+    The second half is the ``isinstance`` question, which ``__getattr__`` cannot
+    answer for: a handler that type-tested the schema it was handed would reject the
+    wrapper outright, so the row proves upstream performs no such test. Both halves
+    are what make the wrapper transparent rather than merely convenient, and both
+    would go stale silently without a row that re-reads the source.
+
+    Only the HANDLERS' schema is substituted, never the view's, so
+    ``AsyncBaseHTTPView.run`` is not part of the question: it reads the consumer's
+    own attribute, passes it to the handler as an ordinary keyword, and never sees
+    the wrapper.
+    """
+    sources = _upstream_handler_sources()
+    reads = set()
+    for source in sources:
+        reads.update(re.findall(r"self\.schema\.(\w+)", source))
+        assert not re.search(r"(isinstance|type)\(\s*(self\.)?schema\b", source), (
+            "upstream now type-tests the schema it was handed, which a delegating "
+            "wrapper cannot satisfy"
+        )
+
+    assert reads == {"subscribe", "execute"}, reads
+    wrapper = consumers_module._StopAwareSchema(SCHEMA, None)
+    for name in reads - {"subscribe"}:
+        assert getattr(wrapper, name) == getattr(SCHEMA, name), name
+    assert wrapper.subscribe != SCHEMA.subscribe
 
 
 # ---------------------------------------------------------------------------
@@ -3885,7 +4621,7 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
     _assert_revoked_close(closed)
     assert controller.emitted == ["same-socket-1", "same-socket-2"]
     assert probe.reads == 2
-    assert controller.finalized, "cancellation did not unwind the subscription generator"
+    assert controller.finalized, "the subscription generator was never unwound"
 
 
 @pytest.mark.django_db(transaction=True)

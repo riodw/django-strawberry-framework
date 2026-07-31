@@ -44,15 +44,26 @@ operation-scoped ``error`` frames. Runtime resolver errors normally ride inside
 ``error`` frames and can still disclose schema, validation, extension, or
 consumer-authored information, so gating them avoids an unnecessary disclosure
 distinction. ``complete``, ``connection_ack``, ``ping`` / ``pong``, the legacy
-keep-alive ``ka``, and every other connection-control frame are delegated
-untouched: they carry no operation information, and one of them (``complete``) is
-what upstream's own cancellation path emits while a socket is being torn down.
+keep-alive ``ka``, and every other connection-control frame are delegated to
+upstream untouched: they carry no operation information, and one of them
+(``complete``) is what upstream emits at the end of every operation.
+
+Delegation is not unconditional, though, and the condition is the connection's
+own state rather than the frame's type: **once the revocation is DECIDED the
+adapter writes nothing further to the socket at all**, delegated frames included.
+Ending a revoked operation's result loop normally means upstream proceeds to its
+own ``complete``, which would otherwise be delegated straight through and land
+AFTER this module's ``4403`` - a control frame on a socket the package says it
+terminated. The adapter's ``send_json`` carries the whole ruling, including why
+the cut-off is the decision rather than the committed close, and why the read
+needs no actor lease.
 
 **Revocation is connection-scoped.** The first failed validation - at either
 checkpoint - atomically marks the connection revoked, suppresses the pending
 frame, closes the whole socket with upstream's own ``4403`` / ``"Forbidden"``,
-unwinds the current operation through cancellation, and lets upstream's existing
-disconnect / shutdown path cancel and await every remaining registered operation.
+ends the revoked operation's own result loop through the stop-aware result source
+described below, and lets upstream's existing disconnect / shutdown path cancel
+and await every remaining registered operation.
 No protocol-specific operation error is sent first, at EITHER checkpoint: the
 actor is connection-scoped so the close IS the rejection, an error-then-close
 sequence would only add protocol asymmetry and another race, and - decisively -
@@ -62,6 +73,66 @@ this close anyway. Exempting that one frame from the gate to let it through woul
 be precisely the disclosure distinction the gated set exists to avoid.
 ``scope["user"]`` is never downgraded to anonymous - a revoked session must not
 quietly become an anonymous one.
+
+**How a revoked operation stops: the stop-aware result source.**
+``_StopAwareSchema`` wraps the ONE object both protocol handlers reach an
+operation's results through - their own ``self.schema`` - and is installed
+per connection by the two handler subclasses the factory below already generates,
+so a single mechanism serves both protocols. Its ``subscribe`` delegates to the
+real schema and returns ``_stop_aware_results``, a generator that consults the
+connection's revocation state before pulling each value and simply RETURNS once
+the connection is revoked. Upstream's ``async for result in result_source`` loop
+therefore ends NORMALLY, at its own next iteration, and the wrapper closes the
+inner source in its own ``finally`` - so the subscription generator's ``finally``
+runs deterministically, at the revocation, rather than whenever the interpreter's
+asyncgen finalizer gets to it.
+
+Termination is the mechanism, and cancellation is deliberately not: a revoked
+operation must be stopped even when every subsequent value is already available.
+``asyncio.Task.cancel()`` only requests cancellation, and the request is consumed
+when the task is next rescheduled - which needs an await that actually yields to
+the loop. The whole suppressed-frame path has none: an uncontended
+``asyncio.Lock.acquire()`` does not suspend, the revoked short-circuit takes no
+session read, a completed close returns immediately, and an immediate-yield
+generator supplies the next value without suspending either. A cancel request
+issued from there is never delivered, so the operation keeps producing values the
+gate keeps suppressing, monopolizing the loop at exactly the moment revocation
+should be unwinding it. Nothing is disclosed - the frames stay suppressed - but
+the socket's teardown is starved, and on the legacy protocol
+``cleanup_operation`` *awaits* the operation task, so the teardown deadlocks
+outright. Neither an ``await asyncio.sleep(0)`` after the request nor a repeated
+request fixes that: a cancellation delivered in the ``async for`` BODY unwinds
+the body and leaves the generator suspended, which is the opposite of closing it.
+
+Non-subscription operations need none of this and get none: upstream reaches them
+through ``schema.execute``, which returns a single result and never loops, so the
+wrapper passes that call through to the real schema untouched.
+
+**The substitution is transparent by the only measure that matters.** ONLY the
+handler's own ``self.schema`` is replaced, and only ever with the connection's
+wrapper - ``AsyncBaseHTTPView.run`` reads the CONSUMER's ``self.schema``, passes
+it to the handler as an ordinary keyword, and never sees the wrapper at all. The
+two handler modules read exactly two attributes off the schema they were handed -
+``subscribe``, in both, and ``execute`` - and perform no ``isinstance`` or
+``type`` test on it; ``subscribe`` is the one the wrapper defines, ``execute`` and
+every other name resolve through ``__getattr__`` to the real schema by identity.
+The wrapper is therefore invisible to execution itself: the real schema builds the
+execution context, so ``info.schema`` and every extension see the real object.
+
+**The close is a state machine, not a flag** (``_ConnectionRevocation``). Three
+facts have to stay separable - that revocation was DECIDED, that a close is IN
+FLIGHT, and that a close COMPLETED - because one boolean standing for all three
+records a close that raised, or one that was abandoned, as a close that was
+committed, and then no later checkpoint ever tries again. Information-bearing
+frames stay fail-closed either way, but the promised ``4403`` would silently
+never reach the client, leaving it holding a socket this module has stopped
+writing to and will never explain. The states and the transitions between them are on
+``_ConnectionRevocation``; the two properties worth naming here are that the
+DECIDED transition is published before any await (so every checkpoint refuses on
+it read-free) and that the close attempt is a task the CONNECTION owns, so
+cancelling whichever operation first observed the revocation - which both
+protocols let a client do, with ``complete`` / ``stop`` - cannot abandon the
+close.
 
 **A same-connection ``logout`` is a revocation event, and the socket ends.** The
 package's own ``auth/mutations.py::logout`` mutation runs on the connection it is
@@ -254,6 +325,29 @@ _DEFAULT_REVALIDATION_WINDOW = 0.0
 _REVOCATION_CLOSE_CODE = 4403
 _REVOCATION_CLOSE_REASON = "Forbidden"
 
+#: The bounded number of close attempts one connection's revocation may spend:
+#: the first attempt plus exactly ONE retry. Checkpoints are client-driven, so an
+#: unbounded retry would hand a client an amplification lever - one attempted
+#: close per frame it chooses to provoke - and the realistic raise set is not
+#: transient (a disconnected transport, a server state assertion, an ``OSError``),
+#: so a third attempt cannot succeed where the first two did not. Past the bound
+#: the connection is ABANDONED: no further attempt, and the outbound gate stays
+#: fail-closed for every information-bearing frame, which is the property that
+#: does not depend on the close reaching the wire.
+_MAX_REVOCATION_CLOSE_ATTEMPTS = 2
+
+#: The five states of one connection's revocation. ``PERMITTED`` is the only one
+#: in which a checkpoint may authorize anything; the other four all deny, and
+#: differ only in what they say about the close. Spelled as module constants
+#: rather than derived from a set of booleans so that "revoked but no close in
+#: flight and a retry permitted" is a state with a name instead of a conjunction
+#: a future reader has to reconstruct.
+_REVOCATION_PERMITTED = "permitted"
+_REVOCATION_DECIDED = "decided"
+_REVOCATION_CLOSING = "closing"
+_REVOCATION_CLOSED = "closed"
+_REVOCATION_ABANDONED = "abandoned"
+
 #: The frame types that carry operation information, and therefore the ones the
 #: outbound checkpoint gates: ``next`` (graphql-transport-ws), ``data`` (legacy
 #: graphql-ws), and the operation-scoped ``error`` both protocols use for
@@ -358,6 +452,153 @@ def resolved_revalidation_window(value: object) -> float:
     return window
 
 
+class _ConnectionRevocation:
+    """One connection's revocation decision and the state of its ``4403`` close.
+
+    Five states, and every transition between them:
+
+    * ``PERMITTED`` - nothing has failed validation. The ONLY state in which a
+      checkpoint may authorize an operation or a frame. ``decide()`` moves it to
+      ``DECIDED``.
+    * ``DECIDED`` - revocation is published and no close attempt is in flight, and
+      one is still permitted. Reached from ``PERMITTED`` by ``decide()``, and from
+      ``CLOSING`` when an attempt RAISED with the attempt bound not yet spent.
+      ``close()`` moves it to ``CLOSING``.
+    * ``CLOSING`` - a connection-owned attempt is in flight. Every checkpoint that
+      arrives here awaits THAT attempt rather than starting its own. The attempt
+      itself moves it to ``CLOSED``, ``DECIDED`` or ``ABANDONED``.
+    * ``CLOSED`` - terminal. An attempt's own ``await`` on the adapter's ``close``
+      returned, so a ``4403`` was committed to the transport.
+    * ``ABANDONED`` - terminal. The attempt bound
+      (``_MAX_REVOCATION_CLOSE_ATTEMPTS``) is spent and no close ever completed.
+
+    ``decide()`` is synchronous and runs before any await, which is what lets every
+    checkpoint refuse on ``revoked`` **read-free** - the refusal costs no session
+    read at all, at either checkpoint, however many frames a client pipelines
+    behind the close.
+
+    The outcome is recorded by the task that awaited ``close`` to completion, after
+    its own await returned - never before it, and never by a bystander. That is
+    the whole correction: an ASGI ``send`` is asynchronous and unacknowledged, so
+    "a close was decided" and "a close reached the transport" are different facts,
+    and a single flag set before the await records the first as the second. An
+    attempt that raised is not a success: the state returns to ``DECIDED`` and the
+    next permitted checkpoint starts exactly one new attempt.
+
+    **A CANCELLED attempt leaves the connection in ``CLOSING``, permanently, and
+    that is the ruling rather than an omission.** ASGI's ``send`` returns ``None``
+    and offers no acknowledgement, so a cancellation delivered while the close is
+    suspended says nothing about whether the frame was committed - the outcome is
+    unobservable, and a retry would risk a SECOND ``4403`` for a close that
+    probably succeeded. The attempt is owned by the connection and nothing in this
+    package cancels it, so the only thing that can is the event loop that owns the
+    socket being torn down, at which point no retry could reach a client anyway.
+    ``CLOSING`` permits no new attempt, so the ruling needs no state of its own -
+    which is also why the ordinary success path can never put two ``4403`` frames
+    on the wire: exactly one attempt is ever in flight, and only a RAISE reopens
+    the door.
+    """
+
+    __slots__ = ("attempt", "attempts", "state")
+
+    def __init__(self) -> None:
+        self.state = _REVOCATION_PERMITTED
+        self.attempt: Any = None
+        self.attempts = 0
+
+    @property
+    def revoked(self) -> bool:
+        """Whether this connection has been revoked, whatever its close has done.
+
+        The read-free denial every checkpoint - and the stop-aware result source -
+        consults. It is a latch in meaning: ``PERMITTED`` is never re-entered.
+        """
+        return self.state != _REVOCATION_PERMITTED
+
+    def decide(self) -> None:
+        """Publish the revocation decision, synchronously and before any await."""
+        if self.state == _REVOCATION_PERMITTED:
+            self.state = _REVOCATION_DECIDED
+
+    async def close(self, websocket: Any) -> None:
+        """Start the one permitted close attempt, or await the one already in flight.
+
+        Callers hold the connection's actor lease, so the state read and the task
+        creation below cannot interleave with another checkpoint's - which is what
+        makes "at most one attempt in flight" true by construction rather than by
+        a second lock.
+
+        The attempt is a task the CONNECTION owns, and ``asyncio.shield`` is what
+        makes that ownership real rather than nominal: a plain ``await`` on a task
+        installs it as the awaiter's ``_fut_waiter``, so cancelling the awaiter
+        cancels the awaited task too, and the close a client-cancellable operation
+        happened to start would die with that operation. Shielding costs a future
+        per acquisition on a path taken once per connection, and it takes nothing
+        away from the outcome record: ``_attempt_close`` is the task that awaits
+        the transport, so it is the one that records what happened.
+        """
+        if self.state == _REVOCATION_DECIDED:
+            self.attempts += 1
+            self.state = _REVOCATION_CLOSING
+            self.attempt = asyncio.create_task(self._attempt_close(websocket))
+        if self.state == _REVOCATION_CLOSING:
+            await asyncio.shield(self.attempt)
+
+    async def settle(self) -> None:
+        """Await this connection's close attempt, if it ever started one.
+
+        The connection's own teardown hook, so an attempt whose starting checkpoint
+        was cancelled is still awaited by somebody before the ASGI application
+        returns - a task the connection owns must not outlive the connection. It
+        never STARTS an attempt: teardown is not a security checkpoint, and a
+        socket that is already being disconnected has nothing left to refuse.
+        Shielded for the same reason ``close`` shields.
+        """
+        if self.attempt is not None:
+            await asyncio.shield(self.attempt)
+
+    async def _attempt_close(self, websocket: Any) -> None:
+        """Commit one ``4403`` close, and record what actually happened.
+
+        Runs as the connection's own task, and records the outcome AFTER its own
+        await returns. The close goes through the adapter (upstream's own
+        ``ChannelsWebSocketAdapter.close`` -> ``consumer.close``) rather than
+        around it, so a consumer that derives its own adapter keeps owning the
+        write.
+
+        ``Exception`` and not ``BaseException``: the realistic raise set is a
+        disconnected transport, a server state assertion and an ``OSError``, all of
+        which are failures this connection can still answer for, while an
+        ``asyncio.CancelledError`` is the loop taking the connection away and is
+        left to propagate (see the class docstring for why that outcome is
+        terminal). The failure itself is recorded and NOT re-raised out of the task:
+        an awaiting checkpoint's job is to know the attempt finished, not to inherit
+        its exception, and an attempt whose awaiter was cancelled must not leave an
+        unretrieved one behind either.
+        """
+        try:
+            await websocket.close(
+                code=_REVOCATION_CLOSE_CODE,
+                reason=_REVOCATION_CLOSE_REASON,
+            )
+        except Exception:
+            self.state = (
+                _REVOCATION_DECIDED
+                if self.attempts < _MAX_REVOCATION_CLOSE_ATTEMPTS
+                else _REVOCATION_ABANDONED
+            )
+            logger.exception(
+                "GraphQLWebSocketConsumer: the revoked connection's close could not be "
+                "committed to the transport (attempt %s of %s). Information-bearing frames "
+                "stay refused on this connection either way; the next security checkpoint "
+                "retries the close while the attempt bound allows it.",
+                self.attempts,
+                _MAX_REVOCATION_CLOSE_ATTEMPTS,
+            )
+            return
+        self.state = _REVOCATION_CLOSED
+
+
 async def revalidate_operation_actor(handler: Any) -> bool:
     """Admission checkpoint: may a NEW operation start on this connection?
 
@@ -411,14 +652,15 @@ async def revalidate_operation_actor(handler: Any) -> bool:
 
     consumer = handler.view
     async with actor_lease(consumer.scope):
-        if consumer._revocation_observed:
-            # Already revoked and already closed by whichever checkpoint saw it
-            # first. A client can still have pipelined this frame before the
-            # close reached it, so the arm is reachable rather than defensive -
-            # and it must stay read-free, which is what makes the denial stable
-            # at no further database cost.
-            return False
-        if await _actor_is_current(consumer):
+        # The left arm short-circuits, so an already-revoked connection denies
+        # without a session read of its own. A client can still have pipelined
+        # this frame before the close reached it, so that arm is reachable rather
+        # than defensive - and it must stay read-free, which is what makes the
+        # denial stable at no further database cost. It still routes through
+        # ``_revoke_connection``, because "revoked" does not imply "closed": an
+        # earlier attempt may have raised, and this checkpoint is the next
+        # permitted one.
+        if not consumer._revocation.revoked and await _actor_is_current(consumer):
             return True
         await _revoke_connection(handler.websocket)
         return False
@@ -447,36 +689,25 @@ async def send_revalidated_operation_frame(
     ``send`` is the adapter's own ``super().send_json`` bound method, so the
     delegation is upstream's serialize-and-write path, unchanged.
 
-    The current operation is then unwound through **cancellation** rather than by
-    raising ``asyncio.CancelledError`` from this frame. The difference matters:
-    cancelling delivers the error at the operation's next suspension point, which
-    is inside ``result_source.__anext__()`` - so the subscription generator's own
-    ``finally`` runs and the generator is closed. Raising here instead would
-    unwind the ``async for`` *body*, leaving the generator suspended for the
-    interpreter's asyncgen finalizer to close at an unrelated moment. Upstream's
-    two loops then diverge exactly as their own code says: legacy
-    ``handle_async_results`` catches ``asyncio.CancelledError`` and sends
-    ``complete``, transport-ws ``run_operation`` does not and emits nothing.
-    Either way no suppressed payload leaves and no task leaks, because the
-    surviving registrations are cleaned up by upstream's own
-    ``shutdown()`` / ``cleanup()`` on disconnect.
+    This function suppresses and revokes; it does NOT unwind the operation, and
+    adds no suspension point of its own on the way out. The revoked operation ends
+    itself, deterministically, at its result loop's next iteration - see the
+    module docstring's stop-aware-result-source section for why termination rather
+    than cancellation is the mechanism, and why an operation whose next value is
+    already available could never be stopped by a cancellation request issued from
+    here. The one path that arrives with no operation of the package's to end at
+    all is the protocols' subscription-limit ``error`` frame, which both handlers
+    emit from the connection's own message-loop task; the close alone is the whole
+    rejection there, and it needs no carve-out now that nothing is cancelled.
+    Upstream's own ``shutdown()`` / ``cleanup()`` still cancels and awaits every
+    sibling operation on disconnect.
     """
     consumer = websocket.ws_consumer
     async with actor_lease(consumer.scope):
-        if not consumer._revocation_observed and await _actor_is_current(consumer):
+        if not consumer._revocation.revoked and await _actor_is_current(consumer):
             await send(message)
             return
         await _revoke_connection(websocket)
-
-    # Outside the lease, and only ever the OPERATION task: cancelling the
-    # connection's own message-loop task (upstream's ``run_task``) would abort
-    # the very disconnect/shutdown path that has to cancel and await the
-    # remaining operations. The main task reaches this function for the
-    # protocols' subscription-limit ``error`` frame, where the close alone is
-    # the whole rejection and there is no operation of ours to unwind.
-    task = asyncio.current_task()
-    if task is not consumer.run_task:
-        task.cancel()
 
 
 async def _actor_is_current(consumer: Any) -> bool:
@@ -570,23 +801,107 @@ async def _actor_is_current(consumer: Any) -> bool:
 
 
 async def _revoke_connection(websocket: Any) -> None:
-    """Mark the connection revoked and close the socket - exactly once.
+    """Publish the revocation decision, then drive the connection's close.
 
-    The transition is set BEFORE the close is awaited, so a sibling task that
-    acquires the connection's actor lease next observes "revoked" immediately and takes
-    neither a second session read nor a second close. Idempotence is not a
-    nicety here: both checkpoints call this, and a socket that is closed twice
-    would make upstream emit a second ``websocket.close`` after the first.
-
-    The close goes through the adapter (upstream's own
-    ``ChannelsWebSocketAdapter.close`` -> ``consumer.close``) rather than around
-    it, so a consumer that derives its own adapter keeps owning the write.
+    The ONE entry point both checkpoints take into
+    ``_ConnectionRevocation``, so the decision and the close can never be
+    published out of order or by different rules: the transition is set BEFORE any
+    await, so a sibling task that acquires the connection's actor lease next
+    observes "revoked" immediately and takes neither a second session read nor a
+    second close attempt, and the close itself is the connection's own bounded
+    attempt. Both halves are idempotent, which is not a nicety: both checkpoints
+    call this, on every frame a client pipelines behind the close, and a socket
+    closed twice would put a second ``websocket.close`` on the wire after the
+    first.
     """
-    consumer = websocket.ws_consumer
-    if consumer._revocation_observed:
-        return
-    consumer._revocation_observed = True
-    await websocket.close(code=_REVOCATION_CLOSE_CODE, reason=_REVOCATION_CLOSE_REASON)
+    revocation = websocket.ws_consumer._revocation
+    revocation.decide()
+    await revocation.close(websocket)
+
+
+async def _stop_aware_results(source: Any, consumer: Any) -> Any:
+    """Yield ``source``'s results until the connection is revoked, then end.
+
+    The package-owned half of the operation-stop protocol. Upstream's two result
+    loops (``run_operation`` / ``handle_async_results``) iterate whatever
+    ``schema.subscribe`` handed back, so ending THIS generator ends that loop -
+    normally, at its own next iteration, with no cancellation involved and no
+    suppressed payload produced. The revocation state is read before each pull
+    rather than after it, which is what makes the number of values a revoked
+    subscription still produces bounded and deterministic: the suppressed frame's
+    own value is the last one the resolver is ever asked for.
+
+    The state read needs no lease. It is a latch, and reading a stale ``False``
+    costs exactly one more value - which the outbound checkpoint then refuses
+    under the lease, like any other frame. Taking the lease here would instead
+    serialize the connection's result production behind its own sends.
+
+    ``finally`` closes the inner source, so the subscription's own ``finally``
+    runs at the revocation and before teardown rather than whenever the
+    interpreter's asyncgen finalizer reaches it. Transport-ws never closes its
+    result source at all (no ``finally``, no ``aclosing``, and the local goes out
+    of scope), and legacy's ``cleanup_operation`` closes whatever is registered -
+    which is now this generator, so closing it closes the real one underneath.
+    """
+    try:
+        while not consumer._revocation.revoked:
+            try:
+                result = await anext(source)
+            except StopAsyncIteration:
+                return
+            yield result
+    finally:
+        await source.aclose()
+
+
+class _StopAwareSchema:
+    """One connection's schema, with subscription results made stoppable.
+
+    Installed on the two handler subclasses' own ``self.schema`` by
+    ``_install_stop_aware_schema``, never on the consumer's, so the substitution
+    reaches exactly the two upstream call sites that build an operation's result
+    source and nothing else. See the module docstring for the transparency
+    argument, and for why the wrapper is invisible to execution itself.
+
+    ``__getattr__`` forwards every other name to the wrapped schema object by
+    identity, which is what keeps ``execute`` - the non-subscription path, whose
+    single result never loops and needs no stopping - upstream's own call.
+    ``__slots__`` keeps the two fields off that forwarding path, so a
+    misspelled internal name is an ``AttributeError`` here rather than a silent
+    delegation to the real schema.
+    """
+
+    __slots__ = ("_consumer", "_schema")
+
+    def __init__(self, schema: Any, consumer: Any) -> None:
+        self._schema = schema
+        self._consumer = consumer
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward everything but ``subscribe`` to the real schema, by identity."""
+        return getattr(self._schema, name)
+
+    async def subscribe(self, *args: Any, **kwargs: Any) -> Any:
+        """Return the real schema's subscription results, wrapped so they can stop.
+
+        The signature is deliberately positional-and-keyword pass-through: the
+        arguments are upstream's, and re-spelling them here would be a second
+        declaration of ``Schema.subscribe``'s parameter list to keep in step.
+        ``Schema.subscribe`` awaits nothing before returning its generator, so the
+        ``await`` below adds no suspension point to an operation's start.
+        """
+        return _stop_aware_results(await self._schema.subscribe(*args, **kwargs), self._consumer)
+
+
+def _install_stop_aware_schema(handler: Any) -> None:
+    """Give one protocol handler the connection's stop-aware schema.
+
+    Called by both handler subclasses after ``super().__init__`` has stored
+    upstream's ``schema=`` keyword, so the wrapper wraps whatever the view handed
+    over. ``handler.view`` IS the consumer under the Channels integration, which
+    is where the revocation state lives.
+    """
+    handler.schema = _StopAwareSchema(handler.schema, handler.view)
 
 
 async def _refreshed_actor(scope: Any) -> Any:
@@ -642,7 +957,11 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
     """
 
     class _RevalidatingTransportWSHandler(base_consumer_cls.graphql_transport_ws_handler_class):
-        """``graphql-transport-ws`` admission: revalidate, then delegate to upstream."""
+        """``graphql-transport-ws``: revalidated admission, stoppable results."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _install_stop_aware_schema(self)
 
         # ``message`` is upstream's ``SubscribeMessage`` TypedDict; annotated
         # ``Any`` deliberately, so the factory keeps importing nothing from
@@ -653,7 +972,11 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             await super().handle_subscribe(message)
 
     class _RevalidatingGraphQLWSHandler(base_consumer_cls.graphql_ws_handler_class):
-        """Legacy ``graphql-ws`` admission: revalidate, then delegate to upstream."""
+        """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            _install_stop_aware_schema(self)
 
         # ``message`` is upstream's ``StartMessage`` TypedDict; see above.
         async def handle_start(self, message: Any) -> None:
@@ -673,7 +996,58 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
         # ``message`` is a protocol frame mapping on either protocol; ``Any``
         # for the same reason the handler hooks above use it.
         async def send_json(self, message: Any) -> None:
+            """Revalidate an information-bearing frame; write nothing once revoked.
+
+            Two arms, and only the first is an authorization decision. An
+            information-bearing frame goes to the outbound checkpoint, which
+            validates the connection's actor under its lease. Every other frame is
+            upstream's own to write - until this connection's revocation has been
+            DECIDED, after which this adapter writes nothing at all.
+
+            **The invariant the second arm enforces: once the revocation is
+            decided, the package puts no further frame on this socket.** A revoked
+            operation's result loop ends NORMALLY (the stop-aware result source
+            returns rather than cancelling), so upstream proceeds to its own
+            end-of-operation frame - ``run_operation``'s ``complete`` on
+            graphql-transport-ws, ``handle_async_results``' ``complete`` on legacy
+            graphql-ws. That frame is not information-bearing, so without this arm
+            it would be delegated straight through and committed AFTER the
+            ``4403``: a control frame arriving on a socket this module says it
+            terminated, which is the connection contract the revocation close
+            exists to provide. It is also not merely untidy on a real server - an
+            ASGI send past the protocol's open state raises, and the raise
+            surfaces inside upstream's own operation task, which logs it and
+            re-raises - so every revoked subscription would report a worker-task
+            error.
+
+            **DECIDED, not "close committed"**, deliberately. Between the decision
+            and the commit the socket is still physically open, so a frame written
+            in that window is a frame written to a connection the package has
+            already refused; and the close is not guaranteed to commit at all - an
+            attempt may raise, and a connection whose attempt bound is spent stays
+            ``ABANDONED`` - so a cut-off keyed on the commit would leave exactly
+            the connections that could not be closed still emitting. ``revoked``
+            is the latch that covers all four post-decision states.
+
+            The close itself is unaffected: ``_ConnectionRevocation`` reaches the
+            transport through the adapter's ``close``, never through ``send_json``.
+
+            **A suppression is not an authorization, so it takes no lease.** The
+            revoked read below is deliberately outside the connection's actor
+            lease: taking the lease here would put every ping, pong and keep-alive
+            behind the protected-send serialization point, which is a real
+            head-of-line change on connection-control traffic. It is sound because
+            ``revoked`` is a latch - the state only ever moves away from
+            ``PERMITTED`` and never back - so a stale read can only be stale in
+            one direction: one frame goes out that a concurrent checkpoint was
+            about to forbid, which is the same outcome any frame racing a
+            checkpoint already has. The reverse error - a frame written after the
+            decision was published - cannot occur, because ``decide()`` publishes
+            the transition synchronously, before any await.
+            """
             if message.get("type") not in _INFORMATION_BEARING_FRAME_TYPES:
+                if self.ws_consumer._revocation.revoked:
+                    return
                 await super().send_json(message)
                 return
             await send_revalidated_operation_frame(self, message, super().send_json)
@@ -691,13 +1065,14 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
 
         ``revalidation_window`` rides as an ``as_asgi()`` initkwarg rather than a
         class attribute, so one cached consumer class serves every router
-        instance and two routers may carry two different windows. The revoked flag
-        is per-INSTANCE for the same structural reason: revocation is
-        connection-scoped, and one consumer instance is exactly one connection.
-        The lock that guards it is NOT an instance attribute, and the asymmetry is
-        the point: exclusion has to reach a second state machine this class cannot
-        see, so it lives on the ASGI scope
-        (``utils/sessions.py::actor_lease``) - which is the same
+        instance and two routers may carry two different windows. The revocation
+        state machine is per-INSTANCE for the same structural reason: revocation
+        is connection-scoped, and one consumer instance is exactly one connection
+        - which is also what makes the close attempt it owns a connection-lifetime
+        task rather than an operation-lifetime one. The lock that guards it is NOT
+        an instance attribute, and the asymmetry is the point: exclusion has to
+        reach a second state machine this class cannot see, so it lives on the ASGI
+        scope (``utils/sessions.py::actor_lease``) - which is the same
         one-object-per-connection lifetime, reachable from the auth layer's own
         ``logout`` without either layer importing the other.
 
@@ -738,8 +1113,23 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             # the consumer's own machinery, and the checkpoints read both of these
             # off the view / adapter's consumer.
             self.revalidation_window = revalidation_window
-            self._revocation_observed = False
+            self._revocation = _ConnectionRevocation()
             super().__init__(*args, **kwargs)
+
+        async def disconnect(self, code: int) -> None:
+            """Let upstream tear the connection down, then settle its close attempt.
+
+            After ``super()``, deliberately: upstream's own ``disconnect`` awaits
+            the connection's message-loop task, which is what cancels and awaits
+            every registered operation, and this connection's close attempt is a
+            task it owns and must not outlive. Settling it here is what makes the
+            attempt survivable in the first place - a client may cancel the
+            operation that started it (``complete`` / ``stop``) at any point,
+            including while the transport has the close back-pressured, and the
+            close must still be finished and recorded by somebody.
+            """
+            await super().disconnect(code)
+            await self._revocation.settle()
 
     return GraphQLWebSocketConsumer
 

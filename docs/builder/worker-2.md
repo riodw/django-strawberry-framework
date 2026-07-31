@@ -72,7 +72,7 @@ When implementation reveals the plan's approach is not quite right (a planned he
 
 ## Pre-existing claim verification
 
-`docs/builder/BUILD.md` `## Verifying a pre-existing-at-HEAD claim` is canonical: the verification is **read-only**, no git write command is part of it, and a failing test or runtime behavior is not worker-verifiable at all. Worker 2's delta: cite the read-only evidence in the build report, and escalate a behavioral claim under `### Notes for Worker 1 (spec reconciliation)` instead of attempting it.
+`docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose` is canonical. Worker 2's delta: cite the read-only evidence in the build report, and escalate a behavioral claim under `### Notes for Worker 1 (spec reconciliation)` instead of attempting it.
 
 ## Apply-changes verification scope
 

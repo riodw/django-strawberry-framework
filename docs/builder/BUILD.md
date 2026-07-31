@@ -214,7 +214,7 @@ Two further change shapes strand test files the slice never names, and both hide
 - **An example-model field/column added, removed, or renamed** breaks every test hard-coding that model's field set — package `tests/` may use real example models as fixtures — through *different* mechanisms: a stale `fields=` / `exclude=` list, an editable-column expectation, a `"__all__"` shorthand that now raises on an unfilterable column type, a dedup/identity assertion. The sweep is the full `uv run pytest tests/ --no-cov`, never a focused run, and every staleness it exposes is fixed in the same pass. The faithful fix restores the test's original intent against the model's **current** field set: never weaken an assertion to force a pass, never change production code to make a stale test green.
 - **A wire-shape conversion** — a root or relation field becoming a connection, or any change to the `edges` / `node` / argument envelope a consumer query must use — must be re-pinned in **every** test tree exercising that field, not only the tree the slice text names (`AGENTS.md` defines three: package `tests/`, per-app `examples/fakeshop/apps/<app>/tests/`, live `examples/fakeshop/test_query/`). The check is `grep -rn <converted field name>` across all three.
 
-A regression either shape introduces is the build's to fix **in-loop**: never a separate-session follow-up, never off-loaded to a task-spawning tool. Background hand-off is only for genuinely out-of-build, pre-existing-at-HEAD issues (`## Verifying a pre-existing-at-HEAD claim`). A tree left stale is at minimum a Medium finding.
+A regression either shape introduces is the build's to fix **in-loop**: never a separate-session follow-up, never off-loaded to a task-spawning tool. Background hand-off is only for genuinely out-of-build, pre-existing-at-HEAD issues (`## Claims are proven mechanically, never accepted on prose`). A tree left stale is at minimum a Medium finding.
 
 ## Failability proofs: prove the test can fail
 
@@ -236,7 +236,7 @@ cmp <file> /tmp/dsf-proof-<slug>.orig              # the proof: exit 0
 
 **The scratch path must be outside the repository.** A pristine copy under `docs/builder/temp-tests/` satisfies every other word here while putting a copy of the file under proof inside the tree under proof.
 
-The pre-mutation copy is the reference because **the tree is legitimately dirty** with this build's own work: an empty `git diff -- <file>` is therefore NOT the proof (it cannot be empty, and a boundary this build introduces has no HEAD version anyway), and `git checkout -- <file>` is never the restore — it would discard the slice. For a boundary already present at HEAD, `git show HEAD:<path>` into a scratch path outside the repo is an equally valid reference (`## Verifying a pre-existing-at-HEAD claim`).
+The pre-mutation copy is the reference because **the tree is legitimately dirty** with this build's own work: an empty `git diff -- <file>` is therefore NOT the proof (it cannot be empty, and a boundary this build introduces has no HEAD version anyway), and `git checkout -- <file>` is never the restore — it would discard the slice. For a boundary already present at HEAD, the read-only HEAD reference in `## Claims are proven mechanically, never accepted on prose` is equally valid.
 
 ### Mechanized: `scripts/prove_failability.py`
 
@@ -248,7 +248,7 @@ The fenced loop stays the fallback: a worker must still know what the tool does.
 
 ### What needs a proof, and what does not
 
-Required for every **new boundary, guard, gate, or rejection path** a slice introduces — anything whose job is to say "no", hold an invariant, or fail closed. **Not** required for every changed line: renamed symbols, relocated bodies, added annotations, doc edits, and refactors that move existing behavior need none (their own proof rule is `## Verifying a relocation, promotion, or unchanged-carryover claim`). Keep the obligation scoped to boundaries, or it becomes unaffordable and gets skipped.
+Required for every **new boundary, guard, gate, or rejection path** a slice introduces — anything whose job is to say "no", hold an invariant, or fail closed. **Not** required for every changed line: renamed symbols, relocated bodies, added annotations, doc edits, and refactors that move existing behavior need none (their own proof rule is `## Claims are proven mechanically, never accepted on prose`). Keep the obligation scoped to boundaries, or it becomes unaffordable and gets skipped.
 
 ### Who performs it
 
@@ -381,20 +381,15 @@ Every `bld-*.md` artifact is copied from the template in **[ARTIFACT.md](ARTIFAC
 
 **Low** — small maintainability issues; naming clarity; minor typing/API polish; localized simplification; comments or docstrings stale or wrong but not load-bearing.
 
-## Verifying a pre-existing-at-HEAD claim
+## Claims are proven mechanically, never accepted on prose
 
-"That failure / diff entry / broken behavior is pre-existing at HEAD" moves work out of the build. Worker 2 must cite its verification; Worker 3 verifies rather than accepts; **an unverified pre-existing claim is a Medium finding.** How far a worker can verify depends on what is claimed:
+Three claim shapes move work or risk out of a build, each cheapest to wave through where it most deserves distrust. All three carry one obligation: the claimant cites its verification, the reader re-derives instead of accepting, and **an unverified claim of any of these shapes is a Medium finding.**
 
-- **A specific file's content: verifiable, read-only.** `git show HEAD:<path> > /tmp/dsf-head-<slug>`, then `diff /tmp/dsf-head-<slug> <path>`. Nothing in the tree is touched and no git write command runs; quote the commands and the output in the artifact.
-- **A failing test or a runtime behavior: not verifiable by a worker at all.** Reproducing it needs the *whole tree* at HEAD, and this tree is legitimately dirty with this build's work and possibly a concurrent session's. Record the claim, record the evidence you do have (failing node ids, the traceback, any HEAD file content obtained read-only, whether the failing test or the code under it appears in this build's diff at all), and **escalate to the maintainer** — the only party who can run a clean HEAD tree. Recording plus escalating discharges the obligation; the Medium finding is for a claim asserted with neither.
+They share a read-only HEAD reference: `git show HEAD:<path>` into a scratch path **outside** the repo, then `diff`; quote the commands and output in the artifact. **`git stash`, `git checkout`, `git restore`, and `git worktree` are never part of verifying a claim** — the maintainer runs concurrent sessions against this same tree, so a stash round-trip races their writes and a `git checkout HEAD` can destroy uncommitted work, theirs or the build's. No verification need waives that ban.
 
-**The old stash recipe is withdrawn.** Earlier copies of this rule prescribed `git stash push -u` + `git checkout HEAD` + reproduce + restore. Do not: the maintainer runs **concurrent sessions against this same working tree**, so a stash round-trip races their writes and a `git checkout HEAD` can destroy uncommitted work outright — theirs or the build's. `git stash`, `git checkout`, `git restore`, and `git worktree` are never part of verifying a claim, and no verification need waives the standing ban on git write commands.
-
-## Verifying a relocation, promotion, or unchanged-carryover claim
-
-The sibling of the rule above, and the same maxim: a claim is proven mechanically, never accepted on prose. A body claimed **relocated** into a seam or classmethod, a private helper **promoted** (renamed public) "rename-only", or logic carried over **unchanged / byte-identical** is what a "no-regression" gate rests on, and the cheapest claim to wave through ("I only moved it") is the one most worth distrusting.
-
-The proof is an executable-token or character diff of the moved/renamed body against pristine HEAD — obtained read-only exactly as above, `git show HEAD:<path>` into a scratch path — with comments and whitespace stripped and any renamed receiver or identifier normalized, then token-identity confirmed. Apply it equally to a helper promotion and to a cross-flavor lift, where BOTH call sites must reproduce their originals' messages and behavior byte-for-byte. An unverified relocation or promotion claim is a Medium finding.
+- **Pre-existing at HEAD.** A file's content is verifiable read-only as above. A failing test or runtime behavior is **not worker-verifiable at all** — reproducing it needs the whole tree at HEAD, and this tree is legitimately dirty with the build's work and possibly a concurrent session's. Record the claim plus the evidence you have (failing node ids, traceback, HEAD content obtained read-only, whether the failing test or its code is even in the build's diff), then **escalate to the maintainer**, the only party who can run a clean HEAD tree. Recording plus escalating discharges the obligation; the Medium finding is for a claim asserted with neither.
+- **Relocated, promoted, or carried over unchanged** — a body moved into a seam, a private helper renamed public "rename-only", logic called byte-identical. It is what a "no-regression" gate rests on, and "I only moved it" is the cheapest claim in the build. Prove it with an executable-token or character diff against pristine HEAD, comments and whitespace stripped and any renamed receiver normalized, then token-identity confirmed. Applies equally to a helper promotion and a cross-flavor lift, where BOTH call sites must reproduce their originals' messages and behavior byte-for-byte.
+- **A stated count** — "5 rows fail", "43 boxes", "the delta is exactly the sum". A number reads as measured and every later pass treats it as measured, so a guess propagates silently, invisible to re-reading. Two failure modes recur: a **long grep phrase samples a claim's vocabulary rather than establishing its population** (the same thing spelled another way, or wrapped across a line, does not match) — so search the shortest distinctive token and count *occurrences*, not matching lines; and a count asserted in the same breath as the lesson it illustrates is routinely wrong — **measure as you write the number.** Prefer any form whose count the reader can re-derive, for the reason `### What gets recorded` gives for listing node ids rather than counting them.
 
 ## Static inspection helper: `scripts/review_inspect.py`
 

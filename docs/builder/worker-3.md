@@ -63,9 +63,9 @@ A **review round** is a cycle whose input is a maintainer adversarial review of 
 
 ## Claim verification
 
-- **Pre-existing at HEAD.** `docs/builder/BUILD.md` `## Verifying a pre-existing-at-HEAD claim` is canonical, and its verification is **read-only**. Worker 3's delta: verify Worker 2's claim yourself from the recorded read-only evidence rather than accepting it, and never reach for a git write command to check it.
+- **Pre-existing at HEAD.** `docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose` is canonical. Worker 3's delta: verify Worker 2's claim yourself from the recorded read-only evidence rather than accepting it.
 - **Behavioral claims.** A claimed runtime property — "strictness-visible", "loud fallback", "fails closed", "raises on miss" — is verified by tracing control flow to the claim, not by trusting the plan's or diff's prose. An earlier short-circuit or guard (a planned-key early return, a cached-state check, a default-arg arm) can silence a fallback that reads as loud. Confirm no prior branch swallows the path; an unverified behavioral claim is a Medium finding.
-- **Relocation / promotion claims.** `docs/builder/BUILD.md` `## Verifying a relocation, promotion, or unchanged-carryover claim` is canonical. Worker 3's delta: run its proof for every such claim the diff makes, rather than reading the build report's account of the move.
+- **Relocation / promotion claims.** `docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose` is canonical. Worker 3's delta: run its proof for every such claim the diff makes, rather than reading the build report's account of the move.
 
 ### Public-surface and CHANGELOG checks
 

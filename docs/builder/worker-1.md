@@ -201,7 +201,7 @@ If DRY opportunities remain, do not accept the slice: record the finding and set
 
 ### Verifying relocation / promotion claims
 
-`docs/builder/BUILD.md` `## Verifying a relocation, promotion, or unchanged-carryover claim` is canonical, and Worker 3 applies it too (`docs/builder/worker-3.md`). Worker 1's delta: run its proof yourself for every such claim the slice makes rather than reading Worker 3's acceptance as discharge, and withhold `final-accepted` while one is unproven.
+`docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose` is canonical, and Worker 3 applies it too (`docs/builder/worker-3.md`). Worker 1's delta: run its proof yourself for every such claim the slice makes rather than reading Worker 3's acceptance as discharge, and withhold `final-accepted` while one is unproven.
 
 ### Failability and fail-open checks
 

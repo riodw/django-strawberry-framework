@@ -124,7 +124,7 @@ new repository; Slices 2–3 land here).
         `DjangoDebugExtension`-family entries point at the new package +
         extra; `README.md` feature list and install section likewise;
         `docs/TREE.md` regen; `docs/dry/dry-file-extensions__debug.md`
-        retired. `docs/spec-044-debug_extension-0_0_14.md` (by then
+        retired. `docs/SPECS/spec-044-debug_extension-0_0_14.md` (by then
         archived) is history — untouched.
   - [ ] The version quintet: `pyproject.toml` `[project].version`,
         `django_strawberry_framework/__init__.py::__version__`,
@@ -469,7 +469,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
   (`extensions/` subtree shrinks to the seam), `TODAY.md`,
   `docs/dry/dry-file-extensions__debug.md` retired,
   `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md` (permission
-  granted by this slice). `docs/spec-044-debug_extension-0_0_14.md` stays
+  granted by this slice). `docs/SPECS/spec-044-debug_extension-0_0_14.md` stays
   untouched as history.
 
 ## Risks and open questions
@@ -551,7 +551,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 
 <!-- docs/SPECS/ -->
 [spec-038]: SPECS/spec-038-auth_mutations-0_0_13.md
-[spec-044]: spec-044-debug_extension-0_0_14.md
+[spec-044]: SPECS/spec-044-debug_extension-0_0_14.md
 
 <!-- docs/builder/ -->
 

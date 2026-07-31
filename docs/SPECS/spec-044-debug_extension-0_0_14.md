@@ -1,8 +1,8 @@
 # Spec: Response-extensions debug middleware — `DjangoDebugExtension` in `extensions/debug.py`, Django-recorded query-log SQL and raised exceptions in the GraphQL response's `extensions["debug"]` map
 
-Planned for `0.0.14` (card [`WIP-ALPHA-044-0.0.14`][kanban]); **this card
-completes the joint `0.0.14` cut and owns the version bump**
-([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
+Built for `0.0.14` (card [`DONE-044-0.0.14`][kanban]); **this card completed
+the joint `0.0.14` cut and owned the version bump** (see `Status:` below and
+[Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
 This card adds the package's **in-response debug surface**: a new
 `django_strawberry_framework/extensions/debug.py` module exposing
 `DjangoDebugExtension`, a Strawberry `SchemaExtension` that captures the
@@ -55,7 +55,7 @@ exactly the card's "Off by default; opt-in via the extensions list" DoD row.
 
 **Version boundary** (see
 [Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)):
-this card is the **last non-Done card at `0.0.14`**. Its three landed
+this card was the **last non-Done card at `0.0.14`**. Its three landed
 predecessors — [`DONE-041-0.0.14`][kanban]
 ([`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter]),
 [`DONE-042-0.0.14`][kanban]
@@ -64,12 +64,12 @@ predecessors — [`DONE-041-0.0.14`][kanban]
 [`GraphQLTestCase`][glossary-graphqltestcase]) — each deferred its version
 bump and release-status wording to the [joint `0.0.14`
 cut][glossary-joint-version-cut], and per that rule the **last card of the
-patch line to land owns the cut**. That card is this one. So unlike
+patch line to land owns the cut**. That card was this one. So unlike
 [`spec-041`][spec-041] Decision 10 / [`spec-042`][spec-042] Decision 10 /
 [`spec-043`][spec-043] Decision 12 (all deferrals), this spec's Slice 3
-carries the version quintet, the GLOSSARY `shipped (0.0.14)` status flips for
-all four `0.0.14` cards, and the release-status doc moves — mirroring the
-lone-card ownership shape of [`spec-038`][spec-038] Decision 14.
+carried the cut — mirroring the lone-card ownership shape of
+[`spec-038`][spec-038] Decision 14. What the cut contained is recorded below
+rather than here.
 
 Status: **COMPLETE (card `DONE-044-0.0.14`) — all three slices built and the card-wrap landed; this card owned and applied the joint `0.0.14` version cut (the version quintet, the GLOSSARY `shipped (0.0.14)` status flips for `041` / `042` / `043` / `044`, and the release-status doc moves).**
 Three slices (the card is an M with one module, two test files, and the joint
@@ -102,227 +102,16 @@ discharges); [`spec-038-form_mutations-0_0_12.md`][spec-038] (the most recent
 **lone-card** version-bump decision, mirrored here as
 [Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
 [`docs/GLOSSARY.md`][glossary] carries [Response-extensions debug
-middleware][glossary-response-extensions-debug-middleware] as `planned for
-0.0.14`; Slice 2 updates the entry body to the implemented contract and
-Slice 3 flips the status to `shipped (0.0.14)` alongside the other three
-`0.0.14` entries.
+middleware][glossary-response-extensions-debug-middleware] as `shipped
+(0.0.14)`: Slice 2 rewrote the entry body to the implemented contract and
+Slice 3 flipped the status alongside the other three `0.0.14` entries.
 
-Revision history (kept inline so the spec is self-contained):
-
-- **Revision 1** — initial draft authored from the [`WIP-ALPHA-044-0.0.14`][kanban]
-  card body via the [`docs/SPECS/NEXT.md`][next] flow (2026-07-10). Pinned:
-  the canonical structured filename
-  ([Decision 1](#decision-1--spec-filename-and-canonical-naming)); the
-  card-scope boundary — the extension ships alone, with no Django middleware,
-  no schema-level field, and no fakeshop always-on wiring
-  ([Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring));
-  the card's first "pick one before writing the spec" choice resolved **for**
-  the response-`extensions` map (the card's own proposed Strawberry-native
-  shape and its named default), with the graphene schema-level `_debug` field
-  rejected with reasons
-  ([Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field));
-  the card's second choice resolved **for** `connection.queries` fidelity (the
-  card's named default), sharpened to Django's own debug-cursor bracket
-  (`force_debug_cursor`, the `CaptureQueriesContext` mechanism) so capture
-  does not silently depend on `settings.DEBUG`, with the cursor-wrap port
-  rejected with reasons
-  ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port));
-  the symbol pinned as `DjangoDebugExtension` at the
-  `django_strawberry_framework.extensions` subpackage — never the package
-  root
-  ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root));
-  the opt-in shape pinned as passing the **class** (one fresh instance per
-  operation), explicitly not the optimizer's singleton-in-a-factory pattern,
-  and the Strawberry floor raised to `0.316.0` because earlier sync execution
-  cached extension instances
-  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160));
-  the hook shape — one sync `on_operation` generator serving both execution
-  colors, payload assembly at teardown, `get_results` returning the stash,
-  with the pre-execution-error no-`debug`-key consequence derived from the
-  engine's verified call ordering
-  ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash));
-  the SQL row shape — graphene's wire names, narrowed to the six fields
-  Django's own log supports, every omission named
-  ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports));
-  exception capture off the result's `original_error` chain
-  ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping));
-  the multi-database bracket over `connections.all()`
-  ([Decision 10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each));
-  the test strategy — real HTTP through a probe URLconf in
-  `examples/fakeshop/test_query/test_debug_extension_api.py`, with only
-  request-impossible mechanics in `tests/extensions/test_debug.py`
-  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics));
-  and the joint-cut ownership
-  ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
-  One card-vs-shipped-shape conflict is recorded in
-  [Risks](#risks-and-open-questions) rather than silently reconciled: the
-  card's **title** says "middleware" while its own Architectural posture
-  section says the Strawberry-native shape is a `SchemaExtension`, not a
-  Django (or Graphene) middleware — resolved per the card's own posture, with
-  the title's word kept only as the card-facing feature name.
-- **Revision 2** — validation pass against the installed `0.316.0` engine,
-  the cached `0.262.0` wheel, Django's query-log implementation, graphene's
-  exception middleware, and the repository's test-placement law
-  (2026-07-10). Corrected six implementation-blocking defects: raised the
-  Strawberry floor to `0.316.0` because the old floor and verified `0.315.3`
-  cache sync extension instances and race `execution_context`; split live HTTP
-  tests into `examples/fakeshop/test_query/` and retained only
-  request-impossible mechanics under `tests/extensions/`; required traceback
-  serialization from `exc.__traceback__`; required walking nested
-  `GraphQLError.original_error` links so explicitly raised GraphQL errors
-  retain graphene parity; replaced the inaccurate bounded-log clamp guarantee
-  with Django's actual best-effort length-snapshot semantics; and added a
-  lock-protected reference-counted flag bracket so overlapping async
-  operations cannot restore `force_debug_cursor` out of order. Added
-  concurrent sync isolation, concurrent async restore, and nested-error-chain
-  tests as regression gates.
-- **Revision 3** — cross-checked the corrected design against
-  [`GOAL.md`][goal], the requested
-  [`cookbook/recipes/schema.py`][upstream-cookbook-recipes-schema], the
-  cookbook's aggregate [`cookbook/schema.py`][upstream-cookbook-schema], and
-  its Graphene settings (2026-07-10). Added the explicit goal/cookbook mapping
-  and migration diff; confirmed that debug is project-level aggregate-schema
-  configuration rather than recipe-app schema surface; and recorded the one
-  deliberate wire migration (`_debug` selection → `response.extensions.debug`)
-  required to remain Strawberry-native and avoid a Graphene compatibility
-  runtime.
-- **Revision 4** — DRY-review fold-in (2026-07-11). Applied the maintainer's
-  review of the planned module against all thirteen
-  `django_strawberry_framework/utils` modules: the
-  [DRY section](#helper-reuse-obligations-dry) gains D4–D6 (module-level
-  wire serializers with one `_SLOW_QUERY_SECONDS` constant; the
-  single-sited collector / two-seam coordinator / log-slice /
-  payload-builder inventory; idiom conformance — no `__init__`, the
-  optimizer's generator-hook shape, the bounded-walk posture for the
-  `original_error` peel, the eager-subpackage export shape, and the
-  "database connection" docstring vocabulary) and D-N5–D-N7 (the
-  `utils/connections.py` Relay-vocabulary disambiguation with the
-  coordinator-placement constraint; the no-utils-import posture with its
-  named near-misses; no `exceptions.py` addition), and D-N1 gains the
-  sharper ground (at the `0.316.0` floor a ContextVar stash has no shared
-  instance left to coordinate). Downstream: Decision 8 records the
-  casing-helper rejection and the wire keys as serializer-and-test
-  literals; Decision 9 records the bounded-walk conformance; Decisions 5
-  and 7 record the export-shape and no-`__init__` / two-seam notes; the
-  [Test plan](#test-plan) pins the anti-DRY literal rule and the
-  seam-targeting rule; [Non-goals](#non-goals) records the `conf.py`
-  non-surface reason. One review citation was corrected during
-  verification: `middleware/__init__.py` deliberately re-exports nothing
-  (spec-042's soft-dependency boundary), so the eager-export precedent
-  cited is `utils/__init__.py` / `testing/__init__.py`.
-- **Revision 5** — second-review reconciliation (2026-07-11). A parallel
-  DRY review, written at the same time against the same Revision-3 text,
-  was squared with Revision 4's fold-in; its suggested checklist items map
-  onto this spec's D3–D6 / D-N5–D-N8 numbering. Genuinely new pins carried
-  in: the direct-`CaptureQueriesContext` rejection gains two stronger
-  grounds (the process-global `request_started → reset_queries` signal
-  toggle — verified at `django/test/utils.py`
-  `#"reset_queries_disconnected"` — and the refcount-free single-context
-  restore); the coordinator map is keyed by connection object identity,
-  never by alias; teardown iterates immutable per-alias snapshot records
-  (connection + starting length) and never re-calls `connections.all()` to
-  match by position; the collector also guards `errors is None`, preserves
-  result-error order, and never speculatively dedups; `get_results` never
-  writes `execution_context` or an existing `ExecutionResult.extensions`,
-  and the stash's absent sentinel is `None`; D-N6's import list gains
-  `graphql`; the new D-N8 rejects the premature abstractions (package base
-  extension class, merged row dispatcher, dataclass/Strawberry wire rows,
-  per-key constants); D3 gains the named acceptance-reload fixture,
-  `create_users`, the one-holder probe-module shape with its
-  copy-not-promote ground (`FAKESHOP_SHARDED` gating), and the
-  never-sort-the-`extensions=`-list rule; and the Test plan gains the
-  real-objects and parametrization rules, the happy-path-only debug
-  accessor, the bracket-boundary-only fake (scenario 8), and the
-  floor run selected by node id (scenario 13). Where the two reviews
-  differed, the reconciliation is recorded in place: the coordinator may
-  surface its two seams as methods or as one per-connection context
-  manager (the pin is single ownership, not the callable shape), and the
-  no-`__init__` rule keeps the first review's default with the second's
-  constrained escape (`execution_context` passthrough only, no `**kwargs`
-  sink).
-
-- **Revision 6** — round-3 DRY review fold-in (2026-07-11). The review
-  confirmed the Revision-4/5 shape (its audit re-ran clean against all
-  thirteen `utils/` modules) and required three pins, none a design change:
-  [Test plan](#test-plan) scenario 2 composes the optimizer through the
-  **canonical consumer shape** — one module-local
-  `DjangoOptimizerExtension()` singleton returned by `lambda: _optimizer`
-  (the shipped [`config/schema.py`][config-schema] wiring, plan cache
-  retained) beside the debug **class** entry, with no helper normalizing
-  the two deliberately different lifetimes into one factory form; the
-  probe module's URLconf **activation** is single-sited in
-  [DRY D3](#helper-reuse-obligations-dry) — one module-level
-  `pytest.mark.urls(__name__)` application (or one module-wide fixture),
-  never per-test `override_settings(ROOT_URLCONF=...)` /
-  `clear_url_caches()` blocks; and the no-`__init__` stash sentinel got a
-  concrete home in
-  [Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)
-  — one immutable class-level `_payload = None` default, read directly by
-  `get_results` and overridden on the instance only at successful
-  teardown.
-- **Revision 7** — source-verification correction pass (2026-07-11).
-  Corrected seven contracts against Strawberry 0.316.0, Django 6.0.5, and
-  asgiref internals: Strawberry constructs extensions with zero arguments and
-  assigns `execution_context` afterward; response-extension merging includes
-  async context-result precedence and replacement of any pre-existing result
-  map; repeated `get_results()` calls are tied to the early-result plus
-  teardown-failure recovery path rather than generic recovery; final card wrap
-  moves behind the mandatory Slice-3 cut; SQL scope is narrowed to Django's
-  `queries_log` and explicitly excludes `callproc()`; async overlap coverage
-  pre-materializes and proves shared wrapper identity; and nested same-thread
-  sync execution is documented as restoration-safe but cross-attributed.
-- **Revision 8** — deep architectural review fold-in (2026-07-11; the
-  review's 21 findings applied as one coherent pass, each verified against
-  the installed Strawberry 0.316.0, Django 6.0.5, asgiref, and repository
-  sources before editing). The five implementation blockers: Test plan
-  scenario 2 and Goals item 5 rewritten to the **visibility-safe two-query
-  prefetch shape** (`CategoryType.get_queryset` makes the optimizer plan
-  `Prefetch`, never a joined single query — the existing
-  `test_products_api.py` proof is the assertion precedent); the
-  byte-identical / off-by-default overclaim replaced with the narrow
-  no-instrumentation/no-key claim plus
-  [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)'s
-  release-wide floor **migration notes** (zero-argument construction,
-  direct-instance deprecation, per-operation lifecycle; `uv.lock` + tests —
-  not the open bound — pin semantics; the stale `optimizer/extension.py`
-  `__init__` comment joins the Slice-1 file map); a **two-phase failure
-  policy** in [Error shapes](#error-shapes) (setup fail-loud after
-  `ExitStack` unwind; post-execution diagnostic failures caught as
-  `Exception`, logged, degrading the payload — never replacing the real
-  result — with the generic-recovery claim qualified to
-  stash-published-only); the **cursor-construction capture-interval
-  boundary** documented in Decision 4 / Edge cases (Django selects the
-  wrapper at `connection.cursor()` time and never re-checks — pre-opened
-  and retained cursors are named boundary cases, not fixed by a wrap port);
-  and the Slice-3 wrap re-ordered **DB-mutations → Done flip →
-  `import_spec_terms` → GLOSSARY/TREE renders → KANBAN renders → `--check`
-  modes**, with the glossary flips enumerated from the companion terms CSV.
-  Also folded: transaction scope narrowed to brackets completing inside the
-  hook (enclosing `ATOMIC_REQUESTS` excluded); a real sharded-tier capture
-  proof (scenario 16); experimental incremental execution and
-  `inc_thread_sharing()` cross-thread wrappers excluded explicitly;
-  sibling-hook SQL ordering documented and tested; the `original_error`
-  walk gains a 64-hop ceiling with deterministic stop; the enabled-cost
-  language replaced with exact complexity/retention wording; the async
-  follow-on's false universal-executor premise corrected
-  (`ThreadSensitiveContext` is per-request under ASGI HTTP — a prototype,
-  not prose, decides the follow-on); the security disclosure enumerates
-  interpolated SQL values, traceback paths, retention, and downstream
-  copies; targeted pytest commands gain the coverage-free
-  `-o addopts="-v -n0"` override; the Strawberry floor gains a durable CI
-  node (`.github/workflows/django.yml` joins the file map); live scenarios
-  gain their `django_db` / `django_db(transaction=True)` markers and
-  scenario 3 its full permitted-writer + required-`categoryId` setup;
-  scenario 13 drops threaded ORM in favor of exception/identity markers;
-  and scenarios 17–21 add the non-interference, cursor-lifetime,
-  transaction-boundary, sibling-order, and hop-policy regressions. Two
-  findings required no spec change, recorded so they are not re-litigated:
-  the settings-lookup concern (F12) does not occur — this spec introduces
-  no settings key, and the shipped `conf.py` / `types/relay.py` split is
-  correct as-is; and the temporary fail-loud stub needs no import-guard
-  test (F21) — `pyproject.toml` already excludes `raise
-  NotImplementedError` from coverage, so the staged
-  `tests/extensions/test_debug.py` guard is deleted rather than kept.
+Deliberative layer: the rejected alternatives, the derivations that do not
+change how a decision is implemented, and the full revision history — every
+change each decision has undergone with the revision that caused it — live in
+the companion [`spec-044-debug_extension-0_0_14-rationale.md`][rationale],
+keyed to the decision each belongs to. This document is the contract and
+states only what is currently true; it never narrates its own history.
 
 ## Key glossary references
 
@@ -482,12 +271,12 @@ debug implementation:
   [Risks](#risks-and-open-questions)), so the reason it is not preserved is
   [Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field)'s
   rejection of a permanent schema surface — not the goal's
-  no-Graphene-runtime constraints. Because criterion 7 as written carves
-  out no such case, Slice 2 carries the corresponding [`GOAL.md`][goal]
-  clarification: the import-only promise covers `Meta`-driven domain
-  declarations; project-level engine configuration (a schema's
-  `extensions=` list, the `GRAPHENE` settings block) migrates by documented
-  recipe.
+  no-Graphene-runtime constraints. Criterion 7 carved out no such case as
+  this spec was authored, so Slice 2 added the corresponding
+  [`GOAL.md`][goal] clarification that it now carries: the import-only
+  promise covers `Meta`-driven domain declarations; project-level engine
+  configuration (a schema's `extensions=` list, the `GRAPHENE` settings
+  block) migrates by documented recipe.
 - **The payload still proves core success criteria.** Captured SQL makes
   success criterion 5's automatic ORM optimization visible, including
   `select_related` / `prefetch_related` / `only()` behavior, while exception
@@ -721,7 +510,7 @@ doc breadth.
            glossary-status, and version DB updates — the GLOSSARY status
            flips cover **every** spec-044 glossary term whose `planned for
            0.0.14` status changes, derived from the companion
-           `docs/spec-044-debug_extension-0_0_14-terms.csv`, not only the
+           `docs/SPECS/spec-044-debug_extension-0_0_14-terms.csv`, not only the
            four headline release surfaces;
         2. flip `044` → Done with the `DONE-044-0.0.14` id and its
            `SpecDoc` pointing at this spec (the importer processes only
@@ -1311,21 +1100,12 @@ Consumer-visible behavior:
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-044-debug_extension-0_0_14.md`: card NNN `044`,
+This spec lives at `docs/SPECS/spec-044-debug_extension-0_0_14.md`: card NNN `044`,
 topic slug `debug_extension` (the card's subject as shipped — a debug
 `SchemaExtension`), version segment `0_0_14` from the card's trailing
 `-0.0.14`. Follows the [`docs/SPECS/NEXT.md`][next] convention.
 
-Alternatives considered (and rejected):
-
-- **`spec-044-response_extensions_debug-0_0_14.md`.** Rejected: the long
-  slug restates the mechanism twice (`response_extensions` + `debug`); the
-  established slug style is short subject-first (`debug_toolbar`,
-  `channels_router`, `test_client`).
-- **`spec-044-debug_middleware-0_0_14.md`.** Rejected: "middleware" is the
-  card title's graphene-inherited word, and the card's own Architectural
-  posture disavows it for our shape — naming the file after the rejected
-  shape would mislead every future grep.
+*Rejected alternatives and the naming derivation: [rationale companion, Decision 1][rationale-d1].*
 
 ### Decision 2 — Card-scope boundary: the extension ships alone — no Django middleware, no schema field, no fakeshop always-on wiring
 
@@ -1352,13 +1132,7 @@ out:
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics),
   [Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
 
-Justification: the card is an M and each excluded piece has its own owner —
-the toolbar card is Done, the schema-field exposure is a rejected
-alternative, and the fakeshop activation line item already exists on the
-beta board. Alternatives considered (and rejected): **bundling a fakeshop
-demo field or dev-settings toggle** — rejected as scope creep that turns a
-one-module card into an example-project design discussion; the probe-URLconf
-tests demonstrate the wiring shape a consumer copies.
+*Scope justification and the rejected bundled-demo alternative: [rationale companion, Decision 2][rationale-d2].*
 
 ### Decision 3 — Exposure: the response-`extensions` map under the `debug` key, not a schema-level `_debug` field
 
@@ -1401,20 +1175,7 @@ Grounds:
    integration points without changing any recipe-app domain type or `Meta`
    surface, matching [`GOAL.md`][goal]'s working-reference posture.
 
-Alternatives considered (and rejected):
-
-- **The graphene schema-level `_debug` field.** Rejected: everything in
-  ground 2, plus a mechanism problem — a field resolver cannot know when the
-  operation's *other* fields have finished executing, which is why graphene
-  needs its promise-chained `get_debug_result()` dance
-  ([`middleware.py`][upstream-debug-middleware] `::DjangoDebugContext`); the
-  operation hook gets completion for free. The selectivity loss (the map is
-  all-or-nothing per enabled schema, where graphene consumers pull only
-  `{ _debug { sql } }` per query) is real and recorded in
-  [Risks](#risks-and-open-questions).
-- **Both at once.** Rejected: two exposure surfaces for one payload doubles
-  the documentation and test matrix for zero new capability; a future card
-  can add the field flavor over the same capture core if a consumer asks.
+*Rejected exposures (graphene's `_debug` field; both at once): [rationale companion, Decision 3][rationale-d3].*
 
 ### Decision 4 — Fidelity: Django's own debug cursor via a `force_debug_cursor` bracket, not a cursor-wrap port
 
@@ -1499,9 +1260,6 @@ Alternatives considered (and rejected):
   minority diagnostic need; the follow-on path stays open (the capture core
   is one private function swap away from a richer source) and is recorded in
   [Risks](#risks-and-open-questions).
-- **Read bare `connection.queries` without the bracket.** Rejected: the
-  `DEBUG=False` silent-empty trap above — a correctness bug dressed as
-  simplicity.
 - **Wrap with `CaptureQueriesContext` instances directly.** Rejected on
   three grounds worth recording: (a) `CaptureQueriesContext.__enter__` calls
   `connection.ensure_connection()` eagerly, which would open a database
@@ -1519,6 +1277,8 @@ Alternatives considered (and rejected):
   logging, snapshot the log length, restore the saved value — without its
   test-oriented connection and signal side effects; an untouched alias
   contributes zero rows and zero connections.
+
+*The rejected bare-`connection.queries` read, and why the two alternatives above stay here: [rationale companion, Decision 4][rationale-d4].*
 
 ### Decision 5 — Symbol and home: `DjangoDebugExtension` in `extensions/debug.py`, exported from the `extensions` subpackage — never the package root
 
@@ -1561,19 +1321,7 @@ Grounds:
    emptiness exists to keep an optional import boundary this subpackage
    does not have.)
 
-Alternatives considered (and rejected):
-
-- **Package-root export beside `DjangoOptimizerExtension`.** Rejected per
-  ground 2 — and the asymmetry is informative rather than confusing: the
-  import path itself signals "this one is not part of the default recipe".
-- **`optimizer/debug.py`.** Rejected: the debug extension is not optimizer
-  machinery (it reports *all* SQL, planned or not) and the card's predicted
-  path pins `extensions/`; parking it under `optimizer/` would also block
-  the `extensions/` subpackage the target tree already reserves.
-- **Naming the module `extensions/debug_extension.py`.** Rejected: the
-  subpackage already says `extensions`; `debug.py` matches upstream
-  strawberry-django's `middlewares/debug_toolbar.py` leaf-naming style the
-  package adopted for `middleware/debug_toolbar.py`.
+*Rejected homes (package root, `optimizer/debug.py`, `extensions/debug_extension.py`): [rationale companion, Decision 5][rationale-d5].*
 
 ### Decision 6 — Opt-in shape: pass the class — one fresh instance per operation requires Strawberry 0.316.0
 
@@ -1642,21 +1390,7 @@ keyword — false at the new floor. The parameter stays (direct-construction
 compatibility) but Slice 1 corrects the comment's rationale (the
 [Implementation plan](#implementation-plan) carries the row).
 
-Alternatives considered (and rejected):
-
-- **Singleton-in-a-factory, ContextVar state (the optimizer's shape).**
-  Rejected: buys nothing (there is no cache to preserve) and costs a
-  ContextVar lifecycle with reset-token hygiene — machinery whose only
-  consumer would be a usage pattern the docs steer away from anyway.
-- **Retain `strawberry-graphql>=0.262.0` and rely on the class form.**
-  Rejected: the sync path still caches the resulting instance before 0.316.0;
-  class syntax alone does not provide isolation at the old floor.
-- **Guard against shared instances at runtime** (e.g. detect a second
-  concurrent `on_operation` on one instance and raise). Rejected: the
-  engine already owns instance lifecycle and deprecation signaling for the
-  bare-instance form; a package-side tripwire would fire only in the
-  misuse case it documents away, and false-positive risk (serialized
-  sequential operations on one instance are harmless) outweighs the catch.
+*Rejected opt-in shapes (the optimizer's singleton, the old floor, a runtime tripwire): [rationale companion, Decision 6][rationale-d6].*
 
 ### Decision 7 — Hook shape: one sync `on_operation` generator, assembly at teardown, `get_results` returns the stash
 
@@ -1733,22 +1467,7 @@ Grounds:
    a reviewer can see across both hooks, not shared code
    ([DRY D6](#helper-reuse-obligations-dry)).
 
-Alternatives considered (and rejected):
-
-- **Assemble inside `get_results`.** Rejected per ground 2: on the
-  early-error paths it would read a bracket that has not restored yet, and
-  it would need its own idempotence guard for the paths where the engine
-  calls it after teardown anyway.
-- **`resolve`-hook accumulation (graphene's mechanism).** Rejected: the
-  per-resolver hook exists for per-field concerns; SQL is per-operation and
-  exceptions already accumulate on the result. A `resolve` implementation
-  would also put the extension on the engine's per-field hot path
-  (`_implements_resolve` adds the middleware wrapper) for pure overhead.
-- **An `async def on_operation` twin class** for async schemas. Rejected:
-  ground 1 makes it unnecessary; the async-color SQL fidelity gap is a
-  thread-locality property, not a hook-color property
-  ([Edge cases](#edge-cases-and-constraints)), so an async hook would not
-  close it anyway.
+*Rejected hook shapes (assemble in `get_results`, a `resolve` hook, an async twin): [rationale companion, Decision 7][rationale-d7].*
 
 ### Decision 8 — The SQL row shape: graphene's wire names, narrowed to what Django's log supports
 
@@ -1794,24 +1513,7 @@ through a GraphQL type, the extension emits the wire form directly).
 `duration` stays float-seconds (not the log's string) so client tooling can
 compare and sum without parsing.
 
-Alternatives considered (and rejected):
-
-- **snake_case keys** (the Python-side names). Rejected: the payload is
-  wire, not Python; a migrant's existing DevTools formatter reads `isSlow`.
-- **Carrying `startTime` / `stopTime` measured by the extension around the
-  whole operation.** Rejected: per-operation stamps on per-query rows would
-  be actively misleading — worse than absent.
-- **A `time` string field mirroring Django's raw log entry.** Rejected:
-  duplicates `duration` in a worse type; anyone needing Django's exact
-  string can reformat.
-- **Deriving the camelCase keys through `utils/strings.graphql_camel_name`.**
-  Rejected: the six keys are a **wire contract** — a graphene migrant's
-  existing DevTools formatter parses these exact bytes — so they must not be
-  a function of a casing helper's future acronym/underscore behavior. They
-  are spelled as literals inside the one row serializer
-  ([DRY D4](#helper-reuse-obligations-dry)), and the mechanics tests
-  re-spell them as independent literals for the same reason
-  ([Test plan](#test-plan)).
+*Rejected row shapes (snake_case keys, extension-measured timestamps, a `time` string field, a casing helper): [rationale companion, Decision 8][rationale-d8].*
 
 ### Decision 9 — Exception capture: the result's `original_error` chain, serialized like graphene's `wrap_exception` — no resolver wrapping
 
@@ -1855,8 +1557,8 @@ Grounds:
    resolver to collect.** graphql-core attaches the raised exception to the
    located `GraphQLError`; wrapping resolvers to catch it first would be
    re-implementation with a hot-path cost
-   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)
-   alternatives).
+   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)'s
+   rejected `resolve` hook: [rationale companion][rationale-d7]).
 2. **The `original_error` filter and chain walk define a deliberate,
    documented widening from graphene.** Graphene's `on_resolve_error` fires
    only for resolver-raised exceptions; GraphQL
@@ -1883,18 +1585,7 @@ Grounds:
    [User-facing API](#user-facing-api) and pinned by Test plan
    scenario 12.
 
-Alternatives considered (and rejected):
-
-- **A `resolve` hook capturing exceptions per field.** Rejected per
-  ground 1.
-- **Serializing every outer result `GraphQLError`** (no `original_error`
-  gate). Rejected per ground 2 — it would spam the list with validation
-  entries the standard `errors` array already carries. This is distinct from
-  retaining a terminal `GraphQLError` reached through a non-`None` original
-  link, which proves it was raised during resolver execution.
-- **Capturing exceptions the resolvers swallowed** (graphene cannot either).
-  Out of scope by construction: only errors that reached the result exist
-  to report.
+*Rejected capture shapes (a per-field `resolve` hook, ungated result errors, swallowed exceptions): [rationale companion, Decision 9][rationale-d9].*
 
 ### Decision 10 — Multi-database capture: every alias in `connections.all()`, one bracket each
 
@@ -1918,7 +1609,8 @@ saved-flag record, and one teardown log copy ([Edge
 cases](#edge-cases-and-constraints) carries the exact complexity language);
 per
 [Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)'s
-third alternative, no connection is force-opened. The per-alias contract is
+rejection of wrapping `CaptureQueriesContext` directly, no connection is
+force-opened. The per-alias contract is
 a **documented promise and therefore needs a real proof**: Test plan
 scenario 16 executes a real `shard_b` query through a debug-enabled probe
 schema on the `FAKESHOP_SHARDED=1` tier and asserts the captured
@@ -1926,12 +1618,7 @@ schema on the `FAKESHOP_SHARDED=1` tier and asserts the captured
 fake partial-acquisition tests alone do not prove a second alias appears in
 the response.
 
-Alternatives considered (and rejected): **bracketing only
-`connections["default"]`** — rejected, silently blind on sharded setups;
-**lazily bracketing on first use via the `connection_created` signal** —
-rejected, misses the common case of aliases whose connections already exist
-from prior requests, and signal (dis)connection per operation is its own
-leak surface.
+*Rejected bracket scopes (default alias only, `connection_created`-lazy): [rationale companion, Decision 10][rationale-d10].*
 
 ### Decision 11 — Test strategy: split live HTTP behavior from package-tier mechanics
 
@@ -1962,23 +1649,7 @@ classification; it is the established way to exercise an opt-in schema shape
 without enabling it in the shipped aggregate schema. Package-tier tests remain
 only for mechanics that cannot be proved by a real request.
 
-Alternatives considered (and rejected):
-
-- **Enable the extension in fakeshop's shipped schema so tests go live.**
-  Rejected in
-  [Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)
-  — every acceptance response pays body weight and capture cost, and the
-  example stops modeling the off-by-default posture.
-- **Put all scenarios in the card's predicted `tests/extensions/` path.**
-  Rejected: a live `/graphql/` request belongs to `test_query/` under the
-  explicit repository rule. Predicted paths guide planning; they do not
-  authorize a placement exception.
-- **In-process `schema.execute_sync` instead of HTTP.** Rejected for the
-  request-driving group (the card says "request", and HTTP exercises the
-  serialization of `extensions` into the response body — JSON round-trip
-  included); retained where it is the *point* — the async-color scenario
-  drives in-process async execution precisely because Django's async test
-  client cannot change the thread-locality story the scenario documents.
+*Rejected placements (fakeshop always-on, all in `tests/extensions/`, in-process only): [rationale companion, Decision 11][rationale-d11].*
 
 ### Decision 12 — This card completes the joint `0.0.14` cut and owns the version bump
 
@@ -2012,19 +1683,12 @@ test-client family, and this card's own entry; the [`README.md`][readme] /
 section under the Slice 3 grant. `0.0.14` is a routine patch cut, **not** a
 milestone (`.0`) cut — the alpha → beta milestone chores (the `0.1.0`
 GLOSSARY constraint lifts, the board's progress section, the README
-milestone prose) belong to [`TODO-BETA-045-0.1.0`][kanban], not here.
+milestone prose) belong to [`TODO-ALPHA-052-0.1.0`][kanban], not here.
 
 The bump moves only in Slice 3, after the extension and its docs are
 complete — never in Slice 1.
 
-Alternatives considered (and rejected):
-
-- **Defer to yet another card.** Rejected: no later `0.0.14` card exists; a
-  deferral would orphan the cut the three predecessors are waiting on.
-- **Bump in Slice 1.** Rejected: the version should move only after the
-  feature and docs are complete (the [`spec-038`][spec-038] rule), and a
-  Slice-1 bump would publish `0.0.14` identity while `044`'s own surface is
-  mid-flight.
+*Rejected cut owners (defer to another card, bump in Slice 1): [rationale companion, Decision 12][rationale-d12].*
 
 ## Implementation plan
 
@@ -2058,16 +1722,14 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 
 Reuse is named per item, and deliberate *non*-reuse carries its reason (the
 [`spec-041`][spec-041] / [`spec-042`][spec-042] / [`spec-043`][spec-043]
-discipline). Two independent, simultaneously-written reviews of the planned
-module against all thirteen `django_strawberry_framework/utils` modules
-(2026-07-11) reached the same headline this section now records in full:
-**almost nothing in `utils/` is directly callable from `debug.py`, and that
-is the correct outcome, not a gap** — the utils charter is the
-query/write/input pipeline (visibility, inputs, windows, write decode); the
-debug extension is an engine-lifecycle instrument over
-`django.db.connections` and the execution result, and forcing reuse would
-invert DRY into coupling. The real DRY work is (a) single-siting inside
-`debug.py` itself (D4–D5), (b) conformance with the package's established
+discipline). The headline, established against all thirteen
+`django_strawberry_framework/utils` modules: **almost nothing in `utils/` is
+directly callable from `debug.py`, and that is the correct outcome, not a
+gap** — the utils charter is the query/write/input pipeline (visibility,
+inputs, windows, write decode); the debug extension is an engine-lifecycle
+instrument over `django.db.connections` and the execution result, and forcing
+reuse would invert DRY into coupling. The real DRY work is (a) single-siting
+inside `debug.py` itself (D4–D5), (b) conformance with the package's established
 idioms (D6), and (c) writing the non-reuse reasons down (D-N1–D-N8) so the
 discipline survives review.
 
@@ -2088,7 +1750,7 @@ discipline survives review.
   [`test_multi_db.py`][test-multi-db] probe-URLconf plumbing — never private
   reload logic, hand-built catalog rows, or hand-rolled POST-decode blocks
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
-  Sharpened by the DRY review: the live module's schema fixture depends on
+  Sharpened to specifics: the live module's schema fixture depends on
   the acceptance suite's `_reload_project_schema_for_acceptance_tests` and
   imports the freshly-reloaded app types *inside* the fixture body — no
   local `registry.clear()`, no second module-reload list, no import-time
@@ -2177,7 +1839,8 @@ discipline survives review.
   [`optimizer/extension.py`][optimizer-extension] defines a constructor only
   because it carries strictness/strategy/cache config. If future
   configuration requires an explicit constructor, initialize only that
-  configuration and do not claim that
+  configuration — `execution_context` passthrough only, never a `**kwargs`
+  sink — and do not claim that
   `super().__init__(execution_context=...)` performs the binding;
   `execution_context` remains engine-assigned. The generator hook
   reads as the same idiom as the package's one existing extension generator
@@ -2256,7 +1919,9 @@ discipline survives review.
   Three tempting near-misses, each rejected: `strings.graphql_camel_name`
   must not manufacture `isSlow` / `isSelect` (the keys are a wire contract —
   [Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)'s
-  rejected alternative); `errors.field_error` must not shape the exception
+  wire-casing table, with the casing-helper rejection recorded in the
+  [rationale companion][rationale-d8]); `errors.field_error` must not shape
+  the exception
   row (the write-envelope `FieldError` is a different wire contract with
   field keys, paths, and codes — the only shared atom is `str()` coercion,
   beneath extraction); and `typing.is_async_callable` /
@@ -2294,6 +1959,9 @@ discipline survives review.
   constantizing every key would scatter the shape across declarations and
   uses — the top-level `"debug"` key earns a name only if it is otherwise
   repeated across both production methods).
+
+*This section's review provenance, moved out of its preamble and out of D3's
+lead-in: [rationale companion, non-decision change record][rationale-nondecision].*
 
 ## Edge cases and constraints
 
@@ -2475,7 +2143,7 @@ discipline survives review.
 
 Scenarios 1–7 live in
 `examples/fakeshop/test_query/test_debug_extension_api.py`; scenarios 8–15
-and the Revision-8 additions 17–21 live in `tests/extensions/test_debug.py`;
+and 17–21 live in `tests/extensions/test_debug.py`;
 the sharded-tier scenario 16 lives with the `FAKESHOP_SHARDED=1`
 infrastructure ([`test_multi_db.py`][test-multi-db] or a dedicated gated
 debug module) — numbering appends rather than renumbers so every existing
@@ -2718,7 +2386,7 @@ and runs only under `FAKESHOP_SHARDED=1`.
     contains its interval, and the outer payload intentionally also contains
     the inner SQL rows.
 
-**Revision-8 additions (16 live-sharded; 17–21 mechanics):**
+**Further scenarios (16 live-sharded; 17–21 mechanics):**
 
 16. **Sharded-tier multi-database capture** (live, gated on
     `FAKESHOP_SHARDED=1` — the existing [`test_multi_db.py`][test-multi-db]
@@ -2853,17 +2521,6 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 
 ## Risks and open questions
 
-- **The card's "middleware" word vs. the shipped shape.** The card title
-  (and the feature's board name) says middleware; the shipped unit is a
-  `SchemaExtension`, per the card's own Architectural posture ("our
-  Strawberry-native shape is a `SchemaExtension` (operation-scoped), not a
-  Django middleware"). Recorded per the
-  [`docs/SPECS/NEXT.md`][next] prefer-the-card rule rather than silently
-  reconciled — but the card resolves its own title here, so **preferred
-  answer:** ship the extension, keep "Response-extensions debug middleware"
-  as the card-facing feature name (the GLOSSARY heading stays, its body
-  names the class). **Fallback:** none needed — no reading of the card asks
-  for an actual Django middleware.
 - **Exposure selectivity: all-or-nothing vs. graphene's per-query pull.**
   With the map exposure, an enabled schema pays capture + payload on every
   operation, where graphene consumers select `_debug` only on the queries
@@ -2913,18 +2570,7 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   exceptions capture is color-agnostic); this matches the
   single upstream's own thread-local scope. **Fallback / follow-on:** a
   per-operation-isolated instrumentation design — worth its own card if
-  async consumers report gaps. (An earlier draft's categorical rejection of
-  routing the bracket through `sync_to_async(thread_sensitive=True)` rested
-  on a **false universal premise** — that thread-sensitive work always
-  shares one process-wide thread. That is only asgiref's *fallback*:
-  Django's ASGI handler wraps each HTTP request in a
-  `ThreadSensitiveContext`, which selects a per-request single-thread
-  executor, so worker-thread bracketing **may be viable** for normal ASGI
-  HTTP inside the inherited request context. It is still not universal —
-  direct `schema.execute()`, batching, and work escaping that context lack
-  the per-request executor — so the follow-on must be accepted or rejected
-  against a **real ASGI-request prototype**, not this spec's prose. v1's
-  honest "async SQL is typically empty" limitation stands either way.)
+  async consumers report gaps.
 - **Engine ordering coupling.** The no-`debug`-key-on-pre-execution-errors
   behavior rides the verified 0.316.0 call ordering (`get_results` inside
   the operation context on early returns, after it on the happy path). A
@@ -2954,6 +2600,11 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   statements is exactly the one the developer needs to see, and the N+1 it
   reveals is the package's whole pitch. **Fallback:** a row-cap knob,
   follow-on with the other knobs.
+
+*The resolved card-vs-shape conflict, and the retracted async-follow-on
+premise — whose one surviving obligation is that the follow-on be decided
+against a real ASGI-request prototype rather than prose:
+[rationale companion, Risks and open questions][rationale-risks].*
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -2987,7 +2638,7 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   ([Edge cases](#edge-cases-and-constraints)); the non-interference rule
   still protects the response.
 - **The `0.1.0` milestone chores** (alpha-constraint lifts, the board's
-  progress section, milestone prose) — [`TODO-BETA-045-0.1.0`][kanban]; this
+  progress section, milestone prose) — [`TODO-ALPHA-052-0.1.0`][kanban]; this
   card's cut is a routine patch cut
   ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
 
@@ -3066,108 +2717,123 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[workflow-django]: ../.github/workflows/django.yml
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
+[workflow-django]: ../../.github/workflows/django.yml
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-async-sql-capture-boundary]: GLOSSARY.md#async-sql-capture-boundary
-[glossary-bounded-query-log-rollover]: GLOSSARY.md#bounded-query-log-rollover
-[glossary-channels-request-adapter]: GLOSSARY.md#channels-request-adapter
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-debug-exception-row]: GLOSSARY.md#debug-exception-row
-[glossary-debug-payload-availability]: GLOSSARY.md#debug-payload-availability
-[glossary-debug-sql-row]: GLOSSARY.md#debug-sql-row
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-developer-only-debug-posture]: GLOSSARY.md#developer-only-debug-posture
-[glossary-django-debug-cursor-capture]: GLOSSARY.md#django-debug-cursor-capture
-[glossary-django-trac-37064]: GLOSSARY.md#django-trac-37064-hardening
-[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
-[glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
-[glossary-finalize-django-types]: GLOSSARY.md#finalize_django_types
-[glossary-get-queryset]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-graphene-debug-migration]: GLOSSARY.md#graphene-debug-migration
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-masking-extension-ordering]: GLOSSARY.md#masking-extension-ordering
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
-[glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-probe-urlconf]: GLOSSARY.md#probe-urlconf
-[glossary-reference-counted-cursor-coordinator]: GLOSSARY.md#reference-counted-cursor-coordinator
-[glossary-require-optional-module]: GLOSSARY.md#require_optional_module
-[glossary-response-extension-merge-semantics]: GLOSSARY.md#response-extension-merge-semantics
-[glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
-[glossary-schema-reload-discipline]: GLOSSARY.md#schema-reload-discipline
-[glossary-seed-data]: GLOSSARY.md#seed_data
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-strawberry-config]: GLOSSARY.md#strawberry_config
-[glossary-strawberry-extension-lifecycle]: GLOSSARY.md#strawberry-extension-lifecycle
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-testclient]: GLOSSARY.md#testclient
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-async-sql-capture-boundary]: ../GLOSSARY.md#async-sql-capture-boundary
+[glossary-bounded-query-log-rollover]: ../GLOSSARY.md#bounded-query-log-rollover
+[glossary-channels-request-adapter]: ../GLOSSARY.md#channels-request-adapter
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-cookbook-parity]: ../GLOSSARY.md#cookbook-parity
+[glossary-debug-exception-row]: ../GLOSSARY.md#debug-exception-row
+[glossary-debug-payload-availability]: ../GLOSSARY.md#debug-payload-availability
+[glossary-debug-sql-row]: ../GLOSSARY.md#debug-sql-row
+[glossary-debug-toolbar-middleware]: ../GLOSSARY.md#debug-toolbar-middleware
+[glossary-developer-only-debug-posture]: ../GLOSSARY.md#developer-only-debug-posture
+[glossary-django-debug-cursor-capture]: ../GLOSSARY.md#django-debug-cursor-capture
+[glossary-django-trac-37064]: ../GLOSSARY.md#django-trac-37064-hardening
+[glossary-djangodebugextension]: ../GLOSSARY.md#djangodebugextension
+[glossary-djangographqlprotocolrouter]: ../GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-eviction-simulated-absence]: ../GLOSSARY.md#eviction-simulated-absence
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get-queryset]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphene-debug-migration]: ../GLOSSARY.md#graphene-debug-migration
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-hard-dependency]: ../GLOSSARY.md#hard-dependency
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-masking-extension-ordering]: ../GLOSSARY.md#masking-extension-ordering
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
+[glossary-per-operation-extension-isolation]: ../GLOSSARY.md#per-operation-extension-isolation
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-probe-urlconf]: ../GLOSSARY.md#probe-urlconf
+[glossary-reference-counted-cursor-coordinator]: ../GLOSSARY.md#reference-counted-cursor-coordinator
+[glossary-require-optional-module]: ../GLOSSARY.md#require_optional_module
+[glossary-response-extension-merge-semantics]: ../GLOSSARY.md#response-extension-merge-semantics
+[glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
+[glossary-schema-reload-discipline]: ../GLOSSARY.md#schema-reload-discipline
+[glossary-seed-data]: ../GLOSSARY.md#seed_data
+[glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-strawberry-config]: ../GLOSSARY.md#strawberry_config
+[glossary-strawberry-extension-lifecycle]: ../GLOSSARY.md#strawberry-extension-lifecycle
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-038]: SPECS/spec-038-form_mutations-0_0_12.md
-[spec-041]: SPECS/spec-041-channels_router-0_0_14.md
-[spec-042]: SPECS/spec-042-debug_toolbar-0_0_14.md
-[spec-043]: SPECS/spec-043-test_client-0_0_14.md
+[next]: NEXT.md
+[rationale]: spec-044-debug_extension-0_0_14-rationale.md
+[rationale-d1]: spec-044-debug_extension-0_0_14-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d10]: spec-044-debug_extension-0_0_14-rationale.md#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each
+[rationale-d11]: spec-044-debug_extension-0_0_14-rationale.md#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics
+[rationale-d12]: spec-044-debug_extension-0_0_14-rationale.md#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump
+[rationale-d2]: spec-044-debug_extension-0_0_14-rationale.md#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring
+[rationale-d3]: spec-044-debug_extension-0_0_14-rationale.md#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field
+[rationale-d4]: spec-044-debug_extension-0_0_14-rationale.md#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port
+[rationale-d5]: spec-044-debug_extension-0_0_14-rationale.md#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root
+[rationale-d6]: spec-044-debug_extension-0_0_14-rationale.md#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160
+[rationale-d7]: spec-044-debug_extension-0_0_14-rationale.md#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash
+[rationale-d8]: spec-044-debug_extension-0_0_14-rationale.md#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports
+[rationale-d9]: spec-044-debug_extension-0_0_14-rationale.md#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping
+[rationale-nondecision]: spec-044-debug_extension-0_0_14-rationale.md#change-record-for-the-specs-non-decision-sections
+[rationale-risks]: spec-044-debug_extension-0_0_14-rationale.md#change-record-for-risks-and-open-questions
+[spec-038]: spec-038-form_mutations-0_0_12.md
+[spec-041]: spec-041-channels_router-0_0_14.md
+[spec-042]: spec-042-debug_toolbar-0_0_14.md
+[spec-043]: spec-043-test_client-0_0_14.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[init]: ../django_strawberry_framework/__init__.py
-[middleware-debug-toolbar]: ../django_strawberry_framework/middleware/debug_toolbar.py
-[optimizer-extension]: ../django_strawberry_framework/optimizer/extension.py
+[init]: ../../django_strawberry_framework/__init__.py
+[middleware-debug-toolbar]: ../../django_strawberry_framework/middleware/debug_toolbar.py
+[optimizer-extension]: ../../django_strawberry_framework/optimizer/extension.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[tests-conftest]: ../tests/conftest.py
+[test-base-init]: ../../tests/base/test_init.py
+[tests-conftest]: ../../tests/conftest.py
 
 <!-- examples/ -->
-[config-schema]: ../examples/fakeshop/config/schema.py
-[schema-reload]: ../examples/fakeshop/schema_reload.py
-[test-multi-db]: ../examples/fakeshop/test_query/test_multi_db.py
+[config-schema]: ../../examples/fakeshop/config/schema.py
+[schema-reload]: ../../examples/fakeshop/schema_reload.py
+[test-multi-db]: ../../examples/fakeshop/test_query/test_multi_db.py
 
 <!-- scripts/ -->
-[build-glossary-md]: ../scripts/build_glossary_md.py
-[build-kanban-md]: ../scripts/build_kanban_md.py
-[build-tree-md]: ../scripts/build_tree_md.py
+[build-glossary-md]: ../../scripts/build_glossary_md.py
+[build-kanban-md]: ../../scripts/build_kanban_md.py
+[build-tree-md]: ../../scripts/build_tree_md.py
 
 <!-- .venv/ -->
-[venv-base-extension]: ../.venv/lib/python3.14/site-packages/strawberry/extensions/base_extension.py
-[venv-django-base]: ../.venv/lib/python3.14/site-packages/django/db/backends/base/base.py
-[venv-django-test-utils]: ../.venv/lib/python3.14/site-packages/django/test/utils.py
-[venv-django-utils]: ../.venv/lib/python3.14/site-packages/django/db/backends/utils.py
-[venv-extensions-context]: ../.venv/lib/python3.14/site-packages/strawberry/extensions/context.py
-[venv-runner]: ../.venv/lib/python3.14/site-packages/strawberry/extensions/runner.py
-[venv-schema]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema.py
+[venv-base-extension]: ../../.venv/lib/python3.14/site-packages/strawberry/extensions/base_extension.py
+[venv-django-base]: ../../.venv/lib/python3.14/site-packages/django/db/backends/base/base.py
+[venv-django-test-utils]: ../../.venv/lib/python3.14/site-packages/django/test/utils.py
+[venv-django-utils]: ../../.venv/lib/python3.14/site-packages/django/db/backends/utils.py
+[venv-extensions-context]: ../../.venv/lib/python3.14/site-packages/strawberry/extensions/context.py
+[venv-runner]: ../../.venv/lib/python3.14/site-packages/strawberry/extensions/runner.py
+[venv-schema]: ../../.venv/lib/python3.14/site-packages/strawberry/schema/schema.py
 
 <!-- External -->
-[upstream-cookbook-recipes-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-[upstream-cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/schema.py
-[upstream-cookbook-settings]: ../../django-graphene-filters/examples/cookbook/cookbook/settings.py
-[upstream-debug-init]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py
-[upstream-debug-middleware]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py
-[upstream-debug-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py
-[upstream-exception-formating]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py
-[upstream-exception-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py
-[upstream-sql-tracking]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py
-[upstream-sql-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py
+[upstream-cookbook-recipes-schema]: ../../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[upstream-cookbook-schema]: ../../../django-graphene-filters/examples/cookbook/cookbook/schema.py
+[upstream-cookbook-settings]: ../../../django-graphene-filters/examples/cookbook/cookbook/settings.py
+[upstream-debug-init]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py
+[upstream-debug-middleware]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py
+[upstream-debug-types]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py
+[upstream-exception-formating]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py
+[upstream-exception-types]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py
+[upstream-sql-tracking]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py
+[upstream-sql-types]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py
 [upstream-strawberry-extension-isolation]: https://github.com/strawberry-graphql/strawberry/issues/4369

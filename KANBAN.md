@@ -97,7 +97,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 | --- | --- |
 | `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_15.md](docs/spec-046-transport_security-0_0_15.md) |
 | `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-045-visibility_boundary-0_0_14.md](docs/spec-045-visibility_boundary-0_0_14.md) |
-| `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
+| `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/SPECS/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
 | `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
 | `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
@@ -1513,7 +1513,7 @@ Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec
 - Status: Done
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
-- Spec: [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md)
+- Spec: [spec-044-debug_extension-0_0_14.md](docs/SPECS/spec-044-debug_extension-0_0_14.md)
 
 #### Glossary terms
 

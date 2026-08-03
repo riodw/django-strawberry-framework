@@ -1,6 +1,6 @@
 # Rationale: sealed `get_queryset` visibility-boundary policy artifacts (spec-045)
 
-The deliberative layer of [`docs/spec-045-visibility_boundary-0_0_14.md`][spec]. The spec
+The deliberative layer of [`docs/SPECS/spec-045-visibility_boundary-0_0_14.md`][spec]. The spec
 states the contract the [visibility boundary][glossary-visibility-boundary] offers today
 and nothing else; this file carries, for each of that spec's numbered decisions, the
 alternatives that were rejected and why each lost, every change the decision has
@@ -512,30 +512,31 @@ model, and named in the closeout record rather than silently closed.
 
 <!-- docs/ -->
 
-[glossary-prove-then-clone-ast-trust]: GLOSSARY.md#prove-then-clone-ast-trust
-[glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
-[spec]: spec-045-visibility_boundary-0_0_14.md
-[spec-decision-1]: spec-045-visibility_boundary-0_0_14.md#decision-1--the-hook-and-source-objects-are-untrusted-query-state-rebuilt-into-a-framework-owned-plain-djangodbmodelsqueryset
-[spec-decision-2]: spec-045-visibility_boundary-0_0_14.md#decision-2--fail-closed-prove-then-clone-ast-trust
-[spec-decision-3]: spec-045-visibility_boundary-0_0_14.md#decision-3--the-identity-fast-path-is-removed-hook-results-are-always-re-sealed-and-result-caches-dropped
-[spec-decision-4]: spec-045-visibility_boundary-0_0_14.md#decision-4--prefetch-rebuild-as-an-exact-django-class--alias-threading-with-require_shared_alias
-[spec-decision-5]: spec-045-visibility_boundary-0_0_14.md#decision-5--queryset-shape-rejections--unconditional-querymodel
-[spec-decision-6]: spec-045-visibility_boundary-0_0_14.md#decision-6--typed-configurationerror-fail-closed-error-contract
-[spec-decision-7]: spec-045-visibility_boundary-0_0_14.md#decision-7--no-version-bump-the-0014-cut-already-landed
-[spec-decision-8]: spec-045-visibility_boundary-0_0_14.md#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion
+[glossary-prove-then-clone-ast-trust]: ../../GLOSSARY.md#prove-then-clone-ast-trust
+[glossary-visibility-boundary]: ../../GLOSSARY.md#visibility-boundary
 
 <!-- docs/SPECS/ -->
+
+[spec]: ../spec-045-visibility_boundary-0_0_14.md
+[spec-decision-1]: ../spec-045-visibility_boundary-0_0_14.md#decision-1--the-hook-and-source-objects-are-untrusted-query-state-rebuilt-into-a-framework-owned-plain-djangodbmodelsqueryset
+[spec-decision-2]: ../spec-045-visibility_boundary-0_0_14.md#decision-2--fail-closed-prove-then-clone-ast-trust
+[spec-decision-3]: ../spec-045-visibility_boundary-0_0_14.md#decision-3--the-identity-fast-path-is-removed-hook-results-are-always-re-sealed-and-result-caches-dropped
+[spec-decision-4]: ../spec-045-visibility_boundary-0_0_14.md#decision-4--prefetch-rebuild-as-an-exact-django-class--alias-threading-with-require_shared_alias
+[spec-decision-5]: ../spec-045-visibility_boundary-0_0_14.md#decision-5--queryset-shape-rejections--unconditional-querymodel
+[spec-decision-6]: ../spec-045-visibility_boundary-0_0_14.md#decision-6--typed-configurationerror-fail-closed-error-contract
+[spec-decision-7]: ../spec-045-visibility_boundary-0_0_14.md#decision-7--no-version-bump-the-0014-cut-already-landed
+[spec-decision-8]: ../spec-045-visibility_boundary-0_0_14.md#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
 
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[walker]: ../django_strawberry_framework/optimizer/walker.py
+[querysets]: ../../../django_strawberry_framework/utils/querysets.py
+[walker]: ../../../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
 
-[queryset-tests]: ../tests/utils/test_querysets.py
+[queryset-tests]: ../../../tests/utils/test_querysets.py
 
 <!-- examples/ -->
 

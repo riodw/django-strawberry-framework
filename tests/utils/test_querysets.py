@@ -12,7 +12,7 @@ surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
 ``tests/test_relay_node_field.py``, ``tests/filters/test_sets.py``).
 
 Visibility-boundary decision references below resolve to
-``docs/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
+``docs/SPECS/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
 
 ``coerce_field_value_or_none`` is the sibling "raw
 literal -> Django field value, or nothing" primitive shared by the Relay id

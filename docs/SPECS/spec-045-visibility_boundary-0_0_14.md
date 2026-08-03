@@ -12,7 +12,7 @@ matches the implemented security contract.
 Decisions 1–6 and 8 below state the boundary's contract as it stands; Decision 7
 records release bookkeeping. Every rejected alternative, every change a decision
 has undergone, and every claim a decision may no longer make live in the
-deliberative companion [`docs/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale].
+deliberative companion [`docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale].
 
 Status: **COMPLETE — shipped in `0.0.14` (commit `60998b17`); this card records
 the governing artifacts, which describe the boundary as it now stands including
@@ -60,7 +60,7 @@ A single documentation slice; the code shipped in commit `60998b17`.
         untrusted-object rebuild, prove-then-clone AST trust,
         identity-fast-path removal, `Prefetch` rebuild + alias threading,
         queryset-shape rejections, and the typed error contract.
-  - [ ] This spec `docs/spec-045-visibility_boundary-0_0_14.md` and its
+  - [ ] This spec `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` and its
         companions `*-terms.csv` and `*-rationale.md`.
   - [ ] The five new glossary entries imported via the fakeshop glossary DB and
         `docs/GLOSSARY.md` regenerated (never hand-edited).
@@ -589,8 +589,8 @@ This card's Slice 1 doc set (the only surface it touches):
   with its glossary links.
 - The prior `[P2]` policy-artifact residual recorded as closed in this spec.
 - This spec and its two companions,
-  `docs/spec-045-visibility_boundary-0_0_14-terms.csv` (glossary terms) and
-  [`docs/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale] (the
+  `docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-terms.csv` (glossary terms) and
+  [`docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale] (the
   deliberative layer).
 
 `README.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, and
@@ -627,7 +627,7 @@ These are deliberate constraints of the contract above, not defects:
       contract: untrusted-object rebuild, prove-then-clone AST trust,
       identity-fast-path removal, `Prefetch` rebuild + alias threading,
       queryset-shape rejections, and the typed error contract.
-- [ ] Spec `docs/spec-045-visibility_boundary-0_0_14.md` authored with its
+- [ ] Spec `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` authored with its
       companions `*-terms.csv` and `*-rationale.md`.
 - [ ] The five new glossary entries imported via the fakeshop glossary DB and
       `docs/GLOSSARY.md` regenerated.
@@ -641,36 +641,37 @@ These are deliberate constraints of the contract above, not defects:
 
 <!-- docs/ -->
 
-[glossary]: GLOSSARY.md
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-callable-shadow-defect]: GLOSSARY.md#callable-shadow-defect
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-prefetch-alias-threading]: GLOSSARY.md#prefetch-alias-threading
-[glossary-prove-then-clone-ast-trust]: GLOSSARY.md#prove-then-clone-ast-trust
-[glossary-sealed-execution-queryset]: GLOSSARY.md#sealed-execution-queryset
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
-[rationale]: spec-045-visibility_boundary-0_0_14-rationale.md
+[glossary]: ../GLOSSARY.md
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-callable-shadow-defect]: ../GLOSSARY.md#callable-shadow-defect
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-prefetch-alias-threading]: ../GLOSSARY.md#prefetch-alias-threading
+[glossary-prove-then-clone-ast-trust]: ../GLOSSARY.md#prove-then-clone-ast-trust
+[glossary-sealed-execution-queryset]: ../GLOSSARY.md#sealed-execution-queryset
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-visibility-boundary]: ../GLOSSARY.md#visibility-boundary
 
 <!-- docs/SPECS/ -->
+
+[rationale]: appx/spec-045-visibility_boundary-0_0_14-rationale.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
 
-[exceptions]: ../django_strawberry_framework/exceptions.py
-[nested-fetch]: ../django_strawberry_framework/optimizer/nested_fetch.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[walker]: ../django_strawberry_framework/optimizer/walker.py
+[exceptions]: ../../django_strawberry_framework/exceptions.py
+[nested-fetch]: ../../django_strawberry_framework/optimizer/nested_fetch.py
+[querysets]: ../../django_strawberry_framework/utils/querysets.py
+[walker]: ../../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
 
-[connection-tests]: ../tests/test_connection.py
-[list-tests]: ../tests/test_list_field.py
-[permissions-tests]: ../tests/test_permissions.py
-[queryset-tests]: ../tests/utils/test_querysets.py
-[relay-tests]: ../tests/test_relay_node_field.py
+[connection-tests]: ../../tests/test_connection.py
+[list-tests]: ../../tests/test_list_field.py
+[permissions-tests]: ../../tests/test_permissions.py
+[queryset-tests]: ../../tests/utils/test_querysets.py
+[relay-tests]: ../../tests/test_relay_node_field.py
 
 <!-- examples/ -->
 

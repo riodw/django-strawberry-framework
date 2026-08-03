@@ -292,6 +292,22 @@ def _measured_remaining(stream: Any) -> int | _Probe:
     ``BaseException`` is deliberately not caught, so cancellation and
     ``KeyboardInterrupt`` still propagate.
 
+    The *positions* a foreign stream reports are held to the same rule, and the
+    rule is stricter than a guard because arithmetic and comparison are not calls
+    this function can wrap once: ``end - position`` and ``remaining <= 0`` would
+    both run consumer ``__sub__`` / ``__le__`` code, so a position object whose
+    numeric protocol raises anything at all - not just the ``TypeError`` a
+    non-number produces - would escape as an unrelated ``500`` from whichever
+    expression touched it first. So no foreign numeric protocol is executed:
+    production Django streams report positions as the built-in ``int``
+    (``SpooledTemporaryFile`` and ``LimitedStream`` both do, on both supported
+    interpreters), that exact type is what this function accepts, and every other
+    shape - an ``int`` subclass included, since it may override either operator -
+    is ``UNMEASURABLE`` and gets the bounded read instead. The type test is
+    ``type(x) is int`` rather than ``isinstance`` for the same reason
+    ``views.py::_resolved_max_request_body_bytes`` uses one: admitting a subclass
+    is admitting overridden operators back inside the boundary.
+
     What each failure means for the position is what decides its outcome:
 
     - ``seekable()`` raising, or answering ``False``, and ``tell()`` raising all
@@ -314,10 +330,10 @@ def _measured_remaining(stream: Any) -> int | _Probe:
       than of the body it exposes) accepts the restore and still ends up
       somewhere else, and the bounded read would then read the wrong bytes -
       previously it silently produced an empty body.
-    - the subtraction failing (a ``seek`` that returns ``None``, or anything else
-      that is not a number - legal for a stream that simply does not report
-      positions) is ``UNMEASURABLE``, because the restore already succeeded by
-      then.
+    - a position or end that is not exactly a built-in ``int`` (a ``seek`` that
+      returns ``None``, which is legal for a stream that simply does not report
+      positions, or any other object) is ``UNMEASURABLE``: no subtraction and no
+      comparison is attempted on it, and the restore already succeeded by then.
 
     Why a probed count of zero or less is a measurement FAILURE
     ----------------------------------------------------------
@@ -372,10 +388,9 @@ def _measured_remaining(stream: Any) -> int | _Probe:
         return _Probe.CORRUPTED
     if not probed:
         return _Probe.UNMEASURABLE
-    try:
-        remaining = end - position
-    except TypeError:
+    if type(end) is not int or type(position) is not int:
         return _Probe.UNMEASURABLE
+    remaining = end - position
     if remaining <= 0:
         return _Probe.UNMEASURABLE
     return remaining

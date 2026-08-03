@@ -53,8 +53,22 @@ from cross_web import (
     DjangoHTTPRequestAdapter,
     HTTPException,
 )
-from django.http import HttpRequest, RawPostDataException, UnreadablePostError
-from django.test import AsyncRequestFactory, RequestFactory, override_settings
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseForbidden,
+    RawPostDataException,
+    UnreadablePostError,
+)
+from django.middleware.csrf import CsrfViewMiddleware
+from django.test import (
+    AsyncClient,
+    AsyncRequestFactory,
+    Client,
+    RequestFactory,
+    override_settings,
+)
+from django.urls import path
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 from strawberry.http.base import BaseView
 
@@ -66,6 +80,11 @@ from django_strawberry_framework._request_body import (
     _UNREADABLE_STREAM_LOG_MESSAGE,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.middleware.request_body import (
+    _BOUNDARY_ENFORCED,
+    _BOUNDARY_MARKER,
+    GraphQLRequestBodyBoundaryMiddleware,
+)
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
     _JSON_PARSE_REASON,
@@ -790,16 +809,67 @@ class _UnseekableToEndStream(_UndeclaredSeekableStream):
 class _UnnumberedSeekStream(_UndeclaredSeekableStream):
     """A ``seek`` that returns ``None`` instead of a position, and never moves.
 
-    The third probe-failure stand-in: the subtraction ``end - position`` is what
-    fails here, with a ``TypeError`` rather than an ``OSError``, which is exactly
-    the class of failure an enumerated ``except`` tuple misses. ``seek`` returning
-    ``None`` is legal for a file-like object that simply does not report positions,
-    and because it also does not move, the position is provably intact and the
-    bounded read is the answer.
+    The third probe-failure stand-in: the *end* this seek reports is not a position
+    at all, so there is no measurement to make and none is attempted. ``seek``
+    returning ``None`` is legal for a file-like object that simply does not report
+    positions, and because it also does not move, the position is provably intact
+    and the bounded read is the answer.
     """
 
     def seek(self, offset, whence=io.SEEK_SET):
         return None
+
+
+class _ArithmeticRaisingPosition(int):
+    """An ``int`` whose subtraction raises something no ``TypeError`` guard catches.
+
+    A stream is free to report positions as objects of its own, and a wrapper that
+    tracks offsets in some richer type is the ordinary way that happens. The
+    package must therefore never execute a foreign numeric protocol inside the size
+    boundary: ``RuntimeError`` here stands for every exception a ``__sub__`` may
+    raise, and an ``int`` subclass is the shape that gets *past* a numeric check
+    written as ``isinstance``.
+    """
+
+    def __sub__(self, other):
+        raise RuntimeError("this position refuses to be subtracted")
+
+
+class _ComparisonRaisingPosition(int):
+    """An ``int`` whose ordering comparison raises - the second escape route.
+
+    Even with the subtraction survived, the probe still compares its result against
+    zero, and a subclass may override ``__le__`` alone. Two hostile operators
+    therefore need two rows, or "the arithmetic is guarded" would be a claim about
+    one expression rather than about the boundary.
+    """
+
+    def __le__(self, other):
+        raise RuntimeError("this position refuses to be compared")
+
+
+class _ArithmeticRaisingPositionStream(_UndeclaredSeekableStream):
+    """Answers the end-seek with a position whose subtraction raises.
+
+    Honest in every other respect: it really seeks, so the restore verifies and the
+    bounded read that follows starts where the request started.
+    """
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        moved = self._buffer.seek(offset, whence)
+        if whence == io.SEEK_END:
+            return _ArithmeticRaisingPosition(moved)
+        return moved
+
+
+class _ComparisonRaisingPositionStream(_ArithmeticRaisingPositionStream):
+    """Answers the end-seek with a position whose comparison raises instead."""
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        moved = self._buffer.seek(offset, whence)
+        if whence == io.SEEK_END:
+            return _ComparisonRaisingPosition(moved)
+        return moved
 
 
 class _UnrestorableStream(_UndeclaredSeekableStream):
@@ -1236,7 +1306,7 @@ def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
     [
         pytest.param(_CapabilityQueryRaisingStream, id="seekable-raises"),
         pytest.param(_UnseekableToEndStream, id="seek-to-end-raises"),
-        pytest.param(_UnnumberedSeekStream, id="subtraction-fails"),
+        pytest.param(_UnnumberedSeekStream, id="unnumbered-end-position"),
     ],
 )
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
@@ -1246,18 +1316,62 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
 ):
     """A failed probe is a ``413`` from a bounded read, never a ``500``.
 
-    Three failure sites, one classification. ``seekable()`` raising and the
-    subtraction failing both leave the stream untouched; the seek to the end
+    Three failure sites, one classification. ``seekable()`` raising and an
+    unnumbered end position both leave the stream untouched; the seek to the end
     raising leaves it unknown until the restore proves otherwise - and here the
     restore does. In all three the position is provably where the request started,
     so the bounded read is licensed and supplies the bound.
 
-    The old implementation called ``seekable()``, both ``seek``s and the
-    subtraction unguarded, so each of these streams turned a request into an
-    unhandled ``500`` (a ``TypeError`` for the third, which no ``OSError`` tuple
-    would have caught). The bound is asserted rather than just the status: exactly
+    The old implementation called ``seekable()`` and both ``seek``s unguarded, so
+    each of these streams turned a request into an unhandled ``500``. The bound is
+    asserted rather than just the status: exactly
     ``limit + 1`` bytes are read, bytes are demonstrably left unread, and nothing
     is materialized.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = stream_class(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.delivered == _PROBE_CAP + 1
+    assert max(stream.requested) <= _PROBE_CAP + 1
+    assert stream.unread > 0
+    assert hasattr(request, "_body") is False
+
+
+@pytest.mark.parametrize(
+    "stream_class",
+    [
+        pytest.param(_ArithmeticRaisingPositionStream, id="subtraction-raises"),
+        pytest.param(_ComparisonRaisingPositionStream, id="comparison-raises"),
+    ],
+)
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_position_object_whose_numeric_protocol_raises_never_runs_inside_the_gate(
+    view_class,
+    stream_class,
+):
+    """No foreign numeric protocol is executed on a probed position, at all.
+
+    The probe used to guard the subtraction alone, and only against ``TypeError``,
+    while the ``remaining <= 0`` comparison ran outside every guard. Both
+    expressions execute code belonging to whatever object the stream handed back,
+    so a position whose ``__sub__`` or ``__le__`` raises anything else turned the
+    body boundary into an unrelated ``500`` - the exact failure mode the rest of
+    this module's totality exists to prevent, reached through arithmetic instead of
+    through a method call.
+
+    Guarding the expressions is not the fix, because a guard still runs the foreign
+    code and a plausible-but-wrong answer from it would be believed. Only the exact
+    built-in ``int`` both production streams report is accepted, so these two
+    positions - ``int`` subclasses, which is what gets past an ``isinstance``
+    check - are never operated on: the verdict is "unmeasurable", and the bounded
+    read supplies the bound, with its own ``limit + 1`` ceiling asserted rather
+    than just the status.
     """
     view = _capped_view(_PROBE_CAP, view_class=view_class)
     stream = stream_class(b"x" * (_PROBE_CAP * 16))
@@ -2062,12 +2176,16 @@ def test_a_get_carrying_a_stray_multipart_content_type_is_not_a_multipart_form()
 
 
 def test_a_non_multipart_request_is_not_subject_to_the_form_encoding_check():
-    """The check is scoped to the one content type Django replacement-decodes.
+    """The two declaration guards own disjoint request shapes.
 
-    A JSON body's encoding is enforced by ``parse_json`` over the raw bytes, which
-    is strictly stronger - it sees the bytes - so a ``charset`` on an
-    ``application/json`` request must not be turned into a second, weaker gate that
-    could refuse a body the strict decode would have accepted.
+    The multipart guard exists because Django decodes the control documents before
+    the package sees them, using the value ``MultiPartParser`` receives - a question
+    that only arises for a form. A JSON body never reaches that parser, so its
+    declaration has its own owner,
+    ``_enforce_body_charset_declaration``, and the same
+    request must be refused by that one instead of by this one. Asserting both
+    halves on the one request is what keeps the split from becoming a gap: either
+    guard claiming both shapes, or neither claiming this one, fails here.
     """
     view = DjangoGraphQLView(schema=SCHEMA)
     request = RequestFactory().post(
@@ -2077,6 +2195,121 @@ def test_a_non_multipart_request_is_not_subject_to_the_form_encoding_check():
     )
 
     view._enforce_multipart_form_encoding(request)
+
+    with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
+        view._enforce_body_charset_declaration(request)
+
+
+def test_a_multipart_declaration_is_left_to_the_form_encoding_guard():
+    """The other direction of the same split, on a request both guards see.
+
+    A multipart POST passes through both halves of the composed boundary, so the
+    body-charset guard has to return without judging it - Django's own promotion
+    rules and ``MultiPartParser``'s ``encoding or DEFAULT_CHARSET`` are what decide
+    a form's encoding, and the multipart guard is written against exactly those.
+    A second, coarser opinion here would refuse forms Django decodes precisely as
+    the contract promises (a declared ``charset=utf-8`` under a Latin-1
+    ``DEFAULT_CHARSET``, say).
+    """
+    view = _capped_view(_PROBE_CAP)
+
+    view._enforce_request_boundary(_multipart_request("utf-8"))
+    view._enforce_body_charset_declaration(_multipart_request("iso-8859-1"))
+
+
+_DECLARED_JSON_CHARSETS = (
+    pytest.param(None, 200, id="no-declaration"),
+    pytest.param("utf-8", 200, id="utf-8"),
+    pytest.param("UTF8", 200, id="alias-spelling"),
+    pytest.param("iso-8859-1", 400, id="latin-1"),
+    pytest.param("utf-8-sig", 400, id="utf-8-sig"),
+    pytest.param("no-such-codec", 400, id="unknown-name"),
+)
+
+#: A JSON document whose bytes decode differently under the two codecs the rows
+#: below declare: ``C3 A9`` is one character in UTF-8 and two in Latin-1. The
+#: non-ASCII byte sits inside a GraphQL comment, so the document is a valid
+#: operation whichever way an intermediary reads the rest of it.
+_NON_ASCII_JSON_BODY = json.dumps(
+    {"query": "{ ping } # \u00e9"},
+    ensure_ascii=False,
+).encode("utf-8")
+
+
+async def _declared_json_response(charset, is_async):
+    """POST the non-ASCII document with ``charset`` declared, over the real endpoint.
+
+    The bytes go on the wire untouched, which is the only way to express the shape
+    these rows are about - a declaration that contradicts the bytes it describes.
+    ``generic`` is what does that: ``post`` re-encodes the payload with the charset
+    it finds on the content type (and cannot even be handed a codec name Python
+    does not know), while ``generic`` puts both the bytes and the header through
+    unchanged.
+
+    Driven through the whole handler rather than a view instance, so the assertions
+    are the wire outcome an intermediary would see. The endpoint mounts live at the
+    bottom of this module, which doubles as its own ``ROOT_URLCONF``.
+    """
+    content_type = "application/json"
+    if charset is not None:
+        content_type = f"{content_type}; charset={charset}"
+    with override_settings(ROOT_URLCONF=__name__):
+        if is_async:
+            return await AsyncClient().generic(
+                "POST",
+                "/async-graphql/",
+                data=_NON_ASCII_JSON_BODY,
+                content_type=content_type,
+            )
+        return Client().generic(
+            "POST",
+            "/graphql/",
+            data=_NON_ASCII_JSON_BODY,
+            content_type=content_type,
+        )
+
+
+@pytest.mark.parametrize(("charset", "status"), _DECLARED_JSON_CHARSETS)
+@pytest.mark.parametrize(
+    "is_async",
+    [pytest.param(False, id="sync"), pytest.param(True, id="async")],
+)
+async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
+    is_async,
+    charset,
+    status,
+):
+    """A declared charset is part of the wire boundary, not decoration.
+
+    The strict decode alone accepts ``Content-Type: application/json;
+    charset=iso-8859-1`` for any body that happens to be valid UTF-8, and answers
+    ``200``. The bytes then mean two different things at two hops: this endpoint
+    reads ``C3 A9`` as one character, while a proxy, WAF, audit or signing layer
+    that honours the declaration reads two - the same parser differential
+    Decision 9's narrowing of the success set exists to remove, arriving through the
+    header instead of through the body.
+
+    So the declaration is refused rather than ignored, with the boundary's shared
+    ``400``, and the rows cover exactly what "refused" means: absent is not a
+    declaration and passes, every alias Python resolves to UTF-8 passes, and
+    ``utf-8-sig`` - a different codec, whose BOM Decision 10 refuses - and an
+    unknown codec name do not.
+
+    Both transports run the same header-only check from the same
+    ``_enforce_request_boundary``, and running the matrix twice is what keeps that
+    structural claim honest end to end: an override or an ordering change reaching
+    only one ``run`` would leave the other endpoint answering ``200`` for a
+    declaration it does not honour. The accepted rows also assert the non-ASCII
+    document really executed, rather than being quietly repaired into one that
+    parses.
+    """
+    response = await _declared_json_response(charset, is_async)
+
+    assert response.status_code == status
+    if status == 200:
+        assert json.loads(response.content)["data"] == {"ping": "pong"}
+    else:
+        assert response.content.decode() == _JSON_PARSE_REASON
 
 
 def test_a_bytes_control_field_is_left_to_the_strict_decode_rather_than_the_marker_check():
@@ -2131,7 +2364,8 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class
 
     view = view_class.as_view(schema=SCHEMA)
 
-    assert view.csrf_exempt is True
+    assert bool(view.csrf_exempt) is True
+    assert getattr(view, _BOUNDARY_MARKER) is True
     assert view_class.as_view.__func__ is views_module._RequestBodyBoundaryMixin.as_view.__func__
     assert view.view_class is view_class
     assert view.view_initkwargs == {"schema": SCHEMA}
@@ -2166,3 +2400,326 @@ def test_each_csrf_continuation_matches_the_transport_it_protects():
         views_module._csrf_protected_async_run,
     ):
         assert getattr(function, "csrf_exempt", False) is False
+
+
+# ---------------------------------------------------------------------------
+# The ordering, supplied by the middleware chain instead of by the
+# view: ``GraphQLRequestBodyBoundaryMiddleware`` runs the boundary from
+# ``process_view`` and the exemption on the view callback withdraws itself, so the
+# deployment's OWN ``CsrfViewMiddleware`` - base class or subclass - is what runs
+# behind the boundary. These rows need a project whose ``MIDDLEWARE`` names a
+# custom CSRF subclass and a URLconf that mounts the package views, which is a
+# whole-chain shape fakeshop's single settings module cannot express, so the
+# module doubles as its own ROOT_URLCONF.
+# ---------------------------------------------------------------------------
+
+
+class _RejectingCsrfMiddleware(CsrfViewMiddleware):
+    """A project's own CSRF middleware: it records its calls and refuses the request.
+
+    Stands in for the real thing a deployment installs - a subclass that binds the
+    token to a session, adds a tenant check, or logs failures. Two behaviors, both
+    load-bearing: recording proves whether Django's chain reached it at all, and
+    rejecting proves its policy is what decides the response rather than merely
+    running. Django's base implementation could prove neither, because a test client
+    request passes its check and is indistinguishable from one it never saw.
+    """
+
+    calls: list[str] = []
+
+    def process_view(
+        self,
+        request,
+        callback,
+        callback_args,
+        callback_kwargs,
+    ):
+        """Apply the extra policy to exactly the callbacks the base class would check.
+
+        The two deferrals are what make the recording meaningful rather than
+        universal: a safe method is not something ``CsrfViewMiddleware`` checks, and
+        an exempt callback is one it declines - so honouring both is what turns
+        ``calls`` into evidence about whether Django's chain brought a *checkable*
+        request here, which is the whole question these rows ask.
+        """
+        if request.method in (
+            "GET",
+            "HEAD",
+            "OPTIONS",
+            "TRACE",
+        ) or getattr(
+            callback,
+            "csrf_exempt",
+            False,
+        ):
+            return super().process_view(request, callback, callback_args, callback_kwargs)
+        type(self).calls.append(request.path)
+        return HttpResponseForbidden("the project's own CSRF policy refused this")
+
+
+def _passthrough_middleware(get_response):
+    """A function-style middleware, which the ordering check must skip rather than probe.
+
+    ``settings.MIDDLEWARE`` admits any callable factory, so the ordering audit has
+    to cope with an entry that is not a class at all - ``issubclass`` would raise
+    ``TypeError`` on one.
+    """
+    return get_response
+
+
+def _plain_view(request):
+    """A non-package view, mounted so the middleware's pass-through is exercised."""
+    return HttpResponse("plain")
+
+
+_BOUNDARY_MIDDLEWARE_PATH = (
+    "django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware"
+)
+_CSRF_MIDDLEWARE_PATH = "tests.test_views._RejectingCsrfMiddleware"
+_PASSTHROUGH_MIDDLEWARE_PATH = "tests.test_views._passthrough_middleware"
+
+_ORDERED_CHAIN = [_PASSTHROUGH_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH]
+
+#: The mount cap the over-limit rows are refused by. Small enough that an ordinary
+#: multipart envelope exceeds it, so the refusal is a property of the boundary
+#: rather than of an enormous fixture.
+_MOUNTED_CAP = 32
+
+urlpatterns = [
+    path("graphql/", DjangoGraphQLView.as_view(schema=SCHEMA)),
+    path("async-graphql/", AsyncDjangoGraphQLView.as_view(schema=SCHEMA)),
+    path(
+        "capped/",
+        DjangoGraphQLView.as_view(schema=SCHEMA, max_request_body_bytes=_MOUNTED_CAP),
+    ),
+    path(
+        "async-capped/",
+        AsyncDjangoGraphQLView.as_view(schema=SCHEMA, max_request_body_bytes=_MOUNTED_CAP),
+    ),
+    path("plain/", _plain_view),
+]
+
+_MOUNTED_PATHS = (
+    pytest.param("/graphql/", "/capped/", False, id="sync"),
+    pytest.param("/async-graphql/", "/async-capped/", True, id="async"),
+)
+
+
+@contextlib.contextmanager
+def _chain(middleware):
+    """This module as the project's URLconf, with ``middleware`` as the whole chain.
+
+    ``ROOT_URLCONF`` points at this module because the rows' subject is Django's
+    real request path through a chain: the view callback the URL resolver holds is
+    what carries both ordering marks, and a ``RequestFactory`` call on a view
+    instance would bypass every middleware hook that is being asserted.
+    """
+    _RejectingCsrfMiddleware.calls = []
+    with override_settings(ROOT_URLCONF=__name__, MIDDLEWARE=middleware):
+        yield
+
+
+async def _post(path, is_async, **kwargs):
+    """POST through the real handler, on whichever client matches the transport."""
+    if is_async:
+        return await AsyncClient().post(path, **kwargs)
+    return Client().post(path, **kwargs)
+
+
+@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+async def test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read(
+    under,
+    over,
+    is_async,
+):
+    """The invariant the middleware exists for: the boundary precedes the parse.
+
+    ``CsrfViewMiddleware.process_view`` reads ``request.POST`` on every
+    cookie-bearing POST, and on a multipart request that read IS the
+    ``MultiPartParser`` invocation. With the boundary running from a middleware
+    listed ahead of the CSRF entry, the ``413`` is produced before the CSRF
+    middleware is entered at all - which is what the empty call log proves, and it
+    is a stronger witness than an upload-handler sentinel because the class that
+    would have parsed the body never ran.
+
+    ``under`` is unused by this row and present only because both mounts come from
+    one parametrization; the reason the over-limit mount is a separate URL is that
+    the cap is a per-mount keyword.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = await _post(over, is_async, data={"operations": "{}"})
+
+    assert response.status_code == 413
+    assert response.content.decode() == _BODY_LIMIT_REASON
+    assert _RejectingCsrfMiddleware.calls == []
+
+
+@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+async def test_the_projects_own_csrf_middleware_runs_when_the_chain_supplies_the_ordering(
+    under,
+    over,
+    is_async,
+):
+    """The defect this closes: a project's CSRF class must not be replaced here.
+
+    Before the ordering moved into the chain, the package view marked its callback
+    exempt and re-entered CSRF through ``csrf_protect``, which is built from
+    Django's STOCK ``CsrfViewMiddleware``. A deployment whose ``MIDDLEWARE`` names a
+    subclass - stronger token binding, a tenant check, failure logging - therefore
+    had that subclass silently skipped on the GraphQL endpoint and the base
+    implementation run in its place. No view-local decorator can fix that, because
+    the configured class is a property of the chain.
+
+    With the middleware installed the exemption withdraws itself, so the subclass
+    runs on this endpoint exactly as on any other view: its ``process_view`` is
+    called, and its refusal - not a package response - is what the client gets.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = await _post(
+            under,
+            is_async,
+            data=json.dumps({"query": "{ ping }"}),
+            content_type="application/json",
+        )
+
+    assert response.status_code == 403
+    assert _RejectingCsrfMiddleware.calls == [under]
+
+
+@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+async def test_without_the_middleware_the_view_keeps_its_own_ordering_and_exemption(
+    under,
+    over,
+    is_async,
+):
+    """Backward compatibility, asserted rather than assumed.
+
+    A deployment that has not changed its ``MIDDLEWARE`` must behave exactly as it
+    did: the callback stays exempt, so the project's CSRF middleware skips it -
+    which the empty call log shows - the view enforces the boundary itself and then
+    re-enters CSRF from inside ``run``, and both the allowed request and the
+    over-limit one end where they always did. This is the row that would fail if the
+    exemption had simply been deleted, or if the boundary had moved into the
+    middleware and out of the view.
+    """
+    with _chain([_CSRF_MIDDLEWARE_PATH]):
+        allowed = await _post(
+            under,
+            is_async,
+            data=json.dumps({"query": "{ ping }"}),
+            content_type="application/json",
+        )
+        refused = await _post(over, is_async, data={"operations": "{}"})
+
+    assert json.loads(allowed.content)["data"] == {"ping": "pong"}
+    assert refused.status_code == 413
+    assert _RejectingCsrfMiddleware.calls == []
+
+
+async def test_the_middleware_passes_a_non_package_view_through_untouched():
+    """The marker is what scopes the middleware, so a foreign view costs one getattr.
+
+    The middleware is a project-wide chain entry, and it holds no opinion about any
+    view but the package's. Recognition is by the marker attribute
+    ``_RequestBodyBoundaryMixin.as_view`` stamps rather than by an ``issubclass``
+    check, which is also what keeps the dependency one-way: ``views.py`` imports the
+    middleware module, never the reverse.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = Client().get("/plain/")
+
+    assert response.status_code == 200
+    assert response.content == b"plain"
+
+
+@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+async def test_the_view_does_not_measure_a_body_the_chain_already_measured(under, over, is_async):
+    """One request, one measurement: the middleware stamps and the view believes it.
+
+    The stamp is not an optimization detail - re-running the boundary would cost a
+    second probe of a seekable stream or a second bounded read of bytes already
+    proven to be within the limit, on every request the endpoint serves. The
+    witness is the request object the view was handed: the mark is present, and the
+    body it carries is still the client's, byte for byte, after passing through both
+    owners.
+    """
+    seen = []
+    body = json.dumps({"query": "{ ping }"}).encode()
+
+    class _Recording(DjangoGraphQLView):
+        def run(self, request, *args, **kwargs):
+            seen.append((getattr(request, _BOUNDARY_ENFORCED, False), request.body))
+            return super().run(request, *args, **kwargs)
+
+    with _chain(_ORDERED_CHAIN):
+        request = RequestFactory().generic(
+            "POST",
+            "/graphql/",
+            data=body,
+            content_type="application/json",
+        )
+        middleware = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        view = _Recording.as_view(schema=SCHEMA)
+
+        assert middleware.process_view(request, view, (), {}) is None
+        view(request)
+
+    assert seen == [(True, body)]
+
+
+def test_a_chain_that_lists_the_boundary_after_csrf_is_refused_at_startup():
+    """A chain that looks right and is not must fail loud, not fail silently.
+
+    The whole guarantee is positional, and a deployment that appends the middleware
+    to the end of ``MIDDLEWARE`` gets a chain where the CSRF read still precedes the
+    boundary - with the exemption now withdrawn, so nothing catches it. That is
+    exactly the state the middleware exists to leave behind, and it is invisible from
+    the outside: every response looks correct until an oversized multipart request
+    arrives and has already been parsed.
+
+    So the audit runs where the chain is built, and the accepting rows are what keep
+    it from being a blanket refusal: the documented order passes, a chain with no
+    CSRF middleware at all passes (there is no read to precede, and the view's own
+    continuation still protects the endpoint), and a function-style entry - which
+    ``issubclass`` cannot be asked about - is skipped rather than probed.
+    """
+    with override_settings(MIDDLEWARE=[_CSRF_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH]):
+        with pytest.raises(ConfigurationError, match="must appear BEFORE"):
+            GraphQLRequestBodyBoundaryMiddleware(_plain_view)
+
+    for chain in (
+        _ORDERED_CHAIN,
+        [_BOUNDARY_MIDDLEWARE_PATH, _PASSTHROUGH_MIDDLEWARE_PATH],
+        [_CSRF_MIDDLEWARE_PATH],
+    ):
+        with override_settings(MIDDLEWARE=chain):
+            assert GraphQLRequestBodyBoundaryMiddleware(_plain_view) is not None
+
+
+async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_call():
+    """The mark is request-scoped on both chains, and a raising view does not leak it.
+
+    The exemption's answer is read off a ``ContextVar``, because it has to be true
+    for a package view mounted in a chain WITHOUT this middleware in the same
+    process. Setting it around the downstream call is therefore only correct if it is
+    also reset around it - and on the async chain the reset has to happen after the
+    ``await``, which is the reason ``__acall__`` exists rather than a ``finally``
+    wrapped around a returned coroutine.
+
+    Both directions are asserted through the exemption object itself, which is the
+    value ``CsrfViewMiddleware.process_view`` consults: false while a request is in
+    flight, true again afterwards, including when the chain raised.
+    """
+    from django_strawberry_framework.middleware.request_body import _CSRF_ORDERING_EXEMPTION
+
+    async def downstream(request):
+        assert bool(_CSRF_ORDERING_EXEMPTION) is False
+        raise RuntimeError("the downstream chain failed")
+
+    middleware = GraphQLRequestBodyBoundaryMiddleware(downstream)
+
+    assert iscoroutinefunction(middleware) is True
+    with pytest.raises(RuntimeError, match="downstream chain"):
+        await middleware(RequestFactory().get("/graphql/"))
+
+    assert bool(_CSRF_ORDERING_EXEMPTION) is True

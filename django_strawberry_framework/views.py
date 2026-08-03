@@ -37,13 +37,23 @@ A cap that runs after something else has already parsed the body is not a gate,
 and Django's own ``CsrfViewMiddleware.process_view`` reads
 ``request.POST.get("csrfmiddlewaretoken", "")`` on **every** cookie-bearing POST -
 before the view, and on a multipart request that read is what invokes
-``MultiPartParser`` and the upload handlers. Both package views therefore mark
-the callback ``as_view`` returns ``csrf_exempt`` - once, on the shared mixin - and
-re-enter Django's *own* CSRF implementation from inside the view, after the
-boundary has run, through the public ``csrf_protect`` decorator (see
-:func:`_run_after_csrf_check`). The
-exemption is an ORDERING MECHANISM, never a bypass: every request that gets past
-the size boundary still goes through the complete CSRF check.
+``MultiPartParser`` and the upload handlers. The ordering therefore belongs in the
+middleware chain, and
+``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` is where a
+deployment puts it: installed before its own ``CsrfViewMiddleware`` entry, it runs
+this module's boundary from ``process_view`` and the project's *configured* CSRF
+class - base or subclass - then runs in full behind it.
+
+A deployment that has not installed it keeps the arrangement that predates it:
+both package views mark the callback ``as_view`` returns exempt from the CSRF
+middleware - once, on the shared mixin - and re-enter Django's own
+``CsrfViewMiddleware`` from inside the view, after the boundary has run, through
+the public ``csrf_protect`` decorator (see :func:`_run_after_csrf_check`). The
+exemption is an ORDERING MECHANISM, never a bypass, and it withdraws itself when
+the chain supplies the ordering instead
+(``middleware/request_body.py::_CsrfOrderingExemption``): in either arrangement
+every request that gets past the size boundary goes through exactly one complete
+CSRF check.
 
 The wire contract needs one thing the mixin cannot provide, which is why it has a
 second owner here: upstream's sync adapter decodes inside its own ``body``
@@ -78,12 +88,17 @@ from typing import TYPE_CHECKING, Any
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
 from django.conf import settings
 from django.utils.decorators import classonlymethod
-from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django.views.decorators.csrf import csrf_protect
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 
 from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
+from django_strawberry_framework.middleware.request_body import (
+    _BOUNDARY_ENFORCED,
+    _BOUNDARY_MARKER,
+    _CSRF_ORDERING_EXEMPTION,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Mapping
@@ -445,7 +460,10 @@ class _RequestBodyBoundaryMixin:
     For a **multipart** request the declared gate is what runs, and what it now
     genuinely precedes is stated exactly: the ``413`` is raised before
     ``request.POST``, ``request.FILES``, ``MultiPartParser``, or any upload
-    handler is entered, because the package view is ``csrf_exempt`` at its outer
+    handler is entered - because
+    ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` runs this
+    boundary from a chain position ahead of the CSRF middleware, or, where it is not
+    installed, because the package view is exempt from that middleware at its outer
     dispatch callback and re-enters CSRF *after* this boundary (see
     :func:`_run_after_csrf_check`; before that ordering fix, Django's
     ``CsrfViewMiddleware.process_view`` had already parsed the form to look for
@@ -473,24 +491,37 @@ class _RequestBodyBoundaryMixin:
 
     @classonlymethod
     def as_view(cls, **initkwargs: Any) -> Any:  # noqa: N805 - Django's own signature
-        """Return upstream's view callback, marked ``csrf_exempt``.
+        """Return upstream's view callback, stamped with the two ordering marks.
 
         The ordering half of the body boundary (spec-046 Decision 18), stamped
         once, here, so both views get it and a URLconf author cannot forget it.
-        ``CsrfViewMiddleware.process_view`` reads ``csrf_exempt`` off the callback
-        the URL resolver holds - so the callback is where it is put, rather than on
-        ``dispatch`` for ``View.as_view`` to copy: a consumer subclass that
-        overrides ``dispatch`` then keeps the ordering too, and the transport's
-        coroutine marking (upstream's ``as_view`` sets it, ``csrf_exempt``
-        preserves it, and ``functools.wraps`` carries ``view_class`` /
-        ``view_initkwargs`` through) is untouched.
+        Both marks live on the callback the URL resolver holds, because that is the
+        object the chain reads them off - the CSRF middleware reads
+        ``csrf_exempt`` there, and
+        ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` reads
+        its marker off the ``view_func`` it is handed. Putting them there rather
+        than on ``dispatch`` for ``View.as_view`` to copy means a consumer subclass
+        that overrides ``dispatch`` keeps the ordering too.
 
-        See :func:`_run_after_csrf_check` for why an exemption is what buys this
+        The marks are set on upstream's callback rather than applied through a
+        wrapping decorator, so the transport's coroutine marking and Django's
+        ``view_class`` / ``view_initkwargs`` bookkeeping - which the middleware
+        needs to build the instance whose boundary it runs - are the untouched
+        originals.
+
+        ``csrf_exempt`` is the withdrawable exemption rather than a plain ``True``:
+        it is false for a request travelling through a chain that already orders
+        the boundary ahead of the CSRF check, so the deployment's configured CSRF
+        class runs on this endpoint like on any other view. See
+        :func:`_run_after_csrf_check` for why an exemption is what buys this
         endpoint *more* CSRF ordering rather than less, and for the two shapes that
-        can still lose the ordering (a wrapper that drops the attribute, and a
+        can still lose the ordering (a wrapper that drops the attributes, and a
         consumer middleware that reads the body inbound).
         """
-        return csrf_exempt(super().as_view(**initkwargs))
+        view = super().as_view(**initkwargs)
+        view.csrf_exempt = _CSRF_ORDERING_EXEMPTION
+        setattr(view, _BOUNDARY_MARKER, True)
+        return view
 
     def _enforce_request_boundary(self, request: HttpRequest) -> None:
         """Run the whole pre-CSRF, pre-parse boundary, in the one order that is safe.
@@ -504,9 +535,34 @@ class _RequestBodyBoundaryMixin:
         Both halves agree on what "multipart" means, through the one
         :func:`_is_multipart_form_post` discriminator, so the cap's carve-out and
         the encoding guard cannot drift apart on a request shape.
+
+        The third check is the other declaration a client can make about the bytes
+        it is sending - the ``charset`` on a non-multipart body's content type -
+        and it reads headers only as well.
         """
         self._enforce_request_body_limit(request)
         self._enforce_multipart_form_encoding(request)
+        self._enforce_body_charset_declaration(request)
+
+    def _enforce_request_boundary_once(self, request: HttpRequest) -> None:
+        """Run the boundary unless the middleware chain already ran it for this request.
+
+        One method for both transports, so the two ``run`` overrides cannot
+        disagree about when the view's own enforcement is redundant.
+        ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` stamps
+        the request after enforcing, and re-measuring a body that has already been
+        measured would cost a second probe or a second bounded read of bytes
+        already proven to be within the limit.
+
+        The CSRF continuation below is NOT skipped in the same way, deliberately:
+        Django's own ``csrf_processing_done`` already makes a second check a no-op,
+        so leaving the continuation unconditional keeps the endpoint protected even
+        on a chain that has neither the package middleware nor
+        ``CsrfViewMiddleware``.
+        """
+        if getattr(request, _BOUNDARY_ENFORCED, False):
+            return
+        self._enforce_request_boundary(request)
 
     def _enforce_request_body_limit(self, request: HttpRequest) -> None:
         """Raise ``HTTPException(413)`` when the request body exceeds the cap.
@@ -550,6 +606,50 @@ class _RequestBodyBoundaryMixin:
         if not _is_multipart_form_post(request):
             return
         if not _form_encoding_is_utf8(request):
+            raise HTTPException(400, _JSON_PARSE_REASON)
+
+    def _enforce_body_charset_declaration(self, request: HttpRequest) -> None:
+        """Refuse a body whose content type declares a charset this endpoint will not use.
+
+        The declaration half of the strict UTF-8 wire contract (spec-046
+        Decision 9) for every body that is not a multipart form. ``parse_json``
+        decodes those bytes as UTF-8 and nothing else, so a request that arrives as
+        ``application/json; charset=iso-8859-1`` is one whose declaration the
+        endpoint does not honour. Accepting it - which a decode-only contract does,
+        for any body that happens to be valid UTF-8 - means the same byte sequence
+        has two interpretations: this endpoint reads ``C3 A9`` as one character,
+        while any hop that honours the declaration (a proxy, a WAF, an audit or
+        signing layer) reads it as two. A parser differential of exactly that shape
+        is what the decode narrowing exists to remove, so the declaration is part
+        of the boundary rather than advice the endpoint ignores.
+
+        Refused rather than honoured, because honouring it would re-open the
+        multi-encoding success set Decision 9 closes, and because a client that
+        cannot send UTF-8 must find out at the boundary instead of having its bytes
+        reinterpreted.
+
+        Absent is not a declaration, and is the overwhelmingly common case: it
+        leaves the strict decode as the only encoding contract, which is the
+        stronger one because it inspects the bytes. Anything present must
+        canonicalize to UTF-8 by :func:`_canonicalizes_to_utf8`, so every alias is
+        accepted while ``utf-8-sig`` - a different codec, whose BOM Decision 10
+        refuses - and an unknown codec name are not.
+
+        Multipart is excluded here because it has its own, narrower owner
+        (:meth:`_enforce_multipart_form_encoding`): Django consults that
+        declaration itself and decodes the control documents before the package
+        sees them, so the two guards must not both claim the same request shape.
+        GET is excluded because this endpoint reads no body on GET, so a content
+        type on one describes nothing the package parses.
+
+        The ``400`` carries :data:`_JSON_PARSE_REASON` for the same reason every
+        other refusal on this boundary does: a caller must not be able to attribute
+        a rejection by message.
+        """
+        if request.method == "GET" or _is_multipart_form_post(request):
+            return
+        declared = (request.content_params or {}).get("charset")
+        if declared is not None and not _canonicalizes_to_utf8(declared):
             raise HTTPException(400, _JSON_PARSE_REASON)
 
     def _reject_lossy_multipart_control_fields(self, form: Mapping[str, str | bytes]) -> None:
@@ -683,10 +783,19 @@ def _run_after_csrf_check(
     had already parsed - and possibly spooled to disk - the very body the gate
     exists to refuse.
 
+    This function is the fallback arrangement, and what it costs is the reason
+    ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` exists:
+    ``csrf_protect`` is built from Django's *stock* ``CsrfViewMiddleware``, so on a
+    project whose ``MIDDLEWARE`` names a subclass this continuation would run the
+    base implementation in that subclass's place. A deployment that installs the
+    middleware gets the ordering from the chain instead, the exemption withdraws
+    itself, its own class runs, and this continuation becomes a no-op through
+    Django's ``csrf_processing_done``. Everything below describes the arrangement
+    that applies when it is not installed.
+
     The fix is composition Django documents rather than machinery the package
-    invents: the shared mixin's ``as_view`` returns
-    ``csrf_exempt(super().as_view(...))``, which puts the mark on exactly the
-    object ``process_view`` reads it off - the callback the URL resolver holds - so
+    invents: the shared mixin's ``as_view`` marks the callback the URL resolver
+    holds - exactly the object ``process_view`` reads the mark off - so
     the project's global ``CsrfViewMiddleware.process_view`` skips the callback
     without touching ``request.POST`` (its ``process_request`` may still run, which
     parses nothing), and the view re-enters CSRF from *inside* ``run``, after the
@@ -835,7 +944,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
         request that survives the boundary still passes Django's complete CSRF
         check before Strawberry parses anything.
         """
-        self._enforce_request_boundary(request)
+        self._enforce_request_boundary_once(request)
         return _csrf_protected_run(request, super().run, args, kwargs)
 
     def parse_multipart(self, request: SyncHTTPRequestAdapter) -> dict[str, str]:
@@ -885,7 +994,7 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):
         that ``csrf_protect`` decides whether to await by inspecting the callable
         it wraps.
         """
-        self._enforce_request_boundary(request)
+        self._enforce_request_boundary_once(request)
         return await _csrf_protected_async_run(request, super().run, args, kwargs)
 
     async def parse_multipart(self, request: AsyncHTTPRequestAdapter) -> dict[str, str]:

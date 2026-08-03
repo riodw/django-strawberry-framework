@@ -1,115 +1,117 @@
 # Adversarial review: spec-046 transport security
 
-This pass reviewed [spec-046][spec-046] from a cancellation and task-lifecycle
-angle: whether revocation deterministically stops an operation, whether the
-documented connection close survives cancellation and adapter failure, and whether
-the new actor lease remains sound when either side of an `await` does not complete
-normally. The lease fixes the previously reported same-connection logout
-orderings, but the teardown built on top of it is not failure-atomic.
+This pass reviewed [spec-046][spec-046] from the composition boundary: whether the
+new package-owned checks preserve the security policy expressed by the surrounding
+Django deployment, and whether the defensive paths remain total when framework-owned
+objects return values outside the production happy path. The previously reported
+revoked-operation spin and failed-close retry defects are repaired, but four independent
+gaps remain.
 
 ## Findings
 
-### [P1] Self-cancellation does not stop a subscription whose next result is immediately ready
+### [P1] A contradictory JSON charset declaration restores the parser differential
 
-`django_strawberry_framework/consumers.py::send_revalidated_operation_frame`
-tries to unwind a revoked operation by calling `asyncio.current_task().cancel()`
-immediately before it returns. The function's commentary assumes that the
-`CancelledError` will be delivered at the subscription's next suspension point,
-inside `result_source.__anext__()`. That assumption is false for an async generator
-whose next value is already available: executing an `await` does not necessarily
-return control to the event loop.
+`django_strawberry_framework/views.py::_RequestBodyBoundaryMixin.parse_json` strictly
+decodes the raw body as UTF-8, but it never validates the `charset` declared on an
+`application/json` content type. The only declaration check is
+`::_enforce_multipart_form_encoding`, and `::_is_multipart_form_post` deliberately keeps
+that check exclusive to multipart POSTs. The package therefore accepts UTF-8 bytes while
+the request explicitly tells every other hop that those bytes use another encoding.
 
-After the first revocation, the whole suppressed-frame path can complete
-synchronously from the task's perspective:
+This is reachable over the real endpoint, not just by calling `parse_json` directly. A raw
+request carrying a valid, non-ASCII UTF-8 JSON document and
+`Content-Type: application/json; charset=iso-8859-1` returned `200`, exactly like the same
+body without the declaration. The byte sequence `C3 A9`, for example, is `e-acute` to this
+view and two Latin-1 characters to a proxy, WAF, audit logger, or signature layer that
+honours the declared charset. That is the same one-byte-sequence/two-documents condition
+S9 was introduced to remove. The existing package test only proves that the *multipart*
+encoding helper is a no-op for JSON; it turns the absence of this boundary into an asserted
+behavior without testing the cross-hop consequence.
 
-1. the connection's actor lease is uncontended, so `asyncio.Lock.acquire()`
-   returns without suspending;
-2. `_revocation_observed` short-circuits before `_actor_is_current` performs a
-   session read;
-3. `::_revoke_connection` returns immediately because the flag is already set;
-4. the helper requests cancellation again and returns to upstream's `async for`;
-5. an immediate-yield async generator supplies another result without yielding to
-   the event loop, and the cycle repeats.
+The root fix is to make the ordinary JSON content type part of the wire boundary before
+the body is parsed: an absent declaration or a name that canonicalizes to UTF-8 may pass;
+an unknown codec, `utf-8-sig`, or a non-UTF-8 declaration must receive the same controlled
+`400` as every other encoding refusal. Add sync and async raw-envelope regressions with a
+non-ASCII UTF-8 document, using a driver that does not helpfully re-encode the body from its
+declared charset. Pin UTF-8 aliases as successes and contradictory, unknown, and
+`utf-8-sig` declarations as refusals.
 
-A direct harness around the production helper processed 100,000 suppressed
-`next` frames without one cancellation being delivered and left the current task
-with 100,000 pending cancellation requests. The frames remain suppressed, so this
-is not an authorization disclosure. It is still a process-level availability
-failure at the security boundary: a buffered or otherwise immediate-yield
-subscription can monopolize the event loop precisely when revocation is supposed
-to unwind it, its generator cleanup is not deterministic, and the documented
-disconnect path never gets a chance to cancel the connection's other operations.
-The existing controlled subscription always waits on an event between yields, so
-its next `__anext__()` genuinely suspends and hides this case.
+### [P1] The CSRF reorder bypasses the project's configured CSRF middleware class
 
-The root fix is to make operation termination part of an owned lifecycle protocol,
-not a request set on the task that happens to be running the adapter. The package
-needs a seam that can stop the upstream result loop and explicitly close/await its
-result source even when every subsequent value is immediately ready. Merely adding
-`await asyncio.sleep(0)` after `task.cancel()` is not the root fix: it injects
-`CancelledError` inside the `async for` body, the exact location the current
-commentary correctly says does not synchronously close the generator. Likewise,
-repeating `task.cancel()` cannot force a task to yield.
+`django_strawberry_framework/views.py::_RequestBodyBoundaryMixin.as_view` marks the URL
+callback `csrf_exempt`, so the `CsrfViewMiddleware` class actually installed by the project
+returns before applying any of its policy. The inner continuation does not re-enter that
+configured class: module-level `csrf_protect` is permanently constructed from Django's
+stock `CsrfViewMiddleware`. A deployment that subclasses the middleware to strengthen
+token binding, tenant checks, logging, or rejection policy silently loses those additions
+on the GraphQL endpoint and receives only Django's base implementation.
 
-Add a regression on both protocols with an async generator that yields a bounded
-but large sequence without awaiting between yields. Revoke on its first outbound
-checkpoint and assert that only a small, deterministic number of results are
-pulled, the generator's `finally` runs before teardown completes, the operation
-task finishes, sibling operations are cancelled and awaited, and the event loop
-remains responsive to an independently scheduled sentinel task.
+A direct middleware probe confirms the bypass. A `CsrfViewMiddleware` subclass whose
+`_check_token` records entry sees the package callback's `csrf_exempt` flag, returns `None`,
+and never enters the override. The view then invokes the separately constructed stock
+decorator. This contradicts the architectural claim that Django and the consumer's real
+middleware own HTTP security; the body-limit ordering has replaced a deployment policy
+rather than merely reordered it.
 
-### [P2] A failed or cancelled close is permanently recorded as a completed close
+The root fix needs an ordering mechanism in the actual middleware chain. Put a narrowly
+scoped package body-boundary middleware before the configured CSRF middleware (keyed by a
+marker on package views), then remove the outer exemption and stock-class re-entry. A
+view-local decorator cannot reproduce an arbitrary installed middleware subclass. Add a
+regression with a custom `CsrfViewMiddleware` subclass in `MIDDLEWARE`: an over-limit
+multipart body must still be refused before parsing, while an under-limit request must
+reach and obey the subclass's additional rejection on both view variants.
 
-`django_strawberry_framework/consumers.py::_revoke_connection` sets
-`consumer._revocation_observed = True` before awaiting `websocket.close(...)`.
-That ordering publishes the authorization decision promptly, but the same boolean
-is also used as proof that the transport close was already sent. If the adapter's
-close raises or the operation task is cancelled while the close is suspended, the
-flag remains true and every later checkpoint returns without another close attempt.
+### [P2] A foreign position object's arithmetic still escapes the fail-closed body gate
 
-The failure is directly reproducible against the production helper: an adapter
-whose first `close` raises `OSError` leaves `_revocation_observed` true, and a
-second call to `_revoke_connection` returns normally with the close-call count
-still equal to one. Cancellation is the more adversarial real-protocol shape. Both
-upstream protocols let a client cancel its operation with `complete` / `stop`; if
-that cancellation lands while the revocation close is back-pressured, the operation
-unwinds through `CancelledError`, no `4403` is committed, and the connection's
-message loop remains alive with a latch that forbids any retry.
+`django_strawberry_framework/_request_body.py::_measured_remaining` describes every
+operation on a foreign stream as guarded, including the position subtraction. The code,
+however, catches only `TypeError` from `end - position`, and performs `remaining <= 0`
+outside any guard. A seekable stream can return position objects whose subtraction or
+comparison raises any other exception. A minimal stream that restores its starting
+position correctly but whose end-position object's `__sub__` raises `RuntimeError`
+propagates that exception out of the production helper instead of selecting the bounded
+read. At the view boundary that is an unrelated `500`, not the promised controlled,
+fail-closed response.
 
-Information-bearing frames remain fail-closed because later checkpoints see the
-flag. The observable connection contract does not: the promised non-disclosing
-`4403` close can disappear, retained operations and connection state may remain
-allocated, and control frames can continue on a socket the package claims it
-terminated. Treating "revocation was decided", "a close is in progress", and "the
-close completed" as one bit is the root cause.
+The root fix is to stop executing arbitrary numeric protocols from this foreign object.
+Production Django streams report exact built-in integer positions, so accept that measured
+shape explicitly; after a verified restore, any other position/end type or unusable result
+should be `_Probe.UNMEASURABLE` and take the bounded-read path. If broader numeric support is
+intentional, the entire subtraction and comparison must at least be guarded with
+`Exception`. Regressions should cover exceptions from both `__sub__` and the ordering
+comparison, not only the current `None - int` `TypeError` case.
 
-The root fix is a connection-owned revocation/close state machine. Publish the
-revoked state immediately so no later authorization can pass, but represent the
-single shared close attempt separately and shield its ownership from cancellation
-of whichever operation first observed revocation. Concurrent and later
-checkpoints should await that same completion; an adapter failure needs an explicit
-retry or connection-loop escalation policy rather than being mistaken for success.
-The design must also handle the ambiguous case where an ASGI send commits and its
-awaiter is then cancelled, so simply moving the boolean assignment after the
-`await` is not sufficient.
+### [P2] Cancellation of disconnect lets the connection-owned close task outlive the connection
 
-Add deterministic regressions for both protocols. Park the adapter close, cancel
-the detecting operation through the protocol's own `complete` / `stop` message,
-then prove the shared close still commits exactly one `4403` and the connection
-teardown finishes. Pair that with an adapter that raises on its first close and
-succeeds on the next permitted attempt, proving a later checkpoint cannot silently
-inherit a false "already closed" result.
+`django_strawberry_framework/consumers.py::_ConnectionRevocation.settle` awaits the close
+task through `asyncio.shield`. Shielding protects the close from cancellation, but it does
+not make the caller continue awaiting it: cancel `settle()` while the adapter close is
+parked and `settle()` finishes with `CancelledError` while the owned attempt remains pending
+and the state remains `closing`. A direct production-helper probe produced exactly that
+state. `build_revalidating_consumer_class` compounds it because
+`GraphQLWebSocketConsumer.disconnect` calls `settle()` only after an unguarded
+`await super().disconnect(code)`; cancellation or failure of upstream teardown skips
+settlement entirely.
 
-## Non-findings from this review angle
+ASGI servers cancel application tasks during shutdown and application-close timeouts, so
+this is a real lifecycle boundary rather than a caller misusing a private helper. The
+orphaned task retains the adapter, consumer, scope, session, and stale actor, and may remain
+parked on a send after the ASGI application has returned. That is the opposite of the
+specification's explicit claim that a connection-owned task cannot outlive its connection.
 
-- The shared actor lease now covers positive-window cache hits, session reads,
-  write-back, protected sends, and the package-owned logout transition. The two
-  logout orderings from the preceding review no longer reproduce.
-- The bounded HTTP read now converts ordinary foreign-stream read, sizing, close,
-  and replacement failures into the documented fail-closed body-limit response.
-- Neither lifecycle finding lets another information-bearing frame reach the
-  client after revocation. They concern deterministic task and connection teardown,
-  not a restatement of the fixed authorization race.
+The root fix is to make final teardown the terminal owner, not another shielded waiter.
+`disconnect` must enter settlement through `finally`, and cancellation while settling must
+cancel and await the owned attempt (or use an equivalent structured-concurrency owner with
+a bounded final wait). At that point the socket is already disconnecting, so the earlier
+ambiguity about retrying a possibly committed close no longer justifies retaining a task
+that has no live connection. Add regressions that cancel `disconnect` with a parked close
+and that make `super().disconnect` fail, then assert the close task is done, no task retains
+the consumer, and no second close is attempted.
+
+## Verification notes
+
+No pytest suite was run. The findings above were verified with focused, read-only probes
+against the installed Django/Channels stack and the production helpers.
 
 <!-- LINK DEFINITIONS -->
 

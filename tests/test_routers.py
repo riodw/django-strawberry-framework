@@ -4273,6 +4273,213 @@ async def test_the_revocation_close_retry_is_bounded_and_still_refuses_every_pay
 
 
 # ---------------------------------------------------------------------------
+# Channels-present: the connection's FINAL teardown as the close attempt's last
+# owner.
+#
+# The rows above all measure a live connection, where a cancelled waiter is a
+# bystander and the shielded attempt rightly survives it. These measure the other
+# end: ``disconnect`` runs once, nobody comes after it, and an ASGI server may
+# cancel it (shutdown, application-close timeout) or upstream's own teardown may
+# raise inside it. An attempt still running past that point would retain the
+# adapter, the consumer, the scope and a stale actor on a transport that is gone,
+# so teardown has to END the attempt rather than shield it and walk away.
+#
+# Upstream's teardown is the controlled input here, patched on upstream's own
+# consumer class so the subject stays the generated consumer's real
+# ``disconnect``. A communicator cannot deliver either input: nothing in
+# ``channels.testing`` cancels the application task, and a raising teardown is a
+# server-level fault rather than anything a client can send.
+# ---------------------------------------------------------------------------
+
+
+class _ParkedCloseWebSocket:
+    """An adapter-shaped websocket whose ``close`` parks until it is released.
+
+    The transport state the teardown rows need and no in-process queue produces:
+    a ``4403`` handed to a socket that neither commits it nor refuses it. Released
+    only by ``release``, so a row that never releases it is measuring what the
+    package does with a close that can only be ended by cancellation.
+    """
+
+    def __init__(self):
+        self.closes = []
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def close(self, code=None, reason=None):
+        self.closes.append((code, reason))
+        self.entered.set()
+        await self.release.wait()
+
+
+async def _revocation_with_a_parked_attempt(revocation):
+    """Drive ``revocation`` to a real in-flight attempt parked at the transport.
+
+    Through ``decide()`` and ``close()`` rather than by assigning the fields, so
+    the attempt under test is the connection-owned task production created, with
+    the attempt count and the ``CLOSING`` state it really carries. The starting
+    caller is a task of its own because ``close()`` awaits the attempt it started -
+    which is the mid-connection waiter every row here needs to keep distinct from
+    the terminal owner.
+    """
+    websocket = _ParkedCloseWebSocket()
+    revocation.decide()
+    starter = asyncio.create_task(revocation.close(websocket))
+    await _reached(websocket.entered, "the close attempt never reached the transport")
+    assert revocation.state == consumers_module._REVOCATION_CLOSING
+    return websocket, starter
+
+
+async def _discard(task):
+    """Await a task that is expected to end cancelled, leaving nothing behind."""
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+def _consumer_with_a_controlled_teardown(monkeypatch, teardown):
+    """Instantiate the generated consumer with ``teardown`` as upstream's ``disconnect``.
+
+    Patched on upstream's own consumer class, which is where the generated
+    ``disconnect``'s ``super()`` call resolves: the row then exercises the real
+    package override - its ``try``/``finally`` and its settlement - against a
+    teardown whose cancellation and failure it controls.
+    """
+    upstream_consumer = _graphql_ws_consumer()
+    monkeypatch.setattr(upstream_consumer, "disconnect", teardown, raising=False)
+    consumer_class = _mounted_ws_callback(_router()).consumer_class
+    assert issubclass(consumer_class, upstream_consumer)
+    return consumer_class(schema=SCHEMA, revalidation_window=0.0)
+
+
+async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphaning_it():
+    """A cancelled ``settle()`` cancels and awaits the attempt it owns.
+
+    The helper-level statement of the teardown contract, made where the two
+    ownership roles can be held side by side: a mid-connection caller is parked on
+    the same attempt, and the terminal owner is cancelled while the transport still
+    has the ``4403`` uncommitted. ``asyncio.shield`` protects the attempt from the
+    cancellation but does not keep the cancelled caller awaiting it, so shielding
+    alone would return the caller and leave the task running against a transport
+    nobody is going to read again.
+
+    Both halves are asserted, because either one alone is satisfiable by the wrong
+    implementation: the ``CancelledError`` propagates (so the caller's cancellation
+    is honoured rather than absorbed by a teardown hook), and the attempt is
+    finished. A finished attempt cannot be ``CLOSING`` - that state claims one is in
+    flight, and every later checkpoint would await a task that will never complete -
+    so the connection ends ``ABANDONED``, still revoked and still permitting no
+    further attempt.
+    """
+    revocation = consumers_module._ConnectionRevocation()
+    websocket, starter = await _revocation_with_a_parked_attempt(revocation)
+    attempt = revocation.attempt
+
+    settling = asyncio.create_task(revocation.settle())
+    await asyncio.sleep(0)
+    assert not settling.done()
+
+    settling.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await settling
+
+    assert attempt.done() and attempt.cancelled()
+    assert revocation.state == consumers_module._REVOCATION_ABANDONED
+    assert revocation.revoked
+    # One attempt reached the transport, and the terminal state buys no second one.
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    await revocation.settle()
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    assert revocation.state == consumers_module._REVOCATION_ABANDONED
+    # The mid-connection caller was never the owner: it ends with the attempt.
+    await _discard(starter)
+
+
+async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(monkeypatch):
+    """``disconnect`` cancelled by the server ends the connection's own close task.
+
+    The same contract through the consumer the router mounts, with the input an
+    ASGI server really delivers: application tasks are cancelled at shutdown and at
+    an application-close timeout, and that cancellation arrives at whatever the
+    consumer's ``disconnect`` is awaiting - here, the settlement of a ``4403`` the
+    transport has parked.
+
+    Afterwards nothing retains this connection. The attempt is done, so the
+    adapter, the consumer, the scope and the actor it captured are released, and no
+    ``send`` can be issued after the ASGI application has returned. The subsequent
+    ``settle()`` is the no-second-close half: a terminal state is not a fresh start,
+    and the transport sees exactly the one ``4403`` it already saw.
+    """
+    teardown_reached = asyncio.Event()
+
+    async def cancellable_teardown(_consumer, _code):
+        teardown_reached.set()
+
+    consumer = _consumer_with_a_controlled_teardown(monkeypatch, cancellable_teardown)
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+
+    disconnecting = asyncio.create_task(consumer.disconnect(1000))
+    await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
+    assert not disconnecting.done(), "the teardown returned without settling the parked close"
+
+    disconnecting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await disconnecting
+
+    assert attempt.done() and attempt.cancelled()
+    assert consumer._revocation.state == consumers_module._REVOCATION_ABANDONED
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    await consumer._revocation.settle()
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    await _discard(starter)
+
+
+async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(monkeypatch):
+    """Upstream's teardown failing does not skip settlement.
+
+    Settlement sequenced after an unguarded ``await super().disconnect(code)`` is
+    skipped by exactly the events that produce an orphan, so it runs from a
+    ``finally``. This row drives the raising half: upstream's teardown fails, and
+    the connection still finishes the close attempt it owns before the failure
+    leaves ``disconnect``.
+
+    The ordering is what is being measured, not merely the outcome. While the
+    transport holds the close parked the teardown cannot complete - a
+    ``finally``-less implementation would have propagated immediately - and
+    releasing the transport lets the attempt record its real outcome, ``CLOSED``,
+    with the upstream failure then propagating unchanged rather than being
+    swallowed by the settlement that ran under it.
+    """
+    teardown_reached = asyncio.Event()
+
+    async def failing_teardown(_consumer, _code):
+        teardown_reached.set()
+        raise RuntimeError("upstream teardown failed")
+
+    consumer = _consumer_with_a_controlled_teardown(monkeypatch, failing_teardown)
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+
+    disconnecting = asyncio.create_task(consumer.disconnect(1000))
+    await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
+    await _wait_until(
+        lambda: consumer._revocation.attempt is attempt and websocket.entered.is_set(),
+        lambda: "the settlement never reached the parked attempt",
+        tries=5,
+    )
+    assert not disconnecting.done(), "the failure escaped before the close was settled"
+
+    websocket.release.set()
+    with pytest.raises(RuntimeError, match="upstream teardown failed"):
+        await disconnecting
+
+    assert attempt.done() and not attempt.cancelled()
+    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    await starter
+
+
+# ---------------------------------------------------------------------------
 # Channels-present: what the package writes to a socket it has REFUSED.
 #
 # Every row above measures the frames the client can read up to the close. These

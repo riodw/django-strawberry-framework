@@ -132,7 +132,9 @@ DECIDED transition is published before any await (so every checkpoint refuses on
 it read-free) and that the close attempt is a task the CONNECTION owns, so
 cancelling whichever operation first observed the revocation - which both
 protocols let a client do, with ``complete`` / ``stop`` - cannot abandon the
-close.
+close. Ownership binds at both ends: the connection's ``disconnect`` settles that
+task from a ``finally``, and settlement is its TERMINAL owner, so a cancelled or
+failing teardown can neither skip it nor leave it running past the connection.
 
 **A same-connection ``logout`` is a revocation event, and the socket ends.** The
 package's own ``auth/mutations.py::logout`` mutation runs on the connection it is
@@ -288,6 +290,7 @@ check whose entire value is that it rejects.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from collections.abc import Awaitable, Callable
@@ -469,8 +472,9 @@ class _ConnectionRevocation:
       itself moves it to ``CLOSED``, ``DECIDED`` or ``ABANDONED``.
     * ``CLOSED`` - terminal. An attempt's own ``await`` on the adapter's ``close``
       returned, so a ``4403`` was committed to the transport.
-    * ``ABANDONED`` - terminal. The attempt bound
-      (``_MAX_REVOCATION_CLOSE_ATTEMPTS``) is spent and no close ever completed.
+    * ``ABANDONED`` - terminal. No close ever completed and none ever will: either
+      the attempt bound (``_MAX_REVOCATION_CLOSE_ATTEMPTS``) is spent, or the
+      connection's final teardown cancelled the attempt in flight.
 
     ``decide()`` is synchronous and runs before any await, which is what lets every
     checkpoint refuse on ``revoked`` **read-free** - the refusal costs no session
@@ -485,18 +489,28 @@ class _ConnectionRevocation:
     attempt that raised is not a success: the state returns to ``DECIDED`` and the
     next permitted checkpoint starts exactly one new attempt.
 
-    **A CANCELLED attempt leaves the connection in ``CLOSING``, permanently, and
-    that is the ruling rather than an omission.** ASGI's ``send`` returns ``None``
-    and offers no acknowledgement, so a cancellation delivered while the close is
-    suspended says nothing about whether the frame was committed - the outcome is
-    unobservable, and a retry would risk a SECOND ``4403`` for a close that
-    probably succeeded. The attempt is owned by the connection and nothing in this
-    package cancels it, so the only thing that can is the event loop that owns the
-    socket being torn down, at which point no retry could reach a client anyway.
-    ``CLOSING`` permits no new attempt, so the ruling needs no state of its own -
-    which is also why the ordinary success path can never put two ``4403`` frames
-    on the wire: exactly one attempt is ever in flight, and only a RAISE reopens
-    the door.
+    **Mid-connection, a cancellation delivered to whichever checkpoint is waiting
+    never touches the attempt; at final teardown it ENDS it.** The two are
+    different questions, and only the first one is about the close's outcome. While
+    the connection is live, ASGI's ``send`` returns ``None`` and offers no
+    acknowledgement, so a cancellation arriving while the close is suspended says
+    nothing about whether the frame was committed: the attempt is shielded, the
+    cancelled waiter goes away, and some later waiter records the outcome. That is
+    why the ordinary success path can never put two ``4403`` frames on the wire -
+    exactly one attempt is ever in flight, and only a RAISE reopens the door.
+
+    ``settle()`` is the other question. It runs once, from the connection's
+    ``disconnect``, and it is the attempt's LAST owner rather than one more waiter,
+    so a cancellation delivered there (an ASGI server shutting the application
+    down, or an application-close timeout) cannot be answered by leaving the task
+    running: an attempt that outlived its connection would hold the adapter, the
+    consumer, the scope and a stale actor, possibly suspended on a ``send`` after
+    the ASGI application had already returned. So the terminal owner cancels the
+    attempt, awaits it to completion, and re-raises the cancellation it was given.
+    The socket is being disconnected at that point, so the retry ambiguity above
+    has nothing left to protect - a cancelled attempt therefore ends ``ABANDONED``
+    rather than resting in ``CLOSING``, and ``ABANDONED`` permits no further
+    attempt.
     """
 
     __slots__ = ("attempt", "attempts", "state")
@@ -545,17 +559,36 @@ class _ConnectionRevocation:
             await asyncio.shield(self.attempt)
 
     async def settle(self) -> None:
-        """Await this connection's close attempt, if it ever started one.
+        """End this connection's close attempt, if it ever started one.
 
         The connection's own teardown hook, so an attempt whose starting checkpoint
-        was cancelled is still awaited by somebody before the ASGI application
+        was cancelled is still finished by somebody before the ASGI application
         returns - a task the connection owns must not outlive the connection. It
         never STARTS an attempt: teardown is not a security checkpoint, and a
         socket that is already being disconnected has nothing left to refuse.
-        Shielded for the same reason ``close`` shields.
+
+        This is the attempt's TERMINAL owner, which is what makes the ownership
+        claim true rather than nominal. The wait is shielded for the reason ``close``
+        shields - a bystander's cancellation must not kill a close that is nearly
+        committed - but a cancellation delivered HERE is not a bystander's: nobody
+        comes after. Shielding alone would let the caller return while the task it
+        was settling stayed suspended on a transport that is going away, so the
+        cancellation is instead answered by cancelling the attempt, awaiting it to
+        completion, and re-raising - the caller's cancellation is honoured, and no
+        task retains this connection past it.
         """
-        if self.attempt is not None:
+        if self.attempt is None or self.attempt.done():
+            return
+        try:
             await asyncio.shield(self.attempt)
+        except asyncio.CancelledError:
+            self.attempt.cancel()
+            # Suppressed, not swallowed: the attempt answers a cancellation it was
+            # handed with ``CancelledError`` of its own, and re-raising the caller's
+            # below is what propagates the one that matters.
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.attempt
+            raise
 
     async def _attempt_close(self, websocket: Any) -> None:
         """Commit one ``4403`` close, and record what actually happened.
@@ -566,14 +599,21 @@ class _ConnectionRevocation:
         around it, so a consumer that derives its own adapter keeps owning the
         write.
 
-        ``Exception`` and not ``BaseException``: the realistic raise set is a
-        disconnected transport, a server state assertion and an ``OSError``, all of
-        which are failures this connection can still answer for, while an
-        ``asyncio.CancelledError`` is the loop taking the connection away and is
-        left to propagate (see the class docstring for why that outcome is
-        terminal). The failure itself is recorded and NOT re-raised out of the task:
-        an awaiting checkpoint's job is to know the attempt finished, not to inherit
-        its exception, and an attempt whose awaiter was cancelled must not leave an
+        A cancellation is a separate arm from ``Exception``, and it is terminal: only
+        the connection's final teardown cancels this task, so the socket is already
+        going away and no later attempt can reach a client. The state moves to
+        ``ABANDONED`` before the ``CancelledError`` is re-raised, which is what keeps
+        a cancelled attempt from resting in ``CLOSING`` - a state that claims an
+        attempt is in flight. Recorded by the task itself rather than by its awaiter
+        because the task is the only party that knows whether the cancellation
+        arrived before or after its own ``await`` returned.
+
+        ``Exception`` and not ``BaseException`` for the other arm: the realistic raise
+        set is a disconnected transport, a server state assertion and an ``OSError``,
+        all of which are failures this connection can still answer for. The failure
+        itself is recorded and NOT re-raised out of the task: an awaiting
+        checkpoint's job is to know the attempt finished, not to inherit its
+        exception, and an attempt whose awaiter was cancelled must not leave an
         unretrieved one behind either.
         """
         try:
@@ -581,6 +621,9 @@ class _ConnectionRevocation:
                 code=_REVOCATION_CLOSE_CODE,
                 reason=_REVOCATION_CLOSE_REASON,
             )
+        except asyncio.CancelledError:
+            self.state = _REVOCATION_ABANDONED
+            raise
         except Exception:
             self.state = (
                 _REVOCATION_DECIDED
@@ -1127,9 +1170,17 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             operation that started it (``complete`` / ``stop``) at any point,
             including while the transport has the close back-pressured, and the
             close must still be finished and recorded by somebody.
+
+            ``finally`` and not a second statement: upstream's teardown is the part
+            that can be cancelled (an ASGI server shutting the application down) or
+            raise, and settlement is the connection's last chance to end a task it
+            owns. Sequencing it after an unguarded ``await`` would skip it in exactly
+            the cases that produce an orphan.
             """
-            await super().disconnect(code)
-            await self._revocation.settle()
+            try:
+                await super().disconnect(code)
+            finally:
+                await self._revocation.settle()
 
     return GraphQLWebSocketConsumer
 

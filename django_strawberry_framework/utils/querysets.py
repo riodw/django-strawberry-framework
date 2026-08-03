@@ -75,6 +75,7 @@ import enum
 import inspect
 import sys
 import uuid
+import zoneinfo
 from decimal import Decimal
 from typing import Any
 
@@ -83,6 +84,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Prefetch, sql
 from django.db.models.expressions import RawSQL
+from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.lookups import Lookup
 from django.db.models.query import (
     FlatValuesListIterable,
@@ -1277,9 +1279,34 @@ def _query_payload_defect(query: Any) -> tuple[str, str] | None:
 
 # Leaf types canonical reconstruction retains BY REFERENCE: the inert query-parameter
 # set minus ``bytearray``, its one mutable member (a shared ``bytearray`` the candidate
-# could still rewrite in place, so it is copied instead). Every other member is immutable,
-# so sharing one between the candidate and the sealed query is unobservable.
-_RETAINED_LEAF_TYPES: frozenset[type] = _INERT_VALUE_TYPES - {bytearray}
+# could still rewrite in place, so it is copied instead), plus the exact stdlib timezone
+# types a genuine Django datetime expression stores in an ordinary instance slot
+# (``Trunc(..., tzinfo=...)`` / ``Extract(..., tzinfo=...)`` keep the object on
+# ``self.tzinfo``): ``datetime.timezone`` (not subclassable, so exact type covers every
+# instance) and exact ``zoneinfo.ZoneInfo``, both immutable values whose every method is
+# the interpreter's own. Every retained member is immutable, so sharing one between the
+# candidate and the sealed query is unobservable.
+_RETAINED_LEAF_TYPES: frozenset[type] = (_INERT_VALUE_TYPES - {bytearray}) | {
+    datetime.timezone,
+    zoneinfo.ZoneInfo,
+}
+
+# Schema surfaces canonical reconstruction retains BY REFERENCE rather than rebuilds or
+# normalizes: classes (``Query.model`` and every ``output_field`` class reference are
+# shared schema), ``models.Field`` instances (the queried model's OWN column definitions,
+# which rebuilding would detach from the model's descriptors), ``ForeignObjectRel``
+# relation descriptors (the reverse side of those same fields -- a ``Join.join_field``
+# over a reverse relation, whose state legitimately carries the model's own ``on_delete``
+# / ``limit_choices_to`` callables), and ``models.Model`` instances (a bound foreign-key
+# value Django's own code extracts a pk from). One tuple so the rebuild-versus-retain
+# policy (``_is_reconstructable_node``) and the bound-value rule
+# (``_normalized_bound_value``) decide "trusted schema" identically and cannot drift.
+_RETAINED_SCHEMA_BASES: tuple[type, ...] = (
+    type,
+    models.Field,
+    ForeignObjectRel,
+    models.Model,
+)
 
 # Types whose instances reconstruction retains BY REFERENCE, tested INLINE at every
 # traversal step. Seeded with the retained leaves and grown lazily with the SCHEMA classes
@@ -1301,8 +1328,8 @@ def _is_reconstructable_node(node_type: type) -> bool:
 
     The reconstruction rebuilds QUERY AST, not schema and not bound data. An object is
     rebuilt when its type is a genuine Django implementation (proven by object identity
-    against ``sys.modules``, the same provenance rule the graph proofs use) and is
-    neither a class, a ``models.Field``, nor a ``models.Model`` instance:
+    against ``sys.modules``, the same provenance rule the graph proofs use) and is not
+    one of the retained schema surfaces (``_RETAINED_SCHEMA_BASES``):
 
     - a CLASS is not a node (``Query.model`` and every ``output_field`` class reference
       are shared schema, and rebuilding a class is meaningless);
@@ -1310,6 +1337,10 @@ def _is_reconstructable_node(node_type: type) -> bool:
       trusted schema the boundary composes over, not state the visibility hook injected
       -- and rebuilding it would detach it from ``field.model`` / the descriptor cache
       the compiler and the row initializer resolve against;
+    - a ``ForeignObjectRel`` is the reverse side of such a field (a reverse-relation
+      ``Join.join_field``), retained for the same reason -- and its state legitimately
+      carries the model's own callables (``on_delete``), which are schema, not a bound
+      payload;
     - a ``models.Model`` instance in an expression slot is a BOUND PARAMETER (Django
       extracts its pk), inert with respect to SQL structure.
 
@@ -1319,7 +1350,8 @@ def _is_reconstructable_node(node_type: type) -> bool:
     instances) the adapter binds as ``%s`` parameters -- which carry no AST and whose
     ``__deepcopy__`` / ``__reduce__`` would dispatch consumer code mid-seal if copied.
     Those values go to ``_normalized_bound_value`` instead, which replaces a plain-data
-    subclass with an exact inert equivalent and retains a model instance as-is.
+    subclass with an exact inert equivalent, retains trusted schema and a bound model
+    instance as-is, and fails everything else closed.
 
     A ``True`` verdict is memoized in ``_RECONSTRUCTABLE_NODE_TYPES``: sealing is a hot
     path and the identity proof walks ``sys.modules``, while the set of classes that can
@@ -1330,7 +1362,7 @@ def _is_reconstructable_node(node_type: type) -> bool:
     """
     if node_type in _RECONSTRUCTABLE_NODE_TYPES:
         return True
-    if issubclass(node_type, (type, models.Field, models.Model)):
+    if issubclass(node_type, _RETAINED_SCHEMA_BASES):
         _RETAINED_TYPES.add(node_type)
         return False
     if not _type_is_genuinely_django(node_type):
@@ -1459,11 +1491,22 @@ _BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Any], ...] = (
 )
 
 
+class _UntrustedBoundValueError(TypeError):
+    """A bound payload that is neither inert, normalizable plain data, nor trusted schema.
+
+    Raised by ``_normalized_bound_value`` when a bound value has no framework-owned
+    representation, and caught by ``_reconstruction_defect`` so the seal reports a typed
+    ``untrusted`` defect naming the payload's type. A distinct ``TypeError`` subclass so
+    the reconstruction boundary can tell this deliberate refusal apart from an incidental
+    failure (a re-hash raising) without matching on message text.
+    """
+
+
 def _normalized_bound_value(value: Any) -> Any:
     """Return an EXACT inert replacement for a plain-data SUBCLASS bound value.
 
-    A direct lookup right-hand side is admitted on plain-data ancestry rather than exact
-    type, because real schemas bind ``TextChoices`` members and ``Decimal`` / ``UUID`` /
+    An admitted bound value is bound on plain-data ancestry rather than exact type,
+    because real schemas bind ``TextChoices`` members and ``Decimal`` / ``UUID`` /
     date subclasses. Retaining such an instance BY REFERENCE in the sealed query would
     leave consumer code on the compile path: the absence of an ``__getattr__`` /
     ``__getattribute__`` hook does not stop Django or the database adapter from invoking
@@ -1477,26 +1520,40 @@ def _normalized_bound_value(value: Any) -> Any:
     ``_BOUND_VALUE_NORMALIZERS`` reads the proven base type's own descriptors and C slots.
     An ``enum.Enum`` member with no scalar base is normalized to its underlying
     ``_value_``, read straight from the member's instance ``__dict__`` and normalized in
-    turn. Anything else -- a ``models.Model`` instance in foreign-key position, a
-    ``models.Field``, a schema class -- is returned unchanged; a model instance cannot be
-    normalized because it IS the bound value, and Django's own code extracts its pk from
-    a genuine-metaclass instance.
+    turn. Trusted schema (``_RETAINED_SCHEMA_BASES``) is returned unchanged: a
+    ``models.Model`` instance in foreign-key position IS the bound value -- Django's own
+    code extracts its pk from a genuine-metaclass instance -- and a ``models.Field`` or a
+    class is the queried model's own definition, not state the hook injected.
 
-    A subclass that cannot be reduced to an exact inert value raises, which the
-    reconstruction boundary reports as an ``untrusted`` defect.
+    Everything else FAILS CLOSED (spec-045 Decision 8): a bound payload that neither
+    reduces to an exact inert value nor is trusted schema has no framework-owned
+    representation, so it raises ``_UntrustedBoundValueError``, which the reconstruction
+    boundary reports as an ``untrusted`` defect naming the type. This is the ONE home of
+    the admitted-bound-value rule -- every bound payload reaches it through canonical
+    reconstruction whether it sits in direct-lookup position, in an expression's own
+    payload slot (``Value.value``), or as a mapping key, so the verdict cannot vary with
+    where the value sits.
     """
+    # Exact retained leaves pass through unchanged (the enum ``_value_`` recursion below
+    # is the one caller that can hand this function an exact leaf). ``bytearray`` is NOT
+    # in the retained set, so an exact one still routes to its copying normalizer rather
+    # than being shared by reference.
+    if value is None or type(value) in _RETAINED_LEAF_TYPES:
+        return value
     value_type = type(value)
     for base, primitive in _BOUND_VALUE_NORMALIZERS:
         if issubclass(value_type, base):
             normalized = primitive(value)
             break
     else:
-        if not issubclass(value_type, enum.Enum):
+        if issubclass(value_type, _RETAINED_SCHEMA_BASES):
             return value
+        if not issubclass(value_type, enum.Enum):
+            raise _UntrustedBoundValueError(f"binds a {value_type.__name__} bound value")
         member_state = object.__getattribute__(value, "__dict__")
         normalized = _normalized_bound_value(member_state["_value_"])
     if not _is_inert_value(normalized):
-        raise TypeError("bound value did not normalize to an inert value")
+        raise _UntrustedBoundValueError(f"binds a {value_type.__name__} bound value")
     return normalized
 
 
@@ -1508,8 +1565,9 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
     re-instantiated as a fresh object of its OWN proven-genuine class via
     ``object.__new__`` and refilled slot-by-slot from the source instance ``__dict__``,
     each slot itself reconstructed. Schema objects and bound model instances are retained
-    by reference; every other bound value is an exact inert leaf, or a plain-data subclass
-    normalized to one (``_normalized_bound_value``).
+    by reference; every other bound value is an exact inert leaf, a plain-data subclass
+    normalized to one, or refused closed (``_normalized_bound_value`` -- the one home of
+    the admitted-bound-value rule). Mapping keys take the same rule as values.
 
     ``object.__new__`` + raw ``__dict__`` transfer rather than the node's own ``clone()``
     / ``copy()``: Django's expression ``copy()`` is a SHALLOW ``copy.copy`` (it would keep
@@ -1587,14 +1645,18 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
     if value_type is dict:
         rebuilt = {}
         memo[value_id] = rebuilt
-        rebuilt.update(
-            {
-                key: item
-                if item is None or type(item) in _RETAINED_TYPES
-                else _reconstructed_value(item, memo)
-                for key, item in value.items()
-            },
-        )
+        # Keys take the same retain-or-reconstruct rule as values: a rebuilt mapping that
+        # kept a consumer-owned KEY by reference would still share a mutable object with
+        # the candidate (and a JSON-bound payload dict may legitimately carry non-``str``
+        # keys the graph proofs never constrain), so a key is retained only when it is a
+        # retained leaf and otherwise reconstructed -- normalized, retained as schema, or
+        # failed closed -- exactly like a value in the same slot.
+        for key, item in value.items():
+            if not (key is None or type(key) in _RETAINED_TYPES):
+                key = _reconstructed_value(key, memo)
+            if not (item is None or type(item) in _RETAINED_TYPES):
+                item = _reconstructed_value(item, memo)
+            rebuilt[key] = item
         return rebuilt
     if value_type is set:
         rebuilt = set()
@@ -1667,7 +1729,10 @@ def _rebuild_query_payloads(query: Any) -> None:
 
     What stays shared is deliberately inert: exact-``str`` / ``int`` / ``bool`` /
     ``Decimal`` / date / ``UUID`` leaves are BOUND PARAMETERS the adapter renders as
-    ``%s``, never AST, and their every method is the interpreter's own. A plain-data
+    ``%s``, never AST, and their every method is the interpreter's own, and the exact
+    stdlib timezone objects (``datetime.timezone`` / ``zoneinfo.ZoneInfo``) a genuine
+    ``Trunc`` / ``Extract`` carries are immutable interpreter-owned values retained the
+    same way. A plain-data
     SUBCLASS leaf (a ``TextChoices`` member, a ``Decimal`` / date subclass) is NOT shared
     -- it is normalized to an exact inert equivalent, because an ordinary overridden
     method on it (``__str__``, ``__int__``, an adapter hook) would otherwise run consumer
@@ -1675,7 +1740,12 @@ def _rebuild_query_payloads(query: Any) -> None:
     in foreign-key position IS the bound value and is retained, its pk extracted by
     Django's own code from a genuine-metaclass instance; ``models.Field`` instances and
     model classes are the trusted schema the boundary composes over, and rebuilding them
-    would detach the compiler from the model's own descriptors.
+    would detach the compiler from the model's own descriptors. Any OTHER consumer
+    payload -- an opaque object or a container subclass in an expression's own payload
+    slot (``Value.value``), or planted as a mapping key -- has no framework-owned
+    representation and fails the seal closed as ``untrusted`` rather than being retained
+    by reference (spec-045 Decision 8); the graph proofs never enumerate such slots, so
+    the ownership invariant is enforced here, where every retained object is decided.
 
     Runs only on the framework-owned clone, after the whole graph is proven genuine,
     unshadowed and exact-builtin shaped, so every read comes from validated state and
@@ -1696,9 +1766,16 @@ def _reconstruction_defect(query: Any, cls_name: str) -> tuple[str, str] | None:
     ``__hash__``. The typed-defect contract holds across the whole seal path, so a raw
     exception from that (or from any other reconstruction step) is converted into an
     ``untrusted`` defect rather than escaping the boundary.
+
+    A bound payload the admitted-bound-value rule refuses (``_UntrustedBoundValueError``)
+    is the one deliberate rejection on this path, so its defect names the payload's type
+    -- the consumer can find the ``Value(...)`` / expression slot that carries it --
+    while an incidental failure keeps the generic wording.
     """
     try:
         _rebuild_query_payloads(query)
+    except _UntrustedBoundValueError as refusal:
+        return ("untrusted", f"{cls_name} {refusal}")
     except Exception:
         return ("untrusted", f"{cls_name} query state cannot be reconstructed")
     return None

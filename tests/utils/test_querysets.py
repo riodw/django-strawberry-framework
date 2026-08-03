@@ -25,6 +25,7 @@ own through-schema coverage lives in the same surface suites plus
 import datetime
 import enum
 import uuid
+import zoneinfo
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -33,7 +34,7 @@ from apps.products.models import Category, Item
 from django.db import models
 from django.db.models import FilteredRelation, Q
 from django.db.models.expressions import RawSQL
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Trunc
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -2035,7 +2036,7 @@ def test_lookup_direct_rhs_unnormalizable_enum_member_fails_closed():
     source.query.where.children[0].rhs = _OpaqueChoices.KEEP
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
-    assert defect == ("untrusted", "QuerySet query state cannot be reconstructed")
+    assert defect == ("untrusted", "QuerySet binds a _OpaqueValue bound value")
 
 
 def test_lookup_expression_rhs_still_recurses():
@@ -3450,34 +3451,310 @@ def test_mutating_a_candidate_bytearray_parameter_cannot_change_the_sealed_param
 
 
 def test_query_state_that_cannot_be_reconstructed_fails_closed_typed():
-    """A reconstruction failure surfaces as a typed defect, never a raw exception."""
+    """A reconstruction failure surfaces as a typed defect, never a raw exception.
 
-    class _ArmedKey:
-        """A mapping key whose ``__hash__`` refuses once its container is built."""
+    A plain-data subclass instance holding no base-type state (allocated past
+    ``__init__``) is admitted by the direct-RHS rule on its ancestry, but its
+    normalizer's base-slot read raises -- an incidental failure, not the deliberate
+    bound-value refusal, so the defect keeps the generic wording.
+    """
 
-        def __init__(self):
-            self.armed = False
+    class _HollowUuid(uuid.UUID):
+        pass
 
-        def __hash__(self):
-            if self.armed:
-                raise TypeError("hash refused")
-            return 1
-
-        def __eq__(self, other):
-            return self is other
-
-    key = _ArmedKey()
-    # ``_constructor_args`` is deconstruction bookkeeping no compiler path reaches, so the
-    # graph proofs never constrain its mapping keys -- but reconstruction rebuilds the
-    # dict, which re-hashes them.
-    annotation = RawSQL("1", [], output_field=models.IntegerField())
-    annotation._constructor_args = ((), {key: 1})
-    source = Category.objects.filter(is_private=False)
-    source.query.annotations["boom"] = annotation
-    key.armed = True
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = object.__new__(_HollowUuid)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet query state cannot be reconstructed")
+
+
+def test_reconstruction_hostile_mapping_key_fails_closed():
+    """A consumer-owned object planted as a mapping KEY is refused, never retained.
+
+    A rebuilt dict that kept a consumer key by reference would still share a mutable
+    object with the candidate -- the same ownership violation as a retained value -- so
+    keys take the admitted-bound-value rule too. ``_constructor_args`` is deconstruction
+    bookkeeping no compiler path reaches, so the graph proofs never constrain its mapping
+    keys; reconstruction is where the ownership invariant catches it.
+    """
+
+    class _HostileKey:
+        """Hashable, but neither inert plain data nor trusted schema."""
+
+    annotation = RawSQL("1", [], output_field=models.IntegerField())
+    annotation._constructor_args = ((), {_HostileKey(): 1})
+    source = Category.objects.filter(is_private=False)
+    source.query.annotations["boom"] = annotation
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _HostileKey bound value")
+
+
+def test_value_payload_mapping_key_plain_data_subclass_normalizes():
+    """A plain-data SUBCLASS mapping key normalizes to its exact base, like a value.
+
+    A rebuilt mapping that kept a subclass KEY by reference would leave consumer methods
+    (``__hash__`` / ``__eq__`` / ``__str__`` under JSON encoding) on the compile path, so
+    keys take the same normalize-or-refuse rule as values in the same slot.
+    """
+
+    class _KeyStr(str):
+        pass
+
+    source = Category.objects.filter(is_private=False).annotate(
+        probe=models.Value({_KeyStr("a"): 1}),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    (sealed_key,) = sealed.query.annotations["probe"].value
+    assert type(sealed_key) is str
+    assert sealed_key == "a"
+
+
+def test_value_payload_mapping_key_enum_member_normalizes():
+    """An enum-member mapping key normalizes to its underlying exact scalar."""
+
+    class _KeyChoices(models.TextChoices):
+        KEEP = "keep", "Keep"
+
+    source = Category.objects.filter(is_private=False).annotate(
+        probe=models.Value({_KeyChoices.KEEP: 1}),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    (sealed_key,) = sealed.query.annotations["probe"].value
+    assert type(sealed_key) is str
+    assert sealed_key == "keep"
+
+
+def test_value_payload_opaque_object_fails_closed():
+    """An opaque consumer object bound as ``Value(<obj>)`` is refused, never retained.
+
+    A ``Value``'s ``get_source_expressions()`` returns no children, so the graph walk
+    never reaches its ``value`` slot; the admitted-bound-value rule catches the payload at
+    reconstruction instead, so the verdict is the same one a direct lookup RHS gets --
+    an object that is neither inert plain data nor trusted schema fails closed rather
+    than surviving into the sealed query by reference.
+    """
+
+    class _OpaquePayload:
+        pass
+
+    payload = _OpaquePayload()
+    source = Category.objects.filter(is_private=False).annotate(probe=models.Value(payload))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _OpaquePayload bound value")
+    # The candidate keeps its own payload: the seal never mutates the candidate graph.
+    assert source.query.annotations["probe"].value is payload
+
+
+def test_value_payload_mutable_container_subclass_fails_closed():
+    """A ``list`` / ``dict`` SUBCLASS bound as a ``Value`` payload fails closed.
+
+    A container subclass is not a plain container (its methods are consumer-owned), and
+    retaining one by reference would make every post-seal mutation of the candidate's
+    payload observable inside the sealed query. The direct-RHS rule already refuses the
+    shape; the payload slot takes the identical verdict.
+    """
+
+    class _HostileList(list):
+        pass
+
+    class _HostileDict(dict):
+        pass
+
+    source = Category.objects.filter(is_private=False).annotate(
+        probe=models.Value(_HostileList([1, 2, 3])),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _HostileList bound value")
+
+    source = Category.objects.filter(is_private=False).annotate(
+        probe=models.Value(_HostileDict({"a": 1})),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _HostileDict bound value")
+
+
+def test_value_payload_plain_containers_rebuild_without_sharing():
+    """An exact plain ``dict`` / ``list`` payload seals as a fresh framework-owned copy.
+
+    Exact builtin containers are legitimate JSON-shaped bound payloads, so they are
+    admitted -- but rebuilt member-wise, never shared, so a post-seal mutation of the
+    candidate's payload cannot reach the sealed query. A non-``str`` inert mapping key
+    (JSON encoders coerce one) is retained like any other inert leaf.
+    """
+    payload = {"a": 1, 2: "x"}
+    source = Category.objects.filter(is_private=False).annotate(probe=models.Value(payload))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_payload = sealed.query.annotations["probe"].value
+    assert type(sealed_payload) is dict
+    assert sealed_payload == payload
+    assert sealed_payload is not payload
+    payload["a"] = 99
+    assert sealed.query.annotations["probe"].value["a"] == 1
+
+    members = ["a", "b"]
+    source = Category.objects.filter(is_private=False).annotate(probe=models.Value(members))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_members = sealed.query.annotations["probe"].value
+    assert type(sealed_members) is list
+    assert sealed_members == members
+    assert sealed_members is not members
+    members.append("c")
+    assert sealed.query.annotations["probe"].value == ["a", "b"]
+
+
+def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
+    """A plain-data subclass bound as a ``Value`` payload normalizes to its exact base.
+
+    The same replacement a direct lookup RHS gets: a ``TextChoices`` member becomes an
+    exact ``str`` and a date subclass an exact ``datetime.date``, with no subclass
+    override fired during normalization, so no consumer method survives into the sealed
+    query's compile path.
+    """
+    fired = []
+
+    class _PayloadChoices(models.TextChoices):
+        KEEP = "keep", "Keep"
+
+    class _LoudDate(datetime.date):
+        def __str__(self):  # pragma: no cover - must never run
+            fired.append("__str__")
+            return "1999-12-31"
+
+    source = Category.objects.filter(is_private=False).annotate(
+        choice=models.Value(_PayloadChoices.KEEP),
+        day=models.Value(_LoudDate(2020, 1, 2)),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    sealed_choice = sealed.query.annotations["choice"].value
+    assert type(sealed_choice) is str
+    assert sealed_choice == "keep"
+    sealed_day = sealed.query.annotations["day"].value
+    assert type(sealed_day) is datetime.date
+    assert sealed_day == datetime.date(2020, 1, 2)
+    assert fired == []
+    # The candidate keeps its own instances: normalization applies to the sealed query only.
+    assert type(source.query.annotations["choice"].value) is _PayloadChoices
+    assert type(source.query.annotations["day"].value) is _LoudDate
+
+
+def test_value_payload_field_instance_is_retained_schema():
+    """A ``models.Field`` instance in a bound-value slot is trusted schema, kept by reference.
+
+    The bound-value rule retains schema deliberately: a field is the model's own column
+    definition, not state the hook injected, and rebuilding one would detach it from the
+    descriptors the compiler resolves against. A fresh local field class proves the
+    retention verdict itself, not a memo of an earlier traversal.
+    """
+
+    class _LocalField(models.TextField):
+        pass
+
+    field = _LocalField()
+    source = Category.objects.filter(is_private=False).annotate(probe=models.Value(field))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed.query.annotations["probe"].value is field
+
+
+def test_enum_member_with_model_value_fails_closed():
+    """An enum member whose ``_value_`` is a model instance cannot bind and fails closed.
+
+    The member normalizes to its underlying ``_value_``; a model instance is retained
+    schema, not an inert leaf, so the member reduces to no framework-owned bound
+    parameter and the seal refuses it with the member type named.
+    """
+
+    class _ModelChoices(enum.Enum):
+        KEEP = Category(name="enum-carrier")
+
+    source = Category.objects.filter(name="keep")
+    str(source.query)
+    source.query.where.children[0].rhs = _ModelChoices.KEEP
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _ModelChoices bound value")
+
+
+def test_hostile_tzinfo_subclass_fails_closed():
+    """A consumer ``tzinfo`` subclass on a genuine ``Trunc`` node fails closed.
+
+    ``Trunc`` keeps its timezone on an ordinary instance slot the graph walk never
+    reaches; the admitted-bound-value rule still governs it, so only the exact stdlib
+    timezone types are retained and a consumer implementation is refused -- the payload
+    slot's spelling (``tzinfo`` here, ``Value.value`` elsewhere) never changes the
+    verdict.
+    """
+
+    class _HostileTz(datetime.tzinfo):
+        def utcoffset(self, dt):  # pragma: no cover - must never run
+            return datetime.timedelta(0)
+
+        def tzname(self, dt):  # pragma: no cover - must never run
+            return "X"
+
+        def dst(self, dt):  # pragma: no cover - must never run
+            return datetime.timedelta(0)
+
+    source = Category.objects.filter(is_private=False).annotate(
+        day=Trunc("created_date", "day", tzinfo=_HostileTz()),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a _HostileTz bound value")
+
+
+@pytest.mark.django_db
+def test_trunc_tzinfo_is_retained_and_rows_survive():
+    """Exact stdlib timezone objects are retained by reference and cost no rows.
+
+    ``Trunc(..., tzinfo=zoneinfo.ZoneInfo(...))`` and ``tzinfo=datetime.timezone.utc``
+    are ordinary consumer annotations; the seal must keep the timezone (an immutable
+    interpreter-owned value) and the annotated queryset must still return its rows.
+    """
+    Category.objects.create(name="tz_row", is_private=False)
+    tz = zoneinfo.ZoneInfo("UTC")
+    source = Category.objects.filter(is_private=False).annotate(
+        day=Trunc("created_date", "day", tzinfo=tz),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed.query.annotations["day"].tzinfo is tz
+    assert [row.name for row in sealed] == ["tz_row"]
+
+    source = Category.objects.filter(is_private=False).annotate(
+        day=Trunc("created_date", "day", tzinfo=datetime.timezone.utc),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed.query.annotations["day"].tzinfo is datetime.timezone.utc
+    assert [row.name for row in sealed] == ["tz_row"]
+
+
+@pytest.mark.django_db
+def test_value_payload_literals_seal_and_rows_survive():
+    """Ordinary ``Value`` literals seal and the annotated queryset still returns rows."""
+    Category.objects.create(name="lit_row", is_private=False)
+    source = Category.objects.filter(is_private=False).annotate(
+        flag=models.Value(1),
+        label=models.Value("x"),
+    )
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    rows = list(sealed)
+    assert [row.name for row in rows] == ["lit_row"]
+    assert rows[0].flag == 1
+    assert rows[0].label == "x"
 
 
 def test_non_class_model_with_convincing_meta_fails_closed():

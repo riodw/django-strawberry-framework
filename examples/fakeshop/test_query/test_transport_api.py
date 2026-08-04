@@ -15,6 +15,9 @@ authenticated GET (row 5), Django's own exact routing policy including the
 ``APPEND_SLASH`` redirect (row 6), and ``graphql_ide=None`` /
 ``allow_queries_via_get=False`` on a second mount of the package view (row 7).
 An async probe adds the ``AsyncDjangoGraphQLView`` colour of row 1 + row 2.
+One further mount proves ``docs/README.md``'s combined production-profile
+recipe (row 7's two knobs plus introspection disabled through
+``AddValidationRules``) as a single unit over the real fakeshop schema.
 
 Test plan rows 13-17 - the whole body-cap matrix (Decision 7) - land here
 too, against three more mounts of the package view that differ only in their
@@ -76,10 +79,13 @@ from django.http import HttpResponseForbidden
 from django.middleware.csrf import get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
 from django.urls import include, path
+from graphql import NoSchemaIntrospectionCustomRule
 from graphql_client import assert_graphql_data, post_graphql
 from strawberry.django.views import GraphQLView as UpstreamGraphQLView
+from strawberry.extensions import AddValidationRules
 from strawberry.http.base import BaseView
 
+from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as strawberry_patches
 from django_strawberry_framework.views import (
@@ -184,6 +190,34 @@ def _ide_off_view(request, *args, **kwargs):
     """The package view with the IDE and GET queries both turned off (row 7)."""
     from config.schema import schema
 
+    view = DjangoGraphQLView.as_view(
+        schema=schema,
+        graphql_ide=None,
+        allow_queries_via_get=False,
+    )
+    return view(request, *args, **kwargs)
+
+
+def _production_profile_view(request, *args, **kwargs):
+    """The documented production mount, assembled exactly as the guide's recipe.
+
+    ``docs/README.md``'s "Production security profile" section tells a deployment
+    to mount the package view with the IDE off, GET queries off, and schema
+    introspection disabled through ``AddValidationRules``. This probe IS that
+    recipe over the real fakeshop ``Query`` / ``Mutation`` surface, rebuilt per
+    request like every other probe so it tracks the per-test schema reload.
+    """
+    from config.schema import Mutation, Query
+
+    schema = DjangoSchema(
+        query=Query,
+        mutation=Mutation,
+        config=strawberry_config(),
+        # A FACTORY, not an instance: Strawberry deprecates extension instances in
+        # ``extensions=`` (one instance would be shared across every request), and
+        # this suite runs under ``-W error``. The guide's recipe says the same.
+        extensions=[lambda: AddValidationRules([NoSchemaIntrospectionCustomRule])],
+    )
     view = DjangoGraphQLView.as_view(
         schema=schema,
         graphql_ide=None,
@@ -362,6 +396,7 @@ def _upstream_graphql_view(request, *args, **kwargs):
 urlpatterns = [
     path("", include("config.urls")),
     path("ide-off/", _ide_off_view),
+    path("production-profile/", _production_profile_view),
     path("async-graphql/", _async_graphql_view),
     path("cap-tiny/", _capped_view(DjangoGraphQLView, _TINY_CAP)),
     path("cap-spy/", _capped_view(_ParseSpyView, _TINY_CAP)),
@@ -948,6 +983,64 @@ def test_graphql_ide_and_get_queries_can_be_turned_off_on_the_package_view():
     # The default fakeshop mount keeps both, so the contrast is the keywords'.
     assert default_ide.status_code == 200
     assert default_ide.headers["Content-Type"].startswith("text/html")
+
+
+# ---------------------------------------------------------------------------
+# The full production-profile mount: the guide's recipe, proven as one unit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_the_production_profile_mount_refuses_introspection_and_still_serves_operations():
+    """The documented production mount works as one unit, not only knob by knob.
+
+    ``graphql_ide=None`` and ``allow_queries_via_get=False`` are proven
+    individually in row 7 above; this row proves the guide's COMBINED recipe -
+    those two plus ``AddValidationRules([NoSchemaIntrospectionCustomRule])`` on a
+    ``DjangoSchema`` - over the real fakeshop surface. Introspection documents
+    (``__schema`` / ``__type``) are refused at validation with ``data`` never
+    produced, ``__typename`` stays available (the rule's actual scope - it is a
+    recon-narrowing control, not an authorization boundary), and an ordinary
+    operation is served so the profile narrows the mount without breaking it.
+    Upstream's refusal message is not pinned; the refusal and its phase are.
+    """
+    seed_data(1)
+
+    with override_settings(ROOT_URLCONF=__name__):
+        client = Client()
+        schema_probe = _post(
+            client,
+            "{ __schema { queryType { name } } }",
+            path="/production-profile/",
+        )
+        type_probe = _post(
+            client,
+            '{ __type(name: "Query") { name } }',
+            path="/production-profile/",
+        )
+        typename = _post(client, _TYPENAME, path="/production-profile/")
+        operation = _post(client, _ITEMS, path="/production-profile/")
+        ide = client.get("/production-profile/", HTTP_ACCEPT="text/html")
+        get_query = client.get("/production-profile/", {"query": _TYPENAME})
+
+    # Both introspection entry points are validation-refused: errors without data.
+    for refused in (schema_probe, type_probe):
+        payload = refused.json()
+        assert payload["errors"]
+        assert payload.get("data") is None
+
+    # ``__typename`` is outside the rule's scope and keeps working.
+    assert typename.status_code == 200
+    assert typename.json()["data"] == {"__typename": "Query"}
+
+    # An ordinary operation still executes on the same mount.
+    assert operation.status_code == 200
+    assert operation.json()["data"]["allItems"]["edges"]
+
+    # The row-7 knobs hold on this mount too: no IDE page, no GET execution.
+    assert ide.status_code == 404
+    assert b"<html" not in ide.content.lower()
+    assert get_query.status_code == 400
 
 
 # ---------------------------------------------------------------------------

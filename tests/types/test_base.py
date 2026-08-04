@@ -40,6 +40,10 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.base import _detect_custom_get_queryset
 from django_strawberry_framework.types.converters import (
+    DjangoFilePathType,
+    DjangoFileType,
+    DjangoImagePathType,
+    DjangoImageType,
     convert_scalar,
     resolved_relation_annotation,
 )
@@ -1913,6 +1917,227 @@ def _make_file_override_model_type(model, *, namespace=None):
     """Build an ``OverrideType`` over ``model`` selecting only ``id`` + ``attachment``."""
     meta_cls = type("Meta", (), {"model": model, "fields": ("id", "attachment")})
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
+
+
+# ---------------------------------------------------------------------------
+# Meta.filesystem_path_fields (spec-048 Decision 2)
+# ---------------------------------------------------------------------------
+
+
+def _make_path_optin_model():
+    """Return a synthetic model with a file column, an image column, and a scalar."""
+
+    class _PathOptInOwner(models.Model):
+        attachment = models.FileField()
+        preview = models.ImageField(blank=True)
+        title = models.TextField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_override_app_label()
+
+    return _PathOptInOwner
+
+
+def _make_path_optin_type(model, *, namespace=None, fields=None, **meta_attrs):
+    """Build a ``PathOptInType`` over ``model`` with the given Meta attrs."""
+    meta_cls = type(
+        "Meta",
+        (),
+        {
+            "model": model,
+            "fields": fields
+            or (
+                "id",
+                "attachment",
+                "preview",
+                "title",
+            ),
+            **meta_attrs,
+        },
+    )
+    return type("PathOptInType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
+
+
+def test_filesystem_path_fields_is_a_net_new_allowed_meta_key():
+    """``Meta.filesystem_path_fields`` is ALLOWED and not a deferred-key promotion."""
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "filesystem_path_fields" in ALLOWED_META_KEYS
+    assert "filesystem_path_fields" not in DEFERRED_META_KEYS
+
+
+def test_filesystem_path_fields_swaps_only_the_named_columns():
+    """Only a named column gets the path-bearing output object; siblings keep the default.
+
+    Per-column is the whole contract (spec-048 Decision 2): naming ``attachment``
+    must not also publish ``preview``'s path, or the opt-in would be a type-wide
+    switch wearing a field list.
+    """
+    model = _make_path_optin_model()
+    optin_type = _make_path_optin_type(model, filesystem_path_fields=("attachment",))
+    finalize_django_types()
+
+    assert optin_type.__annotations__["attachment"] == (DjangoFilePathType | None)
+    assert optin_type.__annotations__["preview"] == (DjangoImageType | None)
+
+
+def test_filesystem_path_fields_absent_leaves_every_column_pathless():
+    """The control case: no opt-in means neither column reaches a path-bearing type."""
+    model = _make_path_optin_model()
+    default_type = _make_path_optin_type(model)
+    finalize_django_types()
+
+    assert default_type.__annotations__["attachment"] == (DjangoFileType | None)
+    assert default_type.__annotations__["preview"] == (DjangoImageType | None)
+
+
+def test_filesystem_path_fields_opts_an_image_column_into_the_image_sibling():
+    """An ``ImageField`` opt-in keeps its dimensions and gains the path."""
+    model = _make_path_optin_model()
+    optin_type = _make_path_optin_type(model, filesystem_path_fields=("preview",))
+    finalize_django_types()
+
+    assert optin_type.__annotations__["preview"] == (DjangoImagePathType | None)
+
+
+def test_filesystem_path_fields_rejects_an_unknown_field():
+    """A name the model does not have raises the shared unknown-field error."""
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="filesystem_path_fields"):
+        _make_path_optin_type(model, filesystem_path_fields=("does_not_exist",))
+
+
+def test_filesystem_path_fields_rejects_a_field_outside_the_selected_set():
+    """A real but unselected column raises rather than silently doing nothing.
+
+    A silent no-op here reads to a reviewer as either "the path is exposed" or
+    "the path is not exposed" with equal plausibility, which is exactly the
+    ambiguity a security opt-in cannot afford.
+    """
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="not in the selected set"):
+        _make_path_optin_type(
+            model,
+            fields=("id", "title"),
+            filesystem_path_fields=("attachment",),
+        )
+
+
+def test_filesystem_path_fields_rejects_a_non_file_column():
+    """A scalar column has no path to publish, so naming one raises."""
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="not a FileField or ImageField"):
+        _make_path_optin_type(model, filesystem_path_fields=("title",))
+
+
+def test_filesystem_path_fields_rejects_a_consumer_authored_column():
+    """A consumer-owned column already owns its output type, so the opt-in raises."""
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="consumer-authored"):
+        _make_path_optin_type(
+            model,
+            namespace={"__annotations__": {"attachment": str}},
+            filesystem_path_fields=("attachment",),
+        )
+
+
+def test_filesystem_path_fields_rejects_a_bare_string():
+    """A bare string reuses the shared collection guard.
+
+    A ``str`` is iterable, so accepting one would read a single field name as a
+    sequence of single-character names and then reject every one of them for a
+    reason that names no real mistake.
+    """
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="Meta.filesystem_path_fields"):
+        _make_path_optin_type(model, filesystem_path_fields="attachment")
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        ("attachment",),
+        ["attachment"],
+        frozenset({"attachment"}),
+        {"attachment"},
+    ],
+    ids=[
+        "tuple",
+        "list",
+        "frozenset",
+        "set",
+    ],
+)
+def test_filesystem_path_fields_accepts_every_collection_literal(declaration):
+    """A set of names may be declared as a set (spec-048 Decision 2).
+
+    The key names an unordered SET of columns and is normalized to a
+    ``frozenset`` immediately, so refusing the literal a consumer would reach for
+    to spell a set was a shape gate contradicting its own semantics - and the
+    documented accepted-values list already said ``frozenset``.
+    """
+    model = _make_path_optin_model()
+    optin_type = _make_path_optin_type(model, filesystem_path_fields=declaration)
+    finalize_django_types()
+
+    assert optin_type.__annotations__["attachment"] == (DjangoFilePathType | None)
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["nullable_overrides", "required_overrides", "filesystem_path_fields"],
+)
+def test_the_collection_guard_names_the_key_it_rejected(key):
+    """One helper serves four ``Meta`` keys, so its message must name the caller's.
+
+    The message previously said ``Meta.exclude`` whatever key was written, which
+    sends a consumer who mistyped ``filesystem_path_fields`` to look at a key
+    their class does not declare.
+    """
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match=f"Meta.{key} must be a non-string"):
+        _make_path_optin_type(model, **{key: "attachment"})
+
+
+def test_the_collection_guard_still_names_exclude_for_exclude():
+    """``Meta.exclude`` - the first key through the helper - keeps its own message.
+
+    Declared without ``Meta.fields``, which the key is mutually exclusive with, so
+    the shape gate under test is the one that runs.
+    """
+    model = _make_path_optin_model()
+    with pytest.raises(ConfigurationError, match="Meta.exclude must be a non-string"):
+        type(
+            "ExcludeShapeType",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": model, "exclude": "title"})},
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["nullable_overrides", "required_overrides"],
+)
+def test_the_sibling_collection_keys_accept_a_frozenset_too(key):
+    """The sibling keys share the widened guard, so the four cannot drift apart."""
+    model = _make_path_optin_model()
+    _make_path_optin_type(model, **{key: frozenset({"title"})})
+    finalize_django_types()
+
+
+def test_exclude_accepts_a_frozenset_too():
+    """``Meta.exclude`` names an unordered set of columns as well."""
+    model = _make_path_optin_model()
+    excluded = type(
+        "ExcludeSetType",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": model, "exclude": frozenset({"title"})})},
+    )
+    finalize_django_types()
+
+    assert "title" not in excluded.__annotations__
+    assert "attachment" in excluded.__annotations__
 
 
 # =============================================================================

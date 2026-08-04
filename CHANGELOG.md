@@ -327,6 +327,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [today]: TODAY.md
 
 <!-- docs/ -->
+[docs-specs]: docs/SPECS/
 [glossary]: docs/GLOSSARY.md
 [glossary-apply_cascade_permissions]: docs/GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: docs/GLOSSARY.md#auth-mutations
@@ -384,7 +385,6 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [tree]: docs/TREE.md
 
 <!-- docs/SPECS/ -->
-[docs-specs]: docs/SPECS/
 [spec-filters]: docs/SPECS/spec-027-filters-0_0_8.md
 [spec-orders]: docs/SPECS/spec-028-orders-0_0_8.md
 
@@ -418,8 +418,8 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [fakeshop-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [products-schema]: examples/fakeshop/apps/products/schema.py
 [settings]: examples/fakeshop/config/settings.py
-[test-query-readme]: examples/fakeshop/test_query/README.md
 [test-library-api]: examples/fakeshop/test_query/test_library_api.py
+[test-query-readme]: examples/fakeshop/test_query/README.md
 [test-scalars-api]: examples/fakeshop/test_query/test_scalars_api.py
 
 <!-- scripts/ -->

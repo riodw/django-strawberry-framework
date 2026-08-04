@@ -15,6 +15,7 @@ from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
+from .resource_policy import bounded_rows, validate_collection_bound
 from .types import DjangoType
 from .types.base import _is_relay_shaped
 from .utils.querysets import (
@@ -44,6 +45,24 @@ def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> A
 
 async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
     return await post_process_queryset_result_async(target_type, result, info)
+
+
+async def _bounded_async(
+    awaitable: Any,
+    info: Info,
+    max_rows: int | None,
+    *,
+    trusted: bool,
+) -> Any:
+    """Await a visibility-applied result, then apply the field's row bound.
+
+    The bound is applied LAST, never before the visibility hook. A sliced
+    queryset cannot be refiltered or reordered, and both the visibility hook and
+    the surface compose onto the source - so slicing first would turn the bound
+    into a crash on every type that declares a hook. Ordering the two this way is
+    a correctness constraint, not a preference.
+    """
+    return bounded_rows(await awaitable, info, max_rows, trusted=trusted)
 
 
 def _validate_djangotype_target(
@@ -128,6 +147,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
+    max_rows: int | None = None,
+    trusted_max_rows: bool = False,
 ) -> Any:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
@@ -142,7 +163,18 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     ``DjangoConnectionField``, which appends a pk tiebreaker to guarantee a
     deterministic total order (its positional cursors require one); a flat list
     has no cursors, so the unordered sequence is acceptable.
+
+    Row bound (spec-047 Decision 6). Every ``DjangoListField`` is bounded: the
+    request's ``ResourcePolicy.max_list_rows`` applies whether or not the field
+    says anything, and ``max_rows=`` narrows it further for this field. There is
+    no unbounded spelling - ``max_rows=None`` means "the policy governs", not
+    "no bound". ``trusted_max_rows=True`` is the explicit widening opt-in: it
+    declares that this field's ``max_rows`` is a deliberate declaration that
+    outranks the request policy, and it is the only way a field can be wider
+    than the policy.
     """
+    if max_rows is not None:
+        validate_collection_bound(max_rows, field="DjangoListField max_rows")
     # Decision 5 validation guards: the four shared DjangoType-target
     # constructor checks (see ``_validate_djangotype_target`` for the
     # load-bearing ordering and the own-class registration invariant).
@@ -162,12 +194,21 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         def _default(root: Any, info: Info) -> Any:  # noqa: ARG001
             qs = initial_queryset(target_type)
             if in_async_context():
-                # Return the coroutine from ``apply_type_visibility_async``
-                # directly; Strawberry's AwaitableOrValue dispatch awaits it.
-                # An inner ``async def`` wrapper would add a redundant coroutine
-                # layer with no semantic gain.
-                return apply_type_visibility_async(target_type, qs, info)
-            return apply_type_visibility_sync(target_type, qs, info)
+                # The async branch DOES need its own coroutine wrapper: the row
+                # bound has to be applied to the awaited value, after the
+                # visibility hook has composed onto the unsliced source.
+                return _bounded_async(
+                    apply_type_visibility_async(target_type, qs, info),
+                    info,
+                    max_rows,
+                    trusted=trusted_max_rows,
+                )
+            return bounded_rows(
+                apply_type_visibility_sync(target_type, qs, info),
+                info,
+                max_rows,
+                trusted=trusted_max_rows,
+            )
 
         wrapped = _default
     else:
@@ -178,19 +219,28 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 # ``await`` the consumer coroutine BEFORE handing
                 # the result to ``_post_process_consumer_async`` so the
                 # isinstance-QuerySet branch sees the awaited value, not the
-                # coroutine itself.
-                return await _post_process_consumer_async(
-                    target_type,
-                    await user_resolver(root, info),
+                # coroutine itself. The row bound is applied AFTER
+                # post-processing, so a returned ``Manager`` has already been
+                # coerced to a ``QuerySet`` and the visibility hook has already
+                # composed onto the unsliced source.
+                return bounded_rows(
+                    await _post_process_consumer_async(
+                        target_type,
+                        await user_resolver(root, info),
+                        info,
+                    ),
                     info,
+                    max_rows,
+                    trusted=trusted_max_rows,
                 )
         else:
 
             def _wrap(root: Any, info: Info) -> Any:
-                return _post_process_consumer_sync(
-                    target_type,
-                    user_resolver(root, info),
+                return bounded_rows(
+                    _post_process_consumer_sync(target_type, user_resolver(root, info), info),
                     info,
+                    max_rows,
+                    trusted=trusted_max_rows,
                 )
 
         wrapped = _wrap

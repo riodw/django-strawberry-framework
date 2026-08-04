@@ -10,7 +10,18 @@ result-map replacement, the async shared-wrapper overlap restore, nested
 same-thread attribution, concurrent sync instance isolation at the
 ``strawberry-graphql==0.316.0`` floor, the post-execution diagnostic
 non-interference degrade, the cursor-construction capture-interval boundary,
-transaction-boundary scope, and sibling-hook SQL ordering.
+transaction-boundary scope, sibling-hook SQL ordering, the fail-closed
+``settings.DEBUG`` gate's inert path (spec-048 Decision 5), and the payload
+caps' arithmetic (spec-048 Decision 6, exercised directly against the pure
+``_apply_payload_caps``).
+
+The suite runs with ``settings.DEBUG`` false, which is now the extension's
+fail-closed condition, so every case that expects a published payload declares
+the debug posture it exercises: ``override_settings(DEBUG=True)`` where the
+case is about the BARE CLASS entry's own semantics (fresh-per-operation
+instances, coordinator restore, list ordering), and the acknowledgement factory
+``lambda: DjangoDebugExtension(allow_unsafe_production=True)`` only where
+keeping ``DEBUG`` false is itself the point.
 
 Deliberate test rules (spec-044 D4-D5):
 
@@ -41,12 +52,15 @@ from types import SimpleNamespace
 import pytest
 import strawberry
 from django.db import connection, connections, transaction
+from django.test.utils import override_settings
 from graphql import GraphQLError
 from strawberry.extensions import MaskErrors, SchemaExtension
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions import DjangoDebugExtension
 from django_strawberry_framework.extensions import debug as debug_module
 from django_strawberry_framework.extensions.debug import (
+    _apply_payload_caps,
     _build_payload,
     _collect_exceptions,
     _ConnectionSnapshot,
@@ -56,6 +70,18 @@ from django_strawberry_framework.extensions.debug import (
     _serialize_sql_row,
     _terminal_original_error,
 )
+
+# The payload caps re-spelled as INDEPENDENT literals (the module's spec-044
+# D4 rule extended to spec-048 Decision 6's constants): a cap that silently
+# widened must fail these rows, which importing the production constants would
+# make impossible.
+_SQL_ROW_CAP = 100
+_EXCEPTION_ROW_CAP = 25
+_SQL_TEXT_CAP = 4096
+_EXCEPTION_MESSAGE_CAP = 4096
+_EXCEPTION_STACK_CAP = 16384
+_PAYLOAD_CAP = 262144
+_MARKER = "... [truncated]"
 
 
 @strawberry.type
@@ -333,13 +359,15 @@ def test_coordinator_isolates_distinct_wrappers_for_one_alias(default_wrapper):
     assert coordinator._active == {}
 
 
+@override_settings(DEBUG=True)
 def test_partial_acquisition_failure_unwinds_earlier_connections(default_wrapper, monkeypatch):
     """A later-alias acquire failure restores every earlier alias before propagating.
 
     The one sanctioned fake, sitting at the private acquisition boundary
     (never a mock of Strawberry's runner): a stub connections handler exposes
     a second 'alias' whose acquisition raises after the real ``default``
-    wrapper was already bracketed.
+    wrapper was already bracketed. ``DEBUG=True`` because the acquisition loop
+    this pins runs only past the fail-closed gate.
     """
     original_flag = default_wrapper.force_debug_cursor
 
@@ -417,6 +445,7 @@ def test_get_results_no_stash_shape_and_idempotent_read():
     json.dumps(first)  # the JSON-serializability guard
 
 
+@override_settings(DEBUG=True)
 def test_validation_failure_with_raising_teardown_calls_get_results_twice():
     """The early-result plus teardown-failure recovery path invokes get_results twice.
 
@@ -452,6 +481,7 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
     assert "debug" not in (result.extensions or {})
 
 
+@override_settings(DEBUG=True)
 def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
     """Parse early-return + sibling teardown raise must still omit ``debug``."""
 
@@ -470,6 +500,7 @@ def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
     assert "debug" not in (result.extensions or {})
 
 
+@override_settings(DEBUG=True)
 async def test_async_validation_failure_with_raising_teardown_publishes_no_debug_key():
     """Async validation sets ``PreExecutionError`` on context before teardown.
 
@@ -492,6 +523,7 @@ async def test_async_validation_failure_with_raising_teardown_publishes_no_debug
     assert "debug" not in (result.extensions or {})
 
 
+@override_settings(DEBUG=True)
 def test_generic_recovery_alone_calls_get_results_once():
     """A teardown failure on an EXECUTED operation is one recovery, one get_results call."""
     calls = []
@@ -513,6 +545,7 @@ def test_generic_recovery_alone_calls_get_results_once():
     assert len(calls) == 1
 
 
+@override_settings(DEBUG=True)
 def test_parse_and_validation_failures_have_no_debug_key():
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
@@ -525,6 +558,7 @@ def test_parse_and_validation_failures_have_no_debug_key():
     assert "debug" not in (validation_result.extensions or {})
 
 
+@override_settings(DEBUG=True)
 def test_executed_no_op_operation_carries_both_empty_lists(default_wrapper):
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
@@ -539,6 +573,7 @@ def test_executed_no_op_operation_carries_both_empty_lists(default_wrapper):
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.parametrize("prior", [False, True])
 def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
     default_wrapper.force_debug_cursor = prior
@@ -558,6 +593,7 @@ def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.parametrize("debug_after_masking", [True, False])
 def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking):
     if debug_after_masking:
@@ -668,6 +704,7 @@ async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.parametrize("completion_order", [("a", "b"), ("b", "a")])
 async def test_async_overlapping_operations_share_the_wrapper_and_restore(completion_order):
     """Two overlapping async operations refcount one wrapper and restore in any order.
@@ -730,6 +767,7 @@ async def test_async_overlapping_operations_share_the_wrapper_and_restore(comple
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.django_db
 def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrapper):
     original_flag = default_wrapper.force_debug_cursor
@@ -785,6 +823,7 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrappe
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 def test_concurrent_sync_operations_use_isolated_instances():
     """Two concurrent sync operations never see each other's exception payloads.
 
@@ -835,6 +874,7 @@ def test_concurrent_sync_operations_use_isolated_instances():
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(default_wrapper, caplog):
     """A malformed backend log entry degrades ``sql`` to the serialized prefix."""
 
@@ -928,6 +968,7 @@ def test_cursor_construction_defines_the_capture_interval(default_wrapper):
 # ---------------------------------------------------------------------------
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.django_db(transaction=True)
 def test_resolver_owned_atomic_emits_captured_transaction_rows():
     @strawberry.type
@@ -952,6 +993,7 @@ def test_resolver_owned_atomic_emits_captured_transaction_rows():
     assert all(row["isSelect"] is False for row in begin_rows)
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.django_db(transaction=True)
 def test_enclosing_transaction_boundary_statements_are_not_captured():
     @strawberry.type
@@ -994,6 +1036,7 @@ class _MarkerSQLExtension(SchemaExtension):
             cursor.execute("SELECT 32")  # the teardown marker
 
 
+@override_settings(DEBUG=True)
 @pytest.mark.django_db
 @pytest.mark.parametrize("debug_listed_first", [True, False])
 def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first):
@@ -1017,3 +1060,271 @@ def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first):
         # debug released: neither marker is captured.
         assert not any("SELECT 31" in statement for statement in statements)
         assert not any("SELECT 32" in statement for statement in statements)
+
+
+# ---------------------------------------------------------------------------
+# spec-048 Decision 5 - the fail-closed gate: the acknowledgement default, the
+# inert path's absence of a bracket, and the acknowledged factory's payload.
+#
+# Live HTTP proof of the same gate (no key / warning / acknowledged payload
+# over a real request) lives in the fakeshop tier; these rows own what a
+# request cannot show - that the inert path never even enumerates the
+# connections, and that the constructor's default is the safe answer.
+# ---------------------------------------------------------------------------
+
+
+def test_zero_argument_construction_defaults_to_the_safe_answer():
+    """A bare class entry is built with no arguments, so the default must fail closed."""
+    assert DjangoDebugExtension().allow_unsafe_production is False
+    assert DjangoDebugExtension(allow_unsafe_production=True).allow_unsafe_production is True
+
+    with pytest.raises(TypeError):
+        DjangoDebugExtension(True)  # keyword-only: acknowledging must be SPELLED
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "false",
+        "0",
+        "no",
+        "",
+        1,
+        0,
+        None,
+        [],
+    ],
+    ids=[
+        "string-false",
+        "string-zero",
+        "string-no",
+        "empty-string",
+        "truthy-int",
+        "falsy-int",
+        "none",
+        "empty-list",
+    ],
+)
+def test_a_non_bool_acknowledgement_is_refused_at_construction(value):
+    """The acknowledgement is a bool, not a truthiness test.
+
+    ``"false"`` is the case that makes this a security row rather than a typing
+    nicety: it is the exact literal a deployment reading an environment variable
+    straight through would pass, it is TRUTHY, and under a truthiness test it
+    would ARM production disclosure in the very act of trying to refuse it. So
+    every non-bool - truthy or falsy - is a ``ConfigurationError`` naming the
+    value, on the same rule ``ErrorPolicy.enabled`` follows.
+    """
+    with pytest.raises(ConfigurationError, match="allow_unsafe_production"):
+        DjangoDebugExtension(allow_unsafe_production=value)
+
+
+@override_settings(DEBUG=False)
+def test_a_refused_acknowledgement_never_becomes_an_armed_extension():
+    """The refusal happens at construction, so no operation can run with it.
+
+    The consequence worth pinning separately from the message: a schema whose
+    extensions list carries the misspelled acknowledgement fails when Strawberry
+    builds the instance for the operation, rather than answering that operation
+    with the disclosure. Nothing partially constructed is left holding a truthy
+    flag.
+    """
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production="false")],
+    )
+    with pytest.raises(ConfigurationError, match="allow_unsafe_production"):
+        schema.execute_sync("{ ok }")
+
+
+@override_settings(DEBUG=False)
+def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(monkeypatch, caplog):
+    """Refusal is inertness, not payload suppression: no acquire, no snapshot, no flag write.
+
+    The connections handler is replaced by one whose ``all()`` raises: the
+    acquisition loop and the query-log snapshot are the only two readers of it,
+    so reaching either fails the test outright. The real handler is read
+    outside the patch to prove every configured flag survives untouched.
+    """
+    prior_flags = {
+        database_connection.alias: database_connection.force_debug_cursor
+        for database_connection in connections.all()
+    }
+    prior_log_lengths = {
+        database_connection.alias: len(database_connection.queries_log)
+        for database_connection in connections.all()
+    }
+
+    def _refuse():
+        raise AssertionError("the inert path must never enumerate the connections")
+
+    monkeypatch.setattr(debug_module, "connections", SimpleNamespace(all=_refuse))
+    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        result = schema.execute_sync("{ ok }")
+
+    # The operation itself is untouched - a refusal to disclose is not a refusal.
+    assert result.errors is None
+    assert result.data == {"ok": "ok"}
+    assert "debug" not in (result.extensions or {})
+    assert debug_module._coordinator._active == {}
+    for database_connection in connections.all():
+        alias = database_connection.alias
+        assert database_connection.force_debug_cursor is prior_flags[alias]
+        assert len(database_connection.queries_log) == prior_log_lengths[alias]
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "django_strawberry_framework"
+    ]
+    assert len(warnings) == 1
+    assert "allow_unsafe_production" in warnings[0].getMessage()
+
+
+@override_settings(DEBUG=False)
+def test_acknowledged_factory_publishes_the_payload_and_logs_no_warning(default_wrapper, caplog):
+    """The acknowledgement is the ONE spelling that keeps the payload under DEBUG false."""
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        result = schema.execute_sync("{ ok }")
+
+    assert result.extensions["debug"] == {"sql": [], "exceptions": []}
+    assert [
+        record for record in caplog.records if record.name == "django_strawberry_framework"
+    ] == []
+    assert default_wrapper.force_debug_cursor is False  # the bracket still restored
+    assert debug_module._coordinator._active == {}
+
+
+@override_settings(DEBUG=False)
+def test_acknowledged_factory_stays_fresh_per_operation(default_wrapper):
+    """A factory entry is still one instance per operation - no payload carries over."""
+    schema = strawberry.Schema(
+        query=_BoomQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
+    )
+
+    failing = schema.execute_sync("{ boom }")
+    clean = schema.execute_sync("{ ok }")
+
+    assert [row["message"] for row in failing.extensions["debug"]["exceptions"]] == [
+        "sensitive boom detail",
+    ]
+    # The second operation's payload is its own, not the first one's stash.
+    assert clean.errors is None
+    assert clean.extensions["debug"] == {"sql": [], "exceptions": []}
+
+
+# ---------------------------------------------------------------------------
+# spec-048 Decision 6 - the payload caps, exercised directly against the pure
+# ``_apply_payload_caps``: arithmetic this precise cannot be provoked through a
+# real operation, so the live tier owns the wiring proof and these rows own the
+# cut points, the tail drops, and the shared budget's stop rule.
+# ---------------------------------------------------------------------------
+
+
+def _sql_row(sql):
+    """A wire-shaped SQL row whose ONLY string cost is ``sql`` (empty vendor/alias)."""
+    return {
+        "vendor": "",
+        "alias": "",
+        "sql": sql,
+        "duration": 0.001,
+        "isSlow": False,
+        "isSelect": True,
+    }
+
+
+def _exception_row(message, stack=""):
+    """A wire-shaped exception row whose string cost is ``message`` plus ``stack``."""
+    return {"excType": "", "message": message, "stack": stack}
+
+
+def test_caps_leave_an_empty_payload_with_both_lists_present():
+    assert _apply_payload_caps([], []) == {"sql": [], "exceptions": []}
+
+
+def test_over_long_row_strings_are_cut_at_their_own_limit_and_marked():
+    """Each variable-length string has its OWN limit, and only a cut value is marked."""
+    payload = _apply_payload_caps(
+        [_sql_row("s" * (_SQL_TEXT_CAP + 1)), _sql_row("SELECT 1")],
+        [
+            _exception_row("m" * (_EXCEPTION_MESSAGE_CAP + 1), "k" * (_EXCEPTION_STACK_CAP + 1)),
+            _exception_row("short message", "short stack"),
+        ],
+    )
+
+    assert payload["sql"][0]["sql"] == "s" * _SQL_TEXT_CAP + _MARKER
+    assert payload["exceptions"][0]["message"] == "m" * _EXCEPTION_MESSAGE_CAP + _MARKER
+    assert payload["exceptions"][0]["stack"] == "k" * _EXCEPTION_STACK_CAP + _MARKER
+    # A short value is returned verbatim - never marked, never padded.
+    assert payload["sql"][1]["sql"] == "SELECT 1"
+    assert payload["exceptions"][1] == {
+        "excType": "",
+        "message": "short message",
+        "stack": "short stack",
+    }
+    # Truncation edits the strings only; the derived scalars ride through.
+    assert payload["sql"][0]["isSelect"] is True
+    assert payload["sql"][0]["duration"] == 0.001
+
+
+def test_row_count_caps_keep_exactly_the_earliest_rows():
+    """The TAIL is dropped: the first rows explain how the operation started."""
+    payload = _apply_payload_caps(
+        [_sql_row(f"SELECT {index}") for index in range(_SQL_ROW_CAP + 7)],
+        [_exception_row(f"boom {index}") for index in range(_EXCEPTION_ROW_CAP + 3)],
+    )
+
+    assert [row["sql"] for row in payload["sql"]] == [
+        f"SELECT {index}" for index in range(_SQL_ROW_CAP)
+    ]
+    assert [row["message"] for row in payload["exceptions"]] == [
+        f"boom {index}" for index in range(_EXCEPTION_ROW_CAP)
+    ]
+
+
+def test_shared_budget_admits_exceptions_first_and_stops_at_the_first_over_row():
+    """One budget, exceptions first, and admission STOPS - it never skips and continues.
+
+    Both families are given rows already at their per-row ceiling plus one tiny
+    trailing row each. The tiny rows would fit the leftover budget under a
+    skip-and-continue rule, so their absence is what pins the stop.
+    """
+    exception_cost = _EXCEPTION_MESSAGE_CAP + _EXCEPTION_STACK_CAP
+    big_exception_rows = [
+        _exception_row("m" * _EXCEPTION_MESSAGE_CAP, "k" * _EXCEPTION_STACK_CAP)
+        for _ in range(_EXCEPTION_ROW_CAP - 1)
+    ]
+    big_sql_rows = [_sql_row("s" * _SQL_TEXT_CAP) for _ in range(_SQL_ROW_CAP - 1)]
+
+    payload = _apply_payload_caps(
+        [*big_sql_rows, _sql_row("SELECT tiny")],
+        [*big_exception_rows, _exception_row("tiny boom")],
+    )
+
+    admitted_exceptions = _PAYLOAD_CAP // exception_cost
+    remaining = _PAYLOAD_CAP - admitted_exceptions * exception_cost
+    assert len(payload["exceptions"]) == admitted_exceptions
+    # Exceptions were admitted FIRST, so SQL only gets what they left behind.
+    assert len(payload["sql"]) == remaining // _SQL_TEXT_CAP
+    assert all(row["message"] != "tiny boom" for row in payload["exceptions"])
+    assert all(row["sql"] != "SELECT tiny" for row in payload["sql"])
+
+
+def test_build_payload_routes_its_assembled_rows_through_the_caps():
+    """The caps are applied BEFORE the stash, not by the caller - the ordering contract."""
+    long_message = "m" * (_EXCEPTION_MESSAGE_CAP + 1)
+    result = SimpleNamespace(
+        errors=[GraphQLError("outer", original_error=ValueError(long_message))],
+    )
+
+    payload = _build_payload([], result)
+
+    assert payload["sql"] == []
+    assert payload["exceptions"][0]["message"] == "m" * _EXCEPTION_MESSAGE_CAP + _MARKER

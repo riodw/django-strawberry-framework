@@ -1,0 +1,49 @@
+term,anchor,notes
+DjangoFileType,djangofiletype,S5 subject - loses the path field from its default set
+DjangoImageType,djangoimagetype,S5 subject - inherits the removal
+DjangoType,djangotype,the type declaration Meta.filesystem_path_fields joins
+Meta.model,metamodel,named in the User-facing API Meta block
+Meta.fields,metafields,selection gate the opt-in validates against
+Meta.exclude,metaexclude,selection gate the opt-in validates against
+Meta.nullable_overrides,metanullable_overrides,the exact validation precedent the new key copies
+Meta.required_overrides,metarequired_overrides,the exact validation precedent the new key copies
+ConfigurationError,configurationerror,build-time rejection for an invalid opt-in target
+Relation handling,relation-handling,relation targets are one of the four rejected opt-in shapes
+Definition-order independence,definition-order-independence,build pipeline the opt-in frozenset threads through
+finalize_django_types,finalize_django_types,build pipeline the opt-in frozenset threads through
+Scalar field conversion,scalar-field-conversion,the conversion surface picking the file output type
+Specialized scalar conversions,specialized-scalar-conversions,the conversion surface picking the file output type
+Upload scalar,upload-scalar,the write-side counterpart - unchanged here
+Schema audit,schema-audit,failure vocabulary the new Meta key's rejections match
+DjangoDebugExtension,djangodebugextension,S8 subject - gains the fail-closed gate and the caps
+Developer-only debug posture,developer-only-debug-posture,the posture the gate makes structural
+Debug payload availability,debug-payload-availability,the get_results contract inertness must preserve
+Debug SQL row,debug-sql-row,capped by _MAX_SQL_ROWS / _MAX_SQL_TEXT_CHARS
+Debug exception row,debug-exception-row,capped by _MAX_EXCEPTION_ROWS and the two char caps
+Django debug-cursor capture,django-debug-cursor-capture,not acquired at all when the extension is inert
+Reference-counted cursor coordinator,reference-counted-cursor-coordinator,not acquired at all when the extension is inert
+Bounded query-log rollover,bounded-query-log-rollover,the pre-existing log bound the payload caps sit above
+Async SQL-capture boundary,async-sql-capture-boundary,the async half of the debug capture the gate also covers
+Masking-extension ordering,masking-extension-ordering,the LIFO rule Decision 10 satisfies by prepending
+Response-extension merge semantics,response-extension-merge-semantics,wire contract the caps must not break
+Response-extensions debug middleware,response-extensions-debug-middleware,downstream consumer of the capped payload
+Debug-toolbar middleware,debug-toolbar-middleware,downstream consumer of the capped payload
+Graphene debug migration,graphene-debug-migration,downstream mapping that must survive the caps
+Strawberry extension lifecycle,strawberry-extension-lifecycle,construction semantics both new gates depend on
+Per-operation extension isolation,per-operation-extension-isolation,the fresh-per-operation contract the factory ack preserves
+Execution resource policy,execution-resource-policy,the policy-object precedent ErrorPolicy mirrors
+ResourcePolicy,resourcepolicy,the frozen-dataclass precedent ErrorPolicy mirrors
+DjangoResourcePolicyExtension,djangoresourcepolicyextension,the auto-install seam the error policy inverts
+FieldError envelope,fielderror-envelope,data not errors - untouched by masking by construction
+Per-field permission hooks,per-field-permission-hooks,rejected alternative for the path opt-in
+SerializerMutation,serializermutation,write surface whose deliberate rejections survive the mask
+DjangoMutation,djangomutation,write surface whose deliberate rejections survive the mask
+DjangoModelFormMutation,djangomodelformmutation,write surface whose deliberate rejections survive the mask
+SyncMisuseError,syncmisuseerror,the GraphQLError multiple-inheritance precedent
+request_from_info,request_from_info,the only info-to-request seam - DRY obligation
+TestClient,testclient,live test tier
+Probe URLconf,probe-urlconf,narrow probe schemas for the opt-in and gate rows
+seed_data,seed_data,mandatory first line of every catalog test
+Live-first coverage mandate,live-first-coverage-mandate,decides where each regression lives
+Joint version cut,joint-version-cut,the rule this lone-card cut is NOT subject to
+Single-upstream parity,single-upstream-parity,makes the file path field optional rather than foundational

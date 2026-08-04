@@ -15,9 +15,14 @@ Public surface:
   scalar ``str`` input).
 - ``DjangoFileType`` / ``DjangoImageType`` - the structured read-output
   objects mirroring ``strawberry-graphql-django``. ``DjangoFileType`` carries
-  ``name`` / ``path`` / ``size`` / ``url``; ``DjangoImageType`` subclasses it
-  and adds ``width`` / ``height``. Every nullable subfield delegates to the
-  shared ``_safe_file_attr`` storage guard; ``name`` is read directly.
+  ``name`` / ``size`` / ``url``; ``DjangoImageType`` subclasses it and adds
+  ``width`` / ``height``. Every nullable subfield delegates to the shared
+  ``_safe_file_attr`` storage guard; ``name`` is read directly.
+- ``DjangoFilePathType`` / ``DjangoImagePathType`` - the opt-in siblings that
+  add the server's absolute filesystem ``path``. A generated type reaches them
+  only by naming the column in ``Meta.filesystem_path_fields``; the path is
+  deployment metadata and is off the default output on purpose (spec-048
+  Decision 1).
 - ``FIELD_OUTPUT_TYPE_MAP`` - module-level ``dict[type[models.Field], type]``
   mapping ``ImageField`` (before ``FileField`` so the MRO walk hits it first)
   and ``FileField`` to their output object. Consulted only by
@@ -78,8 +83,9 @@ def _safe_file_attr(file_file: Any, attr: str) -> Any:
     """Read ``getattr(file_file, attr)``, degrading storage failures to ``None``.
 
     The single per-subfield guard shared by every nullable subfield resolver
-    on ``DjangoFileType`` / ``DjangoImageType`` (``path`` / ``size`` / ``url``,
-    plus ``width`` / ``height`` on images). ``file_file`` is the bound
+    on ``DjangoFileType`` / ``DjangoImageType`` (``size`` / ``url``, plus
+    ``width`` / ``height`` on images and the opt-in ``path`` on
+    ``DjangoFilePathType`` / ``DjangoImagePathType``). ``file_file`` is the bound
     ``FieldFile`` the parent resolver returned (always truthy here -- an empty
     file resolves the whole object to ``None`` before any subfield runs).
 
@@ -104,31 +110,33 @@ def _safe_file_attr(file_file: Any, attr: str) -> Any:
 class DjangoFileType:
     """Structured read-output for a Django ``FileField`` (spec-037 Decision 3).
 
-    Mirrors ``strawberry-graphql-django``'s ``DjangoFileType`` field-for-field
-    so a migrating consumer's ``{ avatar { url } }`` selection ports unchanged.
+    The default output is limited to the subfields a remote client needs --
+    ``name`` / ``size`` / ``url``. The server's absolute filesystem path is
+    NOT among them (spec-048 Decision 1): it is deployment metadata that can
+    reveal usernames, release directories, container mounts, tenant layout and
+    storage conventions, none of which a client needs to render a file. A
+    deployment that genuinely serves the path opts in per column through
+    ``Meta.filesystem_path_fields``, which swaps this type for
+    ``DjangoFilePathType``.
+
     The fields are resolver-backed (not bare annotations) because the storage
-    properties (``path`` / ``url`` / ``size``) raise on a non-filesystem
-    backend or a vanished file, and that access happens per-subfield AFTER the
-    parent resolver returns -- outside any parent ``try/except`` -- so the guard
-    must live on each subfield (spec-037 Decision 4). ``self`` IS the bound
+    properties (``url`` / ``size``) raise on a non-filesystem backend or a
+    vanished file, and that access happens per-subfield AFTER the parent
+    resolver returns -- outside any parent ``try/except`` -- so the guard must
+    live on each subfield (spec-037 Decision 4). ``self`` IS the bound
     ``FieldFile`` the generated parent resolver returned.
 
     Subfield nullability deliberately diverges from upstream's all-non-null
     shape: ``name`` is non-null (a stored string, present whenever the object
-    is non-null), while ``path`` / ``size`` / ``url`` are nullable so a storage
-    quirk on one property degrades that subfield to ``null`` rather than 500ing
-    the whole query.
+    is non-null), while ``size`` / ``url`` are nullable so a storage quirk on
+    one property degrades that subfield to ``null`` rather than 500ing the
+    whole query.
     """
 
     @strawberry.field
     def name(self) -> str:
         """The stored file name. Non-null and read directly (no storage guard)."""
         return self.name
-
-    @strawberry.field
-    def path(self) -> str | None:
-        """The absolute filesystem path, or ``None`` if storage cannot produce one."""
-        return _safe_file_attr(self, "path")
 
     @strawberry.field
     def size(self) -> int | None:
@@ -145,12 +153,12 @@ class DjangoFileType:
 class DjangoImageType(DjangoFileType):
     """Structured read-output for a Django ``ImageField`` (spec-037 Decision 3).
 
-    Subclasses ``DjangoFileType`` -- inheriting ``name`` / ``path`` / ``size`` /
-    ``url`` so the four shared subfields are defined once -- and adds the
-    image-only ``width`` / ``height`` dimensions through the same
-    ``_safe_file_attr`` guard. Two distinct types (rather than one flagged type
-    with an ``is_image`` check) keep dimension fields off non-image files and
-    match upstream.
+    Subclasses ``DjangoFileType`` -- inheriting ``name`` / ``size`` / ``url``
+    so the three shared subfields are defined once -- and adds the image-only
+    ``width`` / ``height`` dimensions through the same ``_safe_file_attr``
+    guard. Two distinct types (rather than one flagged type with an
+    ``is_image`` check) keep dimension fields off non-image files and match
+    upstream.
     """
 
     @strawberry.field
@@ -162,6 +170,55 @@ class DjangoImageType(DjangoFileType):
     def height(self) -> int | None:
         """The image height in pixels, or ``None`` if storage cannot read it."""
         return _safe_file_attr(self, "height")
+
+
+@strawberry.type
+class _FileSystemPathFields:
+    """The single definition of the opt-in ``path`` subfield (spec-048 Decision 1).
+
+    A ``@strawberry.type``-decorated mixin rather than a plain one: Strawberry
+    collects inherited fields only from bases that carry a type definition, so
+    an undecorated mixin's ``path`` would silently vanish from both composed
+    types. Private and never referenced by an annotation, so it contributes no
+    GraphQL type of its own -- only the two public compositions below reach the
+    schema.
+
+    Defined once so ``DjangoFilePathType`` and ``DjangoImagePathType`` cannot
+    drift in either the resolver's storage guard or the security wording of the
+    description a consumer's SDL will carry.
+    """
+
+    @strawberry.field(
+        description=(
+            "SECURITY: the file's absolute path on the server filesystem. Opted in "
+            "per column via Meta.filesystem_path_fields; it is deployment metadata, "
+            "not client data. Null when the storage backend cannot produce one."
+        ),
+    )
+    def path(self) -> str | None:
+        """The absolute filesystem path, or ``None`` if storage cannot produce one."""
+        return _safe_file_attr(self, "path")
+
+
+@strawberry.type
+class DjangoFilePathType(DjangoFileType, _FileSystemPathFields):
+    """``DjangoFileType`` plus the opt-in absolute filesystem ``path``.
+
+    Reached only by naming the column in ``Meta.filesystem_path_fields``; it is
+    never the default output for a ``FileField``. The opt-in is per column and
+    lives in the type's own ``Meta``, so a reviewer reading one class sees every
+    path the type publishes (spec-048 Decision 2).
+    """
+
+
+@strawberry.type
+class DjangoImagePathType(DjangoImageType, _FileSystemPathFields):
+    """``DjangoImageType`` plus the opt-in absolute filesystem ``path``.
+
+    The ``ImageField`` counterpart of ``DjangoFilePathType``, reached the same
+    way and carrying the same ``width`` / ``height`` dimensions as the default
+    image output.
+    """
 
 
 SCALAR_MAP: dict[type[models.Field], Any] = {
@@ -209,6 +266,17 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
 FIELD_OUTPUT_TYPE_MAP: dict[type[models.Field], type] = {
     models.ImageField: DjangoImageType,
     models.FileField: DjangoFileType,
+}
+
+# The opt-in sibling of each default file/image output object, keyed by the
+# default (spec-048 Decision 2). A second dict rather than a second
+# ``models.Field``-keyed map: the substitution is a property of the OUTPUT type
+# already resolved by ``_field_output_type_for``, so keying it on the field
+# class again would duplicate the MRO walk and let the two maps disagree about
+# what an ``ImageField`` subclass resolves to.
+FILESYSTEM_PATH_OUTPUT_TYPE_MAP: dict[type, type] = {
+    DjangoImageType: DjangoImagePathType,
+    DjangoFileType: DjangoFilePathType,
 }
 
 _NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
@@ -407,6 +475,7 @@ def convert_field_output(
     type_name: str,
     *,
     force_nullable: bool | None = None,
+    expose_filesystem_path: bool = False,
 ) -> Any:
     """Map a non-relation Django column to its read-output annotation.
 
@@ -430,10 +499,19 @@ def convert_field_output(
     ``force_nullable`` carries the same ``Meta.nullable_overrides`` /
     ``Meta.required_overrides`` tri-state as ``convert_scalar``, threaded
     through unchanged so ``_build_annotations`` swaps one call for the other.
+
+    ``expose_filesystem_path`` is the per-column ``Meta.filesystem_path_fields``
+    opt-in (spec-048 Decision 2): true swaps the resolved output object for its
+    path-bearing sibling through ``FILESYSTEM_PATH_OUTPUT_TYPE_MAP``. It is
+    inert on a non-file column, which cannot happen -- the Meta validator
+    rejects a non-file target -- so the flag is read only inside the file
+    branch and never silently changes a scalar's annotation.
     """
     output_type = _field_output_type_for(field)
     if output_type is None:
         return convert_scalar(field, type_name, force_nullable=force_nullable)
+    if expose_filesystem_path:
+        output_type = FILESYSTEM_PATH_OUTPUT_TYPE_MAP[output_type]
     # File/image output is nullable by DEFAULT, independent of ``null`` /
     # ``blank``: the generated parent resolver (``resolvers._make_file_resolver``)
     # returns ``None`` for an empty / falsy ``FieldFile``, and an empty value is

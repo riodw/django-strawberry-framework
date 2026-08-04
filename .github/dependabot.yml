@@ -1,0 +1,52 @@
+# Automated dependency updates. This is the UPDATE half of the dependency
+# posture; .github/workflows/dependency-audit.yml is the DETECTION half. Both
+# are needed: the audit tells us a shipped dependency became vulnerable, and
+# these updates are what actually move it (spec-049 Decision 5).
+#
+# Dependabot is used rather than a scheduled `uv lock --upgrade` job because it
+# opens one reviewable PR per dependency with upstream release notes attached,
+# and because it is the same mechanism that delivers GitHub's own security
+# alerts -- a self-hosted upgrade job would have to reimplement that and would
+# still push a single opaque "bump everything" commit (spec-049 Decision 6).
+version: 2
+
+updates:
+  # Python dependencies, via the native `uv` ecosystem: Dependabot resolves and
+  # rewrites `uv.lock` itself, so an update PR lands the same artifact the
+  # audit workflow scans.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # One PR for the routine dev-tooling churn (linters, pytest plugins, test
+      # fixtures) so it does not crowd out the dependency PRs that change what
+      # consumers actually install.
+      dev-tooling:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions. This is the counterpart to SHA-pinning every `uses:` in
+  # .github/workflows/: a full-SHA pin is immutable, which also means it never
+  # picks up an upstream security fix on its own. Dependabot rewrites the SHA
+  # and updates the trailing `# vX.Y.Z` comment, so the pins stay both immutable
+  # and current instead of immutable and stale (spec-049 Decision 4).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"

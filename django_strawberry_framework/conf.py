@@ -130,6 +130,26 @@ RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
 # (spec-046 Decision 8).
 MAX_REQUEST_BODY_BYTES_KEY = "MAX_REQUEST_BODY_BYTES"
 
+# The deployment's execution resource budget, as a mapping of
+# ``ResourcePolicy`` bound names to values (see
+# ``resource_policy.py::ResourcePolicy`` for the full vocabulary and every
+# default). Normalized and validated ONCE at schema construction by
+# ``resource_policy.py::resolve_resource_policy``, which a
+# ``DjangoSchema(resource_policy=...)`` argument outranks. Absent means "the
+# package defaults", which are themselves bounded - there is no spelling of
+# this key that disables a bound.
+RESOURCE_POLICY_KEY = "RESOURCE_POLICY"
+
+# The deployment's production error policy, as a mapping of ``ErrorPolicy``
+# option names to values (see ``error_policy.py::ErrorPolicy``). Normalized and
+# validated ONCE at schema construction by
+# ``error_policy.py::resolve_error_policy``, which a
+# ``DjangoSchema(error_policy=...)`` argument outranks. Absent means the package
+# default, which MASKS unexpected exceptions under ``DEBUG=False`` - opting out
+# is spelled ``{"enabled": False}`` and is a recorded decision, never an
+# omission (spec-048 Decision 7).
+ERROR_POLICY_KEY = "ERROR_POLICY"
+
 
 # Sentinel for "no live ``django.conf.settings`` object has been bound yet"
 # (distinct from ``None``, which is a valid live value meaning "no settings").
@@ -468,6 +488,30 @@ def max_request_body_bytes_setting() -> int | None:
     thin reader that does not validate domain values.
     """
     return getattr(settings, MAX_REQUEST_BODY_BYTES_KEY, 1_048_576)
+
+
+def resource_policy_setting() -> Any:
+    """The configured resource-policy overrides, or ``None`` when unset.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]``. ``conf.py`` stays a
+    thin reader: the value's shape and every bound's domain are validated by
+    ``resource_policy.py::resolve_resource_policy`` /
+    ``ResourcePolicy.__post_init__``, so an invalid deployment fails at schema
+    construction with a message naming the offending bound.
+    """
+    return getattr(settings, RESOURCE_POLICY_KEY, None)
+
+
+def error_policy_setting() -> Any:
+    """The configured production error-policy overrides, or ``None`` when unset.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]``. ``conf.py`` stays a
+    thin reader: the value's shape and every option's domain are validated by
+    ``error_policy.py::resolve_error_policy`` / ``ErrorPolicy.__post_init__``,
+    so an invalid deployment fails at schema construction with a message naming
+    the offending option.
+    """
+    return getattr(settings, ERROR_POLICY_KEY, None)
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

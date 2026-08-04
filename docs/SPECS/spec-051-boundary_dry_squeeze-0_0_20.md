@@ -235,7 +235,7 @@ duplication that makes every cross-cutting change cost more than it should.
 - Card `WIP-ALPHA-044-0.0.14`
   ([`DjangoDebugExtension`][glossary-djangodebugextension]) is mid-flight and owns
   the `0.0.14` joint cut; card `TODO-ALPHA-050-0.0.19`
-  ([`docs/spec-050-debug_extraction-0_0_19.md`][spec-050]) then **extracts
+  ([`docs/SPECS/spec-050-debug_extraction-0_0_19.md`][spec-050]) then **extracts
   that extension into the standalone `django-strawberry-debug` package**.
   This card is sequenced behind BOTH: by the time its slices run,
   `extensions/debug.py` is gone, `extensions/` is a soft-dependency leaf
@@ -713,7 +713,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   renumbers — it ushers in the beta and closes the Alpha column) — this
   card's squeeze does not absorb its verification scope.
 - The `DjangoDebugExtension` extraction — card `050`
-  ([`docs/spec-050-debug_extraction-0_0_19.md`][spec-050]), which this card
+  ([`docs/SPECS/spec-050-debug_extraction-0_0_19.md`][spec-050]), which this card
   depends on.
 
 ## Definition of done
@@ -737,53 +737,53 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[kanban]: ../KANBAN.md
+[agents]: ../../AGENTS.md
+[kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
-[glossary-djangomodelformmutation]: GLOSSARY.md#djangomodelformmutation
-[glossary-serializermutation]: GLOSSARY.md#serializermutation
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-djangoconnection]: GLOSSARY.md#djangoconnection
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
-[glossary-require_optional_module]: GLOSSARY.md#require_optional_module
-[glossary-input-type-generation]: GLOSSARY.md#input-type-generation
-[glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
-[glossary-choice-enum-generation]: GLOSSARY.md#choice-enum-generation
-[glossary-filter_input_type]: GLOSSARY.md#filter_input_type
-[glossary-order_input_type]: GLOSSARY.md#order_input_type
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-request_from_info]: GLOSSARY.md#request_from_info
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-ordering]: GLOSSARY.md#ordering
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
+[glossary]: ../GLOSSARY.md
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cookbook-parity]: ../GLOSSARY.md#cookbook-parity
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangodebugextension]: ../GLOSSARY.md#djangodebugextension
+[glossary-djangoformmutation]: ../GLOSSARY.md#djangoformmutation
+[glossary-djangomodelformmutation]: ../GLOSSARY.md#djangomodelformmutation
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-hard-dependency]: ../GLOSSARY.md#hard-dependency
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-order_input_type]: ../GLOSSARY.md#order_input_type
+[glossary-ordering]: ../GLOSSARY.md#ordering
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-request_from_info]: ../GLOSSARY.md#request_from_info
+[glossary-require_optional_module]: ../GLOSSARY.md#require_optional_module
+[glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
+[glossary-serializermutation]: ../GLOSSARY.md#serializermutation
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->
-[spec-038]: SPECS/spec-038-auth_mutations-0_0_13.md
+[spec-038]: spec-038-form_mutations-0_0_12.md
+[spec-039]: spec-039-serializer_mutations-0_0_13.md
+[spec-043]: spec-043-test_client-0_0_14.md
 [spec-050]: spec-050-debug_extraction-0_0_19.md
-[spec-039]: SPECS/spec-039-serializer_mutations-0_0_13.md
-[spec-043]: SPECS/spec-043-test_client-0_0_14.md
 
 <!-- docs/builder/ -->
 

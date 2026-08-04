@@ -1545,3 +1545,42 @@ def test_djangolistfield_resolver_manager_alias_drift_fails_closed_sync() -> Non
     assert any(
         "preserve the manager's explicit routing" in str(err.message) for err in result.errors
     )
+
+
+@pytest.mark.django_db
+def test_djangolistfield_rejects_a_non_positive_max_rows_at_construction() -> None:
+    """A bad ``max_rows`` fails at the line that wrote the field, not on a request.
+
+    The row bound is a security boundary, so a typo in it must not be discovered
+    by a client (spec-047 Decision 6).
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    with pytest.raises(ConfigurationError, match="DjangoListField max_rows must be a positive"):
+        DjangoListField(CategoryType, max_rows=0)
+
+
+@pytest.mark.django_db
+def test_djangolistfield_max_rows_narrows_the_request_policy() -> None:
+    """``max_rows`` narrows; it never widens without the trusted opt-in."""
+    services.seed_data(2)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, max_rows=1)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None, result.errors
+    assert len(result.data["allCategories"]) == 1

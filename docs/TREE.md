@@ -199,6 +199,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
 ├── consumers.py                  # The WebSocket Host boundary, the GraphQL consumer, and its two revalidation checkpoints.
+├── error_policy.py               # ``ErrorPolicy`` - what an unexpected exception says to a client in production.
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── keyset.py                     # Keyset (value-encoded) stable cursors - the ``Meta.cursor_field`` opt-in.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
@@ -206,6 +207,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
+├── resource_policy.py            # ``ResourcePolicy`` - the one immutable execution resource budget for a request.
 ├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
@@ -216,7 +218,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 │   └── sessions.py               # Transport-owned auth session boundary: transport classification + capability.
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
-│   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
+│   ├── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
+│   ├── error_policy.py           # ``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
+│   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
@@ -241,7 +245,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036).
 │   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
-│   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
+│   ├── _context.py               # Optimizer <-> resolver context hand-off: the optimizer's own stash keys.
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
@@ -282,6 +286,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
+    ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
@@ -290,7 +295,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
-    ├── sessions.py               # The configured session engine's store resolver, shared across the opt-in boundary.
+    ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
     ├── write_transaction.py      # Write-transaction plumbing: the managed alias, alias pinning, row locks, and conflicts.
@@ -313,12 +318,14 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
 ├── consumers.py                  # The WebSocket Host boundary, the GraphQL consumer, and its two revalidation checkpoints.
+├── error_policy.py               # ``ErrorPolicy`` - what an unexpected exception says to a client in production.
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── keyset.py                     # Keyset (value-encoded) stable cursors - the ``Meta.cursor_field`` opt-in.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 ├── py.typed
 ├── registry.py                   # Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
+├── resource_policy.py            # ``ResourcePolicy`` - the one immutable execution resource budget for a request.
 ├── routers.py                    # Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
@@ -330,7 +337,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 │   └── sessions.py               # Transport-owned auth session boundary: transport classification + capability.
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
-│   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
+│   ├── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
+│   ├── error_policy.py           # ``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
+│   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── fieldset/    # planned by TODO-BETA-053-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
@@ -356,7 +365,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036).
 │   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
-│   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
+│   ├── _context.py               # Optimizer <-> resolver context hand-off: the optimizer's own stash keys.
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
@@ -398,6 +407,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
+    ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
@@ -406,7 +416,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
-    ├── sessions.py               # The configured session engine's store resolver, shared across the opt-in boundary.
+    ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
     ├── strings.py                # GraphQL/Django naming helpers for case conversion and lookup-path flattening.
     ├── typing.py                 # Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
     ├── write_transaction.py      # Write-transaction plumbing: the managed alias, alias pinning, row locks, and conflicts.
@@ -437,6 +447,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
@@ -451,6 +462,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
@@ -613,6 +625,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_client_api.py            # Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
 ├── test_debug_extension_api.py   # Live GraphQL HTTP tests for ``DjangoDebugExtension`` (spec-044 Test plan 1-7).
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
+├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface (WS-3B).
@@ -622,6 +635,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
+├── test_resource_policy_api.py   # Live ``/graphql/`` execution-resource-policy acceptance tests (spec-047).
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
 ├── test_single_parent_fastpath_api.py  # Live GraphQL HTTP tests for the single-parent windowed-prefetch fast path.
@@ -649,6 +663,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
@@ -663,6 +678,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.

@@ -916,10 +916,10 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-046-transport_security-0_0_15.md`: card NNN `046`, topic
+This spec lives at `docs/SPECS/spec-046-transport_security-0_0_15.md`: card NNN `046`, topic
 slug `transport_security`, target version `0.0.15` with dots as underscores, per the
 [`docs/SPECS/NEXT.md`][next] Step 6 convention. The companion term ledger is
-`docs/spec-046-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
+`docs/SPECS/appx/spec-046-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
 [`spec-046-transport_security-0_0_15-rationale.md`][rationale], carrying the rejected
 alternatives, the derivations, and the change record for every decision below, keyed to the
 decision it belongs to — is where this spec's deliberative layer lives. This document is the
@@ -3567,80 +3567,80 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[readme]: ../../README.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[feedback2]: feedback2.md
-[glossary]: GLOSSARY.md
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-channels-request-adapter]: GLOSSARY.md#channels-request-adapter
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-developer-only-debug-posture]: GLOSSARY.md#developer-only-debug-posture
-[glossary-django-appconfig]: GLOSSARY.md#django-appconfig
-[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
-[glossary-djangofiletype]: GLOSSARY.md#djangofiletype
-[glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangoimagetype]: GLOSSARY.md#djangoimagetype
-[glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangonodesfield]: GLOSSARY.md#djangonodesfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
-[glossary-probe-urlconf]: GLOSSARY.md#probe-urlconf
-[glossary-request_from_info]: GLOSSARY.md#request_from_info
-[glossary-require_optional_module]: GLOSSARY.md#require_optional_module
-[glossary-schema-reload-discipline]: GLOSSARY.md#schema-reload-discipline
-[glossary-seed_data]: GLOSSARY.md#seed_data
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-strawberry_config]: GLOSSARY.md#strawberry_config
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[rationale-d10]: spec-046-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
-[rationale-d11]: spec-046-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
-[rationale-d12]: spec-046-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
-[rationale-d13]: spec-046-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
-[rationale-d14]: spec-046-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
-[rationale-d15]: spec-046-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
-[rationale-d16]: spec-046-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
-[rationale-d17]: spec-046-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[rationale-d18]: spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
-[rationale-d19]: spec-046-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
-[rationale-d1]: spec-046-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
-[rationale-d2]: spec-046-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
-[rationale-d3]: spec-046-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
-[rationale-d4]: spec-046-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
-[rationale-d5]: spec-046-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
-[rationale-d6]: spec-046-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
-[rationale-d7]: spec-046-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
-[rationale-d8]: spec-046-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
-[rationale-d9]: spec-046-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
-[rationale]: spec-046-transport_security-0_0_15-rationale.md
-[spec-050]: spec-050-debug_extraction-0_0_19.md
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[feedback2]: ../feedback2.md
+[glossary]: ../GLOSSARY.md
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-channels-request-adapter]: ../GLOSSARY.md#channels-request-adapter
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-cookbook-parity]: ../GLOSSARY.md#cookbook-parity
+[glossary-debug-toolbar-middleware]: ../GLOSSARY.md#debug-toolbar-middleware
+[glossary-developer-only-debug-posture]: ../GLOSSARY.md#developer-only-debug-posture
+[glossary-django-appconfig]: ../GLOSSARY.md#django-appconfig
+[glossary-djangodebugextension]: ../GLOSSARY.md#djangodebugextension
+[glossary-djangofiletype]: ../GLOSSARY.md#djangofiletype
+[glossary-djangographqlprotocolrouter]: ../GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangoimagetype]: ../GLOSSARY.md#djangoimagetype
+[glossary-djangomodelpermission]: ../GLOSSARY.md#djangomodelpermission
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangonodesfield]: ../GLOSSARY.md#djangonodesfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-eviction-simulated-absence]: ../GLOSSARY.md#eviction-simulated-absence
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-hard-dependency]: ../GLOSSARY.md#hard-dependency
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
+[glossary-probe-urlconf]: ../GLOSSARY.md#probe-urlconf
+[glossary-request_from_info]: ../GLOSSARY.md#request_from_info
+[glossary-require_optional_module]: ../GLOSSARY.md#require_optional_module
+[glossary-schema-reload-discipline]: ../GLOSSARY.md#schema-reload-discipline
+[glossary-seed_data]: ../GLOSSARY.md#seed_data
+[glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-strawberry_config]: ../GLOSSARY.md#strawberry_config
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-040]: SPECS/spec-040-auth_mutations-0_0_13.md
-[spec-041]: SPECS/spec-041-channels_router-0_0_14.md
+[next]: NEXT.md
+[rationale]: appx/spec-046-transport_security-0_0_15-rationale.md
+[rationale-d1]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d10]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
+[rationale-d11]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[rationale-d12]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[rationale-d13]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[rationale-d14]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[rationale-d15]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
+[rationale-d16]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[rationale-d17]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[rationale-d18]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[rationale-d19]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[rationale-d2]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[rationale-d3]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[rationale-d4]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[rationale-d5]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[rationale-d6]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[rationale-d7]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[rationale-d8]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[rationale-d9]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[spec-040]: spec-040-auth_mutations-0_0_13.md
+[spec-041]: spec-041-channels_router-0_0_14.md
+[spec-050]: spec-050-debug_extraction-0_0_19.md
 
 <!-- docs/builder/ -->
 

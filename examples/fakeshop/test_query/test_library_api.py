@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 import pytest
 from apps.library import models
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import override_settings
@@ -15,6 +16,21 @@ from strawberry import relay
 
 from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.testing.relay import global_id_for
+
+#: Settings that open the spec-048 error policy's pass-through gate for ONE live
+#: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
+#: reachable instrument - the project schema is constructed by the app, not by the
+#: test. Fakeshop's shipped settings also wire django-debug-toolbar behind
+#: ``DEBUG``, so the toolbar middleware is dropped for the duration: left in, it
+#: would try to inject a panel referencing the ``djdt`` routes that ``config.urls``
+#: computed under the ambient ``DEBUG=False`` and fail the request for a reason
+#: that has nothing to do with the row. Dropping the middleware is the deterministic
+#: form of that - the toolbar's own show-gate is memoized per process, so overriding
+#: its callback would not reliably take effect.
+_ERROR_POLICY_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+}
 
 
 def _seed_library_graph():
@@ -7477,12 +7493,20 @@ def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
 
 
 @pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_serializer_save_kwargs_naming_a_model_field_is_rejected_over_http():
     """A save kwarg naming a MODEL field is a top-level ``ConfigurationError``, no row written.
 
     ``CreateShelfWithModelFieldSaveKwargs`` returns ``{"topic": ...}`` - a ``Shelf`` column -
     from ``get_serializer_save_kwargs``; the unaudited model-field injection channel is
     rejected before ``serializer.save()`` and nothing persists.
+
+    The rejection is a ``ConfigurationError``, which the spec-048 error policy
+    classifies as unexpected and masks; this row's evidence that the injection
+    channel was CLOSED (rather than the write merely failing for some other reason)
+    is that message naming the model field. ``DEBUG=True`` opens the policy's
+    pass-through gate - the instrument for the live tier, where the project schema
+    is constructed by the app rather than by the test.
     """
     branch = models.Branch.objects.create(name="ModelFieldSaveKwargsBranch", city="Boston")
     response = _post_graphql(
@@ -7498,12 +7522,20 @@ def test_serializer_save_kwargs_naming_a_model_field_is_rejected_over_http():
 
 
 @pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_serializer_save_kwargs_rejects_renamed_source_shadow_over_http():
     """A save kwarg cannot silently replace a renamed input's value.
 
     ``shelfCode`` is declared as ``shelf_code`` but validates into DRF's ``code`` key through
     ``source="code"``. The colliding server-side ``code`` kwarg is rejected before save, and
     neither the client nor server value reaches the database.
+
+    The row reads the raised ``ConfigurationError``'s text to prove the check
+    compares against the ACTUAL ``validated_data`` keys rather than a reconstruction
+    from the input specs - a distinction only that message carries. The spec-048
+    error policy masks it as unexpected, so ``DEBUG=True`` opens the policy's
+    pass-through gate for this live request; the retained ``path`` assertion below
+    holds either way.
     """
     branch = models.Branch.objects.create(name="SaveKwargsAliasBranch", city="Boston")
     response = _post_graphql(
@@ -7699,6 +7731,7 @@ def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http
 
 
 @pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_serializer_update_substituted_instance_is_rejected_without_writes_over_http():
     """A hook substituting the located instance is a top-level error and NEITHER row is written (hardening).
 
@@ -7706,6 +7739,12 @@ def test_serializer_update_substituted_instance_is_rejected_without_writes_over_
     than the located, authorized row - the "row A's authorization writes row B" bypass.
     ``instance`` is framework-owned, so the substitution is a ``ConfigurationError`` over
     ``/graphql/`` and no write reaches either row.
+
+    That the failure names the ``instance`` kwarg is what distinguishes the bypass
+    being CLOSED from the write failing incidentally, and the spec-048 error policy
+    masks the ``ConfigurationError`` that carries it. ``DEBUG=True`` opens the
+    policy's pass-through gate for this live request; the two ``refresh_from_db``
+    assertions - the part that proves no row moved - are unaffected by the gate.
     """
     from apps.library.schema import BookType
 

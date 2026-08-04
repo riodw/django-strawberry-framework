@@ -158,7 +158,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] [`CHANGELOG.md`][changelog]: append `### Added` bullets to `[Unreleased]` for `FilterSet`, `RelatedFilter`, `Meta.filterset_class`, the per-module input-class namespace, the `FILTER_DEFAULTS` map, and the cross-relation lazy-resolution surface. Append a `### Changed` bullet noting that `Meta.filterset_class` is no longer in `DEFERRED_META_KEYS`. Per the CHANGELOG-edit-permission rule at [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed", this Slice-5 bullet is the explicit permission for this card.
   - [ ] Version bump: NOT in this card per [Decision 10](#decision-10--joint-008-cut). `[Unreleased]` entries accumulate against an unbumped `__version__ = "0.0.7"` until the last card in the `0.0.8` cohort owns the bump to `0.0.8`.
 - [ ] Slice 6: Sibling-card composition smoke tests (held until after [`DONE-028-0.0.8`][kanban] ships)
-  - [ ] One in-process test under [`tests/filters/test_composition.py`][test-filters-composition] (new) that constructs a `DjangoType` with BOTH `Meta.filterset_class` AND `Meta.orderset_class` set, calls `finalize_django_types()`, and asserts both factories' input types are reachable from the schema. The test is held until [`DONE-028-0.0.8`][kanban] (ordering) ships its `OrderSet` / `Meta.orderset_class` so this card's spec body can name the composition contract without writing the sibling-card test prematurely. If [`DONE-028-0.0.8`][kanban] ships first, the test lands as a slice-back-edit to this card's PR; if this card ships first, the composition test lands in the ordering card's PR and this card's Slice 6 is closed as "carried by sibling".
+  - [ ] One in-process test under `tests/filters/test_composition.py` (new) that constructs a `DjangoType` with BOTH `Meta.filterset_class` AND `Meta.orderset_class` set, calls `finalize_django_types()`, and asserts both factories' input types are reachable from the schema. The test is held until [`DONE-028-0.0.8`][kanban] (ordering) ships its `OrderSet` / `Meta.orderset_class` so this card's spec body can name the composition contract without writing the sibling-card test prematurely. If [`DONE-028-0.0.8`][kanban] ships first, the test lands as a slice-back-edit to this card's PR; if this card ships first, the composition test lands in the ordering card's PR and this card's Slice 6 is closed as "carried by sibling".
 
 ## Problem statement
 
@@ -998,7 +998,7 @@ The card ships as **six slices** aligned with the [Slice checklist](#slice-check
 | 3 — Wiring (`Meta.filterset_class` promotion + finalizer phase-2.5 binding + owner-binding + lifecycle helpers + orphan-validation) | [`django_strawberry_framework/types/base.py`][base] (`DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` move + validation), [`django_strawberry_framework/types/definition.py`][definition] (add `filterset_class` slot AND `related_target_for(field_name)` method per H1 of rev5), [`django_strawberry_framework/types/finalizer.py`][finalizer] (phase 2.5 grows the filter-binding pass with `_owner_definition` binding per H4 of rev4 AND orphan-FilterSet validation against `_helper_referenced_filtersets` per H5 of rev5), [`django_strawberry_framework/filters/__init__.py`][filters] (add `_helper_referenced_filtersets` set + extend `filter_input_type` to record into it), [`django_strawberry_framework/filters/inputs.py`][filters] (add `materialize_input_class` + `clear_filter_input_namespace` + `_materialized_names` ledger), [`django_strawberry_framework/registry.py`][registry] (`clear()` invokes `clear_filter_input_namespace()` AND clears `_helper_referenced_filtersets`), [`tests/types/test_base.py`][test-types] (validator extension), [`tests/types/test_definition_order.py`][test-types] (extend), [`tests/types/test_definition_relations.py`][test-types] (new, per H1 of rev5), `tests/filters/test_finalizer.py` (new) | ~24 (validator accepts/rejects, phase-2.5 binding runs, owner-binding validation, idempotent rerun, partial-finalize recovery, `registry.clear()` co-clear, lazy-related-filter resolution at finalize, `related_target_for` covers FK/M2M/reverse-FK, orphan-FilterSet validation at finalize raises `ConfigurationError`) | `+400 / -5` |
 | 4 — Live HTTP coverage in fakeshop | [`examples/fakeshop/apps/library/filters.py`][fakeshop-library] (new, carrying `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter`), [`examples/fakeshop/apps/library/filters_genre.py`][fakeshop-library] (new, carrying `GenreFilter` — cross-module fixture for the Layer-2 absolute-import-path test), [`examples/fakeshop/apps/library/schema.py`][fakeshop-library-schema] (extend with `Meta.filterset_class` + `filter_input_type(...)` annotations on root resolvers), [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] (extend) | 14 (scalar / choice-enum / non-Relay-FK scalar PK / Relay-M2M GlobalID / reverse-FK / logical / optimizer cooperation / related-queryset parent-scope boundary via `Shelf.topic` / cross-module absolute-path `RelatedFilter` / nested-`RelatedFilter` visibility scoping per H1 of rev4 / form-validation rejection via custom `CharFilter` per H4 of rev8 / GraphQL-enum-coercion-layer companion per H4 of rev8 / root `get_queryset` honoring per M5 of rev4 + M1 of rev8 / wrong-`type_name` Relay GlobalID rejection per M6 of rev4); count bumped from 13 to 14 per H4 of rev8 | `+365 / -10` |
 | 5 — Docs + KANBAN + CHANGELOG | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`docs/TREE.md`][tree], [`README.md`][readme], [`TODAY.md`][today], [`KANBAN.md`][kanban], [`CHANGELOG.md`][changelog] | 0 | `+80 / -25` |
-| 6 — Composition smoke test with sibling ordering card | [`tests/filters/test_composition.py`][test-filters-composition] (new, held until [`DONE-028-0.0.8`][kanban] ships) | 1 (composition with `OrderSet`) | `+30 / -0` |
+| 6 — Composition smoke test with sibling ordering card | `tests/filters/test_composition.py` (new, held until [`DONE-028-0.0.8`][kanban] ships) | 1 (composition with `OrderSet`) | `+30 / -0` |
 
 Total expected delta (Slices 1–5): ~2000 lines across five slices.
 
@@ -1204,6 +1204,7 @@ The card is complete when all of the following are true:
 
 <!-- docs/ -->
 [docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
 [glossary-aggregateset]: ../GLOSSARY.md#aggregateset
 [glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
 [glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
@@ -1254,7 +1255,6 @@ The card is complete when all of the following are true:
 [glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
 [glossary-strawberry-config]: ../GLOSSARY.md#strawberry_config
 [glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
-[glossary]: ../GLOSSARY.md
 [part1-plan]: ../row-preserving-predicates-part1-plan.md
 [tree]: ../TREE.md
 
@@ -1269,8 +1269,8 @@ The card is complete when all of the following are true:
 [spec-018]: spec-022-export_schema-0_0_7.md
 [spec-019]: spec-023-multi_db-0_0_7.md
 [spec-020]: spec-025-scalar_map_helper-0_0_7.md
-[spec-021-terms]: appx/spec-027-filters-0_0_8-terms.csv
 [spec-021]: spec-027-filters-0_0_8.md
+[spec-021-terms]: appx/spec-027-filters-0_0_8-terms.csv
 
 <!-- docs/builder/ -->
 
@@ -1285,7 +1285,6 @@ The card is complete when all of the following are true:
 
 <!-- tests/ -->
 [test-filters]: ../../tests/filters/
-[test-filters-composition]: ../../tests/filters/test_composition.py
 [test-types]: ../../tests/types/
 
 <!-- examples/ -->

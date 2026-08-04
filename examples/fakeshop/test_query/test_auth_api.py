@@ -15,6 +15,8 @@ the register / anonymous-``me`` cases, which still seed first and then exercise
 the fresh-account path; no test hand-rolls a ``User``.
 """
 
+import json
+
 import pytest
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from django.contrib.auth import get_user_model
@@ -419,3 +421,59 @@ def test_generated_auth_type_shapes():
     register_fields = {f["name"]: f["type"] for f in register_payload["fields"]}
     assert register_fields["node"]["name"] == "UserType"
     assert register_fields["errors"]["kind"] == "NON_NULL"
+
+
+# ---------------------------------------------------------------------------
+# The session-auth surface under a REAL CSRF check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_login_and_logout_face_djangos_real_csrf_check():
+    """``login`` / ``logout`` under ``Client(enforce_csrf_checks=True)``.
+
+    The deployment guidance tells consumers to exercise the session-auth surface
+    with the test client's CSRF bypass off; this row IS that direction, run
+    against fakeshop. Both mutations are cookie-relevant POSTs, so each is
+    refused without a token (``CsrfViewMiddleware``'s ``403``, no GraphQL
+    envelope) and succeeds with the ``csrftoken`` cookie the IDE GET set - the
+    same round trip a browser makes. Raw ``client.post`` rather than the shared
+    helpers because the subject is the request envelope itself (the documented
+    raw-envelope exemption).
+    """
+    create_users(1)
+    client = Client(enforce_csrf_checks=True)
+    client.get("/graphql/", HTTP_ACCEPT="text/html")  # sets the csrftoken cookie
+    token = client.cookies["csrftoken"].value
+
+    def _raw_post(query, variables=None, **extra):
+        return client.post(
+            "/graphql/",
+            data=json.dumps({"query": query, "variables": variables or {}}),
+            content_type="application/json",
+            **extra,
+        )
+
+    login_variables = {"u": "staff_1", "p": TEST_USER_PASSWORD}
+
+    # Without a token, neither mutation reaches GraphQL execution at all.
+    refused_login = _raw_post(_LOGIN, login_variables)
+    assert refused_login.status_code == 403
+    assert b'"data"' not in refused_login.content
+
+    # With the token, login establishes the session on this same client.
+    accepted_login = _raw_post(_LOGIN, login_variables, HTTP_X_CSRFTOKEN=token)
+    assert accepted_login.status_code == 200
+    assert accepted_login.json()["data"]["login"]["node"]["username"] == "staff_1"
+    assert "sessionid" in client.cookies
+
+    # Logout is a POST on the now-authenticated session: same two directions.
+    # Django rotated the CSRF token on login, so the cookie is re-read.
+    rotated = client.cookies["csrftoken"].value
+    refused_logout = _raw_post(_LOGOUT)
+    assert refused_logout.status_code == 403
+    assert b'"data"' not in refused_logout.content
+
+    accepted_logout = _raw_post(_LOGOUT, HTTP_X_CSRFTOKEN=rotated)
+    assert accepted_logout.status_code == 200
+    assert accepted_logout.json()["data"]["logout"]["ok"] is True

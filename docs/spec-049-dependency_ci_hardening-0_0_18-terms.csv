@@ -1,0 +1,7 @@
+term,anchor,notes
+Hard dependency,hard-dependency,"Django and strawberry-graphql; the packages whose locked versions Slice 1 refreshes and whose declared floors Decision 1 deliberately leaves alone. Slice 5 folds the secure-version statement into this entry."
+Soft dependency,soft-dependency,"Twice load-bearing: cryptography is a soft dependency whose locked version the audit flagged, and this entry's dev-group-row-plus-lock-regeneration discipline is the precedent for the pyyaml addition (Decision 6)."
+require_optional_module,require_optional_module,"Named to make explicit that pyyaml needs no optional-import guard: no package module imports it, only a test. Decision 6."
+Per-operation extension isolation,per-operation-extension-isolation,"The strawberry-graphql==0.316.0 floor that the exact-Django-5.2.0 matrix cell force-installs; part of why Decision 2 keeps that cell."
+Live-first coverage mandate,live-first-coverage-mandate,"The placement rule that puts tests/test_ci_governance.py in root tests/ under the genuinely-unreachable-live clause: a workflow YAML file is not reachable from a fakeshop /graphql/ request. Decision 8."
+Joint version cut,joint-version-cut,"The rule this card is NOT subject to (Decision 10, sole non-Done 0.0.18 card), and whose 'uv.lock dependency entries are not version state' clause authorizes the Slice 1 lock refresh."

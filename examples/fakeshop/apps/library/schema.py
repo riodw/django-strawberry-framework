@@ -151,6 +151,14 @@ class BookType(DjangoType):
             "loans",
         )
         interfaces = (relay.Node,)
+        # Explicit ``"both"`` opt-in: since 0.0.16 the package default for a
+        # many-side relation on a Relay-Node-shaped type is ``"connection"``
+        # alone, so the raw list sibling is a shape a schema author asks for.
+        # These two keep it because the raw-list relation surface (and its row
+        # bound) needs live coverage; ``ItemType.properties`` in the products app
+        # is deliberately left on the default so the connection-only shape is
+        # covered live too.
+        relation_shapes = {"genres": "both"}
         filterset_class = filters.BookFilter
         orderset_class = orders.BookOrder
 
@@ -221,6 +229,7 @@ class GenreType(DjangoType):
         model = models.Genre
         fields = ("id", "name", "books")
         interfaces = (relay.Node, Named)
+        relation_shapes = {"books": "both"}  # explicit raw-list opt-in; see ``BookType.Meta``
         filterset_class = filters_genre.GenreFilter
         orderset_class = orders_genre.GenreOrder
         connection = {"total_count": True}

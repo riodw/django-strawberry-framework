@@ -72,6 +72,13 @@ class CategoryType(DjangoType):
             "updated_date",
         )
         interfaces = (relay.Node,)
+        # Explicit ``"both"`` opt-in for ``items`` only (0.0.16: the default is
+        # ``"connection"``). ``properties`` deliberately stays on the default, so
+        # this one type covers both shapes live: ``items`` proves the bounded
+        # opt-in raw list, ``properties`` proves the connection-only default -
+        # ``CategoryType.properties`` has NO list form in the SDL and is reachable
+        # only through ``propertiesConnection``.
+        relation_shapes = {"items": "both"}
         filterset_class = filters.CategoryFilter
         orderset_class = orders.CategoryOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
@@ -109,6 +116,9 @@ class ItemType(DjangoType):
             "updated_date",
         )
         interfaces = (relay.Node,)
+        relation_shapes = {
+            "entries": "both",
+        }  # explicit raw-list opt-in; see ``CategoryType.Meta``
         filterset_class = filters.ItemFilter
         orderset_class = orders.ItemOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:

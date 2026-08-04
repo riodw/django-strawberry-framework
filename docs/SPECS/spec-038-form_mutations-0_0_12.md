@@ -2547,8 +2547,8 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
 <!-- scripts/ -->
 
 <!-- .venv/ -->
+
+<!-- External -->
 [upstream-forms-converter]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/converter.py
 [upstream-forms-mutation]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/mutation.py
 [upstream-forms-types]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/types.py
-
-<!-- External -->

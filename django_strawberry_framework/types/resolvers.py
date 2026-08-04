@@ -47,6 +47,7 @@ from ..optimizer._context import (
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
+from ..resource_policy import bounded_rows
 from ..utils.relations import instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
 
@@ -306,11 +307,14 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
     Cardinality-specific shapes:
 
-    - Many-side (M2M, reverse FK): ``list(getattr(root, name).all())``.
+    - Many-side (M2M, reverse FK): ``list(getattr(root, name).all())``,
+      row-bounded by ``resource_policy.py::bounded_rows``.
       ``manager.all()`` is prefetch-aware (returns the cached list when
       the optimizer has prefetched) so the same shape works on or off
       the optimizer. ``list(...)`` materializes the queryset to a Python
       list, matching strawberry-graphql-django's ``get_result`` shape.
+      A raw relation list has no cursor and therefore no Relay cap of its
+      own, so the request policy's ``max_list_rows`` is its only ceiling.
     - Reverse OneToOne (a non-concrete ``OneToOneRel`` descriptor):
       ``getattr(root, name)`` wrapped in ``try/except DoesNotExist`` so
       the resolver returns ``None`` when the reverse row is absent.
@@ -347,8 +351,15 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                 cached = prefetched.get(accessor_name)
                 if cached is not None:
                     result_cache = getattr(cached, "_result_cache", None)
-                    return result_cache if result_cache is not None else cached
-            return list(getattr(root, accessor_name).all())
+                    return bounded_rows(
+                        result_cache if result_cache is not None else cached,
+                        info,
+                    )
+            # The bound is applied to the QUERYSET, before ``list(...)``, so the
+            # unprefetched path carries it into SQL as a ``LIMIT`` rather than
+            # materializing the whole relation and discarding the tail
+            # (``resource_policy.py::bounded_rows``).
+            return list(bounded_rows(getattr(root, accessor_name).all(), info))
 
         return _name_resolver(many_resolver, field_name)
 

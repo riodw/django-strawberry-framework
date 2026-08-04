@@ -1836,12 +1836,12 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[conf]: ../../django_strawberry_framework/conf.py
 [filters-inputs]: ../../django_strawberry_framework/filters/inputs.py
 [init]: ../../django_strawberry_framework/__init__.py
 [mutations-inputs]: ../../django_strawberry_framework/mutations/inputs.py
 [mutations-resolvers]: ../../django_strawberry_framework/mutations/resolvers.py
 [scalars]: ../../django_strawberry_framework/scalars.py
-[conf]: ../../django_strawberry_framework/conf.py
 [types-base]: ../../django_strawberry_framework/types/base.py
 [types-converters]: ../../django_strawberry_framework/types/converters.py
 [types-finalizer]: ../../django_strawberry_framework/types/finalizer.py

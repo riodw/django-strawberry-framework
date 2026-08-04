@@ -1048,8 +1048,18 @@ def _make_asset_model():
     )
 
 
-def _asset_type(model):
-    meta = type("Meta", (), {"model": model, "fields": ("id", "attachment", "preview")})
+def _asset_type(model, *, filesystem_path_fields=()):
+    """Build the asset DjangoType, optionally opting columns into the filesystem path.
+
+    ``filesystem_path_fields`` threads ``Meta.filesystem_path_fields``
+    (spec-048 Decision 2) so a row needing the ``path`` subfield asks for it
+    the way a consumer would; omitted, the type gets the safe default output,
+    which has no ``path`` at all.
+    """
+    attrs = {"model": model, "fields": ("id", "attachment", "preview")}
+    if filesystem_path_fields:
+        attrs["filesystem_path_fields"] = filesystem_path_fields
+    meta = type("Meta", (), attrs)
     return type(f"{model.__name__}Type", (DjangoType,), {"Meta": meta})
 
 
@@ -1066,7 +1076,12 @@ def _asset_schema(asset_type, model):
 
 @pytest.mark.django_db(transaction=True)
 def test_populated_file_and_image_resolve_all_subfields(tmp_path):
-    """A populated FileField / ImageField resolves name/path/size/url (+ width/height)."""
+    """A populated FileField / ImageField resolves name/size/url (+ width/height).
+
+    ``path`` is deliberately absent from the selection: it is off the safe
+    default output (spec-048 Decision 1), and the SDL assertion below is what
+    pins that rather than a query that would merely fail to compile.
+    """
     from django.core.files.base import ContentFile
 
     model = _make_asset_model()
@@ -1080,14 +1095,17 @@ def test_populated_file_and_image_resolve_all_subfields(tmp_path):
             asset.save()
 
             schema = _asset_schema(_asset_type(model), model)
+            # The default output objects publish no filesystem path at all.
+            sdl = str(schema)
+            assert "type DjangoFileType {" in sdl
+            assert "path" not in sdl
             result = schema.execute_sync(
-                "{ assets { attachment { name path size url } "
-                "preview { name path size url width height } } }",
+                "{ assets { attachment { name size url } "
+                "preview { name size url width height } } }",
             )
             assert result.errors is None
             row = result.data["assets"][0]
             assert row["attachment"]["name"].endswith("doc.txt")
-            assert row["attachment"]["path"].endswith("doc.txt")
             assert row["attachment"]["size"] == len(b"hello bytes")
             assert "doc.txt" in row["attachment"]["url"]
             # ImageField dimensions read through the real Pillow-parsed image.
@@ -1159,6 +1177,11 @@ def test_empty_required_file_resolves_to_null_without_error(tmp_path):
 def test_per_subfield_guard_isolates_storage_failure(tmp_path, monkeypatch):
     """A storage failure on ``path`` nulls only ``path``; ``url`` / ``name`` still resolve.
 
+    The type opts ``attachment`` into ``Meta.filesystem_path_fields`` so the
+    ``path`` subfield exists to fail (spec-048 Decision 2); the narrow guard
+    itself is unchanged, and removing ``path`` from the default output is not a
+    substitute for it (spec-048 Decision 3).
+
     Each subfield is selected ONE AT A TIME so the failure cannot be attributed
     to the parent resolver -- proving ``_safe_file_attr`` guards at the field
     level. The non-filesystem ``path`` case (S3-style) is the realistic backend
@@ -1182,7 +1205,10 @@ def test_per_subfield_guard_isolates_storage_failure(tmp_path, monkeypatch):
 
             monkeypatch.setattr(FileSystemStorage, "path", _no_path)
 
-            schema = _asset_schema(_asset_type(model), model)
+            schema = _asset_schema(
+                _asset_type(model, filesystem_path_fields=("attachment",)),
+                model,
+            )
             # ``path`` selected alone -> degrades to null via the subfield guard.
             path_result = schema.execute_sync("{ assets { attachment { path } } }")
             assert path_result.errors is None
@@ -1206,7 +1232,8 @@ def test_suspicious_file_operation_is_not_swallowed(tmp_path, monkeypatch):
 
     It is a ``SuspiciousOperation`` subclass, NOT a ``ValueError`` / ``OSError``,
     so the narrow ``_safe_file_attr`` guard must let it propagate (spec-037
-    Decision 4 -- a path-traversal security signal).
+    Decision 4 -- a path-traversal security signal). The type opts ``attachment``
+    into ``Meta.filesystem_path_fields`` so the subfield exists at all.
     """
     from django.core.exceptions import SuspiciousFileOperation
     from django.core.files.base import ContentFile
@@ -1226,7 +1253,10 @@ def test_suspicious_file_operation_is_not_swallowed(tmp_path, monkeypatch):
 
             monkeypatch.setattr(FileSystemStorage, "path", _suspicious)
 
-            schema = _asset_schema(_asset_type(model), model)
+            schema = _asset_schema(
+                _asset_type(model, filesystem_path_fields=("attachment",)),
+                model,
+            )
             result = schema.execute_sync("{ assets { attachment { path } } }")
             # The error surfaces (it is NOT degraded to a null subfield).
             assert result.errors is not None

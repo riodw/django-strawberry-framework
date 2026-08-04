@@ -2916,7 +2916,6 @@ Before implementation:
 - Read this guide.
 - Read the [`FieldSet specification`][fieldset-spec] and
   [`search specification`][search-spec].
-- Read the [`existing to-many search reproduction`][to-many-search-reproduction].
 - Resolve every item under required product and security decisions, and record the chosen
   contracts.
 - Write the public declaration specification for the graph substrate.
@@ -2973,16 +2972,15 @@ Before review:
 [backlog-stable-cursor]: BACKLOG.md#stable_cursor_field
 [goal]: GOAL.md
 [kanban]: KANBAN.md
-[to-many-search-reproduction]: to-many-search-optimizer-reproduction.md
 
 <!-- docs/ -->
-[fieldset-spec]: docs/spec-053-fieldset-0_1_1.md
 [row-preserving-pg]: docs/row-preserving-predicates-part1-pg-explain.md
-[search-spec]: docs/spec-054-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
 [connection-optimizer-spec]: docs/SPECS/spec-033-connection_optimizer-0_0_9.md
+[fieldset-spec]: docs/SPECS/spec-053-fieldset-0_1_1.md
 [permissions-spec]: docs/SPECS/spec-034-permissions-0_0_10.md
+[search-spec]: docs/SPECS/spec-054-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

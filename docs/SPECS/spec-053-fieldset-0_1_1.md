@@ -889,57 +889,57 @@ cannot reach.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply-cascade-permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize-django-types]: GLOSSARY.md#finalize_django_types
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-get-queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-metaaggregate-class]: GLOSSARY.md#metaaggregate_class
-[glossary-metachoice-enum-names]: GLOSSARY.md#metachoice_enum_names
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metafields-class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset-class]: GLOSSARY.md#metafilterset_class
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metaoptimizer-hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaorderset-class]: GLOSSARY.md#metaorderset_class
-[glossary-metasearch-fields]: GLOSSARY.md#metasearch_fields
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-schema-audit]: GLOSSARY.md#schema-audit
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
+[glossary]: ../GLOSSARY.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply-cascade-permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cookbook-parity]: ../GLOSSARY.md#cookbook-parity
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-get-queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-metaaggregate-class]: ../GLOSSARY.md#metaaggregate_class
+[glossary-metachoice-enum-names]: ../GLOSSARY.md#metachoice_enum_names
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafields-class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset-class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaoptimizer-hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaorderset-class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metasearch-fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
+[glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
+
+<!-- docs/SPECS/ -->
+[spec-030]: spec-030-connection_field-0_0_9.md
+[spec-034]: spec-034-permissions-0_0_10.md
+[spec-038]: spec-038-form_mutations-0_0_12.md
 [spec-050]: spec-050-debug_extraction-0_0_19.md
 [spec-051]: spec-051-boundary_dry_squeeze-0_0_20.md
 [spec-052]: spec-052-beta_release-0_1_0.md
 [spec-054]: spec-054-search_fields-0_1_2.md
-
-<!-- docs/SPECS/ -->
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
-[spec-034]: SPECS/spec-034-permissions-0_0_10.md
-[spec-038]: SPECS/spec-038-form_mutations-0_0_12.md
 
 <!-- docs/builder/ -->
 

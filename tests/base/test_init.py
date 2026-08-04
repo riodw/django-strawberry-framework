@@ -18,7 +18,7 @@ from django_strawberry_framework.types import converters
 def test_version():
     # This version-only change must not widen the package-root __all__;
     # DjangoDebugExtension is a subpackage export.
-    assert __version__ == "0.0.14"
+    assert __version__ == "0.0.18"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -55,13 +55,26 @@ def test_public_api_surface_is_pinned():
     # REQUIRED schema class for generated mutations - its execution context holds
     # each mutation's transaction open through response completion) and
     # ``DjangoMutationExecutionContext`` (the subclassing seam for consumers with
-    # their own execution context).
+    # their own execution context). The 0.0.16 resource-policy cut adds
+    # ``DEFAULT_RESOURCE_POLICY`` / ``RESOURCE_LIMIT_ERROR_CODE`` /
+    # ``ResourceLimitExceeded`` / ``ResourcePolicy`` /
+    # ``DjangoResourcePolicyExtension``. The 0.0.17 secure-output cut adds the
+    # two opt-in file/image output objects (``DjangoFilePathType`` /
+    # ``DjangoImagePathType``, spec-048 Decision 1) and the three
+    # production-error-policy symbols (``DEFAULT_ERROR_POLICY`` /
+    # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7).
     assert django_strawberry_framework.__all__ == (
+        "DEFAULT_ERROR_POLICY",
+        "DEFAULT_RESOURCE_POLICY",
+        "RESOURCE_LIMIT_ERROR_CODE",
         "BigInt",
         "DjangoConnection",
         "DjangoConnectionField",
+        "DjangoErrorPolicyExtension",
+        "DjangoFilePathType",
         "DjangoFileType",
         "DjangoFormMutation",
+        "DjangoImagePathType",
         "DjangoImageType",
         "DjangoListField",
         "DjangoModelFormMutation",
@@ -72,10 +85,14 @@ def test_public_api_surface_is_pinned():
         "DjangoNodeField",
         "DjangoNodesField",
         "DjangoOptimizerExtension",
+        "DjangoResourcePolicyExtension",
         "DjangoSchema",
         "DjangoType",
+        "ErrorPolicy",
         "FieldError",
         "OptimizerHint",
+        "ResourceLimitExceeded",
+        "ResourcePolicy",
         "SyncMisuseError",
         "Upload",
         "__version__",

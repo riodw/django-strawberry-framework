@@ -37,6 +37,7 @@ from typing import Any
 from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import OptimizerError
+from ..resource_policy import effective_bound, policy_from_info
 from .typing import schema_config_from_info
 
 # The connection sidecar argument names, in BOTH vocabularies the shared
@@ -657,9 +658,16 @@ def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
     same attribute path (the cursor-parity invariant's keyset leg).
     """
     if max_results is not None:
-        return max_results
-    cap = getattr(schema_config_from_info(info), "relay_max_results", None)
-    return cap if cap is not None else _RELAY_MAX_RESULTS_DEFAULT
+        cap = max_results
+    else:
+        configured = getattr(schema_config_from_info(info), "relay_max_results", None)
+        cap = configured if configured is not None else _RELAY_MAX_RESULTS_DEFAULT
+    # The request policy is a CEILING over whichever cap won above, never a
+    # replacement for it: a connection can be narrower than the policy and can
+    # never be wider (``resource_policy.py::effective_bound``). This is the seam
+    # both the plan-time walker and the resolve-time window read, so clamping
+    # here keeps the two windows in agreement by construction.
+    return effective_bound(policy_from_info(info).max_page_size, cap)
 
 
 def derive_keyset_window_bounds(

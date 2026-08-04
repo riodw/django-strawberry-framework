@@ -11,9 +11,33 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Core
 # ---------------------------------------------------------------------------
 
+# Fakeshop is a development fixture, and every unsafe value in this module is
+# deliberate: DEBUG on, a checked-in SECRET_KEY, GraphiQL served, the debug
+# toolbar wired, and intentional ``permission_classes = []`` demonstrations in
+# the app schemas. It must never be deployed, and it cannot be made
+# production-ready by editing settings - build a separate project instead.
+# ``_require_development_settings`` below turns the most likely accident
+# (flipping DEBUG and shipping the rest) into a loud import-time failure.
+
 SECRET_KEY = "_$=$%eqxk$8ss4n7mtgarw^5$8^d5+c83!vwatr@i_81myb=e4"
 
 DEBUG = True
+
+
+def _require_development_settings(debug):
+    """Refuse to load as anything but the development fixture this module is."""
+    if not debug:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(
+            "examples/fakeshop is a development fixture and must never be deployed: "
+            "it ships a checked-in SECRET_KEY, GraphiQL, the debug toolbar, and "
+            "intentionally open permission demonstrations. Setting DEBUG = False "
+            "here does not make it production-ready - build a separate project.",
+        )
+
+
+_require_development_settings(DEBUG)
 
 ALLOWED_HOSTS = []
 

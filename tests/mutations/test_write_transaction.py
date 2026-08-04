@@ -145,6 +145,24 @@ def _declare_delete_mutation(*, permission_classes=None, select_for_update=True)
 
 
 def _mutation_schema(*mutations, schema_cls=DjangoSchema, extra_fields=None):
+    """Build a probe schema over ``mutations``, with response-boundary masking OFF.
+
+    The subject of this file is the WRITE pipeline - which alias a write is pinned
+    to, whether a phase violation or a non-bool permission result fails closed, and
+    whether the row survived. Several rows prove that by reading the
+    ``ConfigurationError`` text the pipeline raised, and the spec-048 error policy
+    would replace exactly that text with its stable message. The policy is therefore
+    opted out of on these in-process probe schemas (``error_policy={"enabled":
+    False}``) rather than claiming a debug deployment; masking is pinned on its own
+    in ``tests/test_error_policy.py`` and the live tier. A plain
+    ``strawberry.Schema`` takes no such argument and installs no extension, so the
+    opt-out is passed only for the package schema class.
+    """
+    policy_kwargs = (
+        {"error_policy": {"enabled": False}}
+        if isinstance(schema_cls, type) and issubclass(schema_cls, DjangoSchema)
+        else {}
+    )
     body = {
         f"write{index}": DjangoMutationField(mutation_cls)
         for index, mutation_cls in enumerate(mutations)
@@ -158,6 +176,7 @@ def _mutation_schema(*mutations, schema_cls=DjangoSchema, extra_fields=None):
         query=_Query,
         mutation=Mutation,
         extensions=[DjangoOptimizerExtension],
+        **policy_kwargs,
     )
 
 

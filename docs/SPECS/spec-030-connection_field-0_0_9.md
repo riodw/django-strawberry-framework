@@ -685,7 +685,6 @@ The completion contract the card is built against. Items are grouped by slice; t
 [contributing]: ../../CONTRIBUTING.md
 [goal]: ../../GOAL.md
 [kanban]: ../../KANBAN.md
-[package-init]: ../../django_strawberry_framework/__init__.py
 [readme]: ../../README.md
 [start]: ../../START.md
 [today]: ../../TODAY.md
@@ -706,8 +705,8 @@ The completion contract the card is built against. Items are grouped by slice; t
 [glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: ../GLOSSARY.md#djangotype
 [glossary-fieldset]: ../GLOSSARY.md#fieldset
-[glossary-filterset]: ../GLOSSARY.md#filterset
 [glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-filterset]: ../GLOSSARY.md#filterset
 [glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
 [glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
 [glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
@@ -728,11 +727,12 @@ The completion contract the card is built against. Items are grouped by slice; t
 [glossary-metaprimary]: ../GLOSSARY.md#metaprimary
 [glossary-metarequired_overrides]: ../GLOSSARY.md#metarequired_overrides
 [glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
 [glossary-only-projection]: ../GLOSSARY.md#only-projection
 [glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-order_input_type]: ../GLOSSARY.md#order_input_type
 [glossary-ordering]: ../GLOSSARY.md#ordering
 [glossary-orderset]: ../GLOSSARY.md#orderset
-[glossary-order_input_type]: ../GLOSSARY.md#order_input_type
 [glossary-plan-cache]: ../GLOSSARY.md#plan-cache
 [glossary-public-exports]: ../GLOSSARY.md#public-exports
 [glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
@@ -744,7 +744,6 @@ The completion contract the card is built against. Items are grouped by slice; t
 [glossary-strawberry_config]: ../GLOSSARY.md#strawberry_config
 [glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
 [glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
-[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
@@ -765,6 +764,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [definition]: ../../django_strawberry_framework/types/definition.py
 [list-field]: ../../django_strawberry_framework/list_field.py
 [optimizer-extension]: ../../django_strawberry_framework/optimizer/extension.py
+[package-init]: ../../django_strawberry_framework/__init__.py
 [relay]: ../../django_strawberry_framework/types/relay.py
 
 <!-- tests/ -->

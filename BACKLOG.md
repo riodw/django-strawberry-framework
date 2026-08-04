@@ -1848,20 +1848,20 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[card-optimizer-explain-mode]: KANBAN.md#optimizer_explain_mode
-[card-django-model-based-globalid-encoding]: KANBAN.md#django_model_based_globalid_encoding
 [card-connection-aware-optimizer-planning]: KANBAN.md#connection_aware_optimizer_planning
+[card-django-model-based-globalid-encoding]: KANBAN.md#django_model_based_globalid_encoding
 [card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
 [card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract
 [card-multiple-djangotypes-per-model-with-metaprimary]: KANBAN.md#multiple_djangotypes_per_model_with_metaprimary
 [card-mutation-idempotency-keys]: KANBAN.md#mutation_idempotency_keys
+[card-optimizer-explain-mode]: KANBAN.md#optimizer_explain_mode
 [kanban]: KANBAN.md
 
 <!-- docs/ -->
 [glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
-[spec-035]: docs/spec-035-optimizer_hardening-0_0_10.md
 
 <!-- docs/SPECS/ -->
+[spec-035]: docs/SPECS/spec-035-optimizer_hardening-0_0_10.md
 
 <!-- docs/builder/ -->
 

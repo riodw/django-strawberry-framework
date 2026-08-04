@@ -36,8 +36,11 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.converters import (
     FIELD_OUTPUT_TYPE_MAP,
+    FILESYSTEM_PATH_OUTPUT_TYPE_MAP,
     SCALAR_MAP,
+    DjangoFilePathType,
     DjangoFileType,
+    DjangoImagePathType,
     DjangoImageType,
     _field_output_type_for,
     _sanitize_member_name,
@@ -1914,3 +1917,113 @@ def test_file_columns_stay_scalar_on_the_filter_input_path():
     assert SCALAR_MAP[models.ImageField] is str
     assert FIELD_OUTPUT_TYPE_MAP[models.FileField] is DjangoFileType
     assert FIELD_OUTPUT_TYPE_MAP[models.ImageField] is DjangoImageType
+
+
+# ---------------------------------------------------------------------------
+# Filesystem-path opt-in (spec-048, Decision 1 / Decision 2)
+# ---------------------------------------------------------------------------
+
+
+def test_default_file_output_objects_publish_no_filesystem_path():
+    """``path`` is absent from both default output objects; the opt-in siblings carry it.
+
+    The field surface is read off Strawberry's own type definitions rather than
+    off a rendered schema, so the assertion holds for every consumer type at
+    once instead of for one generated SDL (spec-048 Decision 1).
+    """
+    default_file = {field.name for field in DjangoFileType.__strawberry_definition__.fields}
+    default_image = {field.name for field in DjangoImageType.__strawberry_definition__.fields}
+    assert default_file == {"name", "size", "url"}
+    assert default_image == {
+        "name",
+        "size",
+        "url",
+        "width",
+        "height",
+    }
+    opt_in_file = {field.name for field in DjangoFilePathType.__strawberry_definition__.fields}
+    opt_in_image = {field.name for field in DjangoImagePathType.__strawberry_definition__.fields}
+    assert opt_in_file == default_file | {"path"}
+    assert opt_in_image == default_image | {"path"}
+
+
+def test_opt_in_path_field_carries_the_security_description():
+    """The single shared ``path`` definition warns, on BOTH opt-in types.
+
+    The mixin exists so the wording cannot drift between the file and image
+    compositions; identity of the description is what proves there is one
+    definition rather than two that currently agree.
+    """
+    file_path = next(
+        field
+        for field in DjangoFilePathType.__strawberry_definition__.fields
+        if field.name == "path"
+    )
+    image_path = next(
+        field
+        for field in DjangoImagePathType.__strawberry_definition__.fields
+        if field.name == "path"
+    )
+    assert file_path.description == image_path.description
+    assert "SECURITY" in file_path.description
+    assert "filesystem_path_fields" in file_path.description
+
+
+def test_convert_field_output_swaps_in_the_path_bearing_sibling():
+    """``expose_filesystem_path`` routes a file/image column to its opt-in sibling.
+
+    The nullability tri-state is unchanged by the swap: the opt-in type is
+    nullable by default for the same empty-``FieldFile`` reason the default one
+    is (spec-037 Decision 4), and ``force_nullable=False`` still narrows it.
+    """
+
+    class _PathOwner(models.Model):
+        attachment = models.FileField()
+        preview = models.ImageField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_filesystem_path_optin")
+
+    attachment = _PathOwner._meta.get_field("attachment")
+    preview = _PathOwner._meta.get_field("preview")
+    assert convert_field_output(attachment, "OwnerType") == (DjangoFileType | None)
+    assert convert_field_output(attachment, "OwnerType", expose_filesystem_path=True) == (
+        DjangoFilePathType | None
+    )
+    assert convert_field_output(preview, "OwnerType", expose_filesystem_path=True) == (
+        DjangoImagePathType | None
+    )
+    assert (
+        convert_field_output(
+            attachment,
+            "OwnerType",
+            force_nullable=False,
+            expose_filesystem_path=True,
+        )
+        is DjangoFilePathType
+    )
+    assert FILESYSTEM_PATH_OUTPUT_TYPE_MAP[DjangoFileType] is DjangoFilePathType
+    assert FILESYSTEM_PATH_OUTPUT_TYPE_MAP[DjangoImageType] is DjangoImagePathType
+
+
+def test_consumer_imagefield_subclass_opts_in_to_the_image_sibling():
+    """The opt-in follows the MRO walk's answer, so a subclass keeps its dimensions.
+
+    A consumer ``ImageField`` subclass resolves to ``DjangoImageType`` through
+    ``_field_output_type_for``; the path swap is keyed on THAT answer rather
+    than on the field class again, so the subclass reaches
+    ``DjangoImagePathType`` and not the dimensionless file sibling.
+    """
+
+    class _SubImageOwner(models.Model):
+        preview = _SubImageField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_filesystem_path_subclass")
+
+    preview = _SubImageOwner._meta.get_field("preview")
+    assert convert_field_output(preview, "OwnerType", expose_filesystem_path=True) == (
+        DjangoImagePathType | None
+    )

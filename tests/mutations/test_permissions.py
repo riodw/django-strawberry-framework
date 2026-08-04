@@ -146,6 +146,17 @@ class _Query:
         return 1
 
 
+#: Every probe schema in this file opts out of the spec-048 response-boundary error
+#: policy. The subject here is the AUTHORIZATION pipeline - whether a coroutine or a
+#: non-bool permission result is refused rather than silently treated as ALLOW - and
+#: the proof is the ``SyncMisuseError`` text (and, in one row, the surviving
+#: ``original_error``) that the pipeline raises. Masking is a different, later concern
+#: that would replace exactly that evidence, so it is disabled here rather than
+#: pretending these in-process schemas are running a debug deployment; the masking
+#: contract itself is pinned in ``tests/test_error_policy.py`` and the live tier.
+_NO_ERROR_MASKING = {"enabled": False}
+
+
 def _build_auth_schema(*, create_permission_classes=None):
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
 
@@ -192,7 +203,7 @@ def _build_auth_schema(*, create_permission_classes=None):
         delete_item = DjangoMutationField(DeleteItem)
 
     finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy=_NO_ERROR_MASKING)
     return schema, (CategoryT, ItemT)
 
 
@@ -312,7 +323,7 @@ def test_hidden_row_is_not_found_before_auth_signal_no_existence_leak():
         update_item = DjangoMutationField(UpdateItem)
 
     finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy=_NO_ERROR_MASKING)
 
     cat = product_models.Category.objects.create(name="Cat-hidden")
     hidden = product_models.Item.objects.create(name="Secret", category=cat, is_private=True)
@@ -523,7 +534,7 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
         create_item = DjangoMutationField(AsyncCheckCreateItem)
 
     finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy=_NO_ERROR_MASKING)
     cat = product_models.Category.objects.create(name="Cat-asynccheck")
     res = _execute(
         schema,

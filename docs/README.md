@@ -96,7 +96,7 @@ A quick summary:
 
 **Shipped today** (`0.0.14`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
-- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, choice enums; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects — nullable by default, so an empty stored file resolves to `null` regardless of the column's `null` / `blank` — with the filter / scalar-input value staying `str`)
+- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, choice enums; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects — `name` / `size` / `url`, plus `width` / `height` on images, with the server's absolute filesystem path deliberately absent from the default and available per column through `Meta.filesystem_path_fields` — nullable by default, so an empty stored file resolves to `null` regardless of the column's `null` / `blank` — with the filter / scalar-input value staying `str`)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
 - relation conversion (forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M)
 - `Meta.interfaces = (relay.Node,)` for Relay-node-shaped types with `id: GlobalID!`
@@ -104,7 +104,7 @@ A quick summary:
 - definition-order-independent relation finalization via `finalize_django_types()`
 - `get_queryset` visibility hook (cooperates with the optimizer via `Prefetch` downgrade). As of the visibility-boundary hardening on `main`, every framework-owned invocation of the hook runs through one shared hardened boundary (`django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` / `apply_type_visibility_async`) built on a **sealed execution queryset** contract: the hook or source object is treated as *untrusted query state*, never as a trusted executable object. The boundary validates the extracted SQL state — the registered-type concrete model (proxy siblings compose, MTI children do not), the actual base table recomputed from the first alias of the initialized `Query.alias_map` (never the poisonable `base_table` cached property, which `Query.clone` itself discards and recomputes) including every combined-query (`union()`/`intersection()`/`difference()`) branch rather than the mutable `QuerySet.model` / `Query.model`, the database alias, and (on read surfaces) the projection shape — and then rebuilds a framework-owned plain `django.db.models.QuerySet` from that validated state. Filters, annotations, joins, ordering, database routing, query hints, and (where the surface permits) `.values()` / `.values_list()` projections are preserved; every `prefetch_related` entry is rebuilt as an exact `django.db.models.Prefetch` (including the no-queryset case, so a consumer `Prefetch` subclass cannot keep an executable `get_current_querysets` override) and only an exact-`str` lookup passes through; a `Prefetch` carrying a consumer queryset is itself recursively sealed against the outer effective alias (a child pinned to a divergent alias fails closed, an unrouted child inherits the outer alias, and — when the parent itself is unrouted so the effective alias is unresolved — an explicitly routed child also fails closed, so a single resolution never schedules a parent and its related rows across two database connections), and an unsealable child fails the whole seal closed; the consumer object's executable behavior is never dispatched — and because `sql.Query.clone` is itself not a no-dispatch boundary (its body calls `where.clone()`, the containers' `.copy()`, and, at compile time, `as_sql` on the graph), the seal proves the *entire* query graph trusted before it clones: a structural check rejects any query instance that shadows a callable `sql.Query` method in its `__dict__` (a replaced `chain` / `clone` would otherwise ride through `sql.Query.clone`'s shallow `__dict__` copy and dispatch on the first post-seal transform); every container the clone copies must be an exact builtin `dict` / `set` (a subclass `.copy()` would otherwise dispatch mid-clone) and `combined_queries` must be an exact `tuple` (a `tuple` subclass with a stateful `__iter__` could otherwise yield the registered model's branches during validation and a foreign model's branches during the clone / compile); and a complete, recursive, identity-memoized walk proves every compiler-reachable node — the `where` / `having` trees **and their leaf operands**, annotations including nested `Func` / `Case` / `Subquery` operands, `order_by` / `group_by` / `distinct` / `select` sequences, `alias_map` joins (and any join's `filtered_relation` resolved condition), each expression's SQL-template metadata (`arg_joiner` / `template` / `function` / `connector`, which the compiler interpolates straight into the emitted SQL), the `extra_order_by` / `extra_tables` raw-SQL sequences, and `select_related` — is an exact genuine Django type (proven by object identity against `sys.modules`, read through `type.__getattribute__` so a consumer metaclass cannot run during the provenance check, never the spoofable `__module__` string) with no instance-`__dict__` method shadow, so a consumer `WhereNode` subclass, a consumer expression anywhere in the graph (including a lookup RHS operand or a node buried inside a subquery), an exact Django node with a shadowed `as_sql` or a dynamically-resolved `as_<vendor>` compiler method, a consumer join, or a foreign `select_related` all fail closed alongside a foreign `Query` class, a foreign combined-query branch, and a custom iterable class. A pending relation `_deferred_filter` is baked onto the framework-owned *detached clone* (never the candidate, which is left unmutated) through the unbound `sql.Query.add_q` only after every filter argument is proven inert (by exact leaf type, so a `str` / `int` / `datetime` subclass carrying a `resolve_expression` is not mistaken for a bound parameter) or genuine-Django — with a model-instance argument that shadows `resolve_expression` at the class or instance level failing closed — so no consumer `resolve_expression` runs mid-seal. The retained `QuerySet` state the seal carries forward — `_db` routing, `_hints`, `_fields`, `_sticky_filter`, `_for_write`, and `_prefetch_related_lookups` — is each pinned to its exact Django shape before any truthiness test, comparison, or copy runs on it, so a consumer `__bool__` / `__eq__` / `__iter__` on one of those fields cannot dispatch during the rebuild. A subclass is accepted as *input* (its query state is preserved) but its identity and behavior are deliberately dropped; a custom `Query` class or an unrecognized iterable class fails closed with a typed `ConfigurationError`. `None`, lists, generators, and other non-queryset returns fail closed, as does a queryset off the registered type's concrete table, one whose SQL-bearing `Query.model` (outer or any combined-query branch) is missing or non-model (a model-row select with no model escapes as malformed SQL otherwise), one whose combined-query branch reads another table's rows or is itself a foreign `Query` subclass, and (on read surfaces) an already-sliced queryset that the surface could not refilter or reorder without a raw Django error. On read surfaces a `.values()` / custom-iterable projection fails closed (the read contract composes over model rows), while the cascade deliberately accepts a projection return and re-projects it to the edge's target column. A `Manager` return is coerced through `.all()` with its explicit database routing preserved (a Manager whose `.all()` degrades into a non-queryset, or drifts from the manager's explicit `_db` alias, fails closed). Under a pinned resolution (an active write pipeline, or a source explicitly routed with `.using(...)`) an unrouted hook return is repinned onto the pinned alias while an explicitly divergent one fails closed; and every downstream framework operation (Relay node filtering, connection ordering/slicing/counting, filter/order sets, optimizer, cascade re-projection, and terminal evaluation sync and async) therefore runs on the sealed framework-owned queryset. A hook that returns the source object verbatim is re-sealed too — object identity is not immutability, so there is no identity fast path and an injected result cache (a synthetic unsaved row) cannot cross the boundary. An async `get_queryset` resolving to a nested awaitable (and an async consumer resolver resolving to a residual awaitable) also fails closed rather than skipping visibility.
 - `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. As of `0.0.9` the walk is connection-aware: a nested `<field>Connection`'s `edges { node }` selection gets a windowed `Prefetch` (one window-function query per relation per request instead of one per parent) and strictness flags an unplanned, unserved nested-connection access. As of `0.0.14`, *how* a recognized nested connection is fetched is a pluggable strategy seam: the windowed prefetch is the default backend (`"windowed"`), a Postgres `CROSS JOIN LATERAL` backend pages per parent (O(parents × page) instead of the window's O(all children)), and the backend is selected per extension instance via the `nested_connection_strategy=` constructor kwarg, the `NESTED_CONNECTION_STRATEGY` setting, or `"auto"`; auto keeps one cache-stable lateral-capable window plan, selects lateral only when the nested queryset's effective routed alias is PostgreSQL, and executes the same bounded window on every other vendor. A consumer-authored `NestedConnectionStrategy` instance is also accepted. A keyset-mode nested connection always orders by its target type's declared `Meta.cursor_field`, matching root keyset cursor bytes; supplying that field's `orderBy:` sidecar deliberately leaves it unplanned for the per-parent pipeline rather than overriding the cursor order. As of `0.0.10` the optimizer will not touch a queryset the consumer already evaluated (it passes an evaluated root queryset through unchanged rather than re-executing a clone — though as of the visibility-boundary hardening on `main` this pass-through holds only for querysets that do NOT cross a `get_queryset` visibility hook: an evaluated queryset supplied to or returned by the hook is refreshed to a lazy clone before it can serve rows, an intentional security carve-out, so it may be re-executed and optimized later and object identity is not preserved) and applies no column projection on non-query operations (mutation / subscription querysets keep `select_related` / `prefetch_related` but carry no `.only()` deferral). See [`GLOSSARY.md`][glossary] for the full optimizer surface.
-- `DjangoListField` — non-Relay `list[T]` factory for root Query fields (new in `0.0.7`); default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync + async contexts. See [`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
+- `DjangoListField` — non-Relay `list[T]` factory for root Query fields (new in `0.0.7`); default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync + async contexts. **Row-bounded since `0.0.16`**: the request policy's `max_list_rows` always applies and `max_rows=` narrows it further (`trusted_max_rows=True` is the only widening). See [`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
@@ -115,7 +115,7 @@ A quick summary:
 - ordering subsystem (new in `0.0.8`) — `OrderSet` declarative ordering classes with `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field); `RelatedOrder` cross-relation ordering traversal (class / absolute import path / unqualified-name); `Meta.orderset_class` consumer wiring (promoted out of `DEFERRED_META_KEYS`); the public `Ordering` enum (six members with NULLS positioning); the `order_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope plus active-branch dispatch on `RelatedOrder` branches; row-preserving `Min` / `Max` ordering across to-many paths; omitted fields and explicit `null` directions both contribute no ordering term; clean composition with the shipped filter subsystem, root connection cursor pages, and the optimizer's deliberate per-parent fallback for nested connections carrying `orderBy:`. See [`GLOSSARY.md#orderset`][glossary-orderset].
 - `DjangoConnectionField` (new in `0.0.9`) — Relay connection field over a Relay-Node-shaped `DjangoType`: `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()`, with `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written list resolver, no parallel argument declarations) and an opt-in `totalCount` via `Meta.connection = {"total_count": True}` (counted on the post-filter pre-slice queryset, selection-gated, per connection instance). Composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice; the field owns its own optimizer cooperation point. `DjangoConnection[T]` is the generic return-type alias. See [`GLOSSARY.md#djangoconnectionfield`][glossary-djangoconnectionfield].
 - `DjangoNodeField` / `DjangoNodesField` (new in `0.0.9`) — root Relay refetch fields, bare interface (`node: relay.Node | None = DjangoNodeField()`, `nodes: list[relay.Node | None] = DjangoNodesField()`) and typed (`genre: GenreType | None = DjangoNodeField(GenreType)`) forms; `id: ID!` raw-string arguments decoded server-side via the strategy-aware dispatch; dispatch to the type's `resolve_node` / `resolve_nodes` honoring `get_queryset`; `null` for hidden/missing/uncoercible-pk ids (no existence leak), `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}` for malformed ids; `nodes` is per-type-batched, order-preserving, with `null` holes and duplicate-id support. See [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield].
-- relation-as-Connection upgrade + `Meta.relation_shapes` (new in `0.0.9`) — every Relay-Node-shaped type's many-side relations whose target is also Relay-Node-shaped gain a `<field>Connection` sibling by default (`"both"`); `Meta.relation_shapes = {"<field>": "list" | "connection" | "both"}` narrows per relation; synthesized at finalization Phase 2.5 reusing the shipped connection machinery (per-target connection classes, sidecar `filter:` / `orderBy:` arguments, target-driven `totalCount`). See [`GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
+- relation-as-Connection upgrade + `Meta.relation_shapes` (new in `0.0.9`) — every Relay-Node-shaped type's many-side relations whose target is also Relay-Node-shaped render as a `<field>Connection` **alone** since `0.0.16` (the default moved from `"both"` to `"connection"`, because a raw list sibling has no page of its own and was a way around the connection's cap); `Meta.relation_shapes = {"<field>": "list" | "connection" | "both"}` selects per relation, and an opted-in raw list is row-bounded by the resource policy; synthesized at finalization Phase 2.5 reusing the shipped connection machinery (per-target connection classes, sidecar `filter:` / `orderBy:` arguments, target-driven `totalCount`). See [`GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
 - `testing.relay` helpers (new in `0.0.9`) — `django_strawberry_framework.testing.relay.global_id_for(type_cls, id)` (the strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits) and `decode_global_id(gid)` (public re-export of the decode dispatch). See the [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield] cross-refs (the helpers have no own entry; the spec does not create one).
 - `Meta.nullable_overrides` / `Meta.required_overrides` (new in `0.0.9`) — two tuple-set `Meta` keys that decouple a non-relation field's GraphQL nullability from its Django column (`T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); the scope is non-relation model fields — scalar columns and, as of `0.0.11`, the file/image output objects — and the override flips a choice field's generated enum nullability for free. See [`GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
 - `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
@@ -143,6 +143,34 @@ A quick summary:
 - `0.1.7` — migration and adoption guides + adversarial non-live test suite
 
 **`1.0.0`** — stable release: full `django-graphene-filters` depth + **API freeze** (strict SemVer applies from `1.0.0` forward).
+
+## File and image output: the filesystem path is opt-in
+
+### Migrating from `0.0.16` — an intentional breaking change
+
+`DjangoFileType` and `DjangoImageType` no longer carry `path`. The default output of every generated `FileField` / `ImageField` column is now `name` / `size` / `url` (plus `width` / `height` on images), and the server's absolute filesystem path is not among them.
+
+The path is deployment metadata, not client data. Wherever the storage backend can produce one it can carry usernames, release directories, container mounts, tenant layout, and storage conventions — none of which a client needs to render a file, and all of which are useful to someone chaining a later traversal or template defect. The package's API freeze begins at `1.0.0`; removing an unnecessary disclosure from a default during alpha is preferred over preserving it for migration convenience, and card `046` set that precedent.
+
+**If a client selection breaks**, it was selecting `path`. Two supported routes:
+
+- **Drop it.** `url` is what a client needs to fetch the file, and `name` is the stored key. Most selections of `path` were selecting it because it was there.
+- **Opt the column in.** Name it in the wrapping type's `Meta.filesystem_path_fields`, and that column alone resolves to the path-bearing output object:
+
+```python
+class MediaSpecimenType(DjangoType):
+    class Meta:
+        model = MediaSpecimen
+        fields = ("id", "label", "attachment", "image")
+        # `attachment` gains `path`; `image` does not.
+        filesystem_path_fields = ("attachment",)
+```
+
+The opt-in is per column and lives in the type's own `Meta`, so one class shows every path it publishes. The opted-in column's GraphQL type name changes with it — `DjangoFileType` becomes `DjangoFilePathType`, `DjangoImageType` becomes `DjangoImagePathType` — and the `path` field carries a security description in the generated SDL. Every other subfield is unchanged, so a selection of `{ attachment { name path url } }` ports as written once the opt-in is declared.
+
+Naming something that cannot work raises `ConfigurationError` at type creation rather than doing nothing: an unknown field, a field excluded from the selected set, a column that is not a `FileField` / `ImageField`, or a column whose annotation or `strawberry.field` you already own. A security opt-in that silently no-ops reads to a reviewer as "the path is exposed" and "the path is not exposed" with equal plausibility.
+
+Storage failures are unchanged. `path` still degrades to `null` on a backend that cannot produce one (an S3-style `NotImplementedError`), and a `SuspiciousFileOperation` still surfaces as a top-level error rather than hiding as a null subfield — removing the field from the default is not a substitute for that guard.
 
 ## Nested connection indexing
 
@@ -223,6 +251,55 @@ schema = DjangoSchema(
 ```
 
 `DjangoSchema` installs `DjangoMutationExecutionContext`, which holds each generated top-level mutation field's `transaction.atomic()` open **through GraphQL response completion**: a payload that cannot be serialized (a non-nullable field completing `null`, a corrupt scalar) rolls the write back instead of committing behind a `data: null` response. Under plain `strawberry.Schema` the write pipeline refuses to run — the mutation fails with a `ConfigurationError` naming this requirement before any database work. Serial top-level mutation fields in one operation each get an independent transaction, per the GraphQL spec's serial-mutation semantics. Query-only schemas are unaffected. A consumer with its own execution context subclasses `DjangoMutationExecutionContext` and passes it via `execution_context_class=`.
+
+### Production error policy
+
+`DjangoSchema` also resolves a **production error policy** once, at construction, and installs the extension that applies it. Under `settings.DEBUG = False` an **unexpected** resolver or hook exception no longer puts its own message on the wire: the client receives a stable, non-sensitive message plus a correlation identifier, and the original exception (with its traceback) is logged server-side under that same identifier through the `django_strawberry_framework` logger at `ERROR`.
+
+```json
+{
+  "errors": [
+    {
+      "message": "An unexpected error occurred.",
+      "path": [
+        "someField"
+      ],
+      "extensions": {
+        "correlationId": "6f1a2c8d4b0e4f26a1c3d5e7f9b0a2c4"
+      }
+    }
+  ]
+}
+```
+
+Deliberate client-facing errors keep their contract, and the rule that decides is structural rather than an allowlist of codes:
+
+| Error shape | Reaches the client as |
+|---|---|
+| parse / syntax / validation error (no originating exception) | unchanged |
+| a raised `GraphQLError` — every framework rejection (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the connection / keyset / filter argument rejections, the `Not authorized to ...` denial) and any you raise yourself | unchanged, `extensions.code` included |
+| any other exception escaping a resolver or hook | the policy message + a fresh `correlationId` |
+
+A validation envelope (`FieldError` rows on a mutation payload) is `data`, not an error, and is untouched. Under `settings.DEBUG` the policy is a pass-through, so local development keeps its messages.
+
+Configure it with `DjangoSchema(error_policy=...)` or the `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]` mapping (the constructor argument wins), and opt out explicitly:
+
+```python
+schema = DjangoSchema(
+    query=Query,
+    error_policy={
+        "message": "Something went wrong. Quote the correlation id when you report it.",
+        "correlation_extension_key": "traceId",
+    },
+)
+
+# Explicit opt-out for a consumer who owns their own masking:
+schema = DjangoSchema(query=Query, error_policy={"enabled": False})
+```
+
+The extension is **prepended** to the schema's `extensions=` list. Strawberry unwinds `on_operation` teardowns LIFO, so the first-listed extension finishes last; masking has to happen after every extension that reads `GraphQLError.original_error` — `DjangoDebugExtension` in particular — has had its turn. Supplying your own `DjangoErrorPolicyExtension` entry suppresses the prepend and keeps your position.
+
+**Subscriptions are covered per event.** A query or mutation produces one result, so the extension's teardown is the whole response for it; a subscription delivers one result per event, and the teardown only runs when the operation ends. So the policy is applied again at the package's own subscription result source, immediately before each event's frame is written — every event carries the policy message and its own `correlationId`, with one server-side log record each. The event the engine built keeps its original exception, so a `DjangoDebugExtension` on the same schema still reports the real type and traceback. This applies to subscriptions served through the package's ASGI router (`DjangoGraphQLProtocolRouter`), which is the supported mount; a hand-rolled Channels consumer masks only at the operation's end.
 
 ## Transport: the GraphQL HTTP endpoint and the ASGI router
 
@@ -441,6 +518,111 @@ Wrong password, unknown user, inactive-under-`ModelBackend`, and backend `Permis
 
 On Django HTTP, `login` now saves the session explicitly inside the resolver before constructing any success payload, so a session-store failure can surface as a GraphQL execution error *before* a success payload — earlier than a middleware-only save would. The session is deliberately left marked modified so Django's response middleware performs its normal save and emits the rotated cookie; this can produce a second save. The modified flag is not cleared to suppress that write, because doing so would also suppress the cookie transition that makes the durable session usable by the client.
 
+## Production security profile
+
+One auditable list for taking a schema built on this package from "runs" to "internet-facing". Everything here is either enforced by the package, stated in another section of this guide, or owned by Django and the deployment — this section assembles it so a review walks a single list instead of re-deriving the boundary. Start with Django's own [deployment checklist and `manage.py check --deploy`][django-deploy-checklist]: it mechanically audits the Django-settings half — `DEBUG`, `SECRET_KEY` provenance, `ALLOWED_HOSTS`, HTTPS/HSTS (`SECURE_SSL_REDIRECT` / `SECURE_HSTS_SECONDS`), and the secure/`SameSite` cookie flags (`SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`) — and nothing below repeats what it already reports. Two settings it will not flag for you: set `SECURE_PROXY_SSL_HEADER` and `USE_X_FORWARDED_HOST` **only** behind a proxy you control that strips the client's own values for those headers, and never otherwise — each turns a client-forgeable header into trusted fact.
+
+### What the package already defaults to safe
+
+Verify these hold on the deployed endpoint rather than configuring them. Each row names a mechanical check; the two SDL rows read the export from the [schema-export management command][glossary-schema-export-management-command]:
+
+| Guarantee | Since | Mechanical check |
+|---|---|---|
+| Unexpected resolver/hook exceptions are masked under `DEBUG=False` — see [Production error policy](#production-error-policy) | `0.0.17` | force one; the response carries the policy message + `correlationId`, never the exception's own text |
+| `DjangoDebugExtension` fails closed under `DEBUG=False` | `0.0.17` | a schema listing it answers with no `extensions.debug` unless `allow_unsafe_production=True` was written into the code |
+| One execution resource budget (document tokens / depth / selections / aliases, variable-value cardinality, list rows, uploads, deadline), resolved once at `DjangoSchema` construction | `0.0.16` | an over-budget document or variable payload is refused with `extensions.code = "RESOURCE_LIMIT_EXCEEDED"` before ORM work |
+| Cumulative request-body cap applied before parsing — see [the two layers](#transport-deployment-guidance) | `0.0.15` | POST `MAX_REQUEST_BODY_BYTES` + 1 junk bytes → `413` |
+| Strict UTF-8 wire contract | `0.0.15` | a UTF-16 body → the controlled `400` |
+| Many-side relations expose the bounded connection only (`Meta.relation_shapes` defaults to `"connection"`) | `0.0.16` | the exported SDL carries no raw list sibling you did not opt into |
+| File/image output carries no filesystem `path` unless `Meta.filesystem_path_fields` names the column | `0.0.17` | grep the exported SDL for `path` |
+| Generated writes deny by default (`Meta.permission_classes` required; `[]` is the explicit opt-out) | `0.0.11` | an unauthorized generated mutation → the `Not authorized to ...` error |
+| WebSocket handshakes validate `Host` **and** `Origin`; established sockets revalidate the session actor | `0.0.15` | a hostile handshake is denied; a socket surviving an external logout closes `4403` on its next operation frame |
+
+### The production GraphQL mount
+
+The [transport deployment guidance](#transport-deployment-guidance) covers each knob; assembled, the production mount is:
+
+```python
+from graphql import NoSchemaIntrospectionCustomRule
+from strawberry.extensions import AddValidationRules
+
+from django_strawberry_framework import DjangoSchema, strawberry_config
+from django_strawberry_framework.views import DjangoGraphQLView
+
+schema = DjangoSchema(
+    query=Query,
+    mutation=Mutation,
+    config=strawberry_config(),
+    # A factory, not an instance: Strawberry deprecates passing extension
+    # instances (one would be shared across every request).
+    extensions=[lambda: AddValidationRules([NoSchemaIntrospectionCustomRule])],
+)
+
+urlpatterns = [
+    path(
+        "graphql/",
+        DjangoGraphQLView.as_view(
+            schema=schema,
+            graphql_ide=None,            # no GraphiQL / Pathfinder HTML
+            allow_queries_via_get=False, # POST-only
+        ),
+    ),
+]
+```
+
+Disabling introspection narrows reconnaissance — it is **not** an authorization boundary. `__typename` still answers (the rule's scope is `__schema` / `__type`), field names leak through error messages, and a client that already knows the schema loses nothing. Row visibility and permission classes remain the boundary whether or not introspection is served. The whole recipe is exercised as one unit by the live transport suite, so it is a supported configuration, not a suggestion.
+
+**CORS.** The package adds no CORS headers and needs none for same-origin use — the strongest configuration is not installing CORS middleware on this endpoint at all. If cross-origin browser clients are real, scope the middleware precisely: explicit origins (never `*` with credentials), only the headers the client sends, and keep in mind that a permissive credentialed CORS policy re-opens exactly the cross-site request class that CSRF protection and JSON-preflight behavior otherwise close.
+
+**Edge cache and rate limiting.** Mark the GraphQL location uncacheable at the edge (an authenticated POST endpoint has nothing safely shareable; the `Vary: Cookie` detail is under [Transport deployment guidance](#transport-deployment-guidance)) and rate-limit it there too — the resource budget above bounds what one operation may cost, not how many operations a client may send.
+
+### Relay GlobalIDs are encodings, not capabilities
+
+A `GlobalID` is an addressing scheme. Under the default `model` strategy it decodes to a Django model label and a predictable primary key (`products.item:42`), and any client can mint the ID of any row by guessing small integers. That is by design: possession of a `GlobalID` **must never be treated as permission**. The authorization boundary is the type's visibility policy (`get_queryset` and the permission surface) — node refetch, connections, and generated mutations all locate through it, and hidden rows collapse to `null` indistinguishably from missing ones. If application code accepts a `GlobalID` from a client and touches the ORM with it directly, it has stepped around that boundary and owns the check itself.
+
+### Uploads: the package bounds bytes, the deployment owns content
+
+With `multipart_uploads_enabled=True`, the package bounds what it can see: the declared multipart request size (`413` before Django's parser runs), and the resource budget's upload count / per-file bytes / aggregate bytes. Everything about the *content* of an accepted file is a deployment responsibility, exactly as it is for any Django file upload:
+
+- extension / content-type / magic-byte validation, and malware scanning or quarantine where the threat model calls for it;
+- storage permissions and a storage location that is never served as executable content;
+- `Content-Disposition: attachment` (or an equivalent sandboxed domain) on downloads a browser can reach, so a stored HTML/SVG file cannot become stored XSS on your origin;
+- signed or private URL policy on the storage backend, plus Django's `DATA_UPLOAD_MAX_NUMBER_FILES` / `FILE_UPLOAD_MAX_MEMORY_SIZE` and the proxy-level body cap from the transport section.
+
+### File output metadata is data you are publishing
+
+Of the default file/image output, `name` is the **storage object key** — under many storage layouts it embeds user-supplied filenames, upload paths, or tenant conventions, so treat it as application data with the same scrutiny as any other exposed column. `url` is whatever the storage backend builds: public and permanent on some backends, signed and expiring on others — know which yours is before a client caches it. The absolute filesystem `path` is [opt-in per column](#file-and-image-output-the-filesystem-path-is-opt-in) and should stay unset for remote clients.
+
+### Login and registration are anonymous surfaces — throttle them
+
+`login_mutation()` / `register_mutation()` default to `AllowAny` (the documented inversion of the write family's deny-by-default), the framework adds [no brute-force protection](#enumeration-posture), and the login gate receives the attempted username but never the password. Throttling is deliberately consumer-owned; the smallest real gate is a permission class over Django's cache:
+
+```python
+from django.core.cache import cache
+
+from django_strawberry_framework.auth import login_mutation
+
+
+class LoginAttemptThrottle:
+    """At most 5 login attempts per username per 5 minutes, fail-closed."""
+
+    def has_permission(self, info, mutation, operation, data, instance=None):
+        key = f"login-attempts:{data['username']}"
+        if cache.add(key, 1, timeout=300):
+            return True
+        return cache.incr(key) <= 5
+
+
+class Mutation:
+    login = login_mutation(permission_classes=[LoginAttemptThrottle])
+```
+
+A cache-keyed counter is a floor, not a ceiling — it resets on cache eviction and counts attempts, not outcomes. A deployment that needs lockout, per-IP dimensions, or audit trails should reach for its existing rate-limiting middleware at the edge and keep this gate as defense in depth.
+
+### The example project is a fixture, never a deployment
+
+`examples/fakeshop/` exists to exercise the package: `DEBUG=True`, a checked-in `SECRET_KEY`, GraphiQL, the debug toolbar, multipart uploads, and intentional `permission_classes = []` demonstrations are all deliberate. It must never be deployed, and it cannot be made production-ready by editing its settings — its settings module refuses to load with `DEBUG` off (`ImproperlyConfigured`, pinned by a test), precisely so the most likely accident fails loudly instead of shipping the rest of the fixture. Build a separate project and copy the mount recipe above, not the fakeshop settings.
+
 ## Form mutation contracts
 
 The two form mutation bases intentionally return different payload shapes. A model-backed `DjangoModelFormMutation` returns the same object payload as `DjangoMutation`: the saved object in `node` or `result`, plus `errors`. A model-less `DjangoFormMutation` has no object slot and always returns exactly `ok: Boolean!` and `errors: [FieldError!]!`; validation or write failure sets `ok` to `false`, while success sets it to `true`. See the [`DjangoFormMutation`][glossary-djangoformmutation] and [`DjangoModelFormMutation`][glossary-djangomodelformmutation] contracts.
@@ -586,7 +768,21 @@ Strawberry constructs the class with zero arguments for every operation, keeping
 
 Executed operations add `extensions["debug"]` with `sql` and `exceptions` lists. The extension brackets every configured Django database connection separately and aggregates rows from every alias used during the operation into that one `sql` list; each row's `alias` and `vendor` identify its source. Rows retain per-connection log order and the per-connection groups follow Django's `connections.all()` order, so the combined list is not a cross-database execution timeline. An alias the operation never uses contributes no rows and is not forced open.
 
-Never enable this extension on an internet-facing production schema: it returns interpolated SQL values and unmasked exception messages and tracebacks. See the [`DjangoDebugExtension` glossary entry][glossary-djangodebugextension] for the complete payload and lifecycle contract.
+Never enable this extension on an internet-facing production schema: it returns interpolated SQL values and unmasked exception messages and tracebacks.
+
+**It fails closed if you do.** At operation start the extension reads `settings.DEBUG`; when it is false and the deployment has not acknowledged the disclosure, the extension withholds the whole payload — it acquires no debug cursor, snapshots no query log, publishes no `debug` key — and logs one warning naming the misconfiguration. The operation itself runs normally, because a diagnostic that refuses to disclose must not also refuse the request. Documentation is not a guard for a feature whose purpose is to publish secrets; this is.
+
+If you have a controlled reason to run it with `DEBUG` off, say so explicitly. The factory form is what keeps the fresh-per-operation instance:
+
+```python
+extensions=[
+    lambda: DjangoDebugExtension(allow_unsafe_production=True),
+]
+```
+
+The payload is also **capped**, deterministically: at most 100 SQL rows and 25 exception rows (earliest kept), each row's SQL text cut at 4096 characters, exception messages at 4096 and tracebacks at 16384, every cut marked with `... [truncated]`, and one shared 262144-character budget spent on exception rows before SQL rows. Both lists are always present whether or not a cap bit, so the wire contract is unchanged. The caps are package invariants, not settings: a deployment that wants a different ceiling is a deployment running this extension in production.
+
+See the [`DjangoDebugExtension` glossary entry][glossary-djangodebugextension] for the complete payload and lifecycle contract.
 
 ## Testing GraphQL endpoints
 
@@ -751,9 +947,9 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
+[glossary-inspect-django-type]: GLOSSARY.md#schema-introspection-management-command
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
 [glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
-[glossary-inspect-django-type]: GLOSSARY.md#schema-introspection-management-command
 [glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
@@ -781,4 +977,5 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 
 <!-- External -->
 [django-csrf]: https://docs.djangoproject.com/en/5.2/howto/csrf/
+[django-deploy-checklist]: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 [django-test-client-csrf]: https://docs.djangoproject.com/en/5.2/topics/testing/tools/#the-test-client

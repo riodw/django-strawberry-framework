@@ -7,6 +7,10 @@ name: Postgres CI
 on:
   workflow_dispatch:
 
+# Least privilege: this tier only reads the repository (spec-049 Decision 3).
+permissions:
+  contents: read
+
 jobs:
   test-postgres:
     # The Postgres tier: the DB-touching tests (@pytest.mark.django_db and
@@ -20,6 +24,7 @@ jobs:
     # push/PR.
     name: Postgres - Python 3.14 - Django latest - ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +48,11 @@ jobs:
             distribution: loadscope
             pytest_targets: examples/fakeshop/apps examples/fakeshop/tests
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Manual tier, but the rule is uniform: no job here pushes, so the
+          # checkout credential is never persisted into .git/config.
+          persist-credentials: false
       # Launch Postgres FIRST, detached, so its image pull + boot overlap the
       # uv / dependency / Django-install steps below -- by the time the tests
       # need it, it is already healthy (the "Wait" step usually returns on the
@@ -52,7 +61,14 @@ jobs:
       # traded for a faster write-heavy setup phase (12 workers each createdb +
       # replay migrations, then factories insert fixtures). GitHub's `services:`
       # syntax can't pass these server args, which is why it runs as a step.
-      - name: Start tuned throwaway Postgres
+      #
+      # The image is pinned by DIGEST, not by the `postgres:16` tag: a tag is
+      # mutable, so `postgres:16` silently becomes a different image on every
+      # upstream 16.x rebuild and the tier's server is then unreviewed
+      # (spec-049 Decision 4). The digest below is `postgres:16` as resolved from
+      # Docker Hub at authoring time; refresh it deliberately, in its own change,
+      # with the registry manifest query recorded in docs/builder/bld-049.md.
+      - name: Start tuned throwaway Postgres (digest-pinned)
         run: |
           docker run -d --name postgres \
             -e POSTGRES_USER=fakeshop \
@@ -64,7 +80,7 @@ jobs:
             --health-interval 2s \
             --health-timeout 3s \
             --health-retries 15 \
-            postgres:16 \
+            postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20 \
             -c fsync=off -c synchronous_commit=off -c full_page_writes=off
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0

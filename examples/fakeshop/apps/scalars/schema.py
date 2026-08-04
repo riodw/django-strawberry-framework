@@ -197,11 +197,45 @@ class MediaSpecimenType(DjangoType):
             "attachment",
             "image",
         )
+        # Explicit now that a second type wraps the same model: a relation to
+        # ``MediaSpecimen`` resolves here, not to the path-bearing sibling.
+        primary = True
+
+
+class MediaSpecimenWithPathType(DjangoType):
+    """The ``Meta.filesystem_path_fields`` opt-in, demonstrated on ``attachment`` (spec-048).
+
+    The default file/image output objects publish no filesystem path at all; a
+    deployment that genuinely serves one names the column here, and that column
+    alone resolves to the path-bearing ``DjangoFilePathType``. ``image`` is
+    deliberately NOT named, so the live schema also demonstrates that the opt-in
+    is per column rather than per type.
+
+    ``primary = False``: ``MediaSpecimenType`` stays the type a relation to
+    ``MediaSpecimen`` resolves to, and this one is reachable only through its own
+    root field.
+    """
+
+    class Meta:
+        model = models.MediaSpecimen
+        fields = (
+            "id",
+            "label",
+            "attachment",
+            "image",
+        )
+        filesystem_path_fields = ("attachment",)
+        primary = False
 
 
 @strawberry.type
 class Query:
     """Scalars coverage root fields."""
+
+    @strawberry.field
+    def all_media_specimens_with_path(self) -> list[MediaSpecimenWithPathType]:
+        """Root field for the filesystem-path opt-in demonstration type (spec-048)."""
+        return list(models.MediaSpecimen.objects.order_by("id"))
 
     @strawberry.field
     def all_override_specimens(self) -> list[OverriddenScalarSpecimenType]:

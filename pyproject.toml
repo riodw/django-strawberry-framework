@@ -1,7 +1,7 @@
 # https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 [project]
 name = "django-strawberry-framework"
-version = "0.0.14"
+version = "0.0.18"
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
 license = "MIT"
@@ -67,6 +67,12 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-django>=4.5.2",
     "pytest-xdist>=3.8.0",
+    # PyYAML is a test-only dependency, and NOT a dependency of the package
+    # ([project].dependencies is untouched): tests/test_ci_governance.py parses
+    # .github/workflows/*.yml structurally so the least-privilege permission
+    # scopes, immutable action/image pins, and per-job timeouts are asserted
+    # rather than reviewed by eye (spec-049 Decision 6).
+    "pyyaml>=6.0.2",
     "ruff>=0.15.0",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the

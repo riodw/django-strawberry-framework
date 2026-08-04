@@ -4248,6 +4248,7 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [agents]: ../../AGENTS.md
 [changelog]: ../../CHANGELOG.md
 [contributing]: ../../CONTRIBUTING.md
+[django-workflow]: ../../.github/workflows/django.yml
 [goal]: ../../GOAL.md
 [kanban]: ../../KANBAN.md
 [pyproject]: ../../pyproject.toml
@@ -4256,11 +4257,9 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [start]: ../../START.md
 [today]: ../../TODAY.md
 
-<!-- .github/ -->
-[django-workflow]: ../../.github/workflows/django.yml
-
 <!-- docs/ -->
 [docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
 [glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
 [glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
@@ -4299,7 +4298,6 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
 [glossary-testclient]: ../GLOSSARY.md#testclient
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
-[glossary]: ../GLOSSARY.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
@@ -4333,8 +4331,8 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [types-base]: ../../django_strawberry_framework/types/base.py
 [types-converters]: ../../django_strawberry_framework/types/converters.py
 [types-definition]: ../../django_strawberry_framework/types/definition.py
-[types-relay]: ../../django_strawberry_framework/types/relay.py
 [types-finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[types-relay]: ../../django_strawberry_framework/types/relay.py
 [utils-inputs]: ../../django_strawberry_framework/utils/inputs.py
 [utils-permissions]: ../../django_strawberry_framework/utils/permissions.py
 [utils-querysets]: ../../django_strawberry_framework/utils/querysets.py
@@ -4355,7 +4353,7 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 <!-- scripts/ -->
 
 <!-- .venv/ -->
-[upstream-serializer-converter]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py
-[upstream-serializer-mutation]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py
 
 <!-- External -->
+[upstream-serializer-converter]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py
+[upstream-serializer-mutation]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py

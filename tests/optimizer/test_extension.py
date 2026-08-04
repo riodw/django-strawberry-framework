@@ -4759,6 +4759,11 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
             model = Category
             fields = ("id", "name", "items")
             interfaces = (relay.Node,)
+            # The test needs BOTH surfaces on one relation: the raw ``items``
+            # list sibling whose planned key must survive, and the
+            # ``itemsConnection`` sidecar fallback that re-publishes. The
+            # package default emits the connection alone.
+            relation_shapes = {"items": "both"}
 
     finalize_django_types()
 

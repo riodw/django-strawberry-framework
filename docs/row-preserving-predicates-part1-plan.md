@@ -18,7 +18,7 @@ is added unless separately requested.
 ## Purpose
 
 This plan enacts the "now" half of the to-many fan-out investigation
-([`to-many-search-optimizer-reproduction.md`][repro]): everything that fixes
+(the since-removed `to-many-search-optimizer-reproduction.md`): everything that fixes
 shipped behavior or builds search-independent machinery lands ahead of card
 `TODO-BETA-054-0.1.2`, so that card later wires the `search:` surface onto a
 finished engine ([spec-054][spec-054], Decision 7). The postponed half — the
@@ -1260,14 +1260,13 @@ the previous commit added tracked files.
 
 <!-- Root -->
 [goal]: ../GOAL.md
-[repro]: ../to-many-search-optimizer-reproduction.md
 
 <!-- docs/ -->
 [part1-plan]: row-preserving-predicates-part1-plan.md
-[spec-054]: spec-054-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
 [spec-027-filters]: SPECS/spec-027-filters-0_0_8.md
+[spec-054]: SPECS/spec-054-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

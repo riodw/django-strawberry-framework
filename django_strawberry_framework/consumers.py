@@ -108,6 +108,18 @@ Non-subscription operations need none of this and get none: upstream reaches the
 through ``schema.execute``, which returns a single result and never loops, so the
 wrapper passes that call through to the real schema untouched.
 
+**The same result source is where the production error policy reaches a
+subscription** (spec-048 Decision 11). A query's errors are masked by
+``extensions/error_policy.py::DjangoErrorPolicyExtension`` at operation teardown,
+which is the whole response for a single-result operation - but a subscription
+delivers one ``ExecutionResult`` per EVENT and that teardown runs only when the
+operation ends, so every event's raw exception message would already be on the
+wire. ``_stop_aware_results`` therefore masks each result it yields, through the
+extension module's own ``mask_execution_result``, which returns a masked COPY and
+leaves the engine's result object holding its originals for the extensions that
+read them. Non-subscription operations again need nothing: ``schema.execute`` runs
+the extension teardown before returning.
+
 **The substitution is transparent by the only measure that matters.** ONLY the
 handler's own ``self.schema`` is replaced, and only ever with the connection's
 wrapper - ``AsyncBaseHTTPView.run`` reads the CONSUMER's ``self.schema``, passes
@@ -238,7 +250,10 @@ imports are ``__future__``, ``asyncio``, ``contextlib`` and typing names, so it
 adds nothing to the import graph.
 ``channels.auth.get_user`` and the package's session-store resolver are imported
 **inside** the revalidation coroutine (the
-``auth/mutations.py::_channels_http_login_establish`` precedent),
+``auth/mutations.py::_channels_http_login_establish`` precedent), the error-policy
+masking helpers **inside** the result source that applies them (that module
+imports ``strawberry`` and ``graphql``, so a module-level import here would put
+both above ``routers.py``'s guard),
 ``channels.security.websocket.WebsocketDenier`` **inside** the Host validator's
 denial arm, and neither the two protocol handler base classes nor upstream's
 WebSocket adapter are imported at all - all three are read off the base consumer
@@ -862,11 +877,37 @@ async def _revoke_connection(websocket: Any) -> None:
     await revocation.close(websocket)
 
 
-async def _stop_aware_results(source: Any, consumer: Any) -> Any:
-    """Yield ``source``'s results until the connection is revoked, then end.
+async def _stop_aware_results(source: Any, consumer: Any, schema: Any) -> Any:
+    """Yield ``source``'s masked results until the connection is revoked, then end.
 
-    The package-owned half of the operation-stop protocol. Upstream's two result
-    loops (``run_operation`` / ``handle_async_results``) iterate whatever
+    **This is also where the error policy reaches a subscription** (spec-048
+    Decision 11). A subscription's errors do not arrive on one completed result -
+    each event carries its own ``ExecutionResult``, and the schema extension's
+    teardown runs only when the operation ENDS, so a per-event error would be on
+    the wire long before it. This generator is the one seam every event of every
+    subscription passes through on both protocols, so each result is masked here,
+    immediately before the transport renders it. The policy object and the
+    masking are the extension module's, not re-stated: one classifier, one
+    replacement builder, two application sites.
+
+    The masked value is a COPY when anything was masked, so the engine's own
+    result object - the one ``execution_context.result`` holds and the one an
+    extension reading ``GraphQLError.original_error`` sees - is left untouched.
+    That preserves the LIFO teardown ordering property for the debug extension
+    exactly as the query path does.
+
+    The policy object is resolved ONCE per subscription - it is immutable and its
+    schema outlives the socket - while the ``DEBUG`` pass-through gate is read per
+    event, which is the same granularity the query path's teardown reads it at.
+
+    The masking import is function-local, deliberately: this module's import
+    graph is ``channels``-free AND ``strawberry``-free so ``routers.py`` can
+    import it above its own soft-dependency guard (see the module docstring), and
+    the extension module imports both ``strawberry`` and ``graphql``. By the time
+    a subscription produces a result, both are long since imported.
+
+    The rest is the package-owned half of the operation-stop protocol. Upstream's
+    two result loops (``run_operation`` / ``handle_async_results``) iterate whatever
     ``schema.subscribe`` handed back, so ending THIS generator ends that loop -
     normally, at its own next iteration, with no cancellation involved and no
     suppressed payload produced. The revocation state is read before each pull
@@ -886,19 +927,26 @@ async def _stop_aware_results(source: Any, consumer: Any) -> Any:
     of scope), and legacy's ``cleanup_operation`` closes whatever is registered -
     which is now this generator, so closing it closes the real one underneath.
     """
+    from .extensions.error_policy import (
+        mask_execution_result,
+        masking_is_active,
+        schema_error_policy,
+    )
+
+    policy = schema_error_policy(schema)
     try:
         while not consumer._revocation.revoked:
             try:
                 result = await anext(source)
             except StopAsyncIteration:
                 return
-            yield result
+            yield mask_execution_result(result, policy) if masking_is_active(policy) else result
     finally:
         await source.aclose()
 
 
 class _StopAwareSchema:
-    """One connection's schema, with subscription results made stoppable.
+    """One connection's schema, with subscription results made stoppable and masked.
 
     Installed on the two handler subclasses' own ``self.schema`` by
     ``_install_stop_aware_schema``, never on the consumer's, so the substitution
@@ -932,8 +980,17 @@ class _StopAwareSchema:
         declaration of ``Schema.subscribe``'s parameter list to keep in step.
         ``Schema.subscribe`` awaits nothing before returning its generator, so the
         ``await`` below adds no suspension point to an operation's start.
+
+        The REAL schema is handed to the result source as well, because that is
+        where the operation's error policy lives (``schema.error_policy``): the
+        per-event masking has to read the policy of the schema that executed the
+        operation, never a wrapper attribute of this object.
         """
-        return _stop_aware_results(await self._schema.subscribe(*args, **kwargs), self._consumer)
+        return _stop_aware_results(
+            await self._schema.subscribe(*args, **kwargs),
+            self._consumer,
+            self._schema,
+        )
 
 
 def _install_stop_aware_schema(handler: Any) -> None:

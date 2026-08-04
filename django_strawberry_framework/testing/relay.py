@@ -1,7 +1,7 @@
 """Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 
 The two helpers consumer test suites use to mint and assert the durable
-``GlobalID``s the ``0.0.9`` strategy system emits (``docs/spec-032-full_relay-0_0_9.md``
+``GlobalID``s the ``0.0.9`` strategy system emits (``docs/SPECS/spec-032-full_relay-0_0_9.md``
 Decision 10). Lives under ``testing/`` (not the package root) because the
 audience is consumer *test suites*; the export was withheld in ``0.0.9``'s
 spec-031 cycle until this card shipped the consumer (the tested-usage

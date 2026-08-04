@@ -105,10 +105,21 @@ class _Query:
 
 
 def _schema(mutation_type: type) -> strawberry.Schema:
+    """A probe schema over ``mutation_type``, with response-boundary masking OFF.
+
+    This file's subject is the FORM mutation pipeline. Two rows prove it fails
+    closed by reading the message the pipeline itself raised - the write-phase
+    ``ConfigurationError`` and the relation-hook ``SyncMisuseError`` - and the
+    spec-048 error policy would replace both with its stable production message.
+    These schemas therefore opt out (``error_policy={"enabled": False}``) instead of
+    pretending an in-process probe is a debug deployment; the masking contract is
+    pinned in ``tests/test_error_policy.py`` and the live tier.
+    """
     return DjangoSchema(
         query=_Query,
         mutation=mutation_type,
         extensions=[DjangoOptimizerExtension],
+        error_policy={"enabled": False},
     )
 
 

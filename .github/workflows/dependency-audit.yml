@@ -1,0 +1,69 @@
+name: Dependency Audit
+
+# Vulnerability audit of the resolved dependency graph. Three triggers, one job:
+#
+# - pull_request: a PR that changes the resolution (or the audit config itself)
+#   is told before merge, not after release.
+# - schedule: a vulnerability is published against a dependency we already ship,
+#   without anyone touching the repository. A lock file that was clean on Monday
+#   is not clean on Friday by construction, so the audit must run on a clock and
+#   not only on a diff (spec-049 Decision 5).
+# - workflow_dispatch: manual re-check after a lock refresh.
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/dependency-audit.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  schedule:
+    # 05:17 UTC daily. An off-the-hour minute avoids the top-of-hour scheduling
+    # queue that delays cron-heavy windows on shared runners.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+# Least privilege: the audit reads the repository and reports through the job's
+# own exit status and log. It deliberately does NOT upload SARIF to the code-
+# scanning API, which is the only reason this workflow would need
+# `security-events: write` (spec-049 Decision 5).
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit uv.lock against OSV
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # osv-scanner reads `uv.lock` NATIVELY, so the audited artifact is the
+      # exact resolution CI and the maintainer install -- no `requirements.txt`
+      # export step in between. That matters here specifically: this project's
+      # lock carries TWO Django versions behind disjoint `python_full_version`
+      # markers, and a flattened single-environment export would silently audit
+      # only one of them (spec-049 Decision 5).
+      #
+      # `uv.lock` covers the production resolution AND every optional extra and
+      # dependency group in one file, which satisfies the card's "production
+      # resolution + optional extras" requirement with a single scan target. The
+      # exact-Django-5.2.0 compatibility matrix cell in django.yml is NOT part of
+      # this resolution and is audited nowhere -- deliberately: it is an API
+      # floor-compatibility probe, never a deployment target
+      # (spec-049 Decision 2).
+      #
+      # The action is pinned to a full commit SHA. Upstream's own README warns
+      # that this inner action's behavior may change within a minor release;
+      # the SHA pin is what makes that warning inapplicable.
+      - name: Run osv-scanner against the uv.lock resolution
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --lockfile=uv.lock

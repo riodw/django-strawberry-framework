@@ -1411,44 +1411,44 @@ reader who takes the bullet as a statement about their own development stack.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
+[agents]: ../../../AGENTS.md
 
 <!-- docs/ -->
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-request_from_info]: GLOSSARY.md#request_from_info
-[s65-borrowing-posture]: spec-046-transport_security-0_0_15.md#borrowing-posture
-[s65-consumer-visible]: spec-046-transport_security-0_0_15.md#consumer-visible-behavior
-[s65-current-state]: spec-046-transport_security-0_0_15.md#current-state
-[s65-d10]: spec-046-transport_security-0_0_15.md#decision-10--a-utf-8-bom-is-rejected
-[s65-d11]: spec-046-transport_security-0_0_15.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
-[s65-d12]: spec-046-transport_security-0_0_15.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
-[s65-d13]: spec-046-transport_security-0_0_15.md#decision-13--test-strategy-which-existing-tests-change-and-why
-[s65-d14]: spec-046-transport_security-0_0_15.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
-[s65-d15]: spec-046-transport_security-0_0_15.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
-[s65-d16]: spec-046-transport_security-0_0_15.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
-[s65-d17]: spec-046-transport_security-0_0_15.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[s65-d18]: spec-046-transport_security-0_0_15.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
-[s65-d19]: spec-046-transport_security-0_0_15.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
-[s65-d1]: spec-046-transport_security-0_0_15.md#decision-1--spec-filename-and-canonical-naming
-[s65-d2]: spec-046-transport_security-0_0_15.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
-[s65-d3]: spec-046-transport_security-0_0_15.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
-[s65-d4]: spec-046-transport_security-0_0_15.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
-[s65-d5]: spec-046-transport_security-0_0_15.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
-[s65-d6]: spec-046-transport_security-0_0_15.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
-[s65-d7]: spec-046-transport_security-0_0_15.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
-[s65-d8]: spec-046-transport_security-0_0_15.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
-[s65-d9]: spec-046-transport_security-0_0_15.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
-[s65-dry]: spec-046-transport_security-0_0_15.md#helper-reuse-obligations-dry
-[s65-edge-cases]: spec-046-transport_security-0_0_15.md#edge-cases-and-constraints
-[s65-non-goals]: spec-046-transport_security-0_0_15.md#non-goals
-[s65-slice-checklist]: spec-046-transport_security-0_0_15.md#slice-checklist
-[spec-046]: spec-046-transport_security-0_0_15.md
+[glossary-configurationerror]: ../../GLOSSARY.md#configurationerror
+[glossary-debug-toolbar-middleware]: ../../GLOSSARY.md#debug-toolbar-middleware
+[glossary-joint-version-cut]: ../../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../../GLOSSARY.md#live-first-coverage-mandate
+[glossary-request_from_info]: ../../GLOSSARY.md#request_from_info
 
 <!-- docs/SPECS/ -->
-[spec-040]: SPECS/spec-040-auth_mutations-0_0_13.md
+[s65-borrowing-posture]: ../spec-046-transport_security-0_0_15.md#borrowing-posture
+[s65-consumer-visible]: ../spec-046-transport_security-0_0_15.md#consumer-visible-behavior
+[s65-current-state]: ../spec-046-transport_security-0_0_15.md#current-state
+[s65-d1]: ../spec-046-transport_security-0_0_15.md#decision-1--spec-filename-and-canonical-naming
+[s65-d10]: ../spec-046-transport_security-0_0_15.md#decision-10--a-utf-8-bom-is-rejected
+[s65-d11]: ../spec-046-transport_security-0_0_15.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[s65-d12]: ../spec-046-transport_security-0_0_15.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[s65-d13]: ../spec-046-transport_security-0_0_15.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[s65-d14]: ../spec-046-transport_security-0_0_15.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[s65-d15]: ../spec-046-transport_security-0_0_15.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
+[s65-d16]: ../spec-046-transport_security-0_0_15.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[s65-d17]: ../spec-046-transport_security-0_0_15.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[s65-d18]: ../spec-046-transport_security-0_0_15.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[s65-d19]: ../spec-046-transport_security-0_0_15.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[s65-d2]: ../spec-046-transport_security-0_0_15.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[s65-d3]: ../spec-046-transport_security-0_0_15.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[s65-d4]: ../spec-046-transport_security-0_0_15.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[s65-d5]: ../spec-046-transport_security-0_0_15.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[s65-d6]: ../spec-046-transport_security-0_0_15.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[s65-d7]: ../spec-046-transport_security-0_0_15.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[s65-d8]: ../spec-046-transport_security-0_0_15.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[s65-d9]: ../spec-046-transport_security-0_0_15.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[s65-dry]: ../spec-046-transport_security-0_0_15.md#helper-reuse-obligations-dry
+[s65-edge-cases]: ../spec-046-transport_security-0_0_15.md#edge-cases-and-constraints
+[s65-non-goals]: ../spec-046-transport_security-0_0_15.md#non-goals
+[s65-slice-checklist]: ../spec-046-transport_security-0_0_15.md#slice-checklist
+[spec-040]: ../spec-040-auth_mutations-0_0_13.md
+[spec-046]: ../spec-046-transport_security-0_0_15.md
 
 <!-- docs/builder/ -->
 

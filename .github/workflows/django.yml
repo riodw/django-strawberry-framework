@@ -7,12 +7,25 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# Least privilege by default: every job in this workflow reads the repository and
+# nothing more. A job that genuinely needs a wider scope re-declares `permissions`
+# at the job level, which REPLACES this block rather than adding to it -- so the
+# grant stays visible next to the step that consumes it (spec-049 Decision 3).
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Format Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # This job never pushes, so the checkout credential has no consumer.
+          # Leaving it persisted in .git/config would expose it to every later
+          # step (including the linters' own dependency tree).
+          persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -33,10 +46,13 @@ jobs:
         run: uv run python scripts/check_trailing_commas.py --check
 
   test:
-    name: Python ${{ matrix.python }} - Django ${{ matrix.django }} - ${{ matrix.database }}
+    name: Python ${{ matrix.python }} - Django ${{ matrix.django }} - ${{ matrix.database }}${{ matrix.compatibility_only == '1' && ' [compatibility floor]' || '' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    # Inherits the workflow-level `contents: read`. This job used to grant
+    # `contents: write`; the only token consumer is the Coveralls upload, which
+    # authenticates a coverage report and never writes to the repository, so the
+    # write scope was unused authority (spec-049 Decision 3).
+    timeout-minutes: 45
     strategy:
       # If one version fails, don't stop the others
       fail-fast: false
@@ -47,14 +63,26 @@ jobs:
         # contract is gated only at the dispatch tier so push/PR feedback stays
         # fast. Push/PR runs only the minimum-support combo and the latest combo,
         # single-DB only (covers both ends without doubling CI wall-clock).
+        #
+        # `compatibility_only: "1"` marks the exact-Django-5.2.0 nodes. They prove
+        # the ADVERTISED API FLOOR still imports and behaves -- a compatibility
+        # contract. They are deliberately NOT a secure-deployment statement:
+        # 5.2.0 predates the 5.2.15 / 5.2.16 security releases, so this cell must
+        # never be cited as a supported deployment target, copied into a
+        # deployment example, or used to argue that `django>=5.2` is a safe pin.
+        # Compatibility support and secure-deployment support are different
+        # contracts (spec-049 Decision 2). The dependency audit scans the
+        # `uv.lock` resolution, never this pinned-floor environment, so the cell
+        # cannot turn the audit red either (spec-049 Decision 5).
+        #
         # The minimum-support nodes (Django 5.2.0 / Python 3.10) also force-install
         # exactly strawberry-graphql==0.316.0 so the advertised per-operation
         # extension-isolation floor (spec-044 Decision 6) is durably exercised on
         # every push/PR, coverage-free (the latest node keeps the coverage gate).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0"},
-            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0", "compatibility_only": "1"},
             {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
@@ -70,12 +98,16 @@ jobs:
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"}
           ]') }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Nothing in this job pushes; the Coveralls upload authenticates with
+          # GITHUB_TOKEN from the step env, not with the checkout credential.
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -96,7 +128,7 @@ jobs:
         # a bare constraint is a no-op whenever the synced version already
         # satisfies it, so ``Django==5.2.*`` resolves to the newest 5.2 patch on
         # Python 3.12+ (where uv.lock gives 6.0.x) but leaves 3.11 on the locked
-        # 5.2.14 -- one matrix label, two versions under test. Scoping the
+        # 5.2.16 -- one matrix label, two versions under test. Scoping the
         # upgrade to Django alone, rather than a bare ``--upgrade``, keeps every
         # transitive pin at its uv.lock version.
         run: |

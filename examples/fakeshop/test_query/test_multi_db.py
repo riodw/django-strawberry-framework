@@ -128,8 +128,17 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests):
     """The debug-enabled sibling of ``_build_test_schema`` (spec-044 scenario 16).
 
     Same freshly-reloaded ``BookType`` / ``.using("shard_b")`` resolver shape,
-    plus ``DjangoDebugExtension`` as the CLASS beside the optimizer's factory -
-    the canonical consumer wiring under test.
+    plus ``DjangoDebugExtension`` beside the optimizer's factory - the canonical
+    consumer wiring under test.
+
+    The debug extension is spelled as the acknowledgement factory
+    (``lambda: DjangoDebugExtension(allow_unsafe_production=True)``) rather than
+    a bare class entry: the extension fails closed under ``settings.DEBUG``
+    false (spec-048 Decision 5) and pytest-django holds the setting false for
+    the whole suite, so a bare class entry would publish nothing and this
+    per-alias capture proof would assert against an absent payload. The factory
+    still constructs one fresh instance per operation, which is the property the
+    class entry was chosen for.
     """
     from apps.library.schema import BookType  # freshly-reloaded class
 
@@ -145,7 +154,7 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests):
     _current["schema"] = strawberry.Schema(
         query=_MultiDbDebugTestQuery,
         config=strawberry_config(),
-        extensions=[lambda: optimizer, DjangoDebugExtension],
+        extensions=[lambda: optimizer, lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
     yield
     _current["schema"] = None

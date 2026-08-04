@@ -11,8 +11,9 @@ A nested ``Meta`` class declares the model and (optionally) ``fields``,
 ``exclude``, ``name``, ``description``, ``optimizer_hints``,
 ``interfaces``, ``nullable_overrides``, ``required_overrides``,
 ``connection``, ``cursor_field``, ``filterset_class``,
-``orderset_class``, ``globalid_strategy``, ``relation_shapes``, and
-``primary`` - see ``ALLOWED_META_KEYS`` for the authoritative set.
+``orderset_class``, ``globalid_strategy``, ``relation_shapes``,
+``filesystem_path_fields``, and ``primary`` - see ``ALLOWED_META_KEYS`` for
+the authoritative set.
 
 Selection lives in ``Meta.fields`` / ``Meta.exclude``. A field may also be
 written as a class annotation ``name: auto`` ("declare-but-infer"): the name
@@ -41,6 +42,7 @@ import inspect
 import re
 import typing
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Annotated, Any, ClassVar, NamedTuple
 
 from django.db import models
@@ -55,7 +57,7 @@ from ..optimizer.hints import OptimizerHint
 from ..registry import registry
 from ..utils.strings import snake_case
 from ..utils.typing import is_async_callable
-from .converters import convert_field_output
+from .converters import _field_output_type_for, convert_field_output
 from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
@@ -71,6 +73,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "description",
         "exclude",
         "fields",
+        "filesystem_path_fields",
         "filterset_class",
         "globalid_strategy",
         "interfaces",
@@ -84,6 +87,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "required_overrides",
     },
 )
+# ``filesystem_path_fields`` (spec-048 Decision 2),
 # ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6),
 # ``connection`` (spec-030 Decision 8), ``globalid_strategy`` (spec-031
 # Decision 6), ``relation_shapes`` (spec-032 Decision 7), and
@@ -98,7 +102,13 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 # (spec-032 Decision 7). Mirrors the ``STRING_GLOBALID_STRATEGIES`` /
 # ``DEFAULT_GLOBALID_STRATEGY`` precedent below.
 RELATION_SHAPE_VALUES: frozenset[str] = frozenset({"list", "connection", "both"})
-DEFAULT_RELATION_SHAPE = "both"
+# ``"connection"`` is the secure default (spec-047 Decision 5): a raw many-side
+# list has no cursor and therefore no page of its own, so emitting one BESIDE the
+# bounded connection hands a client a way around the connection's cap by
+# selecting the sibling. A raw many-side list is now an explicit
+# ``Meta.relation_shapes`` opt-in, and the one it opts into is row-bounded
+# (``resource_policy.py::bounded_rows``) rather than unbounded.
+DEFAULT_RELATION_SHAPE = "connection"
 
 # The Relay-Node-gate lead-in shared by the three ``Meta``-key gates
 # (``Meta.connection``, ``Meta.globalid_strategy``, ``Meta.relation_shapes``).
@@ -617,6 +627,12 @@ class DjangoType:
             nullable_overrides=validated.nullable_overrides,
             required_overrides=validated.required_overrides,
         )
+        _validate_filesystem_path_targets(
+            model=meta.model,
+            selected_fields=fields,
+            consumer_authored_fields=consumer_authored_fields,
+            filesystem_path_fields=validated.filesystem_path_fields,
+        )
         _validate_relation_shape_targets(
             model=meta.model,
             relation_shapes=validated.relation_shapes,
@@ -658,6 +674,7 @@ class DjangoType:
             interfaces=validated.interfaces,
             nullable_overrides=validated.nullable_overrides,
             required_overrides=validated.required_overrides,
+            filesystem_path_fields=validated.filesystem_path_fields,
         )
         definition = DjangoTypeDefinition(
             origin=cls,
@@ -749,12 +766,29 @@ def _normalize_fields_spec(value: Any) -> tuple[str, ...] | str | None:
     return tuple(value)
 
 
-def _normalize_sequence_spec(value: Any) -> tuple[str, ...] | None:
-    """Normalize optional sequence specs for storage on ``DjangoTypeDefinition``."""
+def _normalize_sequence_spec(value: Any, key: str = "exclude") -> tuple[str, ...] | None:
+    """Normalize one optional collection-valued ``Meta`` key for storage.
+
+    ``key`` names the declaration being normalized so the rejection message
+    names the key the consumer actually wrote. The default keeps ``Meta.exclude``,
+    the first key through this helper, spelled the way it always was.
+
+    A ``set`` / ``frozenset`` is accepted alongside ``tuple`` / ``list``: every key
+    routed here (``Meta.exclude``, ``Meta.nullable_overrides``,
+    ``Meta.required_overrides``, ``Meta.filesystem_path_fields``) is a SET of
+    field names whose declaration order carries no meaning, and three of the four
+    are normalized to a ``frozenset`` immediately after this call. Rejecting the
+    literal a consumer would reasonably write for a set of names would be a
+    shape gate that contradicts its own semantics. A ``str`` stays refused - it
+    is iterable, so accepting it would silently read one field name as a
+    sequence of single-character names.
+    """
     if value is None:
         return None
-    if isinstance(value, str) or not isinstance(value, Sequence):
-        raise ConfigurationError("Meta.exclude must be a non-string sequence of field names")
+    if isinstance(value, str) or not isinstance(value, (Sequence, AbstractSet)):
+        raise ConfigurationError(
+            f"Meta.{key} must be a non-string sequence or set of field names",
+        )
     return tuple(value)
 
 
@@ -1033,6 +1067,7 @@ class _ValidatedMeta(NamedTuple):
     relation_shapes: dict[str, str] | None
     nullable_overrides: frozenset[str]
     required_overrides: frozenset[str]
+    filesystem_path_fields: frozenset[str]
 
 
 def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
@@ -1121,7 +1156,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
     fields_spec = _normalize_fields_spec(getattr(meta, "fields", None))
-    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
+    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None), "exclude")
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
     relay_shaped = _is_relay_shaped(cls, interfaces)
@@ -1139,19 +1174,21 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         getattr(meta, "relation_shapes", None),
         relay_shaped,
     )
-    # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
-    # keys reuse the ``Meta.exclude`` non-string-sequence guard
-    # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The
+    # Override shape stage (spec-029 Decision 8 step 1): the two set-valued
+    # keys reuse the shared collection guard (``_normalize_sequence_spec``, which
+    # names the key it rejects), then normalize to ``frozenset``. The
     # both-sets collision is a shape-level contradiction visible from the raw
     # ``Meta`` alone (no model/field access needed), so it raises here rather
     # than in the target-validator. Target existence / scope checks
     # (unknown / excluded / consumer-authored / relation / Relay-pk) need the
     # selected fields and run later in ``_validate_nullability_override_targets``.
     nullable_overrides = frozenset(
-        _normalize_sequence_spec(getattr(meta, "nullable_overrides", None)) or (),
+        _normalize_sequence_spec(getattr(meta, "nullable_overrides", None), "nullable_overrides")
+        or (),
     )
     required_overrides = frozenset(
-        _normalize_sequence_spec(getattr(meta, "required_overrides", None)) or (),
+        _normalize_sequence_spec(getattr(meta, "required_overrides", None), "required_overrides")
+        or (),
     )
     both_sets_collision = sorted(nullable_overrides & required_overrides)
     if both_sets_collision:
@@ -1160,6 +1197,19 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
             "nullable_overrides and required_overrides; a field cannot be both "
             "forced-nullable and forced-required.",
         )
+
+    # ``Meta.filesystem_path_fields`` reuses the same collection guard and
+    # frozenset normalization (spec-048 Decision 2). Nothing about the
+    # opt-in contradicts another Meta key, so there is no shape-level collision
+    # to raise here; every target check needs the selected fields and runs in
+    # ``_validate_filesystem_path_targets``.
+    filesystem_path_fields = frozenset(
+        _normalize_sequence_spec(
+            getattr(meta, "filesystem_path_fields", None),
+            "filesystem_path_fields",
+        )
+        or (),
+    )
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -1175,6 +1225,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         relation_shapes=relation_shapes,
         nullable_overrides=nullable_overrides,
         required_overrides=required_overrides,
+        filesystem_path_fields=filesystem_path_fields,
     )
 
 
@@ -1375,6 +1426,73 @@ def _validate_nullability_override_targets(
             )
 
 
+def _validate_filesystem_path_targets(
+    *,
+    model: type[models.Model],
+    selected_fields: tuple[Any, ...],
+    consumer_authored_fields: frozenset[str],
+    filesystem_path_fields: frozenset[str],
+) -> None:
+    """Reject every illegal ``Meta.filesystem_path_fields`` target (spec-048 Decision 2).
+
+    Stage 2 of the opt-in's validation, the structural sibling of
+    ``_validate_nullability_override_targets``: it runs in
+    ``__init_subclass__`` after ``_select_fields`` and the consumer-override
+    union exist, and reuses ``_selected_meta_targets`` for the shared
+    unknown-name and not-selected guards so the consumer-visible error shape
+    matches every other ``Meta.*`` target key.
+
+    The key names the columns whose absolute server filesystem path the schema
+    publishes, so an unnoticed no-op is the failure mode that matters: a name
+    that silently does nothing reads to a reviewer as "the path is exposed" or
+    "the path is not exposed" with equal plausibility. Every non-working target
+    therefore raises at type-creation time rather than being ignored - a
+    consumer-authored column (whose own annotation or ``strawberry.field``
+    already owns the field's output type, so the opt-in could not take effect)
+    and a non-file column (no path exists to publish).
+
+    Args:
+        model: The Django model the type wraps.
+        selected_fields: The Meta-filtered Django field objects from
+            ``_select_fields``.
+        consumer_authored_fields: The four-corner consumer-override union.
+        filesystem_path_fields: The normalized ``Meta.filesystem_path_fields``
+            frozenset.
+
+    Raises:
+        ConfigurationError: any target is unknown / not selected /
+            consumer-authored / not a file or image column.
+    """
+    if not filesystem_path_fields:
+        return
+    selected_by_name, sorted_targets = _selected_meta_targets(
+        model=model,
+        selected_fields=selected_fields,
+        attr="filesystem_path_fields",
+        targets=set(filesystem_path_fields),
+        excluded_error=lambda excluded: (
+            f"{model.__name__}.Meta filesystem_path_fields names fields not in the selected "
+            f"set: {excluded}. The opt-in targets a field that will not appear in the GraphQL "
+            "type (excluded via Meta.exclude or absent from a subset Meta.fields); select the "
+            "field or drop the opt-in."
+        ),
+    )
+    for name in sorted_targets:
+        if name in consumer_authored_fields:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta filesystem_path_fields names consumer-authored field "
+                f"{name!r}; a consumer annotation or strawberry.field assignment already owns "
+                "that field's output type, so the opt-in would have no effect. Drop the opt-in "
+                "and expose the path from the consumer resolver instead.",
+            )
+        if _field_output_type_for(selected_by_name[name]) is None:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta filesystem_path_fields names {name!r}, which is not a "
+                "FileField or ImageField column. The filesystem-path opt-in applies only to "
+                "file/image columns, whose output object is the only place a path field exists.",
+            )
+
+
 def _validate_relation_shape_targets(
     *,
     model: type[models.Model],
@@ -1525,6 +1643,7 @@ def _build_annotations(
     interfaces: tuple[type, ...] = (),
     nullable_overrides: frozenset[str] = frozenset(),
     required_overrides: frozenset[str] = frozenset(),
+    filesystem_path_fields: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
@@ -1581,6 +1700,13 @@ def _build_annotations(
             scalar, the bare ``DjangoFileType`` / ``DjangoImageType`` for a
             file/image column. The two sets are validated disjoint and
             non-relation (relation targets are rejected) upstream.
+        filesystem_path_fields: Normalized ``Meta.filesystem_path_fields``
+            frozenset. A selected file/image column named here resolves to the
+            path-bearing output object (``DjangoFilePathType`` /
+            ``DjangoImagePathType``) instead of the default one, which is the
+            only way the server's absolute filesystem path enters the schema
+            (spec-048 Decision 2). Validated to name selected, non-relation,
+            non-consumer-authored file/image columns upstream.
 
     Returns:
         A tuple of ``(annotations, pending_relations)``.
@@ -1697,5 +1823,6 @@ def _build_annotations(
                 field,
                 cls.__name__,
                 force_nullable=force_nullable,
+                expose_filesystem_path=field.name in filesystem_path_fields,
             )
     return annotations, pending

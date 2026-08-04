@@ -484,12 +484,14 @@ def _synthesize_relation_connections() -> None:
     from ``definition.relation_shapes`` (absent keys default to
     ``DEFAULT_RELATION_SHAPE``):
 
-    - ``"both"`` (default) - keep the generated ``list[T]`` field; add the
-      connection sibling.
-    - ``"connection"`` - add the sibling; remove the generated list
-      annotation and the Phase-2 list resolver before Phase 3 freezes the
-      annotation set, so the SDL never carries the list form.
-    - ``"list"`` - synthesize nothing (the shipped shape).
+    - ``"connection"`` (default, spec-047 Decision 5) - add the sibling; remove
+      the generated list annotation and the Phase-2 list resolver before Phase 3
+      freezes the annotation set, so the SDL never carries the list form.
+    - ``"both"`` - keep the generated ``list[T]`` field AND add the connection
+      sibling. An explicit opt-in since ``0.0.16``: a list sibling beside a
+      connection is a bypass of the connection's page cap, so it is a shape a
+      schema author asks for rather than one they receive.
+    - ``"list"`` - synthesize nothing.
 
     The synthesized field reuses the spec-030 machinery wholesale:
     ``_connection_type_for`` (per-target connection class + ``totalCount``

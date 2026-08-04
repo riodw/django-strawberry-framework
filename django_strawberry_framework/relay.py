@@ -1,7 +1,7 @@
 """Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
 
 The consumer-facing root ``node(id:)`` / ``nodes(ids:)`` surface
-(``docs/spec-032-full_relay-0_0_9.md`` Decisions 3/4/5/11). Both factories
+(``docs/SPECS/spec-032-full_relay-0_0_9.md`` Decisions 3/4/5/11). Both factories
 return ``strawberry.field(resolver=...)`` values picked up by Strawberry's
 class-body walk (the ``DjangoListField`` mechanism) and come in two forms:
 
@@ -63,6 +63,7 @@ from strawberry.utils.inspect import in_async_context
 from .exceptions import ConfigurationError
 from .list_field import _validate_relay_djangotype_target
 from .registry import register_subsystem_clear
+from .resource_policy import check_deadline
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
 from .utils.querysets import coerce_field_value_or_none, model_for
 
@@ -403,6 +404,10 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # malformed ids would never reach the package.
         id: strawberry.ID,  # noqa: A002
     ) -> Any:
+        # The cooperative deadline (spec-047) before the decode: a refetch is a
+        # visibility-scoped query, and the decode is the step that makes one
+        # inevitable.
+        check_deadline(info)
         resolved, node_id = _decode_or_graphql_error(id)
         # Everything below runs OUTSIDE the decode try/except so a dispatch-time
         # ``SyncMisuseError`` surfaces as itself (see ``_decode_or_graphql_error``).
@@ -471,6 +476,10 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         if not ids:
             # Zero database access (spec Edge cases).
             return []
+        # The cooperative deadline (spec-047), after the empty-list short
+        # circuit so a request that asks for nothing is never rejected for it,
+        # and before the batch decode that leads to one query per decoded type.
+        check_deadline(info)
         # Decode every id BEFORE any query - a malformed id anywhere fails the
         # whole field (Decision 5 "Batch decode failures fail the whole field").
         decoded = [_decode_or_graphql_error(raw_id) for raw_id in ids]

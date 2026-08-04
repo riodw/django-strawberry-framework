@@ -21,10 +21,27 @@ import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import factories as kf
 from apps.kanban import models, services
+from django.conf import settings
+from django.test import override_settings
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql
 from strawberry import relay
+
+#: Settings that open the spec-048 error policy's pass-through gate for ONE live
+#: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
+#: reachable instrument - the project schema is constructed by the app, not by the
+#: test. Fakeshop's shipped settings also wire django-debug-toolbar behind
+#: ``DEBUG``, so the toolbar middleware is dropped for the duration: left in, it
+#: would try to inject a panel referencing the ``djdt`` routes that ``config.urls``
+#: computed under the ambient ``DEBUG=False`` and fail the request for a reason
+#: that has nothing to do with the row. Dropping the middleware is the deterministic
+#: form of that - the toolbar's own show-gate is memoized per process, so overriding
+#: its callback would not reliably take effect.
+_ERROR_POLICY_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+}
 
 
 def _seed_board():
@@ -451,6 +468,7 @@ def _nested_dependency_filter(depth: int) -> str:
 
 
 @pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_deeply_nested_self_referential_dependency_filter_is_capped():
     """A pathologically deep self-referential ``dependencies`` filter raises a
     typed depth-cap error, not a raw ``RecursionError`` (report Defect 5).
@@ -460,6 +478,13 @@ def test_deeply_nested_self_referential_dependency_filter_is_capped():
     input-driven visibility derivation recursed once per level and blew the
     Python stack (a 500). The shared traversal budget now caps it at
     ``_MAX_LOGIC_DEPTH`` and surfaces a catchable ``ConfigurationError``.
+
+    The cap is a ``ConfigurationError``, so the spec-048 error policy classifies it
+    as unexpected and would replace its wording with the stable production message -
+    and the whole point of this row is that the wording says "depth"/"nesting"
+    rather than "recursion". ``DEBUG=True`` opens the policy's pass-through gate so
+    the live request returns the cap's own message; this is a live HTTP test against
+    the project schema, so the schema constructor is not ours to pass an opt-out to.
     """
     _seed_board()
     query = "query { allCards(filter: { " + _nested_dependency_filter(10) + " }) { title } }"

@@ -719,7 +719,6 @@ The completion contract the card is built against. Items are grouped by slice; t
 [changelog]: ../../CHANGELOG.md
 [contributing]: ../../CONTRIBUTING.md
 [kanban]: ../../KANBAN.md
-[package-init]: ../../django_strawberry_framework/__init__.py
 [readme]: ../../README.md
 [start]: ../../START.md
 [today]: ../../TODAY.md
@@ -776,6 +775,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [definition]: ../../django_strawberry_framework/types/definition.py
 [filters-base]: ../../django_strawberry_framework/filters/base.py
 [finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[package-init]: ../../django_strawberry_framework/__init__.py
 [registry]: ../../django_strawberry_framework/registry.py
 [relay]: ../../django_strawberry_framework/types/relay.py
 [relay-utils-typing]: ../../django_strawberry_framework/utils/typing.py

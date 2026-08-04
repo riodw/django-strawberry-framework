@@ -1,6 +1,6 @@
 """``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
 
-Spec: ``docs/spec-030-connection_field-0_0_9.md``.
+Spec: ``docs/SPECS/spec-030-connection_field-0_0_9.md``.
 Target release: ``0.0.9``.
 
 The connection-class surface (Decision 3 / Decision 4):
@@ -89,6 +89,7 @@ from .optimizer.selections import (
     prime_selected_fields,
 )
 from .registry import register_subsystem_clear
+from .resource_policy import check_deadline
 from .types.resolvers import _check_n1
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
@@ -1214,6 +1215,13 @@ def _resolve_connection_fast_path(
     stay explicit in the ``totalCount`` variant.
     """
     _guard_first_and_last(first, last)
+    # The cooperative deadline (spec-047), at the one seam both connection
+    # entry points share: a connection is about to slice, count, or window a
+    # queryset, which is the last point before this field hands work to the
+    # database. Runs AFTER the ``first`` + ``last`` guard for the same reason
+    # the count-selection lambda does - a malformed pagination request answers
+    # with its own error rather than with whichever bound fired second.
+    check_deadline(info)
     # Seed ``info.selected_fields`` with the package's anonymous-inline-fragment-safe
     # conversion BEFORE either the ``want_count`` lambda (``_total_count_requested``)
     # or Strawberry's own ``ListConnection.resolve_connection`` reads it. Both reach
@@ -1277,6 +1285,12 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         tests are mandatory because ``ConnectionExtension.resolve`` wraps the
         resolver.
         """
+        # The request's ``ResourcePolicy.max_page_size`` is a CEILING over the
+        # field's / schema's own ``relay_max_results`` (spec-047). Resolving it
+        # once here, before any window or slicing path reads it, is what stops a
+        # client from asking a root connection for a page wider than the policy -
+        # the downstream paths all receive the already-clamped integer.
+        max_results = resolve_relay_max_results(info, max_results)
         built, _want_count = _resolve_connection_fast_path(
             cls,
             nodes,
@@ -1435,6 +1449,7 @@ def _build_total_count_connection(target_type: type) -> type:
         # ``test_fast_path_total_count_marker_bypasses_non_queryset_guard`` /
         # ``test_fast_path_ambiguous_empty_served_from_marker_row`` /
         # ``test_fast_path_last_zero_quirk_parity_via_fallback``.
+        max_results = resolve_relay_max_results(info, max_results)  # policy ceiling (spec-047)
         built, want_count = _resolve_connection_fast_path(
             cls,
             nodes,

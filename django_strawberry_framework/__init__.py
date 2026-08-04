@@ -15,6 +15,12 @@ logger = logging.getLogger("django_strawberry_framework")
 from strawberry import auto  # noqa: E402  # logger must exist before subpackage imports
 
 from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
+from .error_policy import (  # noqa: E402
+    DEFAULT_ERROR_POLICY,
+    ErrorPolicy,
+)
+from .extensions.error_policy import DjangoErrorPolicyExtension  # noqa: E402
+from .extensions.resource_policy import DjangoResourcePolicyExtension  # noqa: E402
 from .forms import DjangoFormMutation, DjangoModelFormMutation  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
 from .mutations import (  # noqa: E402
@@ -30,15 +36,26 @@ from .permissions import (  # noqa: E402
     apply_cascade_permissions,
 )
 from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
+from .resource_policy import (  # noqa: E402
+    DEFAULT_RESOURCE_POLICY,
+    RESOURCE_LIMIT_ERROR_CODE,
+    ResourceLimitExceeded,
+    ResourcePolicy,
+)
 from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
 from .schema import DjangoMutationExecutionContext, DjangoSchema  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
-from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
+from .types.converters import (  # noqa: E402
+    DjangoFilePathType,
+    DjangoFileType,
+    DjangoImagePathType,
+    DjangoImageType,
+)
 
 # Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.
 
-__version__ = "0.0.14"
+__version__ = "0.0.18"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared
@@ -102,11 +119,17 @@ def __getattr__(name: str) -> type:
 
 
 __all__ = (
+    "DEFAULT_ERROR_POLICY",
+    "DEFAULT_RESOURCE_POLICY",
+    "RESOURCE_LIMIT_ERROR_CODE",
     "BigInt",
     "DjangoConnection",
     "DjangoConnectionField",
+    "DjangoErrorPolicyExtension",
+    "DjangoFilePathType",
     "DjangoFileType",
     "DjangoFormMutation",
+    "DjangoImagePathType",
     "DjangoImageType",
     "DjangoListField",
     "DjangoModelFormMutation",
@@ -117,10 +140,14 @@ __all__ = (
     "DjangoNodeField",
     "DjangoNodesField",
     "DjangoOptimizerExtension",
+    "DjangoResourcePolicyExtension",
     "DjangoSchema",
     "DjangoType",
+    "ErrorPolicy",
     "FieldError",
     "OptimizerHint",
+    "ResourceLimitExceeded",
+    "ResourcePolicy",
     "SyncMisuseError",
     "Upload",
     "__version__",

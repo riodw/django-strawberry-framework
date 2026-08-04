@@ -548,7 +548,7 @@ Justification:
 
 - [`examples/fakeshop/test_query/README.md`][test-query-readme] is explicit: "Live GraphQL-API tests … exercise the full Django + Strawberry HTTP stack end-to-end by sending requests to `/graphql/` (typically via `django.test.Client.post(...)`)." The schema-export command is not an HTTP-shaped surface; it does not hit `/graphql/`; it does not exercise the request pipeline.
 - [`docs/TREE.md`][tree] #"`examples/fakeshop/tests/` — **Example-project tests, no HTTP `/graphql/`**": "`examples/fakeshop/tests/` — Example-project tests, no HTTP `/graphql/`. … management commands via `django.core.management.call_command`."
-- [`examples/fakeshop/tests/test_commands.py`][test-commands] already covers the example project's other commands (`seed_data`, `delete_data`, `seed_shards`, `create_users`, `delete_users`) via `call_command`. Adding one test for `export_schema` extends the file in place.
+- `examples/fakeshop/tests/test_commands.py` already covers the example project's other commands (`seed_data`, `delete_data`, `seed_shards`, `create_users`, `delete_users`) via `call_command`. Adding one test for `export_schema` extends the file in place.
 - The card body acknowledges this: "Live coverage: a fakeshop test under `examples/fakeshop/test_query/` (or `examples/fakeshop/tests/` if not HTTP-shaped)." This Decision settles the "or" in favor of `examples/fakeshop/tests/` because the command is decidedly not HTTP-shaped.
 
 [`AGENTS.md`][agents] #"any coverage line achievable via a real GraphQL query against fakeshop"'s coverage-priority rule ("Any coverage line achievable via a real GraphQL query against fakeshop in `examples/fakeshop/test_query/` MUST be earned that way; fall back to `examples/fakeshop/tests/` … or `tests/` … only when the line is genuinely unreachable from a real-world query") is satisfied: the command's lines are not reachable from a live `/graphql/` query (the command's job is to print SDL from the consumer's `manage.py`, not to serve a request), so the fall-back to `examples/fakeshop/tests/` is the correct tier.
@@ -745,7 +745,6 @@ The card is complete when all of the following are true:
 <!-- tests/ -->
 
 <!-- examples/ -->
-[test-commands]: ../../examples/fakeshop/tests/test_commands.py
 [test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->

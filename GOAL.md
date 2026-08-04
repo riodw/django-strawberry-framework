@@ -562,6 +562,4 @@ For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
 <!-- .venv/ -->
 
 <!-- External -->
-
-<!-- Sibling checkout (the working feature-complete reference) -->
 [cookbook-schema]: ../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py

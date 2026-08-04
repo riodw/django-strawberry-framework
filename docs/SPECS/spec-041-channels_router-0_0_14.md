@@ -2135,6 +2135,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 
 <!-- docs/ -->
 [docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
 [glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
 [glossary-channels-request-adapter]: ../GLOSSARY.md#channels-request-adapter
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
@@ -2165,8 +2166,6 @@ implemented-on-main docs update here; release-status wording defers to the joint
 [glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
 [glossary-testclient]: ../GLOSSARY.md#testclient
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
-[glossary]: ../GLOSSARY.md
-[spec-046]: ../spec-046-transport_security-0_0_15.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
@@ -2174,6 +2173,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 [spec-021]: spec-021-apps-0_0_7.md
 [spec-039]: spec-039-serializer_mutations-0_0_13.md
 [spec-040]: spec-040-auth_mutations-0_0_13.md
+[spec-046]: spec-046-transport_security-0_0_15.md
 
 <!-- docs/builder/ -->
 

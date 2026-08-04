@@ -126,37 +126,60 @@ def _seed_library_books(titles, *, genre_name="fiction"):
 # =============================================================================
 
 
-def test_default_both_synthesizes_reverse_fk_connection_sibling():
-    """A reverse-FK relation gains ``<field>Connection`` alongside the list field.
+def test_default_connection_only_drops_the_reverse_fk_list_sibling():
+    """A reverse-FK relation becomes ``<field>Connection`` ALONE under the default.
 
-    No ``relation_shapes`` key: the implicit ``"both"`` default keeps
-    ``items: [ItemType!]!`` and adds ``itemsConnection``. The bare connection
-    (no target ``totalCount`` opt-in) carries no ``totalCount`` field - the
-    type-level counter-fixture for the sidecar/totalCount test below.
+    No ``relation_shapes`` key: the ``"connection"`` default (spec-047
+    Decision 5) adds ``itemsConnection`` and removes ``items: [ItemType!]!``
+    entirely, so there is no list sibling through which a client could bypass
+    the connection's page cap. The bare connection (no target ``totalCount``
+    opt-in) carries no ``totalCount`` field - the type-level counter-fixture for
+    the sidecar/totalCount test below.
     """
     _make_type("ItemType", Item, ("id", "name", "category"))
     category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
 
     sdl = str(_schema_with_root(category_type))
-    assert "items: [ItemType" in sdl
+    assert "items: [ItemType" not in sdl
     assert "itemsConnection(" in sdl
     assert "totalCount" not in sdl
 
 
-def test_default_both_synthesizes_m2m_connection_siblings():
-    """Forward AND reverse M2M relations gain connection siblings under the default.
+def test_explicit_both_restores_the_reverse_fk_list_sibling():
+    """``relation_shapes = {"items": "both"}`` is the raw list's explicit opt-in.
+
+    The other half of Decision 5: the ``"both"`` shape still exists and still
+    emits the list beside the connection - it is now something a schema author
+    asks for, and the list it produces is row-bounded by the request policy
+    (``resource_policy.py::bounded_rows``) rather than unbounded.
+    """
+    _make_type("ItemType", Item, ("id", "name", "category"))
+    category_type = _make_type(
+        "CategoryType",
+        Category,
+        ("id", "name", "items"),
+        meta_extra={"relation_shapes": {"items": "both"}},
+    )
+
+    sdl = str(_schema_with_root(category_type))
+    assert "items: [ItemType" in sdl
+    assert "itemsConnection(" in sdl
+
+
+def test_default_connection_only_covers_both_m2m_directions():
+    """Forward AND reverse M2M relations become connection-only under the default.
 
     ``Book.genres`` (forward M2M) and ``Genre.books`` (reverse M2M) both get
-    ``<field>Connection`` alongside their list fields - with the reverse-FK
-    case above, all three spec-named eligible kinds are pinned.
+    ``<field>Connection`` and lose their list form - with the reverse-FK case
+    above, all three spec-named eligible kinds are pinned.
     """
     _make_type("BookType", Book, ("id", "title", "genres"))
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
 
     sdl = str(_schema_with_root(genre_type))
-    assert "books: [BookType" in sdl
+    assert "books: [BookType" not in sdl
     assert "booksConnection(" in sdl
-    assert "genres: [GenreType" in sdl
+    assert "genres: [GenreType" not in sdl
     assert "genresConnection(" in sdl
 
 
@@ -202,7 +225,12 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
         schema_editor.create_model(PlainBook)
     try:
         _make_type("PlainBookType", PlainBook, ("id", "title"))
-        author_type = _make_type("PlainAuthorType", PlainAuthor, ("id", "name", "plainbook"))
+        author_type = _make_type(
+            "PlainAuthorType",
+            PlainAuthor,
+            ("id", "name", "plainbook"),
+            meta_extra={"relation_shapes": {"plainbook": "both"}},
+        )
         schema = _schema_with_root(author_type)
 
         author = PlainAuthor.objects.create(name="a1")
@@ -1023,7 +1051,15 @@ def _genres_filterable_book_schema(*, strictness="raise"):
         ("id", "title"),
         meta_extra={"filterset_class": _BookFilter},
     )
-    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    # ``"both"``: this fixture's tests select the raw ``books`` list sibling
+    # ALONGSIDE ``booksConnection``, which the ``"connection"`` default no
+    # longer emits together.
+    genre_type = _make_type(
+        "GenreType",
+        Genre,
+        ("id", "name", "books"),
+        meta_extra={"relation_shapes": {"books": "both"}},
+    )
     finalize_django_types()
     query_cls = strawberry.type(
         type(

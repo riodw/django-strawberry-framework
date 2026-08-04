@@ -523,35 +523,35 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[kanban]: ../KANBAN.md
+[agents]: ../../AGENTS.md
+[kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
-[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
-[glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
-[glossary-debug-sql-row]: GLOSSARY.md#debug-sql-row
-[glossary-debug-exception-row]: GLOSSARY.md#debug-exception-row
-[glossary-django-debug-cursor-capture]: GLOSSARY.md#django-debug-cursor-capture
-[glossary-async-sql-capture-boundary]: GLOSSARY.md#async-sql-capture-boundary
-[glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
-[glossary-strawberry-extension-lifecycle]: GLOSSARY.md#strawberry-extension-lifecycle
-[glossary-developer-only-debug-posture]: GLOSSARY.md#developer-only-debug-posture
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
-[glossary-require_optional_module]: GLOSSARY.md#require_optional_module
-[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
-[glossary-probe-urlconf]: GLOSSARY.md#probe-urlconf
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-graphene-debug-migration]: GLOSSARY.md#graphene-debug-migration
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
+[glossary]: ../GLOSSARY.md
+[glossary-async-sql-capture-boundary]: ../GLOSSARY.md#async-sql-capture-boundary
+[glossary-debug-exception-row]: ../GLOSSARY.md#debug-exception-row
+[glossary-debug-sql-row]: ../GLOSSARY.md#debug-sql-row
+[glossary-debug-toolbar-middleware]: ../GLOSSARY.md#debug-toolbar-middleware
+[glossary-developer-only-debug-posture]: ../GLOSSARY.md#developer-only-debug-posture
+[glossary-django-debug-cursor-capture]: ../GLOSSARY.md#django-debug-cursor-capture
+[glossary-djangodebugextension]: ../GLOSSARY.md#djangodebugextension
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-graphene-debug-migration]: ../GLOSSARY.md#graphene-debug-migration
+[glossary-hard-dependency]: ../GLOSSARY.md#hard-dependency
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
+[glossary-per-operation-extension-isolation]: ../GLOSSARY.md#per-operation-extension-isolation
+[glossary-probe-urlconf]: ../GLOSSARY.md#probe-urlconf
+[glossary-require_optional_module]: ../GLOSSARY.md#require_optional_module
+[glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-strawberry-extension-lifecycle]: ../GLOSSARY.md#strawberry-extension-lifecycle
+[glossary-testclient]: ../GLOSSARY.md#testclient
 
 <!-- docs/SPECS/ -->
-[spec-038]: SPECS/spec-038-auth_mutations-0_0_13.md
-[spec-044]: SPECS/spec-044-debug_extension-0_0_14.md
+[spec-038]: spec-038-form_mutations-0_0_12.md
+[spec-044]: spec-044-debug_extension-0_0_14.md
 
 <!-- docs/builder/ -->
 

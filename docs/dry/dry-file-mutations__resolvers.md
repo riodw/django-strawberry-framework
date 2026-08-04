@@ -240,7 +240,7 @@ No production edits. Plan item checked.
 
 <!-- docs/ -->
 
-[spec-051]: ../spec-051-boundary_dry_squeeze-0_0_20.md
+[spec-051]: ../SPECS/spec-051-boundary_dry_squeeze-0_0_20.md
 
 <!-- docs/SPECS/ -->
 

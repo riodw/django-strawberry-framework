@@ -159,8 +159,25 @@ class _Query:
 
 
 def _finalize_schema(mutation_type: type, *, query_type: type = _Query) -> strawberry.Schema:
+    """Finalize and return this suite's probe schema, with response-boundary masking OFF.
+
+    Every schema in this file exists to prove that the AUTH pipeline does not
+    swallow an upstream failure: Django's own sessionless ``AttributeError``, a
+    session-cycle or logout-flush error, the cleanup exception chained onto it, the
+    concurrent-deletion ``UpdateError``, and the ``SyncMisuseError`` an async
+    permission hook earns. Each of those is a plain Python exception, so the
+    spec-048 error policy would replace exactly the message under test with its
+    stable production one. The policy is opted out of here
+    (``error_policy={"enabled": False}``) rather than claiming these in-process
+    schemas run a debug deployment; masking is pinned on its own in
+    ``tests/test_error_policy.py`` and the live tier.
+    """
     finalize_django_types()
-    return DjangoSchema(query=query_type, mutation=mutation_type)
+    return DjangoSchema(
+        query=query_type,
+        mutation=mutation_type,
+        error_policy={"enabled": False},
+    )
 
 
 def _login_logout_schema(*, declare=_declare_user_type, query_type=_Query, **login_kwargs):

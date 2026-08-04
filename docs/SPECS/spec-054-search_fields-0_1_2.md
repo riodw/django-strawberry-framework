@@ -1618,7 +1618,7 @@ compiler shape.
 
 ## Definition of done
 
-- [ ] `docs/spec-054-search_fields-0_1_2.md` (this file) is the card's
+- [ ] `docs/SPECS/spec-054-search_fields-0_1_2.md` (this file) is the card's
   spec of record.
 - [ ] `filters/search.py` ships `apply_search_sync` / `apply_search_async`
   / `build_search_path_plan` / `active_search` / `SEARCH_MAX_LENGTH`;
@@ -1682,43 +1682,43 @@ compiler shape.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[goal]: ../GOAL.md
+[agents]: ../../AGENTS.md
+[goal]: ../../GOAL.md
 
 <!-- docs/ -->
-[part1-plan]: row-preserving-predicates-part1-plan.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filter_input_type]: GLOSSARY.md#filter_input_type
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-metaaggregate_class]: GLOSSARY.md#metaaggregate_class
-[glossary-metachoice_enum_names]: GLOSSARY.md#metachoice_enum_names
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
-[glossary]: GLOSSARY.md
-[search-terms]: spec-054-search_fields-0_1_2-terms.csv
+[glossary]: ../GLOSSARY.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-cookbook-parity]: ../GLOSSARY.md#cookbook-parity
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-metaaggregate_class]: ../GLOSSARY.md#metaaggregate_class
+[glossary-metachoice_enum_names]: ../GLOSSARY.md#metachoice_enum_names
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
+[part1-plan]: ../row-preserving-predicates-part1-plan.md
 
 <!-- docs/SPECS/ -->
-[spec-027]: SPECS/spec-027-filters-0_0_8.md
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
-[spec-043]: SPECS/spec-043-test_client-0_0_14.md
+[search-terms]: appx/spec-054-search_fields-0_1_2-terms.csv
+[spec-027]: spec-027-filters-0_0_8.md
+[spec-030]: spec-030-connection_field-0_0_9.md
+[spec-043]: spec-043-test_client-0_0_14.md
 
 <!-- docs/builder/ -->
 

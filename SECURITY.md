@@ -28,11 +28,15 @@ You can expect an initial response within **7 days**. We will work with you to v
 
 ## Deployment hardening
 
-### Mask resolver errors in production
+### Resolver error masking is on by default under `DjangoSchema`
 
-graphql-core returns the `str()` of any unhandled resolver exception in the response's top-level `errors[].message`, schema-wide — this is standard GraphQL behavior, not specific to this package. The framework's own write-authorization path raises a controlled `GraphQLError("Not authorized to <op> <Type>.")` that reveals nothing the client did not already send, but a **consumer-supplied** hook (a `get_queryset`, a `check_permission` / `permission_classes` `has_permission`, a custom resolver) that raises will surface its exception message to the client.
+graphql-core returns the `str()` of any unhandled resolver exception in the response's top-level `errors[].message`, schema-wide — standard GraphQL behavior, not specific to this package. Since `0.0.17`, a schema constructed as `DjangoSchema` (required for generated mutations) resolves a **production error policy** at construction: under `settings.DEBUG = False`, an unexpected resolver or hook exception reaches the client as a stable non-sensitive message plus a `correlationId`, and the original exception is logged server-side under that same identifier. Parse/validation errors and deliberately raised `GraphQLError`s — the framework's audited rejections and permission denials included — keep their client-facing contract. The full shape, configuration (`error_policy=` / `ERROR_POLICY`), and per-event subscription coverage are in [the user guide's "Production error policy" section][docs-readme-error-policy].
 
-In production, configure Strawberry's error masking so resolver/permission exception messages are not returned to clients — for example the `MaskErrors` schema extension, or a `Schema.process_errors` override. This is the GraphQL equivalent of running Django with `DEBUG=False`, and applies to any GraphQL deployment regardless of this package.
+Two configurations still put exception text on the wire, both deliberate: the explicit opt-out (`error_policy={"enabled": False}`), which is for consumers who own their own masking (Strawberry's `MaskErrors` extension or a `Schema.process_errors` override), and a plain `strawberry.Schema`, which never had the policy — a query-only schema built without `DjangoSchema` must bring its own masking.
+
+### Production security profile
+
+The consolidated deployment checklist — what the package already defaults to safe and how to verify each guarantee mechanically, the hardened mount recipe (IDE off, GET queries off, introspection disabled), transport body caps, CORS/cache/rate-limit posture, upload content responsibilities, why Relay `GlobalID`s are encodings rather than capabilities, and login/register throttling — lives in [the user guide's "Production security profile" section][docs-readme-production-profile]. Run Django's own `manage.py check --deploy` alongside it; the two lists deliberately do not overlap. The example project (`examples/fakeshop/`) is a development fixture that must never be deployed; its settings module fails loudly if loaded with `DEBUG` off.
 
 ## Disclosure
 
@@ -43,6 +47,9 @@ Once a fix is available we will publish a release and a corresponding GitHub Sec
 <!-- Root -->
 
 <!-- docs/ -->
+
+[docs-readme-error-policy]: docs/README.md#production-error-policy
+[docs-readme-production-profile]: docs/README.md#production-security-profile
 
 <!-- docs/SPECS/ -->
 

@@ -130,6 +130,7 @@ from django.urls import path
 import django_strawberry_framework
 import django_strawberry_framework.consumers as consumers_module
 import django_strawberry_framework.routers as routers_module
+from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import request_from_info
@@ -333,8 +334,52 @@ class Query:
         return "pong"
 
 
+#: The string a masked subscription event must not carry. Shaped like something a
+#: real exception would say by accident - a tenant identifier and a server path -
+#: so "it appears nowhere in the frame" is a statement about disclosure rather
+#: than about a token chosen to be easy to find.
+_EVENT_SENSITIVE = "subscription internal secret /srv/private/tenant-7.key"
+
+
+@strawberry.type
+class EmittedRow:
+    """One subscription event's payload, with one field that always raises.
+
+    The shape a per-event masking row needs and no other subscription here has:
+    an event whose ``data`` is partially resolved AND whose ``errors`` carry a
+    plain Python exception's own message. Yielding a scalar cannot produce one -
+    a subscription's errors have to come from resolving something the event
+    carried.
+    """
+
+    @strawberry.field
+    def label(self) -> str:
+        """Succeed, so a masked event still proves ``data`` survived masking."""
+        return "ok"
+
+    @strawberry.field
+    def boom(self) -> str | None:
+        """Raise a plain exception carrying a sensitive string. Nullable, so the
+        error stays attributed to this field's own ``path`` instead of nulling the
+        whole event.
+        """
+        raise ValueError(_EVENT_SENSITIVE)
+
+
 @strawberry.type
 class Subscription:
+    @strawberry.subscription
+    async def leaky(self, count: int = 2) -> AsyncIterator[EmittedRow]:
+        """Emit ``count`` events, each of which fails one of its own fields.
+
+        Deliberately more than one: the per-event error policy seam has to hold
+        for EVERY event, and a one-event subscription cannot tell per-event
+        masking from the operation-teardown masking that only ever sees the last
+        result.
+        """
+        for _ in range(count):
+            yield EmittedRow()
+
     @strawberry.subscription
     async def tick(self) -> AsyncIterator[str]:
         """One value, then completion.
@@ -3549,6 +3594,108 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
     assert gate.sends_under_lease == [True, True]
     # Upstream's teardown cancelled the still-running subscription on disconnect.
     assert controller.finalized
+
+
+# ---------------------------------------------------------------------------
+# The production error policy on the subscription result source (spec-048
+# Decision 11).
+#
+# A query's errors are masked by the schema extension's operation teardown, which
+# for a single-result operation IS the response. A subscription delivers one
+# result per EVENT and that teardown runs only when the operation ends, so the
+# per-event seam is this module's own result source. These rows are consumer-level
+# for that reason: nothing below the transport can observe what a frame carried.
+# ---------------------------------------------------------------------------
+
+_LEAKY_SUBSCRIPTION = "subscription { leaky { label boom } }"
+
+#: 32 lowercase hex characters and nothing else - the pinned ``uuid4().hex`` shape.
+_CORRELATION_ID_PATTERN = re.compile(r"\A[0-9a-f]{32}\Z")
+
+
+def _masking_schema(**schema_kwargs):
+    """Build a ``DjangoSchema`` over this module's ORM-free operations.
+
+    ``DjangoSchema`` rather than the module's plain ``SCHEMA`` because the policy
+    under test is a ``DjangoSchema`` surface: it resolves ``schema.error_policy``
+    at construction, which is what both rows configure. Declares no
+    ``DjangoType``, so the package registry is untouched.
+    """
+    from django_strawberry_framework import DjangoSchema
+
+    return DjangoSchema(query=Query, subscription=Subscription, **schema_kwargs)
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db(transaction=True)
+async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(subprotocol, caplog):
+    """Each event's own errors are masked, on both protocols, not just the last one.
+
+    The defect this row exists to catch is subtle and total: masking installed
+    only on the operation-teardown seam is a no-op for a subscription, because
+    every event has already been serialized and sent by the time the operation
+    ends. So the row reads TWO events off the wire and requires both of them
+    masked, with a DIFFERENT correlation id each - one shared id would mean one
+    masking pass over a final result rather than a pass per delivery.
+
+    ``data`` is asserted alongside the errors because masking must not cost the
+    client the part of the event that succeeded, and the raw frame text is
+    searched for the exception's own string because "the message was replaced" and
+    "the message is gone" are different claims.
+    """
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    router = _router(_masking_schema())
+    _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+
+    correlation_ids = []
+    async with _open_ws(router, subprotocol=subprotocol) as communicator:
+        await _send_operation(communicator, _LEAKY_SUBSCRIPTION, op_id="1")
+        for _ in range(2):
+            message = await communicator.receive_json_from(timeout=10)
+            assert message["type"] == success_frame, message
+            assert _EVENT_SENSITIVE not in json.dumps(message), message
+            payload = message["payload"]
+            assert payload["data"] == {"leaky": {"label": "ok", "boom": None}}, payload
+            assert len(payload["errors"]) == 1, payload
+            error = payload["errors"][0]
+            assert error["message"] == DEFAULT_ERROR_POLICY.message, error
+            # The failing field is still named: the client wrote the query.
+            assert error["path"] == ["leaky", "boom"], error
+            correlation_ids.append(
+                error["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key],
+            )
+
+    assert all(_CORRELATION_ID_PATTERN.fullmatch(value) for value in correlation_ids)
+    assert len(set(correlation_ids)) == 2, correlation_ids
+    # Each id resolves to its own server-side record carrying the real exception.
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    for correlation_id in correlation_ids:
+        assert correlation_id in logged
+    assert any(
+        isinstance(record.exc_info[1], ValueError) for record in caplog.records if record.exc_info
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_subscription_seam_masks_only_what_the_policy_asks_it_to():
+    """The opt-out reaches the per-event seam too, so the seam is not a blanket rewrite.
+
+    The control for the row above: the same subscription on a schema built with
+    ``error_policy={"enabled": False}`` delivers the resolver's own message. Without
+    it, an implementation that unconditionally replaced every subscription error
+    would pass the masking row while ignoring the policy entirely - and a consumer
+    who owns their own masking would have no way back to their own text.
+    """
+    router = _router(_masking_schema(error_policy={"enabled": False}))
+
+    async with _open_ws(router) as communicator:
+        await _send_operation(communicator, _LEAKY_SUBSCRIPTION, op_id="1")
+        message = await communicator.receive_json_from(timeout=10)
+
+    assert message["type"] == "next", message
+    error = message["payload"]["errors"][0]
+    assert _EVENT_SENSITIVE in error["message"], error
+    assert "extensions" not in error or error["extensions"] is None, error
 
 
 @pytest.mark.django_db(transaction=True)

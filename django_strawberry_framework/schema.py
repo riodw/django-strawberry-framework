@@ -43,6 +43,7 @@ executes exactly as stock graphql-core.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import strawberry
@@ -50,7 +51,11 @@ from django.db import transaction
 from graphql.execution.execute import ExecutionContext
 from strawberry.utils.inspect import in_async_context
 
+from .error_policy import ErrorPolicy, resolve_error_policy
+from .extensions.error_policy import DjangoErrorPolicyExtension
+from .extensions.resource_policy import DjangoResourcePolicyExtension
 from .mutations.fields import MUTATION_CLASS_MARKER
+from .resource_policy import ResourcePolicy, resolve_resource_policy
 from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
@@ -205,8 +210,94 @@ class DjangoSchema(strawberry.Schema):
     otherwise - every constructor argument passes through, and a consumer
     needing a custom execution context subclasses
     ``DjangoMutationExecutionContext`` and passes it explicitly.
+
+    **The execution resource policy is resolved here, once.** ``resource_policy=``
+    accepts a ``ResourcePolicy`` or a mapping of bound names to values; omitted,
+    the ``DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]`` setting and then the
+    package defaults apply. The resolved object is validated at construction - an
+    invalid bound fails the deployment at startup, not on a request - is exposed
+    as ``schema.resource_policy``, and is enforced by
+    ``extensions/resource_policy.py::DjangoResourcePolicyExtension``, which this
+    constructor appends unless the consumer already supplied one. A schema built
+    through this class is therefore bounded with no opt-in boilerplate, which is
+    the whole point: an endpoint whose only limiter is one a consumer remembered
+    to install is an endpoint with no limiter.
+
+    **The production error policy is resolved here too, and by the same rule.**
+    ``error_policy=`` accepts an ``ErrorPolicy`` or a mapping of option names to
+    values; omitted, the ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]`` setting
+    and then the package defaults apply. It is validated at construction, exposed
+    as ``schema.error_policy``, and enforced by
+    ``extensions/error_policy.py::DjangoErrorPolicyExtension``, which this
+    constructor PREPENDS unless the consumer already supplied one - the position
+    is load-bearing, see ``_with_error_policy_extension``. Under
+    ``settings.DEBUG = False`` an unexpected resolver or hook exception therefore
+    reaches the client as a stable message plus a correlation identifier rather
+    than as whatever the exception happened to say. Opting out is explicit:
+    ``DjangoSchema(error_policy={"enabled": False})``.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        resource_policy: ResourcePolicy | Mapping[str, Any] | None = None,
+        error_policy: ErrorPolicy | Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.resource_policy = resolve_resource_policy(resource_policy)
+        self.error_policy = resolve_error_policy(error_policy)
         kwargs.setdefault("execution_context_class", DjangoMutationExecutionContext)
+        extensions = _with_resource_policy_extension(kwargs.get("extensions"))
+        kwargs["extensions"] = _with_error_policy_extension(extensions)
         super().__init__(*args, **kwargs)
+
+
+def _with_resource_policy_extension(extensions: Any) -> list[Any]:
+    """Return ``extensions`` with the resource-policy extension appended if absent.
+
+    The extension is appended as a CLASS, which is what Strawberry wants: it
+    constructs one instance per request, so a class (or factory) is what gives
+    each operation its own charge counters. Passing an instance would share one
+    set of counters across every concurrent request on the process.
+
+    A consumer-supplied entry - class or instance - suppresses the append, so a
+    consumer who installed the extension with a policy of their own keeps exactly
+    that entry rather than getting a second copy whose charges would double-count
+    against the same bounds. A consumer who wants a different policy without
+    touching ``extensions`` passes ``DjangoSchema(resource_policy=...)``, which is
+    the supported spelling; a bare factory callable
+    (``lambda: DjangoResourcePolicyExtension(...)``) is opaque to this check by
+    construction, so a consumer using one should not also rely on suppression.
+    """
+    installed = list(extensions or [])
+    for extension in installed:
+        candidate = extension if isinstance(extension, type) else type(extension)
+        if issubclass(candidate, DjangoResourcePolicyExtension):
+            return installed
+    installed.append(DjangoResourcePolicyExtension)
+    return installed
+
+
+def _with_error_policy_extension(extensions: list[Any]) -> list[Any]:
+    """Return ``extensions`` with the error-policy extension PREPENDED if absent.
+
+    Prepended, not appended, and the position is the contract (spec-048
+    Decision 10). Strawberry's ``on_operation`` teardowns unwind LIFO, so the
+    first-listed extension tears down LAST - and masking must be last, after
+    every extension that reads ``GraphQLError.original_error`` has had its turn.
+    ``extensions/debug.py::DjangoDebugExtension`` is exactly such an extension
+    and is documented to be listed after any masking extension; appending here
+    would silently empty its ``exceptions`` list on any schema that installs
+    both. The resource-policy extension appends for the mirror-image reason: it
+    gates BEFORE execution, so it wants to set up last.
+
+    A consumer-supplied entry - class or instance - suppresses the prepend, so a
+    consumer who installed the extension at a position of their own keeps
+    exactly that entry rather than getting a second copy that would mask an
+    already-masked error and mint a second correlation id for it.
+    """
+    for extension in extensions:
+        candidate = extension if isinstance(extension, type) else type(extension)
+        if issubclass(candidate, DjangoErrorPolicyExtension):
+            return extensions
+    return [DjangoErrorPolicyExtension, *extensions]

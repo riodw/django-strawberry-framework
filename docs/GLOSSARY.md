@@ -17,7 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.14`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.17`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -26,8 +26,11 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
 - [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
 - [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
-- [`DjangoFileType`](#djangofiletype) — structured read-output object for a `FileField` column (`name` / `path` / `size` / `url`).
+- [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) — response-side enforcement of the [production error policy](#production-error-policy); prepended to a `DjangoSchema`'s extensions list so it masks after every other teardown.
+- [`DjangoFilePathType`](#djangofilepathtype) — `DjangoFileType` plus the opt-in absolute filesystem `path`, selected per column by [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
+- [`DjangoFileType`](#djangofiletype) — structured read-output object for a `FileField` column (`name` / `size` / `url`).
 - [`DjangoFormMutation`](#djangoformmutation) — plain `Form` mutation base (model-less sibling): `Meta.form_class`, pinned `ok` + `errors` payload, no object slot.
+- [`DjangoImagePathType`](#djangoimagepathtype) — `DjangoImageType` plus the opt-in absolute filesystem `path`; the `ImageField` counterpart of [`DjangoFilePathType`](#djangofilepathtype).
 - [`DjangoImageType`](#djangoimagetype) — structured read-output object for an `ImageField` column (`DjangoFileType` fields plus `width` / `height`).
 - [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
 - [`DjangoModelFormMutation`](#djangomodelformmutation) — `ModelForm` mutation base subclassing `DjangoMutation`; returns the post-save object in the uniform `node` / `result` slot.
@@ -38,6 +41,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoNodesField`](#djangonodesfield) — root Relay `nodes(ids:)` batch refetch field factory.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
+- [`ErrorPolicy`](#errorpolicy) — frozen production error policy (`enabled` / `message` / `correlation_extension_key`), resolved once at schema construction; exported alongside `DEFAULT_ERROR_POLICY`.
 - [`FieldError`](#fielderror-envelope) — public typed validation-error type (`field` + `messages`) in the shared mutation-payload envelope.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`SerializerMutation`](#serializermutation) — DRF `ModelSerializer` mutation base subclassing `DjangoMutation` (`Meta.serializer_class`); a lazy root export under the soft `djangorestframework` guard (resolved via `__getattr__`, not in `__all__` while DRF is soft).
@@ -91,8 +95,11 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [Connection-scoped revocation](#connection-scoped-revocation) | shipped |
 | [Cookbook parity](#cookbook-parity) | planned through `1.0.0` |
+| [Correlation identifier](#correlation-identifier) | shipped (`0.0.17`) |
 | [Debug exception row](#debug-exception-row) | shipped (`0.0.14`) |
+| [Debug fail-closed gate](#debug-fail-closed-gate) | shipped (`0.0.17`) |
 | [Debug payload availability](#debug-payload-availability) | shipped (`0.0.14`) |
+| [Debug payload caps](#debug-payload-caps) | shipped (`0.0.17`) |
 | [Debug SQL row](#debug-sql-row) | shipped (`0.0.14`) |
 | [Debug-toolbar middleware](#debug-toolbar-middleware) | shipped (`0.0.14`) |
 | [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
@@ -102,10 +109,13 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoDebugExtension`](#djangodebugextension) | shipped (`0.0.14`) |
+| [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) | shipped (`0.0.17`) |
+| [`DjangoFilePathType`](#djangofilepathtype) | shipped (`0.0.17`) |
 | [`DjangoFileType`](#djangofiletype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](#djangoformmutation) | shipped (`0.0.12`) |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | shipped (`0.0.14`) |
 | [`DjangoGraphQLView`](#djangographqlview) | shipped |
+| [`DjangoImagePathType`](#djangoimagepathtype) | shipped (`0.0.17`) |
 | [`DjangoImageType`](#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoModelFormMutation`](#djangomodelformmutation) | shipped (`0.0.12`) |
@@ -115,8 +125,11 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoNodeField`](#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoNodesField`](#djangonodesfield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) | shipped (`0.0.16`) |
 | [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
+| [`ErrorPolicy`](#errorpolicy) | shipped (`0.0.17`) |
 | [Eviction-simulated absence](#eviction-simulated-absence) | shipped (`0.0.13`) |
+| [Execution resource policy](#execution-resource-policy) | shipped (`0.0.16`) |
 | [`FieldError` envelope](#fielderror-envelope) | shipped (`0.0.11`) |
 | [`FieldSet`](#fieldset) | planned for `0.1.1` |
 | [`FilterSet`](#filterset) | shipped (`0.0.8`) |
@@ -139,6 +152,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.exclude`](#metaexclude) | shipped |
 | [`Meta.fields`](#metafields) | shipped |
 | [`Meta.fields_class`](#metafields_class) | planned for `0.1.1` |
+| [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) | shipped (`0.0.17`) |
 | [`Meta.filterset_class`](#metafilterset_class) | shipped (`0.0.8`) |
 | [`Meta.globalid_strategy`](#metaglobalid_strategy) | shipped (`0.0.9`) |
 | [`Meta.interfaces`](#metainterfaces) | shipped (`0.0.5`) |
@@ -163,6 +177,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Prefetch alias threading](#prefetch-alias-threading) | shipped (`0.0.14`) |
 | [Probe URLconf](#probe-urlconf) | shipped (repository test pattern) |
+| [Production error policy](#production-error-policy) | shipped (`0.0.17`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
 | [Prove-then-clone AST trust](#prove-then-clone-ast-trust) | shipped (`0.0.14`) |
 | [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) | shipped (`0.0.14`) |
@@ -175,6 +190,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Request-body cap](#request-body-cap) | shipped |
 | [`request_from_info`](#request_from_info) | shipped (`0.0.8`) |
 | [`require_optional_module`](#require_optional_module) | shipped (`0.0.14`) |
+| [`ResourcePolicy`](#resourcepolicy) | shipped (`0.0.16`) |
 | [Response-extension merge semantics](#response-extension-merge-semantics) | shipped (`0.0.14`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | shipped (`0.0.14`) |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
@@ -193,11 +209,13 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Strawberry extension lifecycle](#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
+| [Structural error classification](#structural-error-classification) | shipped (`0.0.17`) |
 | [`SyncMisuseError`](#syncmisuseerror) | shipped (`0.0.5`) |
 | [`TestClient`](#testclient) | shipped (`0.0.14`) |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | shipped (`0.0.11`) |
 | [UTF-8 wire contract](#utf-8-wire-contract) | shipped |
+| [Value-budget walker](#value-budget-walker) | shipped (`0.0.16`) |
 | [Visibility boundary](#visibility-boundary) | shipped (`0.0.14`) |
 | [WebSocket consumer-injection seam](#websocket-consumer-injection-seam) | shipped |
 | [WebSocket Host boundary](#websocket-host-boundary) | shipped |
@@ -209,7 +227,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 
 For readers exploring rather than looking up a specific term:
 
-- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names) · [`auto`-typed annotations](#auto-typed-annotations).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
@@ -221,8 +239,8 @@ For readers exploring rather than looking up a specific term:
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
-- **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity) · [Async SQL-capture boundary](#async-sql-capture-boundary) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Cookbook parity](#cookbook-parity) · [Debug exception row](#debug-exception-row) · [Debug payload availability](#debug-payload-availability) · [Debug SQL row](#debug-sql-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Django debug-cursor capture](#django-debug-cursor-capture) · [`DjangoDebugExtension`](#djangodebugextension) · [Graphene debug migration](#graphene-debug-migration) · [Hard dependency](#hard-dependency) · [Masking-extension ordering](#masking-extension-ordering) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Response-extension merge semantics](#response-extension-merge-semantics) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [`DjangoGraphQLView`](#djangographqlview) · [Request-body cap](#request-body-cap) · [UTF-8 wire contract](#utf-8-wire-contract) · [WebSocket consumer-injection seam](#websocket-consumer-injection-seam) · [WebSocket revalidation window](#websocket-revalidation-window).
+- **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoFilePathType`](#djangofilepathtype) · [`DjangoImagePathType`](#djangoimagepathtype) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity) · [Async SQL-capture boundary](#async-sql-capture-boundary) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Cookbook parity](#cookbook-parity) · [Debug exception row](#debug-exception-row) · [Debug payload availability](#debug-payload-availability) · [Debug SQL row](#debug-sql-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Django debug-cursor capture](#django-debug-cursor-capture) · [`DjangoDebugExtension`](#djangodebugextension) · [Graphene debug migration](#graphene-debug-migration) · [Hard dependency](#hard-dependency) · [Masking-extension ordering](#masking-extension-ordering) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Response-extension merge semantics](#response-extension-merge-semantics) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [`DjangoGraphQLView`](#djangographqlview) · [Request-body cap](#request-body-cap) · [UTF-8 wire contract](#utf-8-wire-contract) · [WebSocket consumer-injection seam](#websocket-consumer-injection-seam) · [WebSocket revalidation window](#websocket-revalidation-window) · [Execution resource policy](#execution-resource-policy) · [`ResourcePolicy`](#resourcepolicy) · [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) · [Value-budget walker](#value-budget-walker) · [Correlation identifier](#correlation-identifier) · [Debug fail-closed gate](#debug-fail-closed-gate) · [Debug payload caps](#debug-payload-caps) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [`ErrorPolicy`](#errorpolicy) · [Production error policy](#production-error-policy) · [Structural error classification](#structural-error-classification).
 - **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence) · [Schema reload discipline](#schema-reload-discipline) · [`seed_data`](#seed_data) · [Probe URLconf](#probe-urlconf).
 
 ---
@@ -387,6 +405,16 @@ The repository's obligation to validate migration claims against the working `dj
 
 **See also:** [Graphene debug migration](#graphene-debug-migration) · [Single-upstream parity](#single-upstream-parity).
 
+## Correlation identifier
+
+**Status:** shipped (`0.0.17`).
+
+The identifier that keeps masking supportable. Every error the [production error policy](#production-error-policy) masks carries a fresh `uuid.uuid4().hex` — 32 lowercase hexadecimal characters, no dashes, so it is grep-safe, log-safe, URL-safe, and safe to read aloud over a support call. It is published to the client under the policy's `correlation_extension_key` (`correlationId` by default) and written into the server-side `ERROR` log record's message text alongside the original exception's `exc_info`, so one `grep` resolves a user's report to one traceback even in a deployment with no structured-logging handler.
+
+**One id per MASKED ERROR, not per operation.** A response carrying two unrelated failures logs two exceptions, and a single per-operation id would leave the client's report ambiguous about which of them they hit — the exact question the identifier exists to answer. The value is random rather than derived: a hash of the message or the traceback would be an oracle, letting a client distinguish two errors or confirm a guess about the exception text.
+
+**See also:** [Production error policy](#production-error-policy) · [`ErrorPolicy`](#errorpolicy) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension).
+
 ## Debug exception row
 
 **Status:** shipped (`0.0.14`).
@@ -395,6 +423,18 @@ One item in `extensions.debug.exceptions`. The wire keys mirror graphene-django'
 
 **See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Debug payload availability](#debug-payload-availability) · [Masking-extension ordering](#masking-extension-ordering).
 
+## Debug fail-closed gate
+
+**Status:** shipped (`0.0.17`).
+
+The `settings.DEBUG` gate that makes [`DjangoDebugExtension`](#djangodebugextension) safe to leave in a schema. At operation start the extension reads `settings.DEBUG`; when it is false and the deployment has not acknowledged the disclosure, the extension is **INERT** — it acquires no debug cursor, snapshots no query log, builds no payload, and `get_results()` returns `{}` — and logs one warning naming the misconfiguration, so the condition is discoverable in a log rather than only as an absent response key. The operation itself still runs normally: a diagnostic that refuses to disclose must not also refuse the request. Reading the setting at operation start rather than at import is deliberate — `settings.DEBUG` is legitimately overridden per test and per settings module, and an import-time read would pin whichever value was live when the module first loaded.
+
+The acknowledgement is the keyword-only `allow_unsafe_production` argument, spelled as a factory entry: `lambda: DjangoDebugExtension(allow_unsafe_production=True)`. A factory rather than a pre-built instance, so the fresh-per-operation instance a bare class entry gives is preserved ([Per-operation extension isolation](#per-operation-extension-isolation)). The `False` default is exactly what Strawberry's zero-argument construction of the bare class entry produces, so the ubiquitous `extensions=[DjangoDebugExtension]` spelling is safe with no consumer action.
+
+**Inert, not raising.** Raising at operation start would turn a diagnostics misconfiguration into a total production outage and hand anyone who can get a debug entry into a production schema list a denial-of-service lever. Fail-closed here means **non-disclosure**, and inertness achieves that completely. Refusing at schema construction is equally rejected: a class entry is stored unexamined, and a construction-time verdict on `DEBUG` would be stale for exactly the test and multi-settings deployments that need the gate most.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Developer-only debug posture](#developer-only-debug-posture) · [Debug payload caps](#debug-payload-caps) · [Per-operation extension isolation](#per-operation-extension-isolation).
+
 ## Debug payload availability
 
 **Status:** shipped (`0.0.14`).
@@ -402,6 +442,18 @@ One item in `extensions.debug.exceptions`. The wire keys mirror graphene-django'
 When `extensions.debug` is present. An enabled schema emits both `sql` and `exceptions` lists for every operation that reaches execution, including successful operations, resolver failures, mutations, and introspection. Parse and validation failures carry no `debug` key because Strawberry asks extensions for results before `on_operation` teardown has assembled the payload. A coerced non-GraphQL exception that escapes execution can carry the payload because teardown has run before the engine's recovery response. `get_results()` is therefore a pure, idempotent stash read and may be called more than once.
 
 **See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Response-extension merge semantics](#response-extension-merge-semantics).
+
+## Debug payload caps
+
+**Status:** shipped (`0.0.17`).
+
+The deterministic bounds on what [`DjangoDebugExtension`](#djangodebugextension) publishes, held as module constants in `extensions/debug.py` with no settings key — a bound on a development-only diagnostic nobody has asked to tune does not need a public knob, and a deployment that wants a different ceiling subclasses the extension. At most **100** [SQL rows](#debug-sql-row) and **25** [exception rows](#debug-exception-row) are admitted; each serialized SQL statement is cut at 4096 characters, each exception message at 4096, and each serialized traceback at 16384; and one shared **262144**-character budget is spent on the exception rows before the SQL rows, with admission STOPPING at the first row that would exceed it, so a payload cannot grow enormous through many rows that each fit their own cap.
+
+Truncation is **marked**: an over-long string is cut to its first N characters and suffixed with the single shared literal `... [truncated]`, so a consumer detects truncation with one comparison rather than three. **Rows beyond a row cap are dropped from the TAIL**, because the earliest queries explain how the operation started and a diagnostic that keeps only the last hundred of a thousand queries describes the symptom rather than the cause.
+
+**The ordering is contractual: caps apply AFTER serialization and BEFORE the payload is stashed**, in one helper both paths call. Truncating earlier would truncate a structure rather than a string and give the two paths different definitions of "too long"; truncating later would mean the uncapped payload existed in memory, which is the thing being bounded. **Both lists remain always present**, empty or fully dropped, so the wire contract is unchanged and [Response-extension merge semantics](#response-extension-merge-semantics), the [Response-extensions debug middleware](#response-extensions-debug-middleware), and the [Graphene debug migration](#graphene-debug-migration) mapping all keep working against a capped payload.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Debug SQL row](#debug-sql-row) · [Debug exception row](#debug-exception-row) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Debug payload availability](#debug-payload-availability).
 
 ## Debug SQL row
 
@@ -457,9 +509,9 @@ Validation that a manual relation annotation matches the Django relation cardina
 
 **Status:** shipped (`0.0.14`).
 
-The security contract for response-side debugging. [`DjangoDebugExtension`](#djangodebugextension) is off by default and intended only for development-controlled schemas because it returns interpolated SQL plus raw exception types, messages, and tracebacks to the GraphQL client. It can intentionally reveal details that a masking extension hides from the standard `errors` array. The initial surface has no settings gate, request predicate, redaction hook, row cap, or configurable slow-query threshold; consumers control exposure by whether the class appears in the schema's `extensions=` list. Never enable it on an internet-facing production schema.
+The security contract for response-side debugging. [`DjangoDebugExtension`](#djangodebugextension) is off by default and intended only for development-controlled schemas because it returns interpolated SQL plus raw exception types, messages, and tracebacks to the GraphQL client. It can intentionally reveal details that a masking extension hides from the standard `errors` array. The surface is gated on `settings.DEBUG`: under a false setting the extension is inert unless the deployment spells the `allow_unsafe_production` acknowledgement (see the [debug fail-closed gate](#debug-fail-closed-gate)), and what it does publish is bounded by the deterministic [debug payload caps](#debug-payload-caps). There is no request predicate, redaction hook, or configurable slow-query threshold; beyond the gate, consumers control exposure by whether the class appears in the schema's `extensions=` list. Never enable it on an internet-facing production schema.
 
-**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Masking-extension ordering](#masking-extension-ordering).
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Masking-extension ordering](#masking-extension-ordering) · [Debug fail-closed gate](#debug-fail-closed-gate) · [Debug payload caps](#debug-payload-caps).
 
 ## Django `AppConfig`
 
@@ -473,9 +525,9 @@ The security contract for response-side debugging. [`DjangoDebugExtension`](#dja
 
 **Status:** shipped (`0.0.14`).
 
-The SQL fidelity source used by [`DjangoDebugExtension`](#djangodebugextension). For every alias in `connections.all()`, the extension saves and enables `connection.force_debug_cursor`, snapshots `len(connection.queries_log)`, then restores the saved flag and serializes new log rows at teardown. This is the flag-and-snapshot mechanism of Django's `CaptureQueriesContext` without constructing that context directly, because its `__enter__` eagerly opens every configured connection. Enabling `force_debug_cursor` makes `CursorDebugWrapper` populate `queries_log` independently of `settings.DEBUG`; the extension adds no package-owned cursor wrapper and does not force unused aliases open.
+The SQL fidelity source used by [`DjangoDebugExtension`](#djangodebugextension). For every alias in `connections.all()`, the extension saves and enables `connection.force_debug_cursor`, snapshots `len(connection.queries_log)`, then restores the saved flag and serializes new log rows at teardown. This is the flag-and-snapshot mechanism of Django's `CaptureQueriesContext` without constructing that context directly, because its `__enter__` eagerly opens every configured connection. Enabling `force_debug_cursor` makes `CursorDebugWrapper` populate `queries_log` independently of `settings.DEBUG`; the extension adds no package-owned cursor wrapper and does not force unused aliases open. The mechanism's independence from `settings.DEBUG` is precisely why the extension carries its own gate: the [debug fail-closed gate](#debug-fail-closed-gate) decides whether this bracket is entered at all, so under a false `settings.DEBUG` without the acknowledgement no cursor is acquired and no snapshot is taken.
 
-**See also:** [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Debug SQL row](#debug-sql-row).
+**See also:** [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Debug SQL row](#debug-sql-row) · [Debug fail-closed gate](#debug-fail-closed-gate).
 
 ## `DjangoConnection`
 
@@ -501,15 +553,39 @@ The field owns its own optimizer cooperation point (the plan-application logic e
 
 The public Strawberry `SchemaExtension` exported from `django_strawberry_framework.extensions` by spec 044. Consumers opt in with the **class** in `strawberry.Schema(..., extensions=[..., DjangoDebugExtension])`; the class is not exported from the package root and fakeshop does not enable it globally. One fresh instance per operation captures [Debug SQL rows](#debug-sql-row) and [Debug exception rows](#debug-exception-row), then returns `{"debug": {"sql": [...], "exceptions": [...]}}` through Strawberry's response-extension seam. It is the concrete symbol behind [Response-extensions debug middleware](#response-extensions-debug-middleware), requires `strawberry-graphql>=0.316.0` for instance isolation, and follows the [Developer-only debug posture](#developer-only-debug-posture).
 
-**See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Django debug-cursor capture](#django-debug-cursor-capture) · [Debug payload availability](#debug-payload-availability).
+It fails closed: at operation start it reads `settings.DEBUG` and, when that is false without the `allow_unsafe_production=True` acknowledgement — spelled as the factory entry `lambda: DjangoDebugExtension(allow_unsafe_production=True)`, which preserves the fresh-per-operation instance — it acquires no cursor, builds no payload, returns `{}` from `get_results()`, and logs one warning (see the [debug fail-closed gate](#debug-fail-closed-gate)). What it does publish is bounded: at most 100 SQL rows and 25 exception rows with the tail dropped, per-row string truncation marked with `... [truncated]`, and one shared 262144-character payload budget (see [Debug payload caps](#debug-payload-caps)).
+
+**See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Django debug-cursor capture](#django-debug-cursor-capture) · [Debug payload availability](#debug-payload-availability) · [Debug fail-closed gate](#debug-fail-closed-gate) · [Debug payload caps](#debug-payload-caps).
+
+## `DjangoErrorPolicyExtension`
+
+**Status:** shipped (`0.0.17`).
+
+The `SchemaExtension` that ENFORCES the [production error policy](#production-error-policy), root-exported for a consumer assembling a plain `strawberry.Schema`. `DjangoSchema` **PREPENDS** it at index 0 of the extensions list unless the consumer already supplied one of their own, which suppresses the automatic install entirely.
+
+**The install position is load-bearing.** `on_operation` teardowns unwind LIFO, so the FIRST-listed extension tears down LAST; prepending is therefore what guarantees masking happens after every other teardown — critically after [`DjangoDebugExtension`](#djangodebugextension), which must read `original_error` to build its [exception rows](#debug-exception-row), and after any consumer masking extension, which expects to see the originals. This is the exact inverse of the resource policy's append, and the inversion is principled: [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) does its work in the SETUP half, which runs in list order. **One rule states both — install the extension where its own half of the lifecycle runs LAST**, because each policy is the final word on its side of the operation.
+
+The teardown is **one synchronous generator serving both execution colors** (the engine enters sync generator hooks on the async path too), handling both result shapes it can be handed — graphql-core's `ExecutionResult` and Strawberry's — and treating a `None` result or an error-free one as a no-op. Each remaining entry is classified by [structural error classification](#structural-error-classification) and, when masked, **replaced** by a fresh `GraphQLError` carrying the policy message, a [correlation identifier](#correlation-identifier), the original `nodes` / `source` / `positions` / `path`, and `original_error=None`. Because both the deliberate rejections and the replacements are plain `GraphQLError`s, sync HTTP, async HTTP and both WebSocket protocols render them identically with no translation layer.
+
+**See also:** [Production error policy](#production-error-policy) · [`ErrorPolicy`](#errorpolicy) · [Masking-extension ordering](#masking-extension-ordering) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle).
+
+## `DjangoFilePathType`
+
+**Status:** shipped (`0.0.17`).
+
+[`DjangoFileType`](#djangofiletype) plus the opted-in `path`: the file's absolute location on the server filesystem, nullable and guarded by the same `_safe_file_attr` degradation as `size` / `url`. Root-exported, and reached only by naming the column in [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) — a `FileField` column that does not opt in emits `DjangoFileType`, which has no `path` field in the SDL at all, not a nullable one and not a permission-guarded one.
+
+**The description is the warning.** The `path` field carries its own SDL description stating that this is the absolute filesystem path on the server, that it was opted into per column, and that it is deployment metadata rather than client data — so the caution travels with the field into every generated schema a consumer reads. The `path` resolver lives once, in the private `_FileSystemPathFields` mixin this type and [`DjangoImagePathType`](#djangoimagepathtype) compose, because two copies of a security-sensitive resolver drift silently. And the opt-in types **subclass** the safe ones, so a consumer fragment on `DjangoFileType` still matches an opted-in field's shared members and the two shapes stay one family.
+
+**See also:** [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) · [`DjangoFileType`](#djangofiletype) · [`DjangoImagePathType`](#djangoimagepathtype).
 
 ## `DjangoFileType`
 
 **Status:** shipped (`0.0.11`).
 
-Resolver-backed output object for a `FileField` column, carrying `name` (non-null), `path` / `size` / `url` (nullable, storage-safe). The `path` / `size` / `url` subfields delegate to the shared `_safe_file_attr` guard, which degrades to `null` on the storage-shaped errors a non-filesystem backend or a vanished file raises (`ValueError` / `OSError` / `NotImplementedError`); `SuspiciousFileOperation` is deliberately **not** swallowed (it propagates as a path-traversal security signal). An empty / absent file resolves the **whole object** to `null`, never a `FieldFile.url` exception. Mapped on **read** via the new `FIELD_OUTPUT_TYPE_MAP` (kept off the shared [`SCALAR_MAP`](#scalar-field-conversion) / filter-input path, so no output object reaches a [`FilterSet`](#filterset) input). A consumer `attachment: str` annotation override bypasses it and keeps the legacy `str` (name / URL) shape per [Scalar field override semantics](#scalar-field-override-semantics). Paired with the [`Upload` scalar](#upload-scalar) on the input side.
+Resolver-backed output object for a `FileField` column, carrying `name` (non-null) and `size` / `url` (nullable, storage-safe). The server's absolute filesystem path is not among them: it is deployment metadata that can reveal usernames, release directories, container mounts, tenant layout and storage conventions, none of which a client needs to render a file, and a deployment that genuinely serves it opts in per column through [`Meta.filesystem_path_fields`](#metafilesystem_path_fields), which swaps this type for [`DjangoFilePathType`](#djangofilepathtype). The `size` / `url` subfields delegate to the shared `_safe_file_attr` guard, which degrades to `null` on the storage-shaped errors a non-filesystem backend or a vanished file raises (`ValueError` / `OSError` / `NotImplementedError`); `SuspiciousFileOperation` is deliberately **not** swallowed (it propagates as a path-traversal security signal). An empty / absent file resolves the **whole object** to `null`, never a `FieldFile.url` exception. Mapped on **read** via the new `FIELD_OUTPUT_TYPE_MAP` (kept off the shared [`SCALAR_MAP`](#scalar-field-conversion) / filter-input path, so no output object reaches a [`FilterSet`](#filterset) input). A consumer `attachment: str` annotation override bypasses it and keeps the legacy `str` (name / URL) shape per [Scalar field override semantics](#scalar-field-override-semantics). Paired with the [`Upload` scalar](#upload-scalar) on the input side.
 
-**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoImageType`](#djangoimagetype).
+**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoImageType`](#djangoimagetype) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) · [`DjangoFilePathType`](#djangofilepathtype).
 
 ## `DjangoFormMutation`
 
@@ -545,19 +621,31 @@ The view callback is stamped `csrf_exempt` on the outside and the request re-ent
 
 **See also:** [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Request-body cap](#request-body-cap) · [UTF-8 wire contract](#utf-8-wire-contract) · [Soft dependency](#soft-dependency).
 
+## `DjangoImagePathType`
+
+**Status:** shipped (`0.0.17`).
+
+The `ImageField` counterpart of [`DjangoFilePathType`](#djangofilepathtype): [`DjangoImageType`](#djangoimagetype) — `width` / `height` included — composed with the same private `_FileSystemPathFields` mixin, so the opted-in `path` and its security description are the single definition both path-bearing types share. Root-exported, and selected automatically when an `ImageField` column is named in [`Meta.filesystem_path_fields`](#metafilesystem_path_fields); the swap is one mapping (`DjangoImageType -> DjangoImagePathType`, `DjangoFileType -> DjangoFilePathType`) applied where the output type is picked, so an `ImageField` never silently degrades to the file-shaped sibling and loses its dimensions.
+
+**See also:** [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) · [`DjangoImageType`](#djangoimagetype) · [`DjangoFilePathType`](#djangofilepathtype).
+
 ## `DjangoImageType`
 
 **Status:** shipped (`0.0.11`).
 
-Subclasses [`DjangoFileType`](#djangofiletype) and adds nullable `width` / `height` image dimensions, resolved through the same `_safe_file_attr` guard so a missing / corrupt image or a backend that cannot read dimensions degrades them to `null`. An `ImageField` column resolves here (not `DjangoFileType`) via the `FIELD_OUTPUT_TYPE_MAP` MRO precedence — the `ImageField` row precedes the `FileField` row, so the `ImageField` subclass matches its own row first.
+Subclasses [`DjangoFileType`](#djangofiletype) — so its own default subfields are `name` / `size` / `url`, with no filesystem `path` — and adds nullable `width` / `height` image dimensions, resolved through the same `_safe_file_attr` guard so a missing / corrupt image or a backend that cannot read dimensions degrades them to `null`. An `ImageField` column resolves here (not `DjangoFileType`) via the `FIELD_OUTPUT_TYPE_MAP` MRO precedence — the `ImageField` row precedes the `FileField` row, so the `ImageField` subclass matches its own row first.
 
-**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype).
+An `ImageField` column named in [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) resolves to [`DjangoImagePathType`](#djangoimagepathtype) instead, which is this type plus the opted-in `path`.
+
+**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields) · [`DjangoImagePathType`](#djangoimagepathtype).
 
 ## `DjangoListField`
 
 **Status:** shipped (`0.0.7`).
 
 Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants coming from `graphene-django`'s `DjangoListField` and for use cases that do not need pagination, edges, or page-info. Implemented as a **factory function** (not a class): consumer usage is `all_branches: list[BranchType] = DjangoListField(BranchType)`, and Strawberry's `@strawberry.type` class-body walk picks up the factory's return value the same way it picks up `strawberry.field(...)`. Outer-list nullability is driven by the consumer's class-attribute annotation — `list[T]` renders as `[T!]!` and `list[T] | None` renders as `[T!]`. The default resolver pulls `target_type.__django_strawberry_definition__.model._default_manager.all()` and applies the type-level [`get_queryset`](#get_queryset-visibility-hook) in both sync and async contexts (the sync path rejects an async `get_queryset` with `ConfigurationError`, mirroring the Relay defaults). A consumer-supplied `resolver=` overrides the default body; when its return value is a Django `Manager` or `QuerySet`, the wrapper coerces the `Manager` to a `QuerySet` and applies `target_type.get_queryset(qs, info)` (graphene-django parity), so a custom resolver still honors the visibility hook. Async consumer resolvers are detected at construction time via the partial-aware `is_async_callable` predicate (checked on the resolver, on its `__call__` so callable-instance resolvers with `async def __call__` are covered, and through a one-hop `functools.partial`) and routed through an `async def` wrapper that awaits the coroutine before applying the isinstance check. Python `list` returns from sync or async resolvers pass through unchanged. Optimizer cooperation rides the existing root-gated [`DjangoOptimizerExtension`](#djangooptimizerextension) hook (`info.path.prev is None`), so root-position `DjangoListField` selections receive `select_related` / `prefetch_related` / `only` planning automatically; nested non-root usage is functional but not root-optimized in `0.0.7`. Standard field-level metadata pass-through (`description`, `deprecation_reason`, `directives`) is forwarded into the inner `strawberry.field(...)` call.
+
+**Row bound (`0.0.16`, spec-047).** Every `DjangoListField` is bounded: the request's [execution resource policy](#execution-resource-policy) supplies `max_list_rows` whether or not the field says anything, and `max_rows=` narrows it further for this field. There is no unbounded spelling - `max_rows=None` means "the policy governs", and a non-positive value raises [`ConfigurationError`](#configurationerror) at the line that constructed the field. `trusted_max_rows=True` is the only way a field can be wider than the policy. The bound is applied by SLICING and only AFTER the [`get_queryset`](#get_queryset-visibility-hook) hook and any consumer-resolver post-processing, so a `QuerySet` carries it into SQL as a `LIMIT` while the hook still composes onto an unsliced source.
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) (the Relay-shaped equivalent).
 
@@ -652,6 +740,18 @@ Constructor accepts a `strictness` argument — see [Strictness mode](#strictnes
 
 **See also:** [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation).
 
+## `DjangoResourcePolicyExtension`
+
+**Status:** shipped (`0.0.16`).
+
+The `SchemaExtension` that SPENDS the [execution resource policy](#execution-resource-policy). [`DjangoSchema`](#djangoschema) appends it - as a CLASS, so Strawberry builds one instance per request and charge counters are never shared across concurrent requests - unless the consumer already supplied one, and it is root-exported for a consumer assembling a plain `strawberry.Schema`. There is no configuration under which it is installed and enforces nothing.
+
+Three passes, in the order a request meets them. (1) A pre-parse lexer sweep over the raw document charges tokens and structural nesting; it MUST run before the parse because graphql-core's parser is recursive-descent, so a depth bound applied to the AST cannot stop the parse from exhausting the stack - which is also why depth is structural (`{`, `(`, `[`) rather than selection-only, and why a malformed document is left to the real parser for its accurate diagnostic. (2) One iterative, fragment-expanding walk over the validated AST charges expanded selections, aliases and multiplicative collection cost; a fragment is charged at EVERY spread site, the spread path makes a cyclic fragment set terminate, and a directive changes what is returned rather than what is charged. (3) The same walk runs the [value-budget walker](#value-budget-walker).
+
+Every rejection is a `ResourceLimitExceeded`, which multiple-inherits `graphql.GraphQLError` and the package base - so it travels sync HTTP, async HTTP and both WebSocket protocols as one ordinary error entry carrying `extensions.code == "RESOURCE_LIMIT_EXCEEDED"` plus `bound`, `limit` and `charged`, with no per-transport translation.
+
+**See also:** [Execution resource policy](#execution-resource-policy) · [`ResourcePolicy`](#resourcepolicy) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle).
+
 ## `DjangoType`
 
 **Status:** shipped (`0.0.5`).
@@ -694,6 +794,18 @@ Validation contracts (errors surface as [`ConfigurationError`](#configurationerr
 
 **See also:** all [`Meta.*`](#index) keys · [`finalize_django_types`](#finalize_django_types) · [Definition-order independence](#definition-order-independence) · [Relay Node integration](#relay-node-integration).
 
+## `ErrorPolicy`
+
+**Status:** shipped (`0.0.17`).
+
+The frozen dataclass in `django_strawberry_framework/error_policy.py` carrying the whole [production error policy](#production-error-policy), root-exported alongside `DEFAULT_ERROR_POLICY`. Three fields, each with a package default: `enabled` (`True` — safety is not opt-in), `message` (`"An unexpected error occurred."`, a single stable string that interpolates nothing from what it masks, because a message embedding part of the original is not a mask), and `correlation_extension_key` (`"correlationId"`, configurable for a deployment that already has a name for the field in its error contract). `__post_init__` validates each one, so a malformed policy raises [`ConfigurationError`](#configurationerror) naming the offending field.
+
+`resolve_error_policy` resolves the deployment's policy ONCE, at schema construction, with precedence highest first: the `DjangoSchema(error_policy=...)` argument, then the `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]` mapping, then the package defaults. A mapping from either source is applied over the defaults so a deployment overrides only what it cares about, and an unknown option raises [`ConfigurationError`](#configurationerror) naming it. `conf.py::error_policy_setting()` is a thin reader that validates nothing — the dataclass owns every domain check, so the two gates cannot drift. The resolved object is exposed as `schema.error_policy`; it is **frozen**, so a resolver holding it cannot loosen its own request's policy, and **resolved at construction**, so an invalid deployment fails at startup rather than on the first request that happens to raise.
+
+This mirrors [`ResourcePolicy`](#resourcepolicy) field for field so the package has one policy-object idiom rather than two similar ones: a reader who has understood one has understood both, and a future third policy has an obvious shape. `DjangoSchema(error_policy={"enabled": False})` is the explicit opt-out, keeping the extension installed so the shape stays auditable.
+
+**See also:** [Production error policy](#production-error-policy) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [`ResourcePolicy`](#resourcepolicy) · [`ConfigurationError`](#configurationerror).
+
 ## Eviction-simulated absence
 
 **Status:** shipped (`0.0.13`).
@@ -703,6 +815,18 @@ The [soft-dependency](#soft-dependency) test discipline: a dependency's absence 
 Two refinements the channels card pins. The restore is **two-sided**: a blocked-then-retried import re-executes the module and rebinds the parent package's attribute to a fresh module object, so the fixture saves/restores the parent attribute together with the `sys.modules` entries, putting the *original module object* back in both places — otherwise the attribute path and the import path hold two live modules with independent caches, an order-dependent identity flake under `pytest-xdist`. And eviction is also how **degraded** (present-but-incompatible) installs are tested: evicting the module drops its module-global class cache (`_ROUTER_CLASS`) with it, so a blocked builder import actually fires regardless of earlier construction tests. The install hint is drift-checked against a **re-typed literal** in the test file (the `_HINT_SUBSTRING` discipline) — a test asserting the imported constant against itself could never notice the hint drifting from the dev-group floor.
 
 **See also:** [Soft dependency](#soft-dependency) · [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+
+## Execution resource policy
+
+**Status:** shipped (`0.0.16`).
+
+The one immutable budget a request is allowed to spend, introduced in `0.0.16` (spec-047). [`DjangoSchema`](#djangoschema) resolves it ONCE at construction from `DjangoSchema(resource_policy=...)`, then `DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]`, then the package defaults, and publishes the resolved [`ResourcePolicy`](#resourcepolicy) on the request context under `dst_resource_policy` - the same seam shape the optimizer's `DST_OPTIMIZER_*` keys use. It owns three families of bound: the DOCUMENT bounds (tokens and structural depth, charged before the parse; expanded selections, aliases and multiplicative collection cost, charged after validation), the VALUE bounds the [value-budget walker](#value-budget-walker) charges, and the COLLECTION bounds the fields enforce (`max_page_size` as a ceiling over `relay_max_results`, `max_list_rows` for every raw list).
+
+**Fail-closed by construction.** Every bound is a positive integer with a package default and there is no spelling that disables one; a context carrying no published policy reads back the package defaults rather than "unbounded". The single optional bound is `execution_deadline_seconds`, which defaults to `None` because a wall-clock deadline a deployment did not choose is a correctness hazard rather than a safety one - and which is COOPERATIVE: the collection resolvers check it before they reach the database, and nothing in-process can interrupt a query a driver already accepted.
+
+**Narrowing only.** A per-field maximum (`DjangoListField(max_rows=...)`) narrows to the tighter of itself and the request policy; the schema-construction policy is the sole trusted declaration that may widen a package default, and a field may widen only through an explicit `trusted` opt-in.
+
+**See also:** [`ResourcePolicy`](#resourcepolicy) · [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) · [Value-budget walker](#value-budget-walker) · [Request-body cap](#request-body-cap).
 
 ## `FieldError` envelope
 
@@ -922,7 +1046,9 @@ A package-tests placement for new surface area must be justified as genuinely-un
 
 The ordering contract between [`DjangoDebugExtension`](#djangodebugextension) and an error-masking `SchemaExtension` such as Strawberry's `MaskErrors`. Extension context teardowns unwind last-in, first-out. `MaskErrors` replaces result errors with copies whose `original_error` is `None`; therefore the debug class must be listed **after** the masker so debug teardown runs first and records the original exception. Reversing the order yields an empty debug `exceptions` list. Even with correct ordering, the standard GraphQL `errors` remain masked while the debug payload is deliberately unmasked.
 
-**See also:** [Debug exception row](#debug-exception-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle).
+The package's own masker satisfies the rule from the other side: [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) is PREPENDED at index 0 of the extensions list, so it tears down last and the debug extension — listed after it, wherever the consumer puts it — has already read the originals. A consumer who assembles the extension list by hand keeps the same rule: the masker first, the debug class after it.
+
+**See also:** [Debug exception row](#debug-exception-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [Production error policy](#production-error-policy).
 
 ## `Meta.aggregate_class`
 
@@ -996,6 +1122,18 @@ Tuple / list of model field names, or `"__all__"`, or omitted (defaults to `"__a
 References a [`FieldSet`](#fieldset) subclass that defines field-level permission checks, custom resolvers, computed fields, and redaction behavior for this `DjangoType`.
 
 **See also:** [`FieldSet`](#fieldset) · [Per-field permission hooks](#per-field-permission-hooks).
+
+## `Meta.filesystem_path_fields`
+
+**Status:** shipped (`0.0.17`).
+
+The per-column opt-in that swaps a file or image column's generated output object for its path-bearing sibling: a `tuple` / `list` / `frozenset` of column names on a [`DjangoType`](#djangotype), each of which renders as [`DjangoFilePathType`](#djangofilepathtype) (or [`DjangoImagePathType`](#djangoimagepathtype) for an `ImageField`) instead of the path-free default. It is declared in the type's own `Meta`, so **one class body shows every filesystem path that type publishes** and a reviewer auditing the exposure never leaves the declaration — the reason this is a `Meta` key rather than a process-wide settings flag, which would re-arm every schema, type and column at once and leave no per-field audit anywhere.
+
+Normalization and validation copy [`Meta.nullable_overrides`](#metanullable_overrides) / [`Meta.required_overrides`](#metarequired_overrides) field for field: the same `_normalize_sequence_spec` helper snapshots the declaration into a `frozenset[str]`, the same validation pass checks the targets, and the frozenset threads through `_build_annotations` into the single mapping that picks the output type. Four illegal targets each raise [`ConfigurationError`](#configurationerror) naming the offending column — an **unknown** model field, a field the type does not **select** ([`Meta.fields`](#metafields) / [`Meta.exclude`](#metaexclude)), a **consumer-authored** field, and a concrete column that is **not a `FileField`** subclass.
+
+**The failure is build-time**, matching [Schema audit](#schema-audit): a typo'd opt-in must not fail open into a silently absent path (invisible) or fail closed on the first query (late). The type refuses to build and names the field.
+
+**See also:** [`DjangoFilePathType`](#djangofilepathtype) · [`DjangoImagePathType`](#djangoimagepathtype) · [`DjangoFileType`](#djangofiletype) · [`ConfigurationError`](#configurationerror).
 
 ## `Meta.filterset_class`
 
@@ -1166,6 +1304,8 @@ The already-shipped consumer relation-override paths (annotation overrides like 
 
 Per-relation narrowing key for the relation-as-Connection upgrade. On a Relay-Node-shaped [`DjangoType`](#djangotype), every selected many-side relation (reverse FK, forward / reverse M2M) whose target type is also Relay-Node-shaped synthesizes a `<field>Connection` sibling at finalization Phase 2.5 by default, reusing the shipped [`DjangoConnectionField`](#djangoconnectionfield) machinery — per-target connection classes, sidecar-derived `filter:` / `orderBy:` arguments, and the target type's [`Meta.connection`](#metaconnection) `totalCount` opt-in. `Meta.relation_shapes` is a `dict[str, str]` with values `"list"` / `"connection"` / `"both"` (`"both"` is the implicit default): `"connection"` suppresses the `list[T]` field, `"list"` suppresses the connection. Validated at type creation — unknown keys / values / shapes, a key naming a non-relation / non-many-side / unselected field, a key naming a consumer-authored relation (the override owns the shape), and declaring the key on a non-Relay-Node type all raise [`ConfigurationError`](#configurationerror); an explicit shape naming a relation whose target is not Relay-Node-shaped raises at finalization, while non-Node targets degrade silently (stay list-only) under the implicit default. As of `0.0.9` the synthesized `<field>Connection` siblings are optimizer-planned: a selected nested connection gets a windowed `Prefetch` so its page resolves in one query per relation per request rather than per parent — see [Connection-aware optimizer planning](#connection-aware-optimizer-planning). A synthesized relation connection still runs a sync pipeline with no `resolver=` seam, so a Relay target whose `get_queryset` is `async def` raises `SyncMisuseError` on every query of its `<field>Connection`; narrow that relation with `relation_shapes = {"<field>": "list"}` until an async connection pipeline lands.
 
+**The default is `"connection"` as of `0.0.16`** (spec-047), not `"both"`. A raw many-side list emitted beside a bounded connection has no cursor and no page of its own, so it was a way around the connection's cap by selecting the sibling; the raw list is now an explicit `"both"` (or `"list"`) opt-in, and the list it produces is row-bounded by the [execution resource policy](#execution-resource-policy)'s `max_list_rows`. This is an intentional alpha breaking change with no deprecation shim: a schema that wants the sibling declares it, and the change surfaces at schema build rather than at runtime.
+
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`Meta.connection`](#metaconnection) · [Relay Node integration](#relay-node-integration) · [`DjangoType`](#djangotype).
 
 ## `Meta.required_overrides`
@@ -1335,6 +1475,20 @@ A test-local Django URL configuration used to exercise an opt-in schema shape ov
 
 **See also:** [Live-first coverage mandate](#live-first-coverage-mandate) · [Schema reload discipline](#schema-reload-discipline) · [`TestClient`](#testclient).
 
+## Production error policy
+
+**Status:** shipped (`0.0.17`).
+
+What an UNEXPECTED exception says to a client when `settings.DEBUG` is false. graphql-core's default puts the raised exception's literal message into the response, which is right for a development schema and wrong for a deployment — the message is written by whatever raised it, frequently a library with no idea it was addressing an untrusted reader. So the policy is installed by default rather than remembered: the package's `DjangoSchema` resolves an [`ErrorPolicy`](#errorpolicy) once at construction and installs [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) to enforce it.
+
+Under `settings.DEBUG = False`, an unexpected resolver or hook exception is replaced by the policy's stable message plus a fresh [correlation identifier](#correlation-identifier) published in `extensions.correlationId`, while the original is logged at `ERROR` through the `django_strawberry_framework` logger with `exc_info` and that same identifier in the message text. The client's error keeps its `path` and `locations` — the client wrote the query and the schema is public, so attribution is not a disclosure, and dropping it would break every client-side error-to-field renderer for no security gain.
+
+**Deliberate client-facing errors keep their contract.** [Structural error classification](#structural-error-classification) decides what is deliberate, so the coded framework rejections — `RESOURCE_LIMIT_EXCEEDED`, `GLOBALID_INVALID`, the connection / keyset / filter rejections, the permission denial — and any `GraphQLError` a consumer raises from their own resolver reach the client unchanged, as do parse and validation errors. [`FieldError` envelopes](#fielderror-envelope) need no rule at all: a form or serializer validation failure is returned in `data` as a structured payload, never raised, so it is untouched by construction.
+
+**Under `settings.DEBUG` the policy is a pass-through.** Development keeps its real messages; a masked stack trace in a developer's browser is a worse day for everyone and teaches the developer to disable the policy wholesale. The setting is read at operation time, for the same reason the [debug fail-closed gate](#debug-fail-closed-gate) reads it there.
+
+**See also:** [`ErrorPolicy`](#errorpolicy) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [Structural error classification](#structural-error-classification) · [Correlation identifier](#correlation-identifier) · [Masking-extension ordering](#masking-extension-ordering).
+
 ## Queryset diffing
 
 **Status:** shipped (`0.0.3`).
@@ -1433,6 +1587,8 @@ Target type or `None`. Returns `None` when the related row does not exist (no `R
 - consumer-authored `strawberry.field` relation overrides are preserved instead of being clobbered by generated resolvers
 - consumer overrides are responsible for their own queryset shape — re-shaping a relation queryset with `.order_by(...)` / `.filter(...)` can bypass the framework's prefetched relation cache
 
+**Many-side default (`0.0.16`, spec-047).** On a Relay-Node-shaped type whose relation target is also Relay-Node-shaped, a selected many-side relation renders as the synthesized `<field>Connection` ALONE; the raw `list[T]` form is an explicit [`Meta.relation_shapes`](#metarelation_shapes) opt-in, and every raw relation list that is opted into is row-bounded by the [execution resource policy](#execution-resource-policy).
+
 **See also:** [`DjangoType`](#djangotype) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [FK-id elision](#fk-id-elision) · [Definition-order independence](#definition-order-independence).
 
 ## Relay Node integration
@@ -1502,6 +1658,18 @@ Hard single-siting rule: every new request/context shape is supported inside thi
 The raising optional-dependency primitive planned for `utils/imports.py` — the package's single optional-import owner, beside the best-effort `import_attr_if_importable` and the loaded-only `loaded_attr` — landing in Slice 1 of the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card. Signature `require_optional_module(module_name, *, install_hint)`: imports the module via `importlib.import_module` and returns it unchanged; on `ImportError` raises a new `ImportError` carrying `install_hint`, chaining the original. No memoization — [eviction-simulated absence](#eviction-simulated-absence) tests must be able to re-hit real imports. **No `feature_label` parameter**: the feature-specific text lives entirely in the caller's `install_hint` (an unused label is ceremony), and hint strings stay single-sited at the feature owner (`routers.py::_CHANNELS_INSTALL_HINT`). `require_channels()` is a thin wrapper over it; migrating `require_drf()` onto the same primitive is a deliberate follow-on non-goal (its hint is byte-pinned by the `_HINT_SUBSTRING` tests).
 
 **See also:** [Soft dependency](#soft-dependency) · [Eviction-simulated absence](#eviction-simulated-absence) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+
+## `ResourcePolicy`
+
+**Status:** shipped (`0.0.16`).
+
+The frozen dataclass in `django_strawberry_framework/resource_policy.py` carrying every bound of the [execution resource policy](#execution-resource-policy), root-exported alongside `DEFAULT_RESOURCE_POLICY`. Its `__post_init__` validates every field, so an invalid bound raises [`ConfigurationError`](#configurationerror) at schema construction rather than on the first request that reads it - and `bool` is rejected explicitly, since `isinstance(True, int)` would otherwise turn a typo into a silent bound of `1`.
+
+The bounds and their defaults: `max_document_tokens` 4000, `max_depth` 20, `max_selections` 500, `max_aliases` 100, `max_collection_cost` 1000000000, `max_page_size` 100, `max_list_rows` 100, `max_input_nodes` 5000, `max_container_width` 1000, `max_membership_items` 500, `max_node_ids` 200, `max_relation_ids_per_mutation` 200, `max_relation_ids_total` 1000, `max_nested_rows` 200, `max_upload_count` 10, `max_upload_file_bytes` 10 MiB, `max_upload_total_bytes` 25 MiB, `max_scalar_bytes` 65536, `execution_deadline_seconds` `None`. `max_collection_cost` is a SHAPE bound rather than a row promise - the rows a request can return are bounded per collection by `max_page_size` / `max_list_rows`, and this one exists to stop their product compounding down a deep document, which is why its default is generous.
+
+`ResourcePolicy.narrowed(**overrides)` returns a tighter copy and refuses any override that loosens a bound, naming both values.
+
+**See also:** [Execution resource policy](#execution-resource-policy) · [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) · [`ConfigurationError`](#configurationerror).
 
 ## Response-extension merge semantics
 
@@ -1755,6 +1923,18 @@ Interface / union sibling-concrete-type fragment narrowing (the would-be G3 stri
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Schema audit](#schema-audit).
 
+## Structural error classification
+
+**Status:** shipped (`0.0.17`).
+
+The rule the [production error policy](#production-error-policy) uses to decide what is deliberate, applied per error on the result and keyed on SHAPE rather than on a code. An error whose `original_error` is `None` is a parse or validation error and travels **untouched**. An error whose `original_error` IS a `graphql.GraphQLError` is a deliberate client-facing statement and travels **untouched** — that covers every framework rejection in this package, each of which is raised as a `GraphQLError` (including `ResourceLimitExceeded`, which multiple-inherits it on the [`SyncMisuseError`](#syncmisuseerror) precedent), and equally covers a `GraphQLError` a consumer raises from their own resolver, who is making the identical statement: *this message is for the client*. Anything else is **masked**.
+
+**Why this beats a curated `extensions.code` allowlist.** An allowlist has to be extended by every future rejection site — every new bound, every new validation, every new mutation guard — and the day someone forgets it **fails OPEN**: the new deliberate rejection is masked, the client reads "An unexpected error occurred", and the regression surfaces as a UX bug nobody attributes to the security boundary. The structural rule has the opposite failure mode. A new plain-Python exception anywhere in the package or in consumer code is masked with no registration step, so it **fails CLOSED for exactly the dangerous class** and fails open only for something a developer explicitly typed as client-facing.
+
+A module-prefix check on `type(original_error).__module__` is rejected for the same reason the [visibility boundary](#visibility-boundary) rejected it — `__module__` is spoofable — and it would additionally mask a consumer's deliberate error while permitting a framework accident. An opt-in exception base class the consumer must subclass is a registration step, so it fails open like an allowlist, and `GraphQLError` already is that base class.
+
+**See also:** [Production error policy](#production-error-policy) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [`FieldError` envelope](#fielderror-envelope) · [`SyncMisuseError`](#syncmisuseerror).
+
 ## `SyncMisuseError`
 
 **Status:** shipped (`0.0.5`).
@@ -1808,6 +1988,18 @@ This is permanent policy **on the view**, not one of the upstream-bug patches: i
 The contract also reaches the two `multipart/form-data` control documents Django decodes before the package sees them, `operations` and `map` (Decision 17). The form's **effective** encoding - `request.encoding or settings.DEFAULT_CHARSET`, the pair `MultiPartParser` actually decodes with - must canonicalize to UTF-8, **and** a declared `charset`, when present, must too: two independent conditions joined with `and`, never a fallback chain, because reading the declaration *instead* let a client choose which value was validated while Django decoded with the other one. Separately, because Django decodes form fields with `errors="replace"`, a malformed byte sequence does not raise - it silently becomes `U+FFFD` - so a control value arriving with that replacement marker in it lost bytes to the decode and is refused before either value is parsed as JSON. Ordinary `JSON.stringify` output and genuine multibyte UTF-8 are unaffected, and a client that legitimately needs a literal replacement character sends the ASCII escape `\ufffd`.
 
 **See also:** [`DjangoGraphQLView`](#djangographqlview) · [Request-body cap](#request-body-cap).
+
+## Value-budget walker
+
+**Status:** shipped (`0.0.16`).
+
+The iterative, cycle-safe pass inside [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) that charges a request's ARGUMENT VALUES, which document limits cannot see: a tiny document can carry an enormous variable payload. It charges total input nodes, container width, membership (`in`) items, Relay node-refetch ids, relation ids per mutation field and in aggregate across the request, nested input-object rows, upload count / per-file bytes / aggregate bytes, and scalar UTF-8 byte size - and it runs entirely on coerced-shape input, so it rejects BEFORE any GlobalID is decoded and before any queryset is built.
+
+Families are classified by the argument's GraphQL INPUT TYPE, not by name: a list of input objects is a nested row set, a list of `ID` inside a mutation is a relation-id set, a list of `ID` under an argument named `ids` in a query is a node-refetch set (Relay's node refetch has no distinguishing type, which is the single name-based rule), and every other list is a membership list. Literal arguments, variables, and literal objects with variables spliced into them all normalize through one walker. Containers are memoized by identity, so a self-referential or shared value terminates while both references still count as nodes. Duplicate ids are charged positionally, because [`DjangoNodesField`](#djangonodesfield) preserves duplicates positionally even where the database would collapse the `IN`. An upload that cannot report a usable size is REJECTED rather than charged as zero bytes.
+
+Upload bytes are the walker's job rather than the transport's precisely because the [request-body cap](#request-body-cap) deliberately never materializes a multipart body.
+
+**See also:** [Execution resource policy](#execution-resource-policy) · [`DjangoNodesField`](#djangonodesfield) · [`Upload` scalar](#upload-scalar) · [Request-body cap](#request-body-cap).
 
 ## Visibility boundary
 

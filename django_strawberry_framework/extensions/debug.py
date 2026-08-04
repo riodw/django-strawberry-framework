@@ -8,7 +8,15 @@ debug-toolbar middleware (``middleware/debug_toolbar.py``), porting the
 capability of graphene-django's ``DjangoDebug`` subsystem into the engine's
 native response-extensions seam.
 
-Off by default. The opt-in is passing the **class** in ``strawberry.Schema``'s
+Off by default, and **fails closed under ``settings.DEBUG = False``**: an
+instance constructed without the ``allow_unsafe_production=True``
+acknowledgement withholds the whole payload on a non-debug deployment and logs
+the misconfiguration, so a single production schema-list entry can no longer
+silently publish the disclosure. The payload is also capped - bounded row
+counts and a bounded serialized size, with deterministic marked truncation - so
+the diagnostic cannot amplify a large operation into an enormous response.
+
+The opt-in is passing the **class** in ``strawberry.Schema``'s
 ``extensions=`` list (one fresh instance per operation - requires the
 package's ``strawberry-graphql>=0.316.0`` floor)::
 
@@ -83,16 +91,19 @@ Capture mechanism and its documented boundaries:
 
 import threading
 import traceback
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from django.conf import settings
 from django.db import connections
 from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
 from strawberry.extensions import SchemaExtension
 
 from .. import logger
+from ..exceptions import ConfigurationError, describe_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.backends.base.base import BaseDatabaseWrapper
@@ -110,6 +121,36 @@ _SLOW_QUERY_SECONDS = 10
 # keep the best-effort terminal instead of raising - so it stays a local
 # helper until a fourth chain-peel motivates a shared extraction).
 _MAX_ORIGINAL_ERROR_HOPS = 64
+
+# Payload caps (spec-048 Decision 6). Module constants, not settings keys: a
+# diagnostic's ceiling is a package invariant, and a deployment that wants a
+# different one is a deployment running this extension in production, which is
+# the thing the fail-closed gate exists to stop.
+#
+# Row counts bound how many rows a single operation can publish; the per-row
+# character limits bound one row's variable-length text; and the payload budget
+# bounds all of them together, so a thousand short rows cannot evade the per-row
+# limits. Every limit counts CHARACTERS - the payload is JSON-encoded downstream,
+# where one character is at least one byte, so a character ceiling is a byte
+# ceiling that does not depend on the encoder.
+#
+# ``_MAX_PAYLOAD_TEXT_CHARS`` is named for exactly what it measures: the summed
+# length of the rows' variable-length STRING values (``_row_cost``). It is not a
+# ceiling on the encoded payload's own size - the fixed cost of a row's keys,
+# quoting, separators, and numeric values is excluded, because that cost is a
+# property of the wire encoder rather than of the diagnostic, and counting it
+# would make the budget move whenever the encoder did. The variable text is what
+# an operation can inflate without bound, and it is what this bounds.
+_MAX_SQL_ROWS = 100
+_MAX_EXCEPTION_ROWS = 25
+_MAX_SQL_TEXT_CHARS = 4096
+_MAX_EXCEPTION_MESSAGE_CHARS = 4096
+_MAX_EXCEPTION_STACK_CHARS = 16384
+_MAX_PAYLOAD_TEXT_CHARS = 262144
+
+# The single marker appended to every truncated string, so a consumer reading
+# the payload can always tell a cut value from a short one.
+_TRUNCATION_MARKER = "... [truncated]"
 
 
 class _DebugSQLRow(TypedDict):
@@ -331,16 +372,112 @@ def _query_log_entries_since(snapshot: _ConnectionSnapshot) -> list[dict[str, An
     return entries[start:]
 
 
+def _truncate(text: str, limit: int) -> str:
+    """Cut ``text`` to ``limit`` characters, marking it when anything was dropped.
+
+    The one truncation primitive both row families use, so the SQL and
+    exception paths cannot drift in either the cut point or the marker.
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + _TRUNCATION_MARKER
+
+
+def _row_cost(row: "Mapping[str, Any]") -> int:
+    """The serialized character cost of one row, counting its string values only.
+
+    The numeric and boolean values are bounded by their own types, so the
+    variable cost of a row is exactly its strings. Counting anything else would
+    make the budget depend on the repr of a float.
+    """
+    return sum(len(value) for value in row.values() if isinstance(value, str))
+
+
+def _apply_payload_caps(
+    sql_rows: "list[_DebugSQLRow]",
+    exception_rows: "list[_DebugExceptionRow]",
+) -> _DebugPayload:
+    """Bound the assembled rows to the payload caps, deterministically (Decision 6).
+
+    Three passes, in this fixed order, so the same operation always yields the
+    same payload:
+
+    1. **Per-row truncation.** Each row's variable-length strings are cut to
+       their own limit and marked.
+    2. **Row-count caps.** The EARLIEST rows are kept and the tail dropped: the
+       first queries are the ones that explain how the operation started, and a
+       tail-drop is stable under a re-run in a way that sampling is not.
+    3. **One shared text budget.** Exception rows are admitted first because
+       they explain a failure, then SQL rows, each row admitted whole while the
+       running total of string characters stays within
+       ``_MAX_PAYLOAD_TEXT_CHARS``. Admission STOPS at the first row that would
+       exceed the budget rather than skipping it and trying the next - skipping
+       would make the payload's content depend on individual row sizes rather
+       than on their order.
+
+    The two orderings are independent and both are contractual: the row-count
+    cap keeps the EARLIEST rows within each list, and the budget spends itself on
+    EXCEPTION rows before SQL rows. So a failing operation whose tracebacks
+    exhaust the budget publishes no SQL at all, which is the intended trade - the
+    exception rows are the ones that explain the failure the reader came for.
+    Pass 1 also guarantees no single row can be refused on its own: the per-row
+    limits cap one row's text far below the whole budget.
+
+    Both lists are always present in the returned map, cap or no cap, so the
+    wire contract is unchanged.
+    """
+    truncated_sql: list[_DebugSQLRow] = [
+        {**row, "sql": _truncate(row["sql"], _MAX_SQL_TEXT_CHARS)}
+        for row in sql_rows[:_MAX_SQL_ROWS]
+    ]
+    truncated_exceptions: list[_DebugExceptionRow] = [
+        {
+            **row,
+            "message": _truncate(row["message"], _MAX_EXCEPTION_MESSAGE_CHARS),
+            "stack": _truncate(row["stack"], _MAX_EXCEPTION_STACK_CHARS),
+        }
+        for row in exception_rows[:_MAX_EXCEPTION_ROWS]
+    ]
+    remaining = _MAX_PAYLOAD_TEXT_CHARS
+    admitted_exceptions: list[_DebugExceptionRow] = []
+    for exception_row in truncated_exceptions:
+        cost = _row_cost(exception_row)
+        if cost > remaining:
+            break
+        remaining -= cost
+        admitted_exceptions.append(exception_row)
+    admitted_sql: list[_DebugSQLRow] = []
+    for sql_row in truncated_sql:
+        cost = _row_cost(sql_row)
+        if cost > remaining:
+            break
+        remaining -= cost
+        admitted_sql.append(sql_row)
+    return {"sql": admitted_sql, "exceptions": admitted_exceptions}
+
+
 def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any) -> _DebugPayload:
     """Assemble the completed ``debug`` payload - the one place spelling its shape.
 
-    Every call returns fresh list containers. Post-execution diagnostic
-    failures follow the two-phase failure policy: collection is wrapped so a
-    failure is caught as ``Exception``, logged server-side, and **degrades**
-    the payload to whatever rows serialized successfully (or an empty list) -
-    the wire contract is unchanged (both lists are always present) and the
-    operation's real ``data`` / ``errors`` are never put at risk by a
-    diagnostic.
+    Every call returns fresh list containers. The two collection phases each
+    degrade independently - a failure is caught as ``Exception``, logged
+    server-side, and costs only its own list - so the wire contract is unchanged
+    (both lists are always present) and the operation's real ``data`` / ``errors``
+    are never put at risk by a diagnostic. The two degrades are deliberately not
+    symmetric, because what survives a failure differs:
+
+    - **SQL collection degrades to the rows serialized so far**, across every
+      snapshot already drained and partway through the failing one:
+      ``list.extend`` appends each generated row as it is produced, so the rows
+      that preceded the failure remain in the list.
+    - **Exception collection degrades to an EMPTY list.** ``_collect_exceptions``
+      builds and returns its own list, so a failure inside it leaves nothing to
+      salvage; there is no partial list to adopt.
+
+    A degraded exception list also hands the whole text budget to the SQL rows,
+    since ``_apply_payload_caps`` spends it on exceptions first. The assembled
+    rows then pass through that helper, so every payload this function returns is
+    already bounded.
     """
     sql_rows: list[_DebugSQLRow] = []
     try:
@@ -365,7 +502,7 @@ def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any
             "unaffected.",
         )
         exception_rows = []
-    return {"sql": sql_rows, "exceptions": exception_rows}
+    return _apply_payload_caps(sql_rows, exception_rows)
 
 
 class DjangoDebugExtension(SchemaExtension):
@@ -377,16 +514,28 @@ class DjangoDebugExtension(SchemaExtension):
     them is routinely copied downstream (see the module docstring for the
     full disclosure surface).
 
+    **Fails closed under ``settings.DEBUG = False``** (spec-048 Decision 5).
+    At operation start the extension checks the setting; when it is false and
+    the deployment has not acknowledged the disclosure, the extension is inert
+    - it acquires no debug cursor, snapshots no query log, builds no payload,
+    and ``get_results`` returns ``{}`` - and logs one warning naming the
+    misconfiguration. The operation itself still runs normally: a diagnostic
+    that refuses to disclose must not also refuse the request.
+
     Opt-in is the **class** in ``extensions=[..., DjangoDebugExtension]``:
     Strawberry (>=0.316.0) constructs class entries per operation with zero
     arguments and assigns ``execution_context`` afterward, so per-operation
     capture state lives in plain instance attributes. This deliberately
     differs from the optimizer's singleton-in-a-factory shape - the optimizer
     preserves a cross-request plan cache; this extension has no cross-request
-    state. There is no ``__init__``: the class has no configuration. Never
-    pass a pre-built instance (the deprecated form the engine warns about at
-    schema construction): a shared instance republishes a stale payload on
-    later operations and races the engine-assigned ``execution_context``.
+    state. The ``__init__`` takes exactly one keyword-only argument,
+    ``allow_unsafe_production``, whose ``False`` default is what a zero-argument
+    class entry gets; acknowledging the disclosure is spelled as a factory
+    entry, ``lambda: DjangoDebugExtension(allow_unsafe_production=True)``,
+    which preserves the fresh-per-operation instance. Never pass a pre-built
+    instance (the deprecated form the engine warns about at schema
+    construction): a shared instance republishes a stale payload on later
+    operations and races the engine-assigned ``execution_context``.
 
     List this class **after** any masking extension (``MaskErrors``):
     teardowns unwind LIFO, and masking strips ``original_error`` in its own
@@ -416,11 +565,50 @@ class DjangoDebugExtension(SchemaExtension):
     # completed payload is always a dict, even when both lists are empty.
     _payload: "_DebugPayload | None" = None
 
+    def __init__(self, *, allow_unsafe_production: bool = False) -> None:
+        """Record the deployment's acknowledgement, defaulting to the safe answer.
+
+        Keyword-only and defaulting to ``False`` so Strawberry's zero-argument
+        construction of a bare class entry produces the fail-closed instance.
+        Acknowledging is therefore something a deployment must SPELL, through
+        the factory form ``lambda: DjangoDebugExtension(allow_unsafe_production=True)``
+        - which keeps the fresh-per-operation instance a bare class entry gives.
+
+        **A security acknowledgement must be a real ``bool``, so a non-bool is a
+        ``ConfigurationError`` rather than a truthiness test.** Every string a
+        deployment would plausibly reach for here - an environment variable read
+        straight through, ``"false"``, ``"0"``, ``"no"`` - is TRUTHY, so accepting
+        one would ARM the disclosure precisely in the case the author meant to
+        refuse it. The gate that decides whether a production response carries
+        unmasked tracebacks and interpolated SQL cannot be the gate that guesses.
+        Raised at construction, the same rule and the same failure shape
+        ``error_policy.py::ErrorPolicy.__post_init__`` applies to its own
+        ``enabled`` flag.
+        """
+        if not isinstance(allow_unsafe_production, bool):
+            raise ConfigurationError(
+                "DjangoDebugExtension(allow_unsafe_production=...) must be a bool; got "
+                f"{describe_value(allow_unsafe_production)}. A truthy non-bool would arm "
+                "the production disclosure, so it is refused rather than interpreted.",
+            )
+        self.allow_unsafe_production = allow_unsafe_production
+
+    def _disclosure_permitted(self) -> bool:
+        """Whether this operation may publish the debug payload (spec-048 Decision 5).
+
+        ``settings.DEBUG`` is read per operation rather than cached on the
+        instance: the instance IS per operation, and a test or management
+        context may legitimately flip the setting between two of them.
+        """
+        return self.allow_unsafe_production or bool(settings.DEBUG)
+
     def on_operation(self) -> Any:  # type: ignore[override]
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
 
         One synchronous generator serves both execution colors (the engine
-        enters sync generator hooks on the async path too). Pre-yield,
+        enters sync generator hooks on the async path too). The fail-closed
+        gate is the first thing pre-yield, so a withheld operation pays for no
+        bracket and no snapshot. Otherwise, pre-yield,
         ``ExitStack`` acquires a reference-counted bracket token and a
         query-log snapshot for every configured database connection - and
         unwinds the already-acquired connections if a later acquisition fails
@@ -431,6 +619,20 @@ class DjangoDebugExtension(SchemaExtension):
         releases every token, the last overlapping release restoring each
         database connection's saved ``force_debug_cursor`` value.
         """
+        if not self._disclosure_permitted():
+            # Fail closed: no bracket is acquired, no query log is snapshotted,
+            # no payload is built, and ``get_results`` keeps returning ``{}``.
+            # The operation itself is untouched - a diagnostic that refuses to
+            # disclose must not also refuse the request.
+            logger.warning(
+                "DjangoDebugExtension is installed on a schema running with settings.DEBUG "
+                "false and no allow_unsafe_production acknowledgement; the debug payload is "
+                "withheld. Remove the extension from this schema's extensions list, or pass "
+                "lambda: DjangoDebugExtension(allow_unsafe_production=True) if the disclosure "
+                "is deliberate.",
+            )
+            yield
+            return
         snapshots: list[_ConnectionSnapshot] = []
         with ExitStack() as stack:
             for database_connection in connections.all():

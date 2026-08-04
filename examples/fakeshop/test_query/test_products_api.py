@@ -32,6 +32,7 @@ from apps.products.serializers import (
     REJECTED_SERIALIZER_ITEM_NAME,
 )
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
@@ -44,6 +45,21 @@ from graphql_client import post_graphql_raw as _post_graphql_raw
 from strawberry import relay
 
 from django_strawberry_framework.testing import TestClient
+
+#: Settings that open the spec-048 error policy's pass-through gate for ONE live
+#: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
+#: reachable instrument - the project schema is constructed by the app, not by the
+#: test. Fakeshop's shipped settings also wire django-debug-toolbar behind
+#: ``DEBUG``, so the toolbar middleware is dropped for the duration: left in, it
+#: would try to inject a panel referencing the ``djdt`` routes that ``config.urls``
+#: computed under the ambient ``DEBUG=False`` and fail the request for a reason
+#: that has nothing to do with the row. Dropping the middleware is the deterministic
+#: form of that - the toolbar's own show-gate is memoized per process, so overriding
+#: its callback would not reliably take effect.
+_ERROR_POLICY_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+}
 
 
 def _staff_client() -> Client:
@@ -2047,6 +2063,7 @@ def test_products_items_connection_inverted_after_before_window_is_empty():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("argument", ["after", "before"])
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_products_items_connection_negative_cursor_preserves_pipeline_error(argument):
     """A forged negative offset cursor cannot be approximated by a SQL window.
 
@@ -2054,6 +2071,13 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
     boundary. Its per-parent Django ``QuerySet`` path rejects negative indexing;
     pre-fix, the optimizer translated the boundary to an SQL row-number range and
     silently served rows instead. Falling back preserves the field's own error.
+
+    "Preserves the field's own error" is the assertion, and Django raises it as a
+    plain ``ValueError`` - unexpected under the spec-048 classification, so the
+    error policy would substitute its stable production message and the row would
+    no longer be able to tell a preserved error from a swallowed one. ``DEBUG=True``
+    opens the policy's pass-through gate; this is a live request against the project
+    schema, whose construction this test does not own.
     """
     seed_data(1)
     variables = {argument: relay.to_base64("arrayconnection", "-2")}

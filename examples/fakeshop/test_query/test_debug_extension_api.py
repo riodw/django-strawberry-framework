@@ -7,18 +7,36 @@ deliberately copied - not promoted - per spec-044 DRY D3), built over the
 freshly-reloaded fakeshop apps, seeded through ``seed_data`` /
 ``create_users``, and posted through the package ``TestClient``.
 
-Covered live here: DEBUG-independent happy-path SQL capture, the optimizer
-composition (the visibility-safe two-query prefetch shape as the payload's
-demonstration surface), mutation capture, the resolver-exception row, the
-validation-versus-execution boundary, the no-SQL operation's two empty lists,
-and the off-by-default posture. Fakeshop's shipped aggregate schema
-deliberately does NOT enable the extension - the probe URLconf is the
-established way to exercise an opt-in schema shape without changing every
-acceptance response.
+Covered live here: happy-path SQL capture through the forced debug cursor, the
+optimizer composition (the visibility-safe two-query prefetch shape as the
+payload's demonstration surface), mutation capture, the resolver-exception row,
+the validation-versus-execution boundary, the no-SQL operation's two empty
+lists, the off-by-default posture, the fail-closed ``settings.DEBUG`` gate in
+both directions (spec-048 Decision 5: a bare class entry withholds and warns,
+the acknowledgement factory publishes), and the payload caps' end-to-end wiring
+(spec-048 Decision 6). Fakeshop's shipped aggregate schema deliberately does
+NOT enable the extension - asserted here against the project's real
+``/graphql/`` - and the probe URLconf is the established way to exercise an
+opt-in schema shape without changing every acceptance response.
+
+Because the suite runs with ``settings.DEBUG`` false - now the extension's
+fail-closed condition - every payload-expecting scenario here spells the
+acknowledgement factory ``_acknowledged_debug`` rather than flipping the
+setting. Flipping it is not available at this tier: fakeshop mounts the
+package's debug-toolbar middleware behind ``DEBUG``, and the toolbar's
+``djdt`` URL namespace lives on the project URLconf that the probe holder
+replaces, so a ``DEBUG=True`` live request would fail on infrastructure
+unrelated to the payload. The bare CLASS entry's own semantics (a
+zero-argument construction defaulting to the safe answer, and per-operation
+freshness) are pinned in ``tests/extensions/test_debug.py`` under
+``override_settings(DEBUG=True)``; what this tier owns of the bare entry is its
+REFUSAL, which is exactly what a ``DEBUG``-false request shows.
 
 Serializer/coordinator, merge-precedence, async-overlap, masking-order, and
 nested-reentrancy mechanics belong in ``tests/extensions/test_debug.py``.
 """
+
+import logging
 
 import pytest
 import strawberry
@@ -28,6 +46,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db import connection
+from django.test.utils import override_settings
 from django.urls import path
 from strawberry import relay
 from strawberry.django.views import GraphQLView
@@ -59,10 +78,10 @@ def _graphql_view(request):
 urlpatterns = [path("graphql/", _graphql_view)]
 
 # The one module-local optimizer singleton, exposed as ``lambda: _optimizer``
-# beside the debug CLASS - the canonical consumer shape (the shipped
-# ``config/schema.py`` wiring): the two visibly different entries document the
-# two deliberately different lifetimes (one shared cached optimizer, one fresh
-# uncached debug instance per operation).
+# beside the debug factory - the canonical consumer shape (the shipped
+# ``config/schema.py`` wiring): both entries are callables, and the two
+# deliberately different lifetimes live in what they RETURN (a shared cached
+# optimizer every time, a fresh uncached debug instance per operation).
 _optimizer = DjangoOptimizerExtension()
 
 # The live mutation wire contract (the ``test_products_api.py`` shape).
@@ -70,6 +89,23 @@ _CREATE_ITEM = (
     "mutation($d: ItemInput!) { createItem(data: $d) { "
     "node { name category { name } } errors { field messages } } }"
 )
+
+# spec-048 Decision 6's caps re-spelled as INDEPENDENT literals - never the
+# production constants re-imported, so a silently widened cap fails this tier.
+_EXCEPTION_MESSAGE_CAP = 4096
+_TRUNCATION_MARKER = "... [truncated]"
+
+
+def _acknowledged_debug():
+    """The documented acknowledgement spelling (spec-048 Decision 5), as ONE named factory.
+
+    Written as a factory, never a pre-built instance: the engine builds it once
+    per operation, so the fresh-per-operation contract every scenario below
+    relies on is unchanged from the bare class entry. A named function rather
+    than a repeated lambda so the extensions lists stay readable - it is still
+    a factory entry, not an instance entry.
+    """
+    return DjangoDebugExtension(allow_unsafe_production=True)
 
 
 @pytest.fixture
@@ -79,8 +115,9 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
     Imported INSIDE the fixture body (never at module top) so the classes are
     the freshly-reloaded ones; the returned installer takes the ``extensions=``
     list verbatim and never sorts, normalizes, or deduplicates it - order is a
-    tested contract. The probe ``Query`` adds the two execution-error fields a
-    shipped products field cannot provide.
+    tested contract. The probe ``Query`` adds the three execution-error fields a
+    shipped products field cannot provide (a resolver raise, a non-null
+    completion error, and an over-cap exception message).
     """
     from apps.products.schema import Mutation as ProductsMutation
     from apps.products.schema import Query as ProductsQuery
@@ -96,6 +133,12 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
         @strawberry.field
         def broken_non_null(self) -> int:
             return None  # a completion error: null for a non-nullable field
+
+        @strawberry.field
+        def huge_boom(self) -> int:
+            # An exception message comfortably past the per-row character cap,
+            # so a real operation proves the caps are wired into the payload.
+            raise ValueError("x" * (_EXCEPTION_MESSAGE_CAP * 2))
 
     @strawberry.type
     class Mutation(ProductsMutation):
@@ -120,8 +163,8 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
 def _debug(response):
     """Validate-and-return the debug payload for executed-operation happy paths.
 
-    Never used by the absence scenarios (5's unknown-field half and 7) - those
-    assert the missing key explicitly.
+    Never used by the absence scenarios (5's unknown-field half, 7, 8's
+    withheld-payload half and 10) - those assert the missing key explicitly.
     """
     extensions = response.extensions or {}
     assert "debug" in extensions, extensions
@@ -131,13 +174,24 @@ def _debug(response):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 1 - happy-path SQL capture, independent of settings.DEBUG.
+# Scenario 1 - happy-path SQL capture: the forced debug cursor is the capture
+# MECHANISM, while settings.DEBUG (plus the acknowledgement) is the GATE.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_query_capture_is_debug_independent(install_probe_schema):
-    """The bracket - not Django's DEBUG logging - produces the capture."""
+def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(install_probe_schema):
+    """The bracket - not Django's ``DEBUG`` query logging - produces the captured rows.
+
+    Run deliberately under ``settings.DEBUG`` false, through the
+    acknowledgement factory ``_acknowledged_debug``: Django logs no queries of its own in that posture, so every row in the
+    payload was produced by the extension's own ``force_debug_cursor`` bracket.
+
+    The mechanism's DEBUG-independence is NOT the extension's gate. Since
+    spec-048 Decision 5 the extension fails closed under ``settings.DEBUG``
+    false unless the deployment acknowledges the disclosure - which is exactly
+    why this scenario has to spell the acknowledgement to see a payload at all.
+    """
     assert settings.DEBUG is False  # proving the bracket did the work
     seed_data(1)
     # One deterministically anonymous-visible row (seed_data randomizes Item
@@ -148,7 +202,7 @@ def test_query_capture_is_debug_independent(install_probe_schema):
         category=Category.objects.filter(is_private=False).order_by("pk").first(),
         is_private=False,
     )
-    install_probe_schema([DjangoDebugExtension])
+    install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
     res = client.query("query { allItems(first: 1) { edges { node { name } } } }")
@@ -202,7 +256,7 @@ def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_
         is_private=False,
     )
     visible_count = Item.objects.filter(is_private=False, category__is_private=False).count()
-    install_probe_schema([lambda: _optimizer, DjangoDebugExtension])
+    install_probe_schema([lambda: _optimizer, _acknowledged_debug])
     client = TestClient()
 
     res = client.query("query { allItems { edges { node { name category { name } } } } }")
@@ -253,7 +307,7 @@ def test_mutation_capture_includes_the_insert_row(install_probe_schema):
     category_gid = str(
         relay.GlobalID(type_name="products.category", node_id=str(visible_category.pk)),
     )
-    install_probe_schema([DjangoDebugExtension])
+    install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
     with client.login(user):
@@ -279,7 +333,7 @@ def test_mutation_capture_includes_the_insert_row(install_probe_schema):
 
 
 def test_resolver_exception_produces_an_unmasked_exception_row(install_probe_schema):
-    install_probe_schema([DjangoDebugExtension])
+    install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
     res = client.query("query { boom }", assert_no_errors=False)
@@ -307,7 +361,7 @@ def test_validation_versus_execution_error_boundary(install_probe_schema):
     graphene's resolver-only middleware: a non-null field resolving ``None``
     executes, graphql-core raises the completion error, and the row appears.
     """
-    install_probe_schema([DjangoDebugExtension])
+    install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
     unknown = client.query("query { definitelyNotAField }", assert_no_errors=False)
@@ -327,7 +381,7 @@ def test_validation_versus_execution_error_boundary(install_probe_schema):
 
 
 def test_no_sql_operation_carries_both_empty_lists(install_probe_schema):
-    install_probe_schema([DjangoDebugExtension])
+    install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
     res = client.query("query { __typename }")
@@ -341,7 +395,10 @@ def test_no_sql_operation_carries_both_empty_lists(install_probe_schema):
 
 
 def test_off_by_default_publishes_no_debug_key(install_probe_schema):
-    """Without the class in ``extensions=``, no key appears and no envelope widens.
+    """Without any debug entry in ``extensions=``, no key appears and no envelope widens.
+
+    Distinct from scenario 8's withheld payload: there the extension IS listed
+    and refuses; here it was never installed, so nothing runs at all.
 
     Asserted on the envelope keys - the honest claim; the release-wide
     Strawberry-floor raise means "byte-identical to 0.0.13" is deliberately
@@ -355,3 +412,113 @@ def test_off_by_default_publishes_no_debug_key(install_probe_schema):
     assert res.data == {"__typename": "Query"}
     assert "debug" not in (res.extensions or {})
     assert set(res.response.json()) == {"data"}  # no unrelated envelope widening
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8 (spec-048 Decision 5) - the fail-closed gate over a real request.
+# ---------------------------------------------------------------------------
+
+
+@override_settings(DEBUG=False)
+def test_debug_false_bare_class_entry_withholds_the_payload_and_warns(
+    install_probe_schema,
+    caplog,
+):
+    """A production schema that lists the class gets NO payload and ONE warning.
+
+    The ubiquitous spelling ``extensions=[DjangoDebugExtension]`` is what a
+    deployment copies out of a tutorial; under ``settings.DEBUG`` false it must
+    publish nothing while leaving the operation's own ``data`` intact, and it
+    must say so in the log rather than only through an absent key.
+    """
+    install_probe_schema([DjangoDebugExtension])
+    client = TestClient()
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        res = client.query("query { __typename }")
+
+    assert res.data == {"__typename": "Query"}  # the operation is unaffected
+    assert "debug" not in (res.extensions or {})
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "django_strawberry_framework"
+    ]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "allow_unsafe_production" in message
+    assert "withheld" in message
+
+
+@override_settings(DEBUG=False)
+def test_acknowledged_factory_publishes_the_payload_under_debug_false(
+    install_probe_schema,
+    caplog,
+):
+    """The acknowledgement factory is the deliberate opt-out - payload published, no warning."""
+    install_probe_schema([_acknowledged_debug])
+    client = TestClient()
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        res = client.query("query { __typename }")
+
+    assert _debug(res) == {"sql": [], "exceptions": []}
+    assert [
+        record for record in caplog.records if record.name == "django_strawberry_framework"
+    ] == []
+
+
+@override_settings(DEBUG=False)
+def test_acknowledged_factory_keeps_one_instance_per_operation(install_probe_schema):
+    """A factory entry is still fresh per operation: no payload leaks into the next request."""
+    install_probe_schema([_acknowledged_debug])
+    client = TestClient()
+
+    failing = client.query("query { boom }", assert_no_errors=False)
+    clean = client.query("query { __typename }")
+
+    assert [row["message"] for row in _debug(failing)["exceptions"]] == ["division by zero"]
+    # The second operation's payload is its own - not the first operation's stash.
+    assert _debug(clean) == {"sql": [], "exceptions": []}
+
+
+# ---------------------------------------------------------------------------
+# Scenario 9 (spec-048 Decision 6) - the caps are wired into a real operation's
+# published payload, not merely available as a helper.
+# ---------------------------------------------------------------------------
+
+
+def test_over_cap_exception_message_is_truncated_in_the_published_payload(install_probe_schema):
+    """A real resolver raise past the message cap reaches the wire cut and marked."""
+    install_probe_schema([_acknowledged_debug])
+    client = TestClient()
+
+    res = client.query("query { hugeBoom }", assert_no_errors=False)
+
+    assert res.errors
+    rows = _debug(res)["exceptions"]
+    assert len(rows) == 1
+    message = rows[0]["message"]
+    assert message == "x" * _EXCEPTION_MESSAGE_CAP + _TRUNCATION_MARKER
+    assert message.endswith(_TRUNCATION_MARKER)
+    assert rows[0]["excType"] == "<class 'ValueError'>"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 10 - the shipped aggregate fakeshop schema stays debug-free.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.urls("config.urls")
+def test_project_graphql_endpoint_publishes_no_debug_key():
+    """The real ``/graphql/`` must never carry the diagnostic - the probe URLconf owns it.
+
+    The function-level ``urls`` mark overrides this module's, so the request
+    reaches the project's own shipped schema rather than the probe holder.
+    """
+    client = TestClient()
+
+    res = client.query("query { __typename }")
+
+    assert res.data == {"__typename": "Query"}
+    assert "debug" not in (res.extensions or {})

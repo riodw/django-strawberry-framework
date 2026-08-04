@@ -1100,28 +1100,36 @@ async def test_connection_async_resolver_resolving_to_residual_awaitable_fails_c
 # =============================================================================
 
 
-def _make_relation_node_type(name: str, *, fields: tuple[str, ...], model=Category) -> type:
+def _make_relation_node_type(
+    name: str,
+    *,
+    fields: tuple[str, ...],
+    model=Category,
+    list_relations: tuple[str, ...] = (),
+) -> type:
     """Build a bare Relay-Node ``DjangoType`` (no sidecars) exposing ``fields``.
 
     The optimizer tests below reach a relation under ``edges { node }``; the
     sidecar machinery (``_make_sidecar_node_type``) is irrelevant noise here, so
     this builds the minimal Relay-Node shape with the relation field exposed.
+
+    ``list_relations`` names the many-side relations that must keep their RAW
+    LIST form. The package default is ``"connection"``, so a test that plans a
+    prefetch under a plain ``items { ... }`` selection has to ask for the list
+    shape explicitly.
     """
+    meta_attrs = {
+        "model": model,
+        "fields": fields,
+        "interfaces": (relay.Node,),
+        "name": name,
+    }
+    if list_relations:
+        meta_attrs["relation_shapes"] = dict.fromkeys(list_relations, "both")
     return type(
         name,
         (DjangoType,),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {
-                    "model": model,
-                    "fields": fields,
-                    "interfaces": (relay.Node,),
-                    "name": name,
-                },
-            ),
-        },
+        {"Meta": type("Meta", (), meta_attrs)},
     )
 
 
@@ -1183,6 +1191,7 @@ def test_root_connection_field_queryset_prefetches_node_many_relation():
     category_node = _make_relation_node_type(
         "PlanPrefetchCatNode",
         fields=("id", "name", "items"),
+        list_relations=("items",),
     )
     schema = _field_schema(category_node, optimizer=DjangoOptimizerExtension(strictness="raise"))
 
@@ -1220,7 +1229,11 @@ def test_nested_connection_unplanned_raises_under_strictness():
     services.seed_data(2)
     # ``CategoryNode`` exposes the reverse-FK ``items``; ``ItemNode`` is the leaf.
     _make_relation_node_type("NestedGapItemNode", fields=("id", "name"), model=Item)
-    category_node = _make_relation_node_type("NestedGapCatNode", fields=("id", "name", "items"))
+    category_node = _make_relation_node_type(
+        "NestedGapCatNode",
+        fields=("id", "name", "items"),
+        list_relations=("items",),
+    )
     schema = _field_schema(category_node)
 
     ctx = SimpleNamespace(dst_optimizer_planned=set(), dst_optimizer_strictness="raise")

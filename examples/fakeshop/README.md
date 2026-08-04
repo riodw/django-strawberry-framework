@@ -1,7 +1,17 @@
 # Fakeshop Example Django Project
 
 A Django + Strawberry GraphQL example project that exercises
-`django-strawberry-framework` end-to-end. It ships six app surfaces:
+`django-strawberry-framework` end-to-end.
+
+> **Never deploy this project.** It is a development fixture: `DEBUG=True`, a
+> checked-in `SECRET_KEY`, GraphiQL, the debug toolbar, multipart uploads, and
+> intentional `permission_classes = []` demonstrations are all deliberate test
+> scaffolding. It cannot be made production-ready by editing settings — the
+> settings module refuses to load with `DEBUG` off — and a real deployment is a
+> separate project built against the production security profile in
+> [`docs/README.md`][docs-readme].
+
+It ships six app surfaces:
 
 - **`apps.library`** — acceptance app with a real `DjangoType` schema
   (FK, reverse FK, OneToOne, M2M, Relay `Node`, optimizer hints,
@@ -440,6 +450,8 @@ package-level and example-level registries isolated.
 <!-- Root -->
 
 <!-- docs/ -->
+
+[docs-readme]: ../../docs/README.md#production-security-profile
 
 <!-- docs/SPECS/ -->
 

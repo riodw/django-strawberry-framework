@@ -85,6 +85,7 @@ from ..optimizer.extension import (
 )
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
+from ..resource_policy import check_deadline
 
 # Moved to utils/errors.py; re-exported for compatibility.
 from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
@@ -195,6 +196,11 @@ def run_write_pipeline_sync(
     custom ``serializer.save()`` that inserts a row, then raises) never commits the
     partial write; the error envelope is the no-effect outcome.
     """
+    # The cooperative deadline (spec-047) BEFORE the transaction opens: a write
+    # pipeline locates, locks, and writes rows, so an operation already past its
+    # budget must not start one - and refusing before ``transaction.atomic()``
+    # means the refusal never has a partial transaction to unwind.
+    check_deadline(info)
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
     slot = payload_object_slot(primary_type)
@@ -1081,6 +1087,11 @@ def _run_pipeline_sync(
     primary_type = mutation_cls._primary_type
 
     if meta.operation == "delete":
+        # The delete branch's own pre-transaction deadline check; the create /
+        # update branches get theirs inside the shared skeleton
+        # (``run_write_pipeline_sync``), which the form and serializer flavors
+        # also enter, so neither flavor needs a copy.
+        check_deadline(info)
         slot = payload_object_slot(primary_type)
         payload_cls = payload_cls_for(mutation_cls)
         using = require_managed_write(mutation_cls)

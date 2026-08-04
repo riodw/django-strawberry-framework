@@ -1,0 +1,34 @@
+term,anchor,notes
+Execution resource policy,execution-resource-policy,the capability this spec ships
+ResourcePolicy,resourcepolicy,the immutable budget object
+DjangoResourcePolicyExtension,djangoresourcepolicyextension,the enforcement extension
+Value-budget walker,value-budget-walker,the S4 input-cardinality pass
+DjangoListField,djangolistfield,gains the required effective row bound
+DjangoConnectionField,djangoconnectionfield,the policy becomes a ceiling over its cap
+Meta.relation_shapes,metarelation_shapes,its default flips to connection
+Relation handling,relation-handling,the many-side default this card changes
+DjangoNodesField,djangonodesfield,the ids: list S4 names
+Upload scalar,upload-scalar,upload bytes are budgeted here
+Request-body cap,request-body-cap,the complementary transport ceiling
+FilterSet,filterset,the generated and/or/in surface the walker charges
+RelatedFilter,relatedfilter,nested filter branches count toward width and nodes
+filter_input_type,filter_input_type,the generated membership-lookup inputs
+DjangoOptimizerExtension,djangooptimizerextension,the context seam this policy mirrors
+Plan cache,plan-cache,optimizer state sharing the request context
+Strictness mode,strictness-mode,the other optimizer context sentinel
+ConfigurationError,configurationerror,the typed construction-time rejection
+SerializerMutation,serializermutation,nested serializer rows are charged
+DjangoMutation,djangomutation,relation ids per mutation field
+DjangoModelFormMutation,djangomodelformmutation,form-flavored relation id payloads
+strawberry_config,strawberry_config,schema construction surface
+Strawberry extension lifecycle,strawberry-extension-lifecycle,the hooks enforcement uses
+Per-operation extension isolation,per-operation-extension-isolation,why the extension is installed as a class
+TestClient,testclient,the live tier's client
+Probe URLconf,probe-urlconf,the probe mounts the live rows use
+seed_data,seed_data,the live rows' fixture helper
+Live-first coverage mandate,live-first-coverage-mandate,why the boundaries live in test_query
+Joint version cut,joint-version-cut,the rule this card is NOT subject to
+get_queryset visibility hook,get_queryset-visibility-hook,dictates where the row bound may be applied
+Relay Node integration,relay-node-integration,the bounded collection surface
+Connection-aware optimizer planning,connection-aware-optimizer-planning,nested connection pages share the clamp
+Single-upstream parity,single-upstream-parity,the borrowing-posture rule

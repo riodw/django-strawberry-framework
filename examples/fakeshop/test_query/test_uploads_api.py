@@ -79,6 +79,102 @@ def test_media_specimen_output_sdl_is_default_nullable_over_http():
     assert by_name["image"] == {"kind": "OBJECT", "name": "DjangoImageType"}
 
 
+def test_default_file_output_objects_expose_no_filesystem_path_over_http():
+    """Neither default output object publishes ``path`` in the live schema (spec-048 D1).
+
+    Introspection over the real endpoint, not a rendered SDL string: this is the
+    surface an untrusted client actually sees, and an absent field is exactly
+    what "the server's absolute path is not client data" has to mean on the
+    wire.
+    """
+    for type_name in ("DjangoFileType", "DjangoImageType"):
+        output_type = _introspect_type(type_name, "fields { name }")
+        names = {field["name"] for field in output_type["fields"]}
+        assert "path" not in names, (type_name, names)
+    file_names = {
+        field["name"] for field in _introspect_type("DjangoFileType", "fields { name }")["fields"]
+    }
+    assert file_names == {"name", "size", "url"}
+
+
+def test_filesystem_path_opt_in_is_absent_unless_declared_over_http():
+    """The opt-in is per column and per type: only the declared column gets the path type.
+
+    ``MediaSpecimenType`` declares no opt-in and keeps the pathless objects;
+    ``MediaSpecimenWithPathType`` names ``attachment`` only, so ``attachment``
+    resolves to ``DjangoFilePathType`` while its own ``image`` stays
+    ``DjangoImageType`` (spec-048 Decision 2).
+    """
+    default_fields = {
+        field["name"]: field["type"]
+        for field in _introspect_type(
+            "MediaSpecimenType",
+            "fields { name type { kind name } }",
+        )["fields"]
+    }
+    assert default_fields["attachment"] == {"kind": "OBJECT", "name": "DjangoFileType"}
+    assert default_fields["image"] == {"kind": "OBJECT", "name": "DjangoImageType"}
+
+    opt_in_fields = {
+        field["name"]: field["type"]
+        for field in _introspect_type(
+            "MediaSpecimenWithPathType",
+            "fields { name type { kind name } }",
+        )["fields"]
+    }
+    assert opt_in_fields["attachment"] == {"kind": "OBJECT", "name": "DjangoFilePathType"}
+    assert opt_in_fields["image"] == {"kind": "OBJECT", "name": "DjangoImageType"}
+
+    path_field = next(
+        field
+        for field in _introspect_type(
+            "DjangoFilePathType",
+            "fields { name description }",
+        )["fields"]
+        if field["name"] == "path"
+    )
+    assert "SECURITY" in path_field["description"]
+
+
+@pytest.mark.django_db
+def test_opted_in_filesystem_path_resolves_over_http(tmp_path):
+    """The declared column serves its real absolute path; the default type still cannot.
+
+    Both halves matter: the opt-in has to actually work (or a consumer who needs
+    the path has no supported route and forks the type), and the un-opted type
+    has to remain incapable of producing one in the same request.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = models.MediaSpecimen(label="p1")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.image.save("pic.png", ContentFile(_png_bytes()), save=False)
+        specimen.save()
+
+        res = TestClient().query(
+            """
+            query {
+              allMediaSpecimensWithPath {
+                label
+                attachment { name path url }
+                image { name url }
+              }
+            }
+            """,
+        )
+        assert res.response.status_code == 200
+        row = res.data["allMediaSpecimensWithPath"][0]
+        assert row["attachment"]["path"] == specimen.attachment.path
+        assert row["attachment"]["path"].startswith(str(tmp_path))
+
+        # The un-opted type cannot even be asked for it.
+        refused = TestClient().query(
+            "query { allMediaSpecimens { attachment { path } } }",
+            assert_no_errors=False,
+        )
+        assert refused.data is None
+        assert "path" in refused.errors[0]["message"]
+
+
 @pytest.mark.django_db
 def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
     """A populated FileField / ImageField resolves name/size/url (+ width/height) over HTTP."""

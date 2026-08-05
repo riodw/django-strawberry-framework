@@ -34,20 +34,23 @@ because the configured class is a property of the middleware chain.
 
 So the ordering moves into the chain. This middleware runs the whole boundary
 from ``process_view`` - which Django calls after URL resolution and before any
-later middleware's ``process_view``, hence before the CSRF middleware's - and,
-for the duration of a request it is handling, cancels the CSRF exemption the
-package view's callback carries (:data:`_CSRF_ORDERING_EXEMPTION`). The
-configured CSRF middleware, whatever class it is, then runs in full on every
-request that survives the boundary.
+later middleware's ``process_view``, hence before the CSRF middleware's - and
+cancels the CSRF exemption the package view's callback carries for the requests
+whose boundary it has run. The configured CSRF middleware, whatever class it is,
+then runs in full on every request that survives the boundary.
 
 The exemption is a lazily-evaluated object rather than the usual ``True`` for
 exactly that reason: whether the ordering is supplied by the chain is not known
 when a URLconf is imported, and a deployment must not have to state the same fact
-twice. Where this middleware is installed the exemption is ``False`` and only the
-configured CSRF middleware runs; where it is not, the exemption is ``True`` and
-the view's own boundary-then-CSRF re-entry behaves exactly as it did before this
-module existed. Both arrangements enforce CSRF and both enforce the cap; they
-differ only in which class performs the check.
+twice. It lives in ``_boundary_ordering.py``
+(``::_CsrfOrderingExemption``) together with the two marks, and it is ``False``
+for a request this middleware has actually run the boundary for - the narrow
+fact, and the load-bearing one, since that is the request whose body is proven
+measured. For every other request, including one whose callback this middleware
+did not recognize as a package view's, the exemption stays ``True`` and the view's
+own boundary-then-CSRF re-entry behaves exactly as it did before this module
+existed. Both arrangements enforce CSRF and both enforce the cap; they differ
+only in which class performs the check.
 
 Ordering is verified rather than documented: a chain that lists this middleware
 *after* a ``CsrfViewMiddleware`` would put the parse back in front of the cap
@@ -60,9 +63,13 @@ What it deliberately does not do
 It holds no policy of its own: the limit, the refusal statuses, and the wire
 reasons all stay in ``views.py``, and this module reaches them by instantiating
 the resolved view exactly as ``View.as_view`` does. It recognizes a package view
-by one marker attribute stamped on the callback (:data:`_BOUNDARY_MARKER`), never
-by importing the view classes, so no non-package view is touched and the
-dependency runs one way only. And it translates the boundary's
+by the marker attribute stamped on the callback, by the ``view_class`` /
+``view_initkwargs`` bookkeeping behind it, and by the boundary method that
+``view_class`` itself has to carry (:func:`_package_view_instance`), never by
+importing the view classes - the marker and the boundary method's *name* both
+reach this module through ``_boundary_ordering.py`` - so no non-package view is
+touched and this module imports neither ``views.py`` nor anything that imports
+it. And it translates the boundary's
 ``HTTPException`` into the same ``text/plain`` response upstream's ``dispatch``
 produces, so the wire shape of a refusal does not depend on which side of the
 CSRF check refused it.
@@ -70,7 +77,6 @@ CSRF check refused it.
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction
@@ -80,6 +86,12 @@ from django.http import HttpResponse
 from django.middleware.csrf import CsrfViewMiddleware
 from django.utils.module_loading import import_string
 
+from django_strawberry_framework._boundary_ordering import (
+    _BOUNDARY_ENFORCED,
+    _BOUNDARY_MARKER,
+    _BOUNDARY_METHOD,
+    _boundary_middleware_request,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -88,60 +100,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.http import HttpRequest, HttpResponseBase
 
 __all__ = ("GraphQLRequestBodyBoundaryMiddleware",)
-
-
-#: Stamped on the callback ``_RequestBodyBoundaryMixin.as_view`` returns, and the
-#: only thing that makes a resolved view a package view as far as this module is
-#: concerned. An attribute rather than an ``issubclass`` check because the
-#: dependency has to run one way: ``views.py`` imports this module for the
-#: exemption object, so this module must never import ``views.py``.
-_BOUNDARY_MARKER = "graphql_request_body_boundary"
-
-#: Stamped on a request whose boundary this middleware has already run, so the
-#: view does not measure the same body twice. Read by both package views at the
-#: top of ``run``.
-_BOUNDARY_ENFORCED = "graphql_request_body_boundary_enforced"
-
-#: True for the duration of a request this middleware is handling - the one fact
-#: :class:`_CsrfOrderingExemption` needs and the one the view callback cannot
-#: carry, since a callback attribute is process-wide while installation is a
-#: property of the chain a request is travelling through. A ``ContextVar`` rather
-#: than a thread local so the async chain sees it too, and it is set and reset
-#: around the downstream call so it can never leak into an unrelated request.
-_boundary_middleware_active: ContextVar[bool] = ContextVar(
-    "django_strawberry_framework_boundary_middleware_active",
-    default=False,
-)
-
-
-class _CsrfOrderingExemption:
-    """The package view callback's ``csrf_exempt`` value: true only when needed.
-
-    ``CsrfViewMiddleware.process_view`` consults the mark as
-    ``if getattr(callback, "csrf_exempt", False)``, so the value is read for its
-    truthiness at request time - which is what lets one object answer the
-    question the package actually has to answer: *does something else already
-    order the body boundary ahead of the CSRF check?*
-
-    When this module's middleware is installed the answer is yes, the exemption
-    is false, and the deployment's own ``CsrfViewMiddleware`` (or subclass) runs
-    normally, after the boundary. When it is not installed the answer is no, the
-    exemption is true, and the view keeps its own boundary-then-CSRF re-entry -
-    the arrangement that predates this middleware and that a deployment which has
-    not changed its ``MIDDLEWARE`` must keep unchanged.
-
-    It is never a bypass in either state: exactly one complete CSRF check runs on
-    every request that gets past the boundary.
-    """
-
-    def __bool__(self) -> bool:
-        """Whether the view still has to supply the ordering itself."""
-        return not _boundary_middleware_active.get()
-
-
-#: One instance, shared by every package view callback - it carries no per-view
-#: state, and its answer is a property of the chain rather than of the mount.
-_CSRF_ORDERING_EXEMPTION = _CsrfOrderingExemption()
 
 
 #: The ``ConfigurationError`` text for a chain that would defeat the ordering.
@@ -178,7 +136,14 @@ class GraphQLRequestBodyBoundaryMiddleware:
             markcoroutinefunction(self)
 
     def __call__(self, request: HttpRequest) -> Any:
-        """Mark the boundary as chain-supplied for this request, then call downstream.
+        """Publish the request this middleware is handling, then call downstream.
+
+        The request object rather than a bare "installed" flag, because the
+        question the exemption has to answer is per-request - *was the boundary
+        run for this one?* - and the answer is the ``_BOUNDARY_ENFORCED`` stamp
+        ``process_view`` writes on that same object. Publishing the request
+        is therefore what lets one read answer the narrow question instead of the
+        broad one.
 
         The mark spans the downstream call rather than the ``process_view`` hook
         alone, because it is read by the CSRF middleware - which may be *any*
@@ -187,11 +152,11 @@ class GraphQLRequestBodyBoundaryMiddleware:
         """
         if iscoroutinefunction(self):
             return self.__acall__(request)
-        token = _boundary_middleware_active.set(True)
+        token = _boundary_middleware_request.set(request)
         try:
             return self.get_response(request)
         finally:
-            _boundary_middleware_active.reset(token)
+            _boundary_middleware_request.reset(token)
 
     async def __acall__(self, request: HttpRequest) -> Any:
         """The async twin of :meth:`__call__` - the ``await`` is the whole difference.
@@ -200,11 +165,11 @@ class GraphQLRequestBodyBoundaryMiddleware:
         downstream response exists: returning the coroutine from a synchronous
         ``finally`` would reset the mark before the CSRF middleware ever read it.
         """
-        token = _boundary_middleware_active.set(True)
+        token = _boundary_middleware_request.set(request)
         try:
             return await self.get_response(request)
         finally:
-            _boundary_middleware_active.reset(token)
+            _boundary_middleware_request.reset(token)
 
     def process_view(
         self,
@@ -216,15 +181,21 @@ class GraphQLRequestBodyBoundaryMiddleware:
         """Run a package view's body boundary here, before any later ``process_view``.
 
         The boundary itself is the view's, reached through an instance built the
-        way ``View.as_view`` builds one, so the limit that applies is the mount's
-        own ``max_request_body_bytes`` and this module states no policy. A refusal
+        way ``View.as_view`` builds one - and built only from a class
+        :func:`_package_view_instance` has established carries that boundary - so
+        the limit that applies is the mount's own ``max_request_body_bytes`` and
+        this module states no policy. A refusal
         becomes the same ``text/plain`` response upstream's ``dispatch`` produces
         for the identical ``HTTPException``, so a client cannot tell from the
         response which side of the CSRF check refused it.
+
+        A callback :func:`_package_view_instance` declines is left entirely alone:
+        no boundary run here, and therefore no stamp, which is what leaves that
+        request on the view-local arrangement rather than on neither.
         """
-        if not getattr(view_func, _BOUNDARY_MARKER, False):
+        view = _package_view_instance(view_func)
+        if view is None:
             return None
-        view = view_func.view_class(**view_func.view_initkwargs)
         try:
             view._enforce_request_boundary(request)
         except HTTPException as exc:
@@ -234,6 +205,105 @@ class GraphQLRequestBodyBoundaryMiddleware:
                 content_type="text/plain",
             )
         setattr(request, _BOUNDARY_ENFORCED, True)
+        return None
+
+
+def _package_view_instance(view_func: Callable[..., Any]) -> Any:
+    """The package view instance whose boundary this callback's mount would run.
+
+    ``None`` means "not a callback this middleware can run a boundary for", and
+    that is the whole answer :meth:`GraphQLRequestBodyBoundaryMiddleware
+    .process_view` branches on: a declined callback is left with the request
+    unstamped, so the view supplies the ordering itself and the CSRF exemption
+    stays true (``_boundary_ordering.py::_CsrfOrderingExemption``).
+
+    The recognition is one decision and it ends at the boundary, because the
+    boundary is the answer: the marker
+    ``views.py::_RequestBodyBoundaryMixin.as_view`` stamps, a ``view_class`` that
+    is a class, a ``view_initkwargs`` mapping - Django's own ``as_view``
+    bookkeeping, and what makes the built instance carry the mount's own
+    ``max_request_body_bytes`` - a ``view_class`` that itself carries the boundary
+    method named by ``_boundary_ordering.py::_BOUNDARY_METHOD``, and then a
+    construction that the class actually accepts those kwargs for. A wrapper can
+    copy the marker with bookkeeping of any shape behind it, bookkeeping can be
+    shaped exactly like ``as_view``'s while naming kwargs the class rejects, and a
+    ``view_class`` can be a real, buildable class that is no package view at all,
+    so a recognition that stopped short of the boundary - at the shape of the
+    bookkeeping, or at the instance the bookkeeping builds - would still turn a
+    foreign callback into an unhandled ``500`` from a hook whose every other
+    outcome is a controlled response.
+
+    The boundary is probed on the class rather than on the built instance because
+    the boundary is exactly what :meth:`GraphQLRequestBodyBoundaryMiddleware
+    .process_view` then runs, and because probing the instance would answer the
+    same question one step too late, having already run a foreign class's
+    ``__init__``. It is probed for a *callable* rather than for presence: an
+    attribute of that name which cannot be called is not a boundary this
+    middleware can run either, and recognizing it would hand ``process_view`` the
+    same uncontrolled failure the probe exists to remove. The name is reached
+    through ``_boundary_ordering.py``, which is what lets the probe cost no import
+    of ``views.py``. One limit, stated rather than left to be discovered: an
+    attribute read consults the object's own attribute machinery, so a forged
+    ``view_class`` whose metaclass defines ``__getattr__``, or which carries a
+    descriptor under the probed name, still runs that code. Forging the marker is
+    outside the threat model either way, and the probe is here so that every
+    outcome the recognition reaches is a controlled response - a refusal, a stamp,
+    or a decline - not to defend against a forger. Running a boundary the
+    recognition accepted is a different question: a boundary that raises anything
+    but an ``HTTPException`` leaves ``process_view`` uncaught, deliberately and
+    identically for a package mount and for a forged class carrying a callable of
+    the probed name, because a guard there would sit across the body cap's own
+    errors.
+
+    Which is why every read the recognition performs is guarded: attribute
+    machinery of that kind can raise instead of answering, ``getattr``'s default
+    absorbs ``AttributeError`` alone, and ``process_view`` calls this function
+    outside any ``except``, so one unguarded read would leave the hook on an
+    exception of the forged object's choosing. A read that cannot be completed is
+    a question that cannot be answered, and the answer to that is ``None``: the
+    callback is declined and keeps the view-local arrangement, so the cap still
+    runs and what degrades is the CSRF class rather than the ordering. It masks
+    no misconfiguration of a *package* mount either, because a boundary read that
+    genuinely raises on a package class raises again in
+    ``views.py::_RequestBodyBoundaryMixin._enforce_request_boundary_once``, which
+    is exactly what a declined request goes on to run.
+
+    The ``TypeError`` arm is therefore the answer being absent rather than a
+    failure being swallowed: it is raised by the splat and by the class's own
+    signature, the two ways a callback can carry the bookkeeping without a
+    buildable instance behind it, and both mean "not a callback whose boundary I
+    can run". With the probe ahead of it, what reaches it is a class carrying a
+    callable of the probed name that cannot be built from the kwargs it names: a
+    package class named with kwargs it rejects, a package subclass whose own
+    ``__init__`` raises, and equally a forged class whose accepted ``__init__``
+    raises ``TypeError``. It hides no misconfiguration of a *package* mount,
+    because Django's own ``as_view`` closure constructs the same class with the
+    same kwargs for the same request, so a mount that genuinely cannot be built
+    still fails there - as it would with this middleware uninstalled. It stays
+    narrow for that reason while the reads above are guarded broadly: a class that
+    cannot be built from the kwargs it names is a determined answer, and a read
+    that raises is no answer at all. The two ``isinstance`` tests stay ahead of the
+    probe and the construction, so the read is taken off a class rather than off an
+    arbitrary object - which narrows whose attribute machinery can run, a class's own
+    metaclass and descriptors rather than any object's ``__getattr__``, and does
+    not eliminate it - and so it is only ever a class that gets called. There is
+    deliberately no ``or {}`` default: an absent attribute means "not ours", never
+    "ours, with nothing configured".
+    """
+    try:
+        if not getattr(view_func, _BOUNDARY_MARKER, False):
+            return None
+        view_class = getattr(view_func, "view_class", None)
+        initkwargs = getattr(view_func, "view_initkwargs", None)
+        if not isinstance(view_class, type) or not isinstance(initkwargs, dict):
+            return None
+        if not callable(getattr(view_class, _BOUNDARY_METHOD, None)):
+            return None
+    except Exception:  # a read that cannot answer has recognized nothing
+        return None
+    try:
+        return view_class(**initkwargs)
+    except TypeError:
         return None
 
 

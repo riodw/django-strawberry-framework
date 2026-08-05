@@ -53,14 +53,16 @@ from cross_web import (
     DjangoHTTPRequestAdapter,
     HTTPException,
 )
+from django.conf import settings
 from django.http import (
     HttpRequest,
     HttpResponse,
     HttpResponseForbidden,
     RawPostDataException,
     UnreadablePostError,
+    multipartparser,
 )
-from django.middleware.csrf import CsrfViewMiddleware
+from django.middleware.csrf import CSRF_SECRET_LENGTH, CsrfViewMiddleware
 from django.test import (
     AsyncClient,
     AsyncRequestFactory,
@@ -75,15 +77,19 @@ from strawberry.http.base import BaseView
 import django_strawberry_framework
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as patches
+from django_strawberry_framework._boundary_ordering import (
+    _BOUNDARY_ENFORCED,
+    _BOUNDARY_MARKER,
+    _BOUNDARY_METHOD,
+)
 from django_strawberry_framework._request_body import (
     _CORRUPTED_PROBE_LOG_MESSAGE,
     _UNREADABLE_STREAM_LOG_MESSAGE,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.middleware.request_body import (
-    _BOUNDARY_ENFORCED,
-    _BOUNDARY_MARKER,
     GraphQLRequestBodyBoundaryMiddleware,
+    _package_view_instance,
 )
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
@@ -2472,11 +2478,280 @@ def _plain_view(request):
     return HttpResponse("plain")
 
 
+class _DerivedBoundaryMiddleware(GraphQLRequestBodyBoundaryMiddleware):
+    """A deployment's own subclass of the boundary middleware.
+
+    The mirror image of :class:`_RejectingCsrfMiddleware`: the ordering audit
+    resolves entries and compares them by class rather than by dotted path, so a
+    project that subclasses either side of the comparison must be recognized as
+    what it is. A path-matching audit would see this entry as an unrelated
+    middleware and accept the very chain it exists to refuse.
+    """
+
+
+def _wrapper_copying_only_csrf_exempt(view):
+    """A hand-written wrapper of the shape ``as_view``'s docstring names as live.
+
+    It forwards the call and copies ``csrf_exempt`` - the one mark a callback
+    carried before the ordering moved into the chain - plus Django's ``view_class``
+    / ``view_initkwargs`` bookkeeping, and knows nothing about
+    ``_BOUNDARY_MARKER``. Anyone who wrote a wrapper against the shipped surface
+    wrote this shape, and the repository itself contains a leaner member of the
+    same class - ``examples/fakeshop/test_query/test_transport_api.py``'s probe
+    mount copies ``csrf_exempt`` and nothing else - so a marker-dropping wrapper
+    is the reachable input rather than an invented one.
+
+    Deliberately not ``functools.wraps``-based: ``wraps`` copies ``__dict__``, so
+    both marks would travel together and the interesting callback would not exist.
+    """
+    if iscoroutinefunction(view):
+
+        async def wrapped(request, *args, **kwargs):
+            return await view(request, *args, **kwargs)
+
+    else:
+
+        def wrapped(request, *args, **kwargs):
+            return view(request, *args, **kwargs)
+
+    wrapped.csrf_exempt = view.csrf_exempt
+    wrapped.view_class = view.view_class
+    wrapped.view_initkwargs = view.view_initkwargs
+    return wrapped
+
+
+def _marked_callback_without_a_view_class(request):
+    """A callback carrying the marker and none of the bookkeeping behind it.
+
+    The marker name is package-specific, so nothing supported produces this - but
+    the middleware dereferences ``view_class`` and ``view_initkwargs`` on the
+    strength of the marker, and a hook whose every other outcome is a controlled
+    response must not answer an unhandled ``500``.
+    """
+    return HttpResponse("marked, no view_class")
+
+
+def _marked_callback_with_unusable_initkwargs(request):
+    """A callback whose ``view_initkwargs`` is not a mapping to splat.
+
+    The other half of the same recognition: ``view_class`` is real here, so only
+    the ``view_initkwargs`` test stands between ``**`` and a ``TypeError``.
+    """
+    return HttpResponse("marked, unusable initkwargs")
+
+
+def _marked_callback_with_initkwargs_the_class_rejects(request):
+    """A callback whose bookkeeping has ``as_view``'s exact shape and no instance behind it.
+
+    The third shape, and the only one no test of the bookkeeping's *shape* can
+    reach: ``view_class`` is a class and ``view_initkwargs`` is a ``dict``, so what
+    distinguishes it from a real mount is that the class does not accept those
+    kwargs. Recognition therefore has to run as far as the instance.
+    """
+    return HttpResponse("marked, initkwargs the class rejects")
+
+
+class _NotAPackageView:
+    """What calling a non-class ``view_class`` would hand the middleware."""
+
+
+#: Every call the factory below receives, so a row can assert it received none.
+_VIEW_CLASS_FACTORY_CALLS = []
+
+
+def _boundary_the_factory_carries(request):
+    """The callable the factory below carries under the boundary method's name.
+
+    Never invoked by anything: the object a called factory returns is what
+    ``process_view`` would look for a boundary on, not the factory itself. It exists
+    only so the factory passes the boundary probe.
+    """
+    raise AssertionError("the boundary of a non-class view_class must never run")
+
+
+def _view_class_factory(**initkwargs):
+    """A ``view_class`` that is callable and is not a class.
+
+    It records rather than merely returning, because the contract is that nothing
+    but a class is ever *called*: a recognition that called this and then rejected
+    what came back would answer the same ``None`` while having run foreign code.
+
+    It carries the boundary method's name as an attribute for the same reason: with
+    the boundary probe standing behind the class test, a callable non-class carrying
+    no boundary is refused by the probe, so the input that still distinguishes the
+    two clauses is a callable non-class that does carry one.
+    """
+    _VIEW_CLASS_FACTORY_CALLS.append(initkwargs)
+    return _NotAPackageView()
+
+
+setattr(_view_class_factory, _BOUNDARY_METHOD, _boundary_the_factory_carries)
+
+
+def _marked_callback_with_a_callable_view_class(request):
+    """A callback whose ``view_class`` is callable and is not a class.
+
+    The shape that separates the class test from the construction attempt: a
+    factory answers an object for any keywords at all, so attempting the
+    construction would answer a foreign object rather than decline, and
+    ``process_view`` would then look for the boundary on it.
+    """
+    return HttpResponse("marked, callable view_class")
+
+
+#: Every construction the foreign class below receives, so a row can assert it
+#: received none.
+_FOREIGN_VIEW_CONSTRUCTIONS = []
+
+
+class _ForeignButBuildableView:
+    """A real class, buildable with no keywords, carrying no body boundary.
+
+    It records rather than merely accepting the construction, because the contract
+    is that a class the middleware cannot vouch for is never *built*: a recognition
+    that constructed this and only then looked for the boundary would answer the
+    same ``None`` while having run a foreign ``__init__``.
+    """
+
+    def __init__(self, **initkwargs):
+        _FOREIGN_VIEW_CONSTRUCTIONS.append(initkwargs)
+
+
+def _marked_callback_with_a_foreign_view_class(request):
+    """A callback whose bookkeeping is impeccable and whose class is not ours.
+
+    The shape no test of the bookkeeping and no construction attempt can tell from
+    a real mount: ``view_class`` is a class, ``view_initkwargs`` is a ``dict``, and
+    the class accepts those keywords, so recognition succeeds on every one of those
+    counts and hands ``process_view`` an object with no boundary on it. Only the
+    boundary probe separates it from a package view.
+    """
+    return HttpResponse("marked, foreign view_class")
+
+
+class _BoundaryReadRaisesMeta(type):
+    """A metaclass that raises when the boundary method's name is read off the class.
+
+    Deliberately narrow - every other absent attribute answers ``AttributeError``
+    as usual - so what the rows below measure is a read of the probed name rather
+    than some unrelated introspection of the class.
+    """
+
+    def __getattr__(cls, name):
+        if name == _BOUNDARY_METHOD:
+            raise RuntimeError("this metaclass answers the boundary read with a raise")
+        raise AttributeError(name)
+
+
+class _ViewClassWhoseMetaclassRaises(metaclass=_BoundaryReadRaisesMeta):
+    """A real, buildable class whose boundary read raises instead of answering."""
+
+    def __init__(self, **initkwargs):
+        raise AssertionError("a class whose boundary cannot be read must never be built")
+
+
+class _RaisingBoundaryDescriptor:
+    """A descriptor under the boundary method's name whose read raises."""
+
+    def __get__(self, instance, owner=None):
+        raise RuntimeError("this descriptor answers the boundary read with a raise")
+
+
+class _ViewClassWhoseBoundaryDescriptorRaises:
+    """The second shape of attribute machinery a forged ``view_class`` can carry.
+
+    A metaclass ``__getattr__`` runs only for a name the class does not have; a
+    descriptor of that name runs for a name it does. Both are ordinary Python and
+    both are code the forged class chooses, so a recognition that reads the name
+    has to survive either.
+    """
+
+    def __init__(self, **initkwargs):
+        raise AssertionError("a class whose boundary cannot be read must never be built")
+
+
+setattr(_ViewClassWhoseBoundaryDescriptorRaises, _BOUNDARY_METHOD, _RaisingBoundaryDescriptor())
+
+
+class _CallbackWhoseBookkeepingReadRaises:
+    """A marked callback whose own attribute reads raise, before any class is reached.
+
+    Recognition reads three attributes off the callback and one off the class, so
+    the callback is the other side the guard has to cover: the marker sits in this
+    instance's ``__dict__`` and every other read reaches ``__getattr__``, which
+    raises. Unmounted on purpose - a callback that raises on arbitrary reads would
+    break the URL resolver and the CSRF middleware too, and then a row would be
+    measuring its own scaffolding rather than the recognition.
+    """
+
+    def __call__(self, request):
+        raise AssertionError("a callback the recognition declines is never called by it")
+
+    def __getattr__(self, name):
+        raise RuntimeError("this callback answers a bookkeeping read with a raise")
+
+
+def _marked_callback_with_a_raising_metaclass(request):
+    """A callback whose class turns the boundary probe's read into an exception.
+
+    Every clause before the probe says yes: the marker is there, ``view_class`` is
+    a class, ``view_initkwargs`` is a ``dict``. The probe's read is where the
+    forged class gets to run code, and this one raises - so what the recognition
+    has is not an answer but a failure, and the hook it answers to has no
+    ``except`` around it.
+    """
+    return HttpResponse("marked, metaclass read raises")
+
+
+def _marked_callback_with_a_raising_boundary_descriptor(request):
+    """The same failure through the other shape of attribute machinery.
+
+    Refused by the same guard as the metaclass route rather than by a clause of
+    its own, and it is a separate route because the two shapes reach the read by
+    different mechanisms and a guard on one is not a guard on the other.
+    """
+    return HttpResponse("marked, descriptor read raises")
+
+
+setattr(_marked_callback_without_a_view_class, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_unusable_initkwargs, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_initkwargs_the_class_rejects, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_a_callable_view_class, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_a_foreign_view_class, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_a_raising_metaclass, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_a_raising_boundary_descriptor, _BOUNDARY_MARKER, True)
+_marked_callback_with_unusable_initkwargs.view_class = DjangoGraphQLView
+_marked_callback_with_unusable_initkwargs.view_initkwargs = [("schema", SCHEMA)]
+_marked_callback_with_initkwargs_the_class_rejects.view_class = DjangoGraphQLView
+_marked_callback_with_initkwargs_the_class_rejects.view_initkwargs = {"not_a_view_kwarg": 1}
+_marked_callback_with_a_callable_view_class.view_class = _view_class_factory
+_marked_callback_with_a_callable_view_class.view_initkwargs = {}
+_marked_callback_with_a_foreign_view_class.view_class = _ForeignButBuildableView
+_marked_callback_with_a_foreign_view_class.view_initkwargs = {}
+_marked_callback_with_a_raising_metaclass.view_class = _ViewClassWhoseMetaclassRaises
+_marked_callback_with_a_raising_metaclass.view_initkwargs = {}
+_marked_callback_with_a_raising_boundary_descriptor.view_class = (
+    _ViewClassWhoseBoundaryDescriptorRaises
+)
+_marked_callback_with_a_raising_boundary_descriptor.view_initkwargs = {}
+
+#: The callback-side read failure, built once: the marker is in the instance's
+#: ``__dict__`` so recognition gets past the first clause and fails on the next read.
+_CALLBACK_WHOSE_BOOKKEEPING_READ_RAISES = _CallbackWhoseBookkeepingReadRaises()
+setattr(_CALLBACK_WHOSE_BOOKKEEPING_READ_RAISES, _BOUNDARY_MARKER, True)
+
+
 _BOUNDARY_MIDDLEWARE_PATH = (
     "django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware"
 )
+_DERIVED_BOUNDARY_MIDDLEWARE_PATH = "tests.test_views._DerivedBoundaryMiddleware"
 _CSRF_MIDDLEWARE_PATH = "tests.test_views._RejectingCsrfMiddleware"
 _PASSTHROUGH_MIDDLEWARE_PATH = "tests.test_views._passthrough_middleware"
+
+#: Django's own class, for the rows whose witness is the ``request.POST`` read
+#: itself: :class:`_RejectingCsrfMiddleware` refuses before performing one, so it
+#: can prove which class the chain reached but never whether a body was parsed.
+_STOCK_CSRF_MIDDLEWARE_PATH = "django.middleware.csrf.CsrfViewMiddleware"
 
 _ORDERED_CHAIN = [_PASSTHROUGH_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH]
 
@@ -2485,23 +2760,42 @@ _ORDERED_CHAIN = [_PASSTHROUGH_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF
 #: rather than of an enormous fixture.
 _MOUNTED_CAP = 32
 
+_CAPPED_SYNC_CALLBACK = DjangoGraphQLView.as_view(
+    schema=SCHEMA,
+    max_request_body_bytes=_MOUNTED_CAP,
+)
+_CAPPED_ASYNC_CALLBACK = AsyncDjangoGraphQLView.as_view(
+    schema=SCHEMA,
+    max_request_body_bytes=_MOUNTED_CAP,
+)
+
 urlpatterns = [
     path("graphql/", DjangoGraphQLView.as_view(schema=SCHEMA)),
     path("async-graphql/", AsyncDjangoGraphQLView.as_view(schema=SCHEMA)),
-    path(
-        "capped/",
-        DjangoGraphQLView.as_view(schema=SCHEMA, max_request_body_bytes=_MOUNTED_CAP),
-    ),
-    path(
-        "async-capped/",
-        AsyncDjangoGraphQLView.as_view(schema=SCHEMA, max_request_body_bytes=_MOUNTED_CAP),
-    ),
+    path("capped/", _CAPPED_SYNC_CALLBACK),
+    path("async-capped/", _CAPPED_ASYNC_CALLBACK),
+    path("wrapped-capped/", _wrapper_copying_only_csrf_exempt(_CAPPED_SYNC_CALLBACK)),
+    path("wrapped-async-capped/", _wrapper_copying_only_csrf_exempt(_CAPPED_ASYNC_CALLBACK)),
+    path("marked-no-view-class/", _marked_callback_without_a_view_class),
+    path("marked-bad-initkwargs/", _marked_callback_with_unusable_initkwargs),
+    path("marked-rejected-initkwargs/", _marked_callback_with_initkwargs_the_class_rejects),
+    path("marked-callable-view-class/", _marked_callback_with_a_callable_view_class),
+    path("marked-foreign-view-class/", _marked_callback_with_a_foreign_view_class),
+    path("marked-raising-metaclass/", _marked_callback_with_a_raising_metaclass),
+    path("marked-raising-descriptor/", _marked_callback_with_a_raising_boundary_descriptor),
     path("plain/", _plain_view),
 ]
 
 _MOUNTED_PATHS = (
     pytest.param("/graphql/", "/capped/", False, id="sync"),
     pytest.param("/async-graphql/", "/async-capped/", True, id="async"),
+)
+
+#: The same two capped mounts reached through the marker-dropping wrapper, paired
+#: with the stamped mount they must now answer identically to.
+_WRAPPED_PATHS = (
+    pytest.param("/capped/", "/wrapped-capped/", False, id="sync"),
+    pytest.param("/async-capped/", "/wrapped-async-capped/", True, id="async"),
 )
 
 
@@ -2519,11 +2813,56 @@ def _chain(middleware):
         yield
 
 
-async def _post(path, is_async, **kwargs):
-    """POST through the real handler, on whichever client matches the transport."""
+async def _post(path, is_async, client=None, **kwargs):
+    """POST through the real handler, on whichever client matches the transport.
+
+    A fresh client per call by default, because Django's ``ClientHandler.__call__``
+    builds the middleware chain lazily on the first request and a reused client
+    would carry a chain built under a different ``override_settings``.
+    """
+    if client is None:
+        client = AsyncClient() if is_async else Client()
     if is_async:
-        return await AsyncClient().post(path, **kwargs)
-    return Client().post(path, **kwargs)
+        return await client.post(path, **kwargs)
+    return client.post(path, **kwargs)
+
+
+def _csrf_enforcing_client(is_async):
+    """A client whose CSRF check actually reaches the ``request.POST`` read.
+
+    Two fixture traps sit in front of that read, and either one silently turns a
+    parse-ordering assertion into a measurement of the fixture: a default test
+    client makes ``CsrfViewMiddleware.process_view`` short-circuit on
+    ``_dont_enforce_csrf_checks``, and an enforcing client *without* a well-formed
+    ``csrftoken`` cookie is rejected on ``REASON_NO_CSRF_COOKIE``. Only an
+    enforcing client carrying a token-shaped cookie gets as far as reading the
+    POST data - which on a multipart body is the ``MultiPartParser`` invocation the
+    boundary exists to precede.
+    """
+    client = (
+        AsyncClient(enforce_csrf_checks=True) if is_async else Client(enforce_csrf_checks=True)
+    )
+    client.cookies[settings.CSRF_COOKIE_NAME] = "a" * CSRF_SECRET_LENGTH * 2
+    return client
+
+
+@contextlib.contextmanager
+def _counting_multipart_parses():
+    """Count real ``MultiPartParser.parse`` invocations, wherever they come from.
+
+    The primary witness for every ordering row: a CSRF call log only says which
+    class the chain reached, while this says whether any component parsed the body
+    at all. The original is called through, so the request behaves normally.
+    """
+    original = multipartparser.MultiPartParser.parse
+    parses = []
+
+    def counting(self, *args, **kwargs):
+        parses.append(True)
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(multipartparser.MultiPartParser, "parse", counting):
+        yield parses
 
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
@@ -2696,6 +3035,50 @@ def test_a_chain_that_lists_the_boundary_after_csrf_is_refused_at_startup():
             assert GraphQLRequestBodyBoundaryMiddleware(_plain_view) is not None
 
 
+def test_a_boundary_subclass_listed_after_csrf_is_refused_at_startup():
+    """The audit compares by class, so subclassing either side does not evade it.
+
+    A deployment that wants its own logging or metrics around the boundary
+    subclasses the middleware and lists the subclass, and a chain built from dotted
+    paths would then match neither name in the audit and accept an ordering that
+    puts the CSRF read back in front of the cap. Both sides are subclasses here -
+    the CSRF entry is already the project's own - so the row states the comparison
+    contract rather than one half of it.
+
+    The accepting direction is asserted with the same pair, because a refusal that
+    fires on any chain mentioning a subclass would satisfy the first assertion and
+    break every deployment that subclassed correctly.
+    """
+    with override_settings(
+        MIDDLEWARE=[_CSRF_MIDDLEWARE_PATH, _DERIVED_BOUNDARY_MIDDLEWARE_PATH],
+    ):
+        with pytest.raises(ConfigurationError, match="must appear BEFORE"):
+            _DerivedBoundaryMiddleware(_plain_view)
+
+    with override_settings(
+        MIDDLEWARE=[_DERIVED_BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH],
+    ):
+        assert _DerivedBoundaryMiddleware(_plain_view) is not None
+
+
+def test_the_first_csrf_entry_is_the_one_the_ordering_is_measured_against():
+    """A chain carrying two CSRF entries is judged by the earlier one.
+
+    ``MIDDLEWARE`` may legitimately list more than one ``CsrfViewMiddleware``
+    subclass - a project adding a tenant-scoped check alongside an inherited base
+    entry - and the boundary has to precede the FIRST of them, because the first one
+    Django reaches is what reads ``request.POST`` and parses the body. An audit that
+    remembered the last CSRF entry instead would accept this chain: the boundary
+    does precede the trailing entry, and the parse would still have happened one
+    hook earlier.
+    """
+    with override_settings(
+        MIDDLEWARE=[_CSRF_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH],
+    ):
+        with pytest.raises(ConfigurationError, match="must appear BEFORE"):
+            GraphQLRequestBodyBoundaryMiddleware(_plain_view)
+
+
 async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_call():
     """The mark is request-scoped on both chains, and a raising view does not leak it.
 
@@ -2706,13 +3089,19 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
     ``await``, which is the reason ``__acall__`` exists rather than a ``finally``
     wrapped around a returned coroutine.
 
-    Both directions are asserted through the exemption object itself, which is the
-    value ``CsrfViewMiddleware.process_view`` consults: false while a request is in
-    flight, true again afterwards, including when the chain raised.
+    Every assertion is made through the exemption object itself, which is the value
+    ``CsrfViewMiddleware.process_view`` consults, and the three of them inside the
+    downstream call are what pin BOTH clauses of its predicate: a request the
+    middleware is handling whose boundary it has not run answers true - the view
+    still owns the ordering - and only the ``_BOUNDARY_ENFORCED`` stamp
+    ``process_view`` writes turns it false. Then true again afterwards, including
+    when the chain raised, which is the reset.
     """
-    from django_strawberry_framework.middleware.request_body import _CSRF_ORDERING_EXEMPTION
+    from django_strawberry_framework._boundary_ordering import _CSRF_ORDERING_EXEMPTION
 
     async def downstream(request):
+        assert bool(_CSRF_ORDERING_EXEMPTION) is True
+        setattr(request, _BOUNDARY_ENFORCED, True)
         assert bool(_CSRF_ORDERING_EXEMPTION) is False
         raise RuntimeError("the downstream chain failed")
 
@@ -2723,3 +3112,286 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
         await middleware(RequestFactory().get("/graphql/"))
 
     assert bool(_CSRF_ORDERING_EXEMPTION) is True
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_installing_the_middleware_parses_no_body_on_either_mount(marked, wrapped, is_async):
+    """Recognition failure must cost the CSRF class, never the ordering.
+
+    The two mounts are the same view class with the same cap, reached through
+    callbacks that differ in one attribute: the wrapper copied ``csrf_exempt`` and
+    not the boundary marker, so ``process_view`` declines it. The exemption is
+    keyed off the ``_BOUNDARY_ENFORCED`` stamp rather than off the middleware being
+    installed, so a declined callback keeps its exemption, Django's CSRF middleware
+    skips it, and the view runs the boundary itself - which is why both mounts
+    answer ``413`` with nothing parsed.
+
+    The parse counter is the witness, not the status code: the over-limit request
+    is refused either way, and what a bypass changes is only *when*. Stock CSRF and
+    a token-shaped cookie are what make the read reachable at all
+    (:func:`_csrf_enforcing_client`).
+    """
+    with _chain([_BOUNDARY_MIDDLEWARE_PATH, _STOCK_CSRF_MIDDLEWARE_PATH]):
+        with _counting_multipart_parses() as parses:
+            for route in (marked, wrapped):
+                response = await _post(
+                    route,
+                    is_async,
+                    client=_csrf_enforcing_client(is_async),
+                    data={"operations": "{}"},
+                )
+                assert (route, response.status_code) == (route, 413)
+
+    assert parses == []
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
+    marked,
+    wrapped,
+    is_async,
+):
+    """The other half of the pair, and what makes the row above about a regression.
+
+    On a chain carrying no boundary middleware the exemption is unconditionally
+    true, so both callbacks are skipped by the CSRF middleware and both views
+    enforce their own cap. Holding the two rows together is what states the
+    property: installing the middleware does not change the answer for either
+    mount, so no deployment loses an ordering by installing it.
+    """
+    with _chain([_STOCK_CSRF_MIDDLEWARE_PATH]):
+        with _counting_multipart_parses() as parses:
+            for route in (marked, wrapped):
+                response = await _post(
+                    route,
+                    is_async,
+                    client=_csrf_enforcing_client(is_async),
+                    data={"operations": "{}"},
+                )
+                assert (route, response.status_code) == (route, 413)
+
+    assert parses == []
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
+    marked,
+    wrapped,
+    is_async,
+):
+    """The secondary witness, against the project's own CSRF class this time.
+
+    ``_RejectingCsrfMiddleware`` records the callbacks Django's chain brings it in a
+    checkable state, and honours an exemption exactly as the base class does. An
+    empty log on an over-limit multipart request to the *declined* mount therefore
+    says the class was never handed the request - which is the same assertion
+    ``::test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read`` makes
+    for the stamped mount, now made for the one the middleware does not recognize.
+
+    ``marked`` is unused here and present only because both mounts come from one
+    parametrization.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = await _post(wrapped, is_async, data={"operations": "{}"})
+
+    assert response.status_code == 413
+    assert response.content.decode() == _BODY_LIMIT_REASON
+    assert _RejectingCsrfMiddleware.calls == []
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_a_declined_callback_still_gets_a_complete_csrf_check(marked, wrapped, is_async):
+    """Falling back must not cost the protection, only the class.
+
+    The mount the middleware declines is left on the arrangement that predates it,
+    and that arrangement's whole claim is one complete CSRF check per request. Both
+    strictnesses are asserted because either alone is non-distinguishing: a passing
+    client cannot show a check ran, and a rejected one cannot show the request
+    would otherwise reach the schema.
+
+    ``marked`` is unused here and present only because both mounts come from one
+    parametrization.
+    """
+    body = json.dumps({"query": "{ ping }"})
+    with _chain(_ORDERED_CHAIN):
+        allowed = await _post(wrapped, is_async, data=body, content_type="application/json")
+        strict_client = (
+            AsyncClient(enforce_csrf_checks=True)
+            if is_async
+            else Client(
+                enforce_csrf_checks=True,
+            )
+        )
+        refused = await _post(
+            wrapped,
+            is_async,
+            client=strict_client,
+            data=body,
+            content_type="application/json",
+        )
+
+    assert json.loads(allowed.content)["data"] == {"ping": "pong"}
+    assert refused.status_code == 403
+
+
+@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
+async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csrf(
+    under,
+    over,
+    is_async,
+):
+    """The disjunct the ordering audit deliberately admits, driven by a request.
+
+    ``_require_boundary_before_csrf`` accepts a chain with no CSRF entry at all -
+    there is no ``request.POST`` read to precede - and until this row nothing sent a
+    request through one: the audit's own accepting case only proved the chain could
+    be *built*. What protects the endpoint there is the view's unconditional CSRF
+    continuation, so the discriminating input is a client that does not pass CSRF by
+    default; with a default client both arrangements answer ``200`` and the
+    assertion would say nothing.
+
+    ``over`` is unused here and present only because both mounts come from one
+    parametrization.
+    """
+    body = json.dumps({"query": "{ ping }"})
+    with _chain([_BOUNDARY_MIDDLEWARE_PATH]):
+        allowed = await _post(under, is_async, data=body, content_type="application/json")
+        strict_client = (
+            AsyncClient(enforce_csrf_checks=True)
+            if is_async
+            else Client(
+                enforce_csrf_checks=True,
+            )
+        )
+        refused = await _post(
+            under,
+            is_async,
+            client=strict_client,
+            data=body,
+            content_type="application/json",
+        )
+
+    assert json.loads(allowed.content)["data"] == {"ping": "pong"}
+    assert refused.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/marked-no-view-class/",
+        "/marked-bad-initkwargs/",
+        "/marked-rejected-initkwargs/",
+        "/marked-callable-view-class/",
+        "/marked-foreign-view-class/",
+        "/marked-raising-metaclass/",
+        "/marked-raising-descriptor/",
+    ],
+)
+async def test_a_marked_callback_the_middleware_cannot_build_is_declined_not_crashed(route):
+    """The marker is a claim, not a guarantee that a view instance is behind it.
+
+    Running the boundary needs ``view_class`` and ``view_initkwargs`` as well, and a
+    class that actually carries the boundary, and reading any of that off the
+    strength of the marker alone turns a callback that carries one and not the rest
+    into an ``AttributeError`` or ``TypeError`` inside ``process_view`` - an
+    unhandled ``500`` from a hook whose every other outcome is a controlled
+    response.
+
+    The first five routes are five ways the recognition *decides* no, and no two are
+    refused by the same clause: the bookkeeping can be absent, it can be the wrong
+    shape to splat, it can have ``as_view``'s exact shape while naming keywords the
+    class rejects - which only attempting the construction tells apart from a real
+    mount - the ``view_class`` can be callable without being a class, which only the
+    class test tells apart, because the construction would call it and succeed, and
+    the ``view_class`` can be a real class that is buildable with exactly those
+    keywords and simply is not a package view, which nothing but the boundary probe
+    tells apart from a real mount.
+
+    The last two are the other kind of input: the recognition cannot decide at all,
+    because a read it performs raises rather than answering. Both are refused by the
+    guard around the reads rather than by a clause, and they are two routes because a
+    metaclass ``__getattr__`` and a class-level descriptor of the probed name reach
+    that read by different mechanisms. One recognition, two kinds of no: a callback
+    the middleware cannot run a boundary for is declined, whether it cannot be built,
+    carries no boundary to run, or cannot be asked, and declining it leaves that
+    request on the view-local arrangement rather than on neither.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = Client().get(route)
+
+    assert response.status_code == 200
+    assert response.content.decode().startswith("marked, ")
+
+
+def test_a_callable_view_class_that_is_not_a_class_is_never_called():
+    """Recognition refuses a non-class ``view_class`` before anything is called.
+
+    ``test_a_marked_callback_the_middleware_cannot_build_is_declined_not_crashed``
+    shows the request is answered rather than crashed; this row shows the property
+    that makes declining safe rather than merely quiet. A recognition that called the
+    factory and then rejected what came back would answer the same ``None`` and the
+    same ``200`` while having run code the middleware cannot vouch for, so the
+    unrecorded call is as much of the contract as the ``None`` is.
+    """
+    calls_before = len(_VIEW_CLASS_FACTORY_CALLS)
+
+    assert _package_view_instance(_marked_callback_with_a_callable_view_class) is None
+    assert len(_VIEW_CLASS_FACTORY_CALLS) == calls_before
+
+
+def test_a_view_class_without_the_boundary_is_never_constructed():
+    """Recognition reaches the boundary, and reaches it before anything is built.
+
+    The class here is real, is buildable with exactly the keywords the bookkeeping
+    names, and carries no body boundary - so every earlier clause says yes and only
+    the probe says no. Probing the built instance instead would answer the same
+    ``None`` while having run a foreign ``__init__``, and ``process_view`` runs the
+    boundary method by name, so the class is where the answer has to be established.
+    The unrecorded construction is as much of the contract as the ``None`` is.
+    """
+    constructions_before = len(_FOREIGN_VIEW_CONSTRUCTIONS)
+
+    assert _package_view_instance(_marked_callback_with_a_foreign_view_class) is None
+    assert len(_FOREIGN_VIEW_CONSTRUCTIONS) == constructions_before
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        pytest.param(_marked_callback_with_a_raising_metaclass, id="metaclass"),
+        pytest.param(_marked_callback_with_a_raising_boundary_descriptor, id="descriptor"),
+        pytest.param(_CALLBACK_WHOSE_BOOKKEEPING_READ_RAISES, id="callback-bookkeeping"),
+    ],
+)
+def test_a_read_that_raises_is_declined_rather_than_raised_out_of_the_hook(callback):
+    """An attribute read is not only an answer: it can also fail.
+
+    ``getattr``'s default covers an absent attribute and nothing else, and
+    ``process_view`` calls the recognizer outside any ``except``, so a read that
+    raises would leave the hook on an exception the forged object chose - the same
+    uncontrolled failure as an unrecognized foreign class, one layer earlier. The
+    three inputs are the reads the recognition performs: the boundary read off the
+    class, in each of the two shapes of attribute machinery a class can carry, and a
+    bookkeeping read off the callback itself. Each answers ``None`` - the decline,
+    which is the arm that keeps the view-local arrangement - rather than propagating.
+    """
+    assert _package_view_instance(callback) is None
+
+
+def test_the_probed_boundary_method_is_the_one_the_package_views_define():
+    """The probed name and the method ``process_view`` calls are one fact.
+
+    ``_BOUNDARY_METHOD`` is a string naming a method defined in another module, so a
+    rename on either side of it would make the probe refuse every genuine mount and
+    leave the boundary silently unrun. Both directions fail here by name: the
+    identity assertion catches a rename of one side, and the predicate assertion
+    states the property that identity buys - a genuine mount passes recognition by
+    construction, at both transports.
+    """
+    from django_strawberry_framework import views as views_module
+
+    mixin = views_module._RequestBodyBoundaryMixin
+
+    assert getattr(mixin, _BOUNDARY_METHOD) is mixin._enforce_request_boundary
+    assert callable(getattr(DjangoGraphQLView, _BOUNDARY_METHOD, None))
+    assert callable(getattr(AsyncDjangoGraphQLView, _BOUNDARY_METHOD, None))

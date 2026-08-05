@@ -49,11 +49,11 @@ both package views mark the callback ``as_view`` returns exempt from the CSRF
 middleware - once, on the shared mixin - and re-enter Django's own
 ``CsrfViewMiddleware`` from inside the view, after the boundary has run, through
 the public ``csrf_protect`` decorator (see :func:`_run_after_csrf_check`). The
-exemption is an ORDERING MECHANISM, never a bypass, and it withdraws itself when
-the chain supplies the ordering instead
-(``middleware/request_body.py::_CsrfOrderingExemption``): in either arrangement
-every request that gets past the size boundary goes through exactly one complete
-CSRF check.
+exemption is an ORDERING MECHANISM, never a bypass, and it withdraws itself for
+exactly those requests whose boundary the chain has already run
+(``_boundary_ordering.py::_CsrfOrderingExemption``, which owns both ordering
+marks): in either arrangement every request that gets past the size boundary goes
+through exactly one complete CSRF check.
 
 The wire contract needs one thing the mixin cannot provide, which is why it has a
 second owner here: upstream's sync adapter decodes inside its own ``body``
@@ -91,14 +91,14 @@ from django.utils.decorators import classonlymethod
 from django.views.decorators.csrf import csrf_protect
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 
-from django_strawberry_framework._request_body import body_exceeds_limit
-from django_strawberry_framework.conf import max_request_body_bytes_setting
-from django_strawberry_framework.exceptions import ConfigurationError, describe_value
-from django_strawberry_framework.middleware.request_body import (
+from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
     _BOUNDARY_MARKER,
     _CSRF_ORDERING_EXEMPTION,
 )
+from django_strawberry_framework._request_body import body_exceeds_limit
+from django_strawberry_framework.conf import max_request_body_bytes_setting
+from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Mapping
@@ -229,6 +229,26 @@ def _canonicalizes_to_utf8(encoding: object) -> bool:
         return False
 
 
+def _declared_charset_is_unhonourable(request: HttpRequest) -> bool:
+    """Whether the request declares a ``charset`` this endpoint will not honour.
+
+    What the client declared about the body's bytes, and whether this endpoint
+    will decode with it - named once because the two guards that ask it must keep
+    agreeing about what "declared" means, exactly as
+    :func:`_is_multipart_form_post` is named once so they cannot drift apart on
+    what "multipart" means.
+
+    Absent is not a declaration, so it is honourable by default: the strict decode
+    is then the only encoding contract, and it is the stronger one because it
+    inspects the bytes rather than a header. Anything present must canonicalize to
+    UTF-8 by :func:`_canonicalizes_to_utf8`, so every alias is accepted while
+    ``utf-8-sig`` - a different codec, whose BOM spec-046 Decision 10 refuses - and
+    an unknown codec name are not.
+    """
+    declared = (request.content_params or {}).get("charset")
+    return declared is not None and not _canonicalizes_to_utf8(declared)
+
+
 def _form_encoding_is_utf8(request: HttpRequest) -> bool:
     """Whether Django will decode this form's non-file fields as UTF-8.
 
@@ -283,8 +303,7 @@ def _form_encoding_is_utf8(request: HttpRequest) -> bool:
     branch, so on ``operations`` / ``map`` it has no effect and treating it as
     meaningful would be inventing a contract Django does not implement.
     """
-    declared = (request.content_params or {}).get("charset")
-    if declared is not None and not _canonicalizes_to_utf8(declared):
+    if _declared_charset_is_unhonourable(request):
         return False
     return _canonicalizes_to_utf8(request.encoding or settings.DEFAULT_CHARSET)
 
@@ -462,9 +481,10 @@ class _RequestBodyBoundaryMixin:
     ``request.POST``, ``request.FILES``, ``MultiPartParser``, or any upload
     handler is entered - because
     ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` runs this
-    boundary from a chain position ahead of the CSRF middleware, or, where it is not
-    installed, because the package view is exempt from that middleware at its outer
-    dispatch callback and re-enters CSRF *after* this boundary (see
+    boundary from a chain position ahead of the CSRF middleware, or, where the
+    chain did not run it for this request, because the package view's callback is
+    exempt from that middleware at its outer dispatch callback and re-enters CSRF
+    *after* this boundary (see
     :func:`_run_after_csrf_check`; before that ordering fix, Django's
     ``CsrfViewMiddleware.process_view`` had already parsed the form to look for
     ``csrfmiddlewaretoken``). What the gate does NOT bound is a multipart body
@@ -510,9 +530,11 @@ class _RequestBodyBoundaryMixin:
         originals.
 
         ``csrf_exempt`` is the withdrawable exemption rather than a plain ``True``:
-        it is false for a request travelling through a chain that already orders
-        the boundary ahead of the CSRF check, so the deployment's configured CSRF
-        class runs on this endpoint like on any other view. See
+        it is false for a request whose boundary a chain entry has already run
+        ahead of the CSRF check, so the deployment's configured CSRF class runs on
+        this endpoint like on any other view - and true for every other request,
+        including one whose callback that entry did not recognize, which keeps the
+        arrangement below intact rather than losing the ordering. See
         :func:`_run_after_csrf_check` for why an exemption is what buys this
         endpoint *more* CSRF ordering rather than less, and for the two shapes that
         can still lose the ordering (a wrapper that drops the attributes, and a
@@ -628,12 +650,12 @@ class _RequestBodyBoundaryMixin:
         cannot send UTF-8 must find out at the boundary instead of having its bytes
         reinterpreted.
 
-        Absent is not a declaration, and is the overwhelmingly common case: it
+        Which declarations this endpoint will not honour is
+        :func:`_declared_charset_is_unhonourable`'s single answer, shared with the
+        multipart guard's first condition so the two cannot come to disagree about
+        it. Absent is not a declaration, and is the overwhelmingly common case: it
         leaves the strict decode as the only encoding contract, which is the
-        stronger one because it inspects the bytes. Anything present must
-        canonicalize to UTF-8 by :func:`_canonicalizes_to_utf8`, so every alias is
-        accepted while ``utf-8-sig`` - a different codec, whose BOM Decision 10
-        refuses - and an unknown codec name are not.
+        stronger one because it inspects the bytes.
 
         Multipart is excluded here because it has its own, narrower owner
         (:meth:`_enforce_multipart_form_encoding`): Django consults that
@@ -648,8 +670,7 @@ class _RequestBodyBoundaryMixin:
         """
         if request.method == "GET" or _is_multipart_form_post(request):
             return
-        declared = (request.content_params or {}).get("charset")
-        if declared is not None and not _canonicalizes_to_utf8(declared):
+        if _declared_charset_is_unhonourable(request):
             raise HTTPException(400, _JSON_PARSE_REASON)
 
     def _reject_lossy_multipart_control_fields(self, form: Mapping[str, str | bytes]) -> None:

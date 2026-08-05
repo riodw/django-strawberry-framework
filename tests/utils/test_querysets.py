@@ -41,6 +41,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
+    _RETAINED_TYPES,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
     _concrete_or_none,
@@ -3188,6 +3189,76 @@ def test_slotted_genuine_django_node_fails_closed():
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "annotation 'flag' is a SafeString with no instance state")
+
+
+def test_slotted_django_namedtuple_in_an_unenumerated_slot_fails_closed():
+    """A Django namedtuple carrying a MUTABLE member is refused, not retained by reference.
+
+    ``sql.Query.explain_info`` is one of the query slots the graph proofs do not
+    enumerate -- they walk the compiler-reachable EXPRESSION slots -- so the ownership
+    decision for whatever sits there is made by canonical reconstruction alone. Its real
+    Django value type is ``ExplainInfo``, a provenance-genuine namedtuple whose instances
+    are slotted, and a namedtuple is not inert just because the tuple itself is immutable:
+    its ``options`` member is a plain dict. The compiler prepends
+    ``explain_query_prefix(format, **options)`` to the emitted SQL of ANY query carrying an
+    ``explain_info``, so retaining the namedtuple by reference would leave the candidate
+    holding a live handle into the sealed query's SQL, defeating the whole reconstruction.
+    A slotted object has no slot-by-slot rebuild, so it takes the admitted-bound-value
+    rule, which has no representation for a namedtuple and refuses it.
+    """
+    from django.db.models.sql.query import ExplainInfo
+
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.explain_info = ExplainInfo("text", {"analyze": True})
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet binds a ExplainInfo bound value")
+
+
+def test_slotted_django_str_subclass_in_an_unenumerated_slot_is_normalized():
+    """A slotted genuine-Django ``str`` subclass is normalized to an exact ``str``.
+
+    The other half of the slotted rule. ``select_for_update_of`` is likewise unenumerated
+    and likewise compiler-consumed (its members are emitted into ``FOR UPDATE OF ...``),
+    and its members are consumer-supplied strings a hook can hand over as
+    ``SafeString``. Being Django's own class does not make an instance safe to share -- the
+    bound-value rule replaces it with an exact ``str`` whose every method is the
+    interpreter's own, exactly as it would a consumer ``str`` subclass, so the seal keeps
+    the query runnable instead of failing a legitimate value closed.
+    """
+    from django.utils.safestring import SafeString
+
+    source = Category.objects.filter(is_private=False)
+    str(source.query)
+    source.query.select_for_update_of = (SafeString("self"),)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert defect is None
+    assert sealed is not None
+    assert sealed.query.select_for_update_of == ("self",)
+    assert [type(member) for member in sealed.query.select_for_update_of] == [str]
+
+
+def test_reconstruction_never_grows_the_retained_type_set_with_a_planted_type():
+    """The retained-by-reference set grows only with schema, never with a planted type.
+
+    A type inside ``_RETAINED_TYPES`` wins the INLINE retain test at every traversal step
+    of every LATER seal in the process, so a hostile hook that could add to it would buy
+    permanent by-reference sharing for that type process-wide -- long after its own
+    request ended. The single writer is the ``_RETAINED_SCHEMA_BASES`` branch of
+    ``_is_reconstructable_node``, which admits only ``models.Field`` subclasses, model
+    classes, and relation descriptors; the slotted-node path deliberately has none.
+    """
+    from django.db.models.sql.query import ExplainInfo
+    from django.utils.safestring import SafeString
+
+    before = frozenset(_RETAINED_TYPES)
+    for planted in (ExplainInfo("text", {"analyze": True}), SafeString("self")):
+        source = Category.objects.filter(is_private=False)
+        str(source.query)
+        source.query.explain_info = planted
+        _seal_or_defect(source, Category, None)
+    assert frozenset(_RETAINED_TYPES) - before == frozenset()
 
 
 def test_hostile_case_container_fails_closed_before_its_iterator_runs():

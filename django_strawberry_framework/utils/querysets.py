@@ -1311,10 +1311,10 @@ _RETAINED_SCHEMA_BASES: tuple[type, ...] = (
 # Types whose instances reconstruction retains BY REFERENCE, tested INLINE at every
 # traversal step. Seeded with the retained leaves and grown lazily with the SCHEMA classes
 # a query graph is full of -- ``models.Field`` subclasses, model classes (instances of a
-# model metaclass), relation / path descriptors, and genuine Django classes whose
-# instances carry no ``__dict__``. Growth is bounded by the installed schema plus Django's
-# own class surface: a type only enters this set after ``_is_reconstructable_node`` has
-# classified it, which never admits an arbitrary consumer object's type.
+# model metaclass), and relation / path descriptors. Growth is bounded by the installed
+# schema: the ONE writer is ``_is_reconstructable_node``'s ``_RETAINED_SCHEMA_BASES``
+# branch, so nothing a hostile hook plants can enter the set and thereby win the inline
+# retain-by-reference test in every LATER seal this process runs.
 _RETAINED_TYPES: set[type] = set(_RETAINED_LEAF_TYPES)
 
 # Positive-only memo of ``_is_reconstructable_node``: exact genuine Django AST classes
@@ -1586,9 +1586,17 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
     memo. A node is memoized BEFORE its slots are filled, so the pass terminates on any
     graph the proofs somehow admitted.
 
-    A slotted genuine-Django object (no instance ``__dict__``) carries no mutable AST
-    state -- Django's module-level slotted exports are namedtuples and string
-    subclasses -- and is retained by reference.
+    A slotted genuine-Django object (no instance ``__dict__``) is not query AST and has no
+    slot-by-slot reconstruction, so it takes the admitted-bound-value rule instead: every
+    clonable / compilable node carries an instance ``__dict__``, while Django's slotted
+    module-level exports are ``str`` subclasses (normalized to an exact ``str``) and
+    namedtuples (refused closed). A namedtuple is NOT inert just because the tuple itself
+    is immutable -- ``sql.Query.explain_info`` is an ``ExplainInfo`` whose ``options``
+    member is a plain MUTABLE dict, and the compiler prepends
+    ``explain_query_prefix(format, **options)`` to the emitted SQL of any query carrying
+    one -- so retaining it by reference would leave the candidate holding a live handle
+    into the sealed query's SQL. ``explain_info`` is one of the slots the graph proofs do
+    not enumerate, which is exactly why the ownership decision has to be made here.
 
     Per-node SQL-template state needs no special case here, because validation already
     narrowed it to reconstructable shapes: an expression's ``extra`` mapping is an exact
@@ -1678,10 +1686,15 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
     try:
         source_state = object.__getattribute__(value, "__dict__")
     except AttributeError:
-        # A genuine Django class whose instances are slotted (the module-level namedtuple
-        # and string-subclass exports) holds no mutable AST state.
-        _RETAINED_TYPES.add(value_type)
-        return value
+        # A genuine Django class whose instances are SLOTTED (the module-level namedtuple
+        # and string-subclass exports) is not query AST: every clonable / compilable node
+        # carries an instance ``__dict__``, so there is no state to rebuild slot-by-slot.
+        # Retaining it by reference would share whatever its MEMBERS are -- an
+        # ``ExplainInfo``'s ``options`` is a mutable dict the compiler interpolates into
+        # the emitted SQL prefix -- so it takes the admitted-bound-value rule like any
+        # other non-AST value: normalized when it reduces to an exact inert leaf, refused
+        # closed otherwise.
+        return _normalized_bound_value(value)
     # ``object.__new__``, never ``value_type.__new__``: the base allocator only, so a
     # class-level ``__new__`` (Django's ``@deconstructible`` wrapper, or any other) is not
     # dispatched during reconstruction and cannot observe or alter the fresh node before

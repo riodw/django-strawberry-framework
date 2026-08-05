@@ -4434,6 +4434,55 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(mo
     await _discard(starter)
 
 
+async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(monkeypatch):
+    """A cancellation that lands INSIDE upstream's teardown does not skip settlement.
+
+    The other half of the ``finally`` contract, and the half no other row reaches:
+    the row above lets upstream's teardown return and is then cancelled while
+    settlement itself is awaiting, which a plain sequential
+    ``await super().disconnect(code)`` followed by ``await settle()`` also survives.
+    This one cancels while upstream is still awaiting - an ASGI shutdown arriving
+    while the message-loop task is being torn down - so the ``CancelledError``
+    leaves ``super().disconnect`` and a sequential settlement would never be
+    reached at all, orphaning a close the transport still has parked.
+
+    The ordering is the measurement. While the transport holds the ``4403``
+    uncommitted the cancellation cannot leave ``disconnect``, so releasing the
+    transport is what lets the attempt record its real outcome, ``CLOSED``, with the
+    caller's cancellation then propagating unchanged.
+    """
+    teardown_reached = asyncio.Event()
+    teardown_cancelled = asyncio.Event()
+
+    async def parked_teardown(_consumer, _code):
+        teardown_reached.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            teardown_cancelled.set()
+            raise
+
+    consumer = _consumer_with_a_controlled_teardown(monkeypatch, parked_teardown)
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+
+    disconnecting = asyncio.create_task(consumer.disconnect(1000))
+    await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
+
+    disconnecting.cancel()
+    await _reached(teardown_cancelled, "the cancellation never reached upstream's teardown")
+    assert not disconnecting.done(), "the cancellation escaped before the close was settled"
+
+    websocket.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await disconnecting
+
+    assert attempt.done() and not attempt.cancelled()
+    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
+    assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
+    await starter
+
+
 async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(monkeypatch):
     """Upstream's teardown failing does not skip settlement.
 

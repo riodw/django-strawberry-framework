@@ -432,8 +432,8 @@ class _RequestBodyBoundaryMixin:
     ``len(request.body)``. That property performs an unbounded read of the whole
     request into one ``bytes`` value, so counting it would detect an over-limit
     body only *after* the attacker-sized allocation the cap exists to prevent -
-    and Django 5.2.0, this card's floor, has no seekable-stream size check of its
-    own to shrink that window. ``_request_body.py::body_exceeds_limit`` measures
+    and the 5.2.x series, the oldest supported, has no seekable-stream size check of
+    its own to shrink that window. ``_request_body.py::body_exceeds_limit`` measures
     instead: a seekable ASGI spool is size-probed with ``seek`` / ``tell`` and
     refused with nothing read, a non-seekable stream is read in bounded chunks up
     to ``limit + 1`` bytes and no further, and a body an earlier middleware
@@ -890,8 +890,8 @@ async def _async_run_after_csrf_check(
     the decorated callable must itself be a coroutine function for the async view
     to be handled correctly. Wrapping the sync one instead would hand a coroutine
     to ``process_response`` in place of a response. That branch exists in
-    ``django/utils/decorators.py::make_middleware_decorator`` at the supported
-    Django 5.2.0 floor as well as on current, and it was confirmed by EXECUTION at
+    ``django/utils/decorators.py::make_middleware_decorator`` on the oldest
+    supported 5.2.x series as well as on current, and it was confirmed by EXECUTION at
     the floor - Python 3.10 / Django 5.2.0, both views, the full CSRF matrix and
     the untouched-parser witness - rather than by reading current and assuming
     backwards. ``examples/fakeshop/test_query/test_transport_api.py``'s async CSRF

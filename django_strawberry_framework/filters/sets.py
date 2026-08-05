@@ -425,7 +425,7 @@ _PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = Mapping
 #
 # Audited today: the 25.x and 26.x families -- the package test suite runs against
 # django-filter 25.2 (the locked development / CI version) and 26.1 (the
-# Python 3.10 + Django 5.2.0 compatibility-floor cell).
+# Python 3.10 + Django 5.2.16 compatibility-floor cell).
 _AUDITED_DJANGO_FILTER_RANGE: tuple[tuple[int, ...], tuple[int, ...]] = ((25, 2), (27,))
 
 

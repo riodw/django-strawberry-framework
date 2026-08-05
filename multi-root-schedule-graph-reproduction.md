@@ -124,8 +124,8 @@ keep this guide inside that mission:
 
 The audited consumer cannot install current DSF without a framework upgrade:
 
-- DSF declares Django 5.2 or newer and django-filter 25.2 or newer in
-  `pyproject.toml #"Django>=5.2"`.
+- DSF declares Django 5.2.16 or newer and django-filter 25.2 or newer in
+  `pyproject.toml #"Django>=5.2.16"`.
 - The consumer declares Django 4.2.25 and django-filter 24.3 in
   `medtrics/pyproject.toml #"django==4.2.25"`.
 

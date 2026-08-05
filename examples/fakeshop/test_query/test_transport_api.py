@@ -25,7 +25,7 @@ too, against three more mounts of the package view that differ only in their
 or understated ``Content-Length`` can and cannot do on each transport, a
 cumulative multi-fragment body, malformed JSON on both sides of the cap,
 multipart, the parse-and-execution witnesses, which of the two ceilings fired,
-and the three precedence rungs. Row 18 (the py3.10 / Django 5.2 floor) is a
+and the three precedence rungs. Row 18 (the py3.10 / Django 5.2.16 floor) is a
 separately-invoked run of this same file, not a separate row.
 
 Test plan rows 19 / 22 / 23 add one more async row. The strict UTF-8
@@ -1224,8 +1224,9 @@ def test_on_asgi_an_absent_or_lying_content_length_cannot_buy_a_larger_body(
     handler hands the application every byte it received regardless of the
     header, so with no declaration - or a declaration of ``10`` against a
     four-times-oversized payload - the only application-level bound left is the
-    real byte count. On the Django 5.2 floor it is the ONLY bound at all, since
-    that release's ``HttpRequest.body`` has no seekable actual-size check of its
+    real byte count. On the oldest supported Django (the ``5.2.16`` floor) it is
+    the ONLY bound at all, since the 5.2 series'
+    ``HttpRequest.body`` has no seekable actual-size check of its
     own - which is exactly why the package performs its own size probe on the
     spooled body file rather than counting ``len(request.body)``. That the probe
     costs no read is a package-tier proof (``tests/test_views.py``); what this row

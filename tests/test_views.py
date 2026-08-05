@@ -559,8 +559,9 @@ def test_the_counted_check_fires_when_no_content_length_is_declared_at_all():
 
     The package-tier colour of the ASGI live rows - an undeclared body is the
     shape Django's declared-length guard cannot see, and the counted check is
-    the only application-level bound on it (the only one at all on the Django
-    5.2 floor, whose ``HttpRequest.body`` has no seekable actual-size check).
+    the only application-level bound on it (the only one at all on the oldest
+    supported Django, the ``5.2.16`` floor, whose ``HttpRequest.body`` has no
+    seekable actual-size check).
     ``>`` not ``>=``: a body exactly AT the limit is allowed, which the third
     direction pins.
     """
@@ -1016,7 +1017,8 @@ def test_a_seekable_over_limit_body_is_refused_without_ever_being_read(
     ``HttpRequest.body`` performs an unbounded ``self.read()`` that copies the
     entire spooled request into one ``bytes`` value *before* the comparison can
     reject it. Django 6.0 shrinks that window with a seekable-stream size check of
-    its own; the required Django 5.2.0 floor has none, so with an absent
+    its own; the oldest supported Django (the ``Django>=5.2.16`` floor) has
+    none, so with an absent
     ``Content-Length``, an understated one, or
     ``DATA_UPLOAD_MAX_MEMORY_SIZE = None`` the package performed an
     attacker-sized allocation before enforcing its own smaller ceiling.
@@ -1184,7 +1186,8 @@ def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
     one answer that breaks it, because ``body_exceeds_limit`` reads it as "within
     the limit" while nothing has been read. The refused stream then goes to
     ``HttpRequest.body`` with **no package bound at all**, whose only ceiling at
-    the Django 5.2.0 floor is the ``CONTENT_LENGTH`` the cap exists precisely not
+    the oldest supported Django (the ``5.2.16`` floor) is the ``CONTENT_LENGTH``
+    the cap exists precisely not
     to trust. The old ``max(end - position, 0)`` produced exactly that answer for
     a stream that reports a position but cannot take one.
 
@@ -2386,8 +2389,8 @@ def test_each_csrf_continuation_matches_the_transport_it_protects():
     wrapper by asking ``iscoroutinefunction(view_func)``. If the async view's
     continuation were the sync function, the wrapper would hand a coroutine to
     ``process_response`` as if it were a response - so the async wrapper being a
-    coroutine function IS the load-bearing fact, on the supported Django 5.2.0 floor
-    as well as on current.
+    coroutine function IS the load-bearing fact, on the oldest supported Django
+    (the ``5.2.16`` floor) as well as on current.
 
     Neither continuation may be ``csrf_exempt``: the exemption belongs to the outer
     callback alone, and one on the inner function would turn the re-entry into the

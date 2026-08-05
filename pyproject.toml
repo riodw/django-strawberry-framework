@@ -26,7 +26,7 @@ classifiers = [
     "Framework :: Django :: 6.0",
 ]
 dependencies = [
-    "Django>=5.2",
+    "Django>=5.2.16",
     # 0.316.0 is the per-operation extension-isolation floor (spec-044
     # Decision 6): earlier releases cache class-created sync extensions on
     # ``Schema._sync_extensions``, so concurrent requests share one instance's

@@ -101,7 +101,7 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # rejects the same ``models.Q.__init__`` internals inline. Mirror Django
     # 6.0's ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` verbatim so the
     # deferred-filter defect gate behaves identically at the declared
-    # ``Django>=5.2`` floor (pyproject ``[project.dependencies]``).
+    # ``Django>=5.2.16`` floor (pyproject ``[project.dependencies]``).
     PROHIBITED_FILTER_KWARGS = frozenset({"_connector", "_negated"})
 from django.db.models.sql.where import ExtraWhere, WhereNode
 

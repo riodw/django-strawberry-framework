@@ -67,7 +67,7 @@ class RpToFieldChild(models.Model):
 class RpCompositeParent(models.Model):
     """A composite-primary-key parent (``tenant_id`` + ``code``).
 
-    Django's ``CompositePrimaryKey`` (supported on the >= 5.2 floor this repo
+    Django's ``CompositePrimaryKey`` (supported on the >= 5.2.16 floor this repo
     targets) names the concrete member fields; instance ``pk`` reads back as a
     tuple in declaration order (e.g. ``(1, "X")``).
     """
@@ -85,7 +85,7 @@ class RpCompositeParent(models.Model):
 class RpCompositeChild(models.Model):
     """A child of the composite-pk parent, giving a reverse ``children`` hop.
 
-    Django (every version on this repo's >= 5.2 floor) refuses a plain
+    Django (every version on this repo's >= 5.2.16 floor) refuses a plain
     ``ForeignKey`` whose target has a ``CompositePrimaryKey`` -- system check
     ``fields.E347``, and ``schema_editor`` never emits the join column, so the
     relation is dead at runtime. The supported way to bind on a multi-column

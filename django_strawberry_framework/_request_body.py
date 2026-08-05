@@ -25,8 +25,9 @@ the async view.
 
 Django 6.0's own ``HttpRequest.body`` narrows that window: it seeks a *seekable*
 stream to its end and checks the real buffered size against
-``DATA_UPLOAD_MAX_MEMORY_SIZE`` before reading. The **Django 5.2.0 floor this
-card supports has no such check** - only a ``CONTENT_LENGTH`` comparison - so an
+``DATA_UPLOAD_MAX_MEMORY_SIZE`` before reading. The **5.2.x series, the oldest
+this package supports, has no such check** - only a ``CONTENT_LENGTH``
+comparison - so an
 absent declaration, an understated one, or ``DATA_UPLOAD_MAX_MEMORY_SIZE = None``
 leaves that read unbounded there. The package cap therefore has to measure the
 body itself on every supported release, and measuring it means reaching for the
@@ -345,7 +346,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:
     ``0`` is the one numeric answer a size probe must never hand back, because
     :func:`body_exceeds_limit` reads it as "within the limit" and the request
     then goes straight to ``HttpRequest.body`` with **no package bound at
-    all** - and at the Django 5.2.0 floor that property's only ceiling is the
+    all** - and on the 5.2.x series that property's only ceiling is the
     ``CONTENT_LENGTH`` this cap exists precisely not to trust. Answering it on
     the strength of two numbers is therefore fail-open, and the previous
     ``max(end - position, 0)`` did exactly that for both shapes of an

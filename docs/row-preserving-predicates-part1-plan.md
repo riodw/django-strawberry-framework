@@ -1,5 +1,11 @@
 # Part 1 plan: row-preserving predicate machinery, enacted now (Rev 15)
 
+**Floor note (2026-08-05).** The package's declared Django floor moved from `>=5.2` to
+`>=5.2.16` by maintainer decision; Django `5.2.0`-`5.2.15` are no longer supported. Every
+`Django==5.2.0` / `5.2.0 floor` reference below is **historical** — it records the acceptance
+floor as it stood when this plan was written, and is left standing rather than rewritten. A
+worker enacting the acceptance steps today pins the current exact floor, `Django==5.2.16`.
+
 ## Identity and completion ownership
 
 This document is the working plan for the **pre-card groundwork slice of

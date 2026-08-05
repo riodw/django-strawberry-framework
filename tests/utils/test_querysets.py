@@ -4090,9 +4090,9 @@ def test_prohibited_filter_kwargs_matches_django_when_available():
 
     ``django_strawberry_framework.utils.querysets`` guards the Django 6.0-only
     ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` import with a verbatim
-    fallback so the package imports at the declared ``Django>=5.2`` floor. On
+    fallback so the package imports at the declared ``Django>=5.2.16`` floor. On
     Django versions that DO expose the constant this pins the fallback literal
-    against upstream drift; on the 5.2 floor it pins the expected value.
+    against upstream drift; on the 5.2.x floor it pins the expected value.
     """
     import django.db.models.query as django_query
 

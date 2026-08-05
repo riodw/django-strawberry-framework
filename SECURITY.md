@@ -8,6 +8,8 @@
 | -------- | ------------------ |
 | `0.x`    | :white_check_mark: |
 
+The table is about *this* package. Its dependency floors are a separate question: `pyproject.toml` declares `Django>=5.2.16`, and Django `5.2.0`-`5.2.15` are not supported at all. Which Django releases carry security fixes is Django's own policy to state, not this project's.
+
 ## Reporting a vulnerability
 
 If you discover a security vulnerability, **please do not open a public issue**.
@@ -33,6 +35,10 @@ You can expect an initial response within **7 days**. We will work with you to v
 graphql-core returns the `str()` of any unhandled resolver exception in the response's top-level `errors[].message`, schema-wide — standard GraphQL behavior, not specific to this package. Since `0.0.17`, a schema constructed as `DjangoSchema` (required for generated mutations) resolves a **production error policy** at construction: under `settings.DEBUG = False`, an unexpected resolver or hook exception reaches the client as a stable non-sensitive message plus a `correlationId`, and the original exception is logged server-side under that same identifier. Parse/validation errors and deliberately raised `GraphQLError`s — the framework's audited rejections and permission denials included — keep their client-facing contract. The full shape, configuration (`error_policy=` / `ERROR_POLICY`), and per-event subscription coverage are in [the user guide's "Production error policy" section][docs-readme-error-policy].
 
 Two configurations still put exception text on the wire, both deliberate: the explicit opt-out (`error_policy={"enabled": False}`), which is for consumers who own their own masking (Strawberry's `MaskErrors` extension or a `Schema.process_errors` override), and a plain `strawberry.Schema`, which never had the policy — a query-only schema built without `DjangoSchema` must bring its own masking.
+
+### The `Django>=5.2.16` floor is a compatibility bound, not a secure-version recommendation
+
+The Django floor in `pyproject.toml` is an API-compatibility statement frozen at release time — the oldest Django this package is written against — and never advice about which Django is safe to run. Deploy the **newest security patch in your chosen supported Django series** (`5.2.x` or `6.0.x`); that version moves past any floor this package can encode. The floor was deliberately set at a patched release (`5.2.16`, carrying the CVE-2026-48588 fix) so no supported configuration starts out behind a published advisory, but the next Django security release makes "the floor" and "the secure version" diverge again. The project's exact-floor CI cell is labelled `[compatibility floor]` for exactly this reason and is never a deployment target. Longer form: [the user guide's "Production security profile" section][docs-readme-production-profile].
 
 ### Production security profile
 

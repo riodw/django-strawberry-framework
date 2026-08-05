@@ -64,25 +64,31 @@ jobs:
         # fast. Push/PR runs only the minimum-support combo and the latest combo,
         # single-DB only (covers both ends without doubling CI wall-clock).
         #
-        # `compatibility_only: "1"` marks the exact-Django-5.2.0 nodes. They prove
-        # the ADVERTISED API FLOOR still imports and behaves -- a compatibility
-        # contract. They are deliberately NOT a secure-deployment statement:
-        # 5.2.0 predates the 5.2.15 / 5.2.16 security releases, so this cell must
+        # `compatibility_only: "1"` marks the exact-Django-5.2.16 nodes. They
+        # prove the ADVERTISED API FLOOR still imports and behaves -- a
+        # compatibility contract. 5.2.16 is itself a patched release -- it
+        # carries the security fixes that the superseded 5.2.0 floor predated --
+        # so this cell installs nothing under a published advisory today. That
+        # does NOT make the cell a secure-deployment statement: a floor is a
+        # point-in-time API claim, and the next Django security release makes it
+        # older than the newest patch again. So the label stays -- this cell must
         # never be cited as a supported deployment target, copied into a
-        # deployment example, or used to argue that `django>=5.2` is a safe pin.
-        # Compatibility support and secure-deployment support are different
-        # contracts (spec-049 Decision 2). The dependency audit scans the
-        # `uv.lock` resolution, never this pinned-floor environment, so the cell
-        # cannot turn the audit red either (spec-049 Decision 5).
+        # deployment example, or used to argue that pinning the floor exactly is
+        # a safe deployment choice. Compatibility support and secure-deployment
+        # support are different contracts (spec-049 Decision 2). The dependency
+        # audit scans the `uv.lock` resolution, never this pinned-floor
+        # environment, so the cell cannot turn the audit red either
+        # (spec-049 Decision 5).
         #
-        # The minimum-support nodes (Django 5.2.0 / Python 3.10) also force-install
-        # exactly strawberry-graphql==0.316.0 so the advertised per-operation
-        # extension-isolation floor (spec-044 Decision 6) is durably exercised on
-        # every push/PR, coverage-free (the latest node keeps the coverage gate).
+        # The minimum-support nodes (Django 5.2.16 / Python 3.10) also
+        # force-install exactly strawberry-graphql==0.316.0 so the advertised
+        # per-operation extension-isolation floor (spec-044 Decision 6) is
+        # durably exercised on every push/PR, coverage-free (the latest node
+        # keeps the coverage gate).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
-            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0", "compatibility_only": "1"},
             {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
@@ -98,7 +104,7 @@ jobs:
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"}
           ]') }}
 

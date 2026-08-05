@@ -1,5 +1,50 @@
 # Spec: Dependency and CI hardening — refresh the locks, audit the resolution on a clock, run CI at least privilege
 
+> **AMENDED 2026-08-05 by maintainer decision — the declared Django floor moves to
+> `Django>=5.2.16`.** This card argued against exactly that move and was overruled after the
+> argument was heard. The reversal is recorded here rather than edited into the prose below,
+> because a decision that was made and then reversed is two facts, not one.
+>
+> What the amendment changes:
+>
+> 1. **[Decision 1](#decision-1--the-lock-moves-the-declared-floors-do-not) — the
+>    floor-raise refusal is superseded.** `pyproject.toml` now declares `Django>=5.2.16`
+>    (`5.2.16` being the July 2026 security release that fixed CVE-2026-48588; `5.2.15` /
+>    `6.0.6` fixed five more). Django `5.2.0`–`5.2.15` are **no longer supported at all** —
+>    not merely not-recommended for deployment. Decision 1's *distinction* survives intact
+>    and is still the right frame: a declared floor answers an API question and a lock entry
+>    answers a today question, and the two must not be conflated. The maintainer simply
+>    chose to move the compatibility line as well, accepting the cost Decision 1 names
+>    (consumers pinned to an older supported patch must move) in exchange for refusing to
+>    advertise API compatibility with a range nobody should install. What remains a category
+>    error is the *reasoning* Decision 1 rejects — deriving a floor from a security
+>    preference alone; the floor here is a support statement whose boundary happens to
+>    coincide with a patched release.
+> 2. **[Decision 2](#decision-2--the-5-2-0-cell-is-a-compatibility-contract-not-a-deployment-target)
+>    — the cell's contract stands; only its installed version moves.** The exact-floor CI
+>    cell now installs `Django==5.2.16` and **keeps** its `compatibility_only` key, its
+>    `[compatibility floor]` job-name suffix, and its contract comment. Decision 2's
+>    rejected alternative "moving the floor to `5.2.16` so the cell tests a patched
+>    version … destroys the cell's purpose" was reasoning about a cell that tracked an
+>    *unmoved* floor; with the floor itself at `5.2.16` the cell still tests the floor, which
+>    is its whole purpose. The label is not decoration and does not retire: the floor is a
+>    point-in-time API statement, so the first `5.2.17` security release makes the floor
+>    older than the newest patch again. The "install the newest patch in your series" rule
+>    therefore survives the raise unchanged, and so does the cell's prohibition on being
+>    cited as a deployment target.
+> 3. **[Goals](#goals), [Non-goals](#non-goals),
+>    [Implementation plan](#implementation-plan) row 2, and the
+>    [Definition of done](#definition-of-done) floor row** are annotated in place. Their
+>    original text records what this card built and is left standing; each carries an
+>    **Amendment (2026-08-05)** note stating the post-amendment truth.
+>
+> What the amendment does **not** change: every other decision, the lock refresh, the CI
+> least-privilege posture, the audit and Dependabot automation, the governance test, and the
+> secure-version statement — which is *more* necessary after the raise, not less, since a
+> raised floor is still a floor. Checkbox state throughout this spec is untouched; the
+> `Status:` line remains the completion source of truth per this repo's shipped-card closeout
+> convention.
+
 Planned for `0.0.18` (card [`TODO-ALPHA-049-0.0.18`][kanban]). This is **card 4 of 4**,
 the last card of the four-card security-remediation program derived from the hardening
 audit in [`docs/feedback2.md`][feedback2]; it closes that audit's **S6** (the locked Django
@@ -84,6 +129,8 @@ Each top-level item maps to one commit / PR.
       `timeout-minutes` on every job. The Django 5.2.0 cell is relabelled
       compatibility-only, not removed
       ([Decision 2](#decision-2--the-5-2-0-cell-is-a-compatibility-contract-not-a-deployment-target)).
+      **Amendment (2026-08-05):** that cell now installs `Django==5.2.16` — the raised
+      floor — and keeps the compatibility-only labelling verbatim.
 - [ ] **Slice 3 — audit and update automation**
       `.github/workflows/dependency-audit.yml` (new): `osv-scanner` against `uv.lock` on
       pull requests, on a daily schedule, and on dispatch. `.github/dependabot.yml` (new):
@@ -166,7 +213,9 @@ distinct problems, none of which has bitten yet:
   reviewed action code and container images, and bounds its own wall-clock time.
 - The distinction between *compatibility support* and *secure-deployment support* is stated
   where it can be acted on, and the `django>=5.2` floor stops reading as a security
-  recommendation.
+  recommendation. **Amendment (2026-08-05):** the floor is now `django>=5.2.16` and the goal
+  is unchanged in substance — a floor at a patched release still is not a secure-version
+  recommendation, because the next Django security release moves past it.
 - The posture is asserted by a test, so it degrades loudly rather than silently.
 
 ## Non-goals
@@ -174,8 +223,12 @@ distinct problems, none of which has bitten yet:
 - No change to any package source file, the generated SDL, or any settings key.
 - No change to the declared dependency floors in `pyproject.toml`
   ([Decision 1](#decision-1--the-lock-moves-the-declared-floors-do-not)).
+  **Amendment (2026-08-05): superseded for Django.** The declared Django floor is now
+  `Django>=5.2.16`; the other three floors are still untouched.
 - No removal or weakening of the exact-Django-5.2.0 compatibility matrix cell
   ([Decision 2](#decision-2--the-5-2-0-cell-is-a-compatibility-contract-not-a-deployment-target)).
+  **Amendment (2026-08-05):** the cell is neither removed nor weakened — it moves with the
+  floor to exact `Django==5.2.16` and keeps its compatibility-only contract.
 - No new coverage surface: `fail_under = 100` measures `django_strawberry_framework` only,
   and the governance test reads YAML.
 - No SARIF upload to the code-scanning API, and therefore no `security-events: write`
@@ -215,9 +268,27 @@ places that sentence in `README.md` and `docs/README.md`, next to the supported-
 table where a reader forms the belief the sentence has to correct. See
 [Decision 2](#decision-2--the-5-2-0-cell-is-a-compatibility-contract-not-a-deployment-target).
 
+**Amendment (2026-08-05):** substitute `django>=5.2.16` for `django>=5.2` throughout the
+paragraph above and every word of it still holds. A floor sitting on a patched release is
+still a compatibility statement frozen at release time, and a `5.2.17` will move the newest
+patch past it. The statement lands in the user guide's
+[Production security profile][docs-readme-production-profile] and, condensed, in
+[`SECURITY.md`][security]'s deployment-hardening section.
+
 ## Architectural decisions
 
 ### Decision 1 — The lock moves; the declared floors do not
+
+> **Amendment (2026-08-05) — the Django half of this decision is superseded by maintainer
+> decision.** `pyproject.toml` declares `Django>=5.2.16`; Django `5.2.0`–`5.2.15` are
+> unsupported, not merely undeployable. The distinction this decision draws between a
+> compatibility floor and a lock entry remains correct and remains the reason the two files
+> are edited for different reasons — the maintainer moved the compatibility line too, on the
+> ground that advertising API compatibility with a range the project will not support is its
+> own kind of false statement. The paragraphs below are the argument as it stood at build
+> time and are left standing so the reversal is legible. The `cryptography` / `pillow` and
+> lock-refresh halves of this decision are unaffected, as are the `django-filter`,
+> `strawberry-graphql`, and `wrapt` floors.
 
 `uv.lock` is refreshed to Django `5.2.16` / `6.0.7`, `cryptography` `50.0.0`, and `pillow`
 `12.3.0`. `pyproject.toml`'s `[project].dependencies` are left exactly as they are.
@@ -257,6 +328,18 @@ un-co-installable, the standard library anti-pattern. Adding an audit ignore-lis
 two non-Django findings — suppression, not remediation.
 
 ### Decision 2 — The 5.2.0 cell is a compatibility contract, not a deployment target
+
+> **Amendment (2026-08-05) — the cell's contract survives; its version does not.** With the
+> floor raised to `5.2.16` the exact-floor cell installs `Django==5.2.16` and keeps every
+> label this decision gave it: the `compatibility_only` matrix key, the
+> `[compatibility floor]` job-name suffix, the contract comment, and its exclusion from the
+> audit's input. It still tests *the floor* — which is what this decision protects — because
+> the floor is what moved. The labelling is not a leftover: a floor is a point-in-time API
+> statement, so the next `5.2.x` security release again makes the floor older than the newest
+> patch, and the "run the newest patch in your series" rule this decision establishes holds
+> unchanged. Only the third rejected alternative below ("moving the floor to `5.2.16` so the
+> cell tests a patched version") is superseded, and only as reasoning about a *stationary*
+> floor. Read `5.2.0` below as "the exact floor at build time".
 
 The exact-`Django 5.2.0` matrix cell stays, unchanged in what it installs. It gains a
 `compatibility_only: "1"` matrix key, which renders a `[compatibility floor]` suffix into
@@ -543,7 +626,7 @@ own `version` entry in `uv.lock` through an editable rebuild.
 | Slice | Files | Delta |
 |---|---|---|
 | 1 | `uv.lock` | Django `5.2.14` → `5.2.16` (`python_full_version < '3.12'`) and `6.0.5` → `6.0.7` (`>= '3.12'`); `cryptography` `49.0.0` → `50.0.0`; `pillow` `12.2.0` → `12.3.0` (and its `pyopenssl` transitive). `pyproject.toml` floors untouched. |
-| 2 | `.github/workflows/django.yml` | Top-level `permissions: contents: read`; the `test` job's `contents: write` deleted; `timeout-minutes` 10 / 45; both checkouts SHA-pinned with `persist-credentials: false`; `compatibility_only` on the three `5.2.0` matrix rows plus the job-name suffix and the contract comment; the `5.2.14` → `5.2.16` comment correction. |
+| 2 | `.github/workflows/django.yml` | Top-level `permissions: contents: read`; the `test` job's `contents: write` deleted; `timeout-minutes` 10 / 45; both checkouts SHA-pinned with `persist-credentials: false`; `compatibility_only` on the three `5.2.0` matrix rows plus the job-name suffix and the contract comment; the `5.2.14` → `5.2.16` comment correction. (**Amended 2026-08-05:** those three rows now force-install `Django==5.2.16`, the raised floor, and keep the labelling — see the amendment row below.) |
 | 2 | `.github/workflows/postgres.yml` | Top-level `permissions: contents: read`; `timeout-minutes: 45`; checkout SHA-pinned with `persist-credentials: false`; `postgres:16` → `postgres@sha256:…` with the refresh-procedure comment. |
 | 2 | `.github/workflows/kanban-pages.yml` | `checkout`, `configure-pages`, `upload-pages-artifact`, `deploy-pages` SHA-pinned with version comments; `persist-credentials: false` on the checkout. Permissions and timeouts already correct. |
 | 3 | `.github/workflows/dependency-audit.yml` (new) | `pull_request` (paths-filtered) + daily `schedule` + `workflow_dispatch`; `permissions: contents: read`; `concurrency` group; `timeout-minutes: 15`; SHA-pinned checkout and `osv-scanner-action` with `--lockfile=uv.lock`. |
@@ -552,6 +635,7 @@ own `version` entry in `uv.lock` through an editable rebuild.
 | 4 | `pyproject.toml` | The `pyyaml>=6.0.2` dev-group row and its rationale comment. |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`, `KANBAN.md` (DB) | Fold-in and the secure-version note. |
 | 5 | `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `uv.lock` | `0.0.18`. |
+| — | **Amendment (2026-08-05)** — `pyproject.toml`, `uv.lock`, `.github/workflows/django.yml`, `.github/workflows/postgres.yml`, `tests/test_ci_governance.py` | Post-card, by maintainer decision: the declared Django floor becomes `Django>=5.2.16`; the exact-floor matrix cell force-installs `Django==5.2.16` and keeps its `compatibility_only` key, `[compatibility floor]` job-name suffix, and contract comment; the governance test tracks the raised floor. Not part of what card 049 built — recorded here so the row-2 delta above is not read as live. |
 
 ## Helper-reuse obligations (DRY)
 
@@ -647,6 +731,11 @@ Slice 5, all of it fold-in rather than new surface:
   the newest patch in their supported Django series. The `0.0.18` release line.
 - `docs/README.md` — the same secure-version note beside the version table, and the
   `0.0.18` "Shipped today" move.
+- **Amendment (2026-08-05):** the secure-version statement is written against the raised
+  `Django>=5.2.16` floor and lands in `docs/README.md`'s
+  [Production security profile][docs-readme-production-profile] — the section a deployment
+  review actually walks — with a condensed mirror in [`SECURITY.md`][security] beside its
+  supported-versions table. `README.md` carries no dependency-floor prose to attach it to.
 - `docs/GLOSSARY.md` (DB-rendered) — the package-version line to `0.0.18`, and the
   secure-version statement folded into the [Hard dependency][glossary-hard-dependency]
   entry, whose subject is exactly the unconditionally-installed packages this concerns. No
@@ -721,12 +810,17 @@ never by hand.
   not carded.
 - Raising the declared dependency floors — deliberately refused by
   [Decision 1](#decision-1--the-lock-moves-the-declared-floors-do-not), not deferred.
+  **Amendment (2026-08-05):** refused here, then done anyway by maintainer decision for
+  Django alone (`Django>=5.2.16`). Recorded as a reversal of this card's refusal, not as a
+  scope item it quietly carried.
 
 ## Definition of done
 
 - [ ] `uv.lock` resolves Django `>= 5.2.16` under `python_full_version < '3.12'` and
       `>= 6.0.7` under `>= '3.12'`; `uv lock --check` passes; `pyproject.toml`'s
-      `[project].dependencies` floors are byte-identical to their pre-card state.
+      `[project].dependencies` floors are byte-identical to their pre-card state
+      (**amended 2026-08-05**: the Django floor has since moved to `>=5.2.16`; the byte-identity
+      claim describes this card's own delivery, not the current file).
 - [ ] `osv-scanner --lockfile=uv.lock` exits 0 against the refreshed lock, with no
       ignore-list and no suppression file anywhere in the repository.
 - [ ] Every workflow declares `permissions: contents: read` at the top level; no job grants
@@ -740,6 +834,11 @@ never by hand.
 - [ ] The exact-Django-5.2.0 matrix cell still runs, still force-installs
       `strawberry-graphql==0.316.0`, and is labelled compatibility-only in its job name, its
       matrix comment, and `README.md`; it is not an input to the audit.
+- [ ] **Amendment (2026-08-05)** — restated for the raised floor: `pyproject.toml` declares
+      `Django>=5.2.16`; the exact-floor matrix cell force-installs `Django==5.2.16` (not
+      `5.2.0`) alongside `strawberry-graphql==0.316.0`, keeps its `[compatibility floor]`
+      job-name label and contract comment, and is still not an input to the audit; no
+      supported configuration resolves Django below `5.2.16`.
 - [ ] `.github/workflows/dependency-audit.yml` runs on `pull_request`, on a `schedule`, and
       on `workflow_dispatch`, at `contents: read`, with no SARIF upload and no
       `security-events` scope.
@@ -759,8 +858,10 @@ never by hand.
 <!-- Root -->
 [agents]: ../AGENTS.md
 [kanban]: ../KANBAN.md
+[security]: ../SECURITY.md
 
 <!-- docs/ -->
+[docs-readme-production-profile]: README.md#production-security-profile
 [feedback2]: feedback2.md
 [glossary]: GLOSSARY.md
 [glossary-hard-dependency]: GLOSSARY.md#hard-dependency

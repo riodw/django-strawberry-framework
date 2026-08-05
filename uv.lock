@@ -573,7 +573,7 @@ pg = [
 
 [package.metadata]
 requires-dist = [
-    { name = "django", specifier = ">=5.2" },
+    { name = "django", specifier = ">=5.2.16" },
     { name = "django-filter", specifier = ">=25.2" },
     { name = "strawberry-graphql", specifier = ">=0.316.0" },
     { name = "wrapt", specifier = ">=2.0.1" },

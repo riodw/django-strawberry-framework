@@ -54,9 +54,11 @@ jobs:
       # `uv.lock` covers the production resolution AND every optional extra and
       # dependency group in one file, which satisfies the card's "production
       # resolution + optional extras" requirement with a single scan target. The
-      # exact-Django-5.2.0 compatibility matrix cell in django.yml is NOT part of
-      # this resolution and is audited nowhere -- deliberately: it is an API
-      # floor-compatibility probe, never a deployment target
+      # exact-Django-5.2.16 compatibility matrix cell in django.yml is NOT part
+      # of this resolution and is audited nowhere -- deliberately: it is an API
+      # floor-compatibility probe, never a deployment target, and it ages by
+      # design (the floor is fixed at a point in time while this audit gates the
+      # production resolution, which always moves forward)
       # (spec-049 Decision 2).
       #
       # The action is pinned to a full commit SHA. Upstream's own README warns

@@ -692,3 +692,511 @@ the courier failure the artifact contract exists to prevent. Not retro-fixed: Wo
 lines now would be writing `Status:`, and the passes that owed them are closed and committed. The
 round is instead closed forward, through the residual review and Worker 1's final verification,
 which sets `final-accepted` on its own artifact legitimately.
+
+# Closeout cycle (card 046) — appended 2026-08-03
+
+The build above is closed: every slice, both review rounds, the integration pass, and the
+final gate are `- [x]`, and the maintainer committed the work. What follows is a **separate
+cycle** driven off the same card, in the shape `BUILD.md` `## Review rounds` defines (input =
+already-built, already-committed work). It is appended to this plan rather than written to a
+new file because `worker-0.md` `## Stop conditions` makes "an existing build plan would be
+overwritten" a stop condition, and one plan per card keeps the card's whole record in one
+place. Nothing above this heading is edited by this cycle.
+
+## Why this cycle exists
+
+Four maintainer reviews reached this card **after** the final gate. Three of them were
+absorbed into the spec as they landed; the fourth was not, and the rationale companion has
+never been reconciled against any of them:
+
+1. `47ede175` — exact-type checks on the revalidation window and the body cap. **Spec
+   updated in the same commit** (102 lines).
+2. `0fa6501d` / `05a08e31` / `43f1f9f7` — the scope-owned actor lease. **Spec carries it**
+   (`lease` appears 40 times).
+3. `1bb67b43` + `89cfa974` — the owned operation end and the close state machine. **Spec
+   updated by `89cfa974`.**
+4. `2701f41a` + `ba66ab49` — the current `HEAD` pair. **Nothing documentary followed them.**
+
+## Worker-0-verified facts, passed into dispatch so no worker re-derives them
+
+Each was read at `HEAD` before this section was written (`BUILD.md` `### Worker 0 verifies
+every finding against source before dispatching`). Counts below are occurrence counts from
+`grep -c`, re-derivable by the same command.
+
+**V1 — a new public module exists that no document mentions.** `2701f41a` added
+`django_strawberry_framework/middleware/request_body.py`
+(`::GraphQLRequestBodyBoundaryMiddleware`, 264 lines, `__all__`-exported, a consumer
+`MIDDLEWARE` entry). `grep -c GraphQLRequestBodyBoundaryMiddleware` returns **0** in each of:
+the spec, the rationale, `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`,
+`KANBAN.md`, and the terms CSV.
+
+**V2 — `docs/README.md` states the superseded CSRF arrangement as the arrangement.** Its
+`### Transport deployment guidance` CSRF paragraph (`#"an ordering mechanism, not a CSRF
+bypass"`) and the multipart-ordering paragraph (`#"That ordering is a property of the
+csrf_exempt / csrf_protect arrangement"`) describe the view-local exemption plus re-entry as
+the mechanism. At `HEAD` that is the **fallback** path: with the new middleware installed the
+callback's exemption evaluates false and the project's *configured* CSRF class runs
+(`middleware/request_body.py::_CsrfOrderingExemption`). The spec has the same problem in the
+other direction: `csrf_exempt` occurs **13** times, all describing the pre-`2701f41a` shape.
+
+**V3 — a wire refusal shipped that no document states.** `views.py::_RequestBodyBoundaryMixin
+._enforce_body_charset_declaration` refuses a non-multipart body whose content type declares a
+charset that does not canonicalize to UTF-8 (`utf-8-sig` and unknown codec names included),
+with the same controlled `400`. `docs/README.md`'s `#"One UTF-8 wire"` paragraph names only
+UTF-16/32 and the BOM.
+
+**V4 — the spec asserts a ruling the code has since retracted.** Spec
+`#"A CANCELLED close attempt leaves the connection in \`CLOSING\`, permanently, and that is
+the"` still states that ruling. `ba66ab49` made final teardown the attempt's terminal owner:
+`consumers.py::_ConnectionRevocation.settle` now cancels and awaits the attempt and
+re-raises, `::_attempt_close` records `ABANDONED` on cancellation, and `disconnect` reaches
+settlement through `finally`. Three further spec sites read on the retracted ruling: the
+`ABANDONED` state definition (`#"terminal: the attempt bound is spent"`), a test-plan line
+(`#"in \`CLOSING\`, no second close is attempted"`), and a DoD line
+(`#"awaited through \`asyncio.shield\` and settled by"`).
+
+**V5 — `docs/TREE.md` is stale and is script-rendered.** The `middleware/` subtree lists only
+`debug_toolbar.py`. `scripts/build_tree_md.py` renders from module docstrings plus the kanban
+DB, so the fix is a regenerate, never a hand-edit (`START.md` `## Rendered docs`). The new
+module's docstring exists and carries no staging language, and
+`examples/fakeshop/apps/kanban/constants.py` already gained the path in `2701f41a`, so the
+tracked-path allowlist is already synced.
+
+**V6 — six glossary terms this card introduced are orphaned from the card.**
+`docs/GLOSSARY.md` carries `## \`DjangoGraphQLView\``, `## Request-body cap`, `## UTF-8 wire
+contract`, `## WebSocket consumer-injection seam`, `## WebSocket Host boundary`, and
+`## WebSocket revalidation window`, each `**Status:** shipped.`, and
+`grep -c "GLOSSARY.md#<anchor>)" KANBAN.md` returns **0** for all six. Cause:
+`docs/spec-046-transport_security-0_0_15-terms.csv` holds only the 37 pre-existing terms the
+spec *references* and no row for any term the card *introduced*, so `import_spec_terms`
+creates no `CardGlossaryTerm` for them. Both archived sibling CSVs do carry their own
+introduced terms (`spec-044`'s "the subject entry" row; `spec-045`'s five "Authored with
+spec-045." rows), so this is an omission rather than a convention.
+
+**V7 — the card body names a maintainer review file in the DB.** The rendered card 046
+`#### Planning note` reads `Security-audit remediation program, card 1 of 4
+(docs/feedback2.md).` `AGENTS.md` #4 forbids naming those files in code, commits, **or the
+DB**, and this text lives in a `CardItem.text` row.
+
+**V8 — the four `docs/feedback.md` findings are all remediated at `HEAD`.** P1-charset →
+`::_enforce_body_charset_declaration`; P1-CSRF-class → the new middleware plus the
+withdrawable `_CSRF_ORDERING_EXEMPTION`; P2-position-arithmetic →
+`_request_body.py::_measured_remaining` `#"if type(end) is not int or type(position) is not
+int"`; P2-orphaned-close → `settle` / `_attempt_close` / `disconnect` as in V4. Tests landed
+with them (`tests/test_views.py` +599, `tests/test_routers.py` +207). **Not yet audited by
+anyone**: the fixes were committed outside the worker cycle, so no Worker 3 pass has seen the
+diff. R1 exists for that reason.
+
+**V9 — no staged anchors to discharge.**
+`grep -rEn 'TODO\(spec-046|TODO-(ALPHA|BETA|STABLE)-046'` over the tree, excluding board files
+and per-cycle artifacts, matches only the spec's own prose line describing the convention. The
+`TODO-BETA-046-0.1.1` hits are pre-renumber references to the FieldSet card and belong to
+`spec-053`, which already owns retargeting them (`spec-053` #"retarget every pre-renumber");
+`worker-0.md` forbids partial-fixing a cross-surface stale reference, so they stay untouched.
+
+## Pre-flight outcome (7 steps, `worker-0.md` `## Pre-flight procedure`)
+
+Passed on 2026-08-03. Baseline: **clean** (`git status --short` empty). Deviations recorded:
+
+- **Step 3 — old artifacts deliberately NOT deleted.** Every `build-*.md` and `bld-*.md` on
+  disk is a tracked, committed record of already-shipped work, and this cycle's input *is*
+  that work. The review-round carve-out governs (`BUILD.md` `### Cohorting, naming, and
+  closure`, "Pre-flight for a round"). Verified instead that all four `docs/builder/bld-046-*`
+  paths this cycle creates are absent.
+- **Step 7 — the rationale exists but has never been reconciled.** It was authored during the
+  build and swept into `97dc05d7`; it predates all four post-gate reviews. So the extraction
+  gate is satisfied and R2 is a *reconciliation* round rather than a first extraction.
+- Steps 1, 2, 4, 5, 6 clean: `review_inspect.py` smoke-ran against
+  `django_strawberry_framework/views.py`; `.gitignore` lists all three scratch paths;
+  `docs/shadow/`, `docs/builder/temp-tests/`, `docs/builder/worker-memory/` cleared and the
+  four memory files seeded empty; `check_spec_glossary.py --spec
+  docs/spec-046-transport_security-0_0_15.md` exits 0 (`OK: 37 terms`).
+
+## Cycle-wide declarations
+
+- **Ownership partition: none; sequential rounds.** Each round owns every file it writes; no
+  two rounds run concurrently. Per-round file lists are below.
+- **Hot-path declaration: none.** No round writes production code unless R1 finds a defect;
+  if it does, the fixing pass inherits the declaration R1 records.
+- **Floor-verification scope: none for R2/R3/final.** **R1 owns one floor run**: the
+  remediation it audits changes request-lifecycle and ASGI-teardown plumbing, which is a
+  Django/Channels integration seam, so `tests/test_views.py` and `tests/test_routers.py`
+  re-run in an isolated floor venv. Floor facts are `BUILD.md` `## Floor verification`'s, read
+  from there at dispatch and never restated from memory.
+- **Version quintet: still not ours.** `pyproject.toml` and `__init__.py` both read `0.0.14`;
+  `0.0.15` is uncut and its quintet belongs to the last card of that line to land (spec
+  Decision 15). No round in this cycle touches it, and no round edits `CHANGELOG.md`.
+
+## Do-not-touch (every round)
+
+- `docs/feedback.md`, `docs/feedback2.md` — the maintainer's review artifacts. Never edited,
+  never annotated, never named in code, commit messages, or the DB (`AGENTS.md` #4,
+  `BUILD.md` `### The review document is evidence, not contract`). Removing the existing DB
+  mention (V7) is the one authorized action, and it removes rather than adds.
+- `CHANGELOG.md`, `pyproject.toml` `[project].version`,
+  `django_strawberry_framework/__init__.py` `__version__`, `tests/base/test_init.py`.
+- Every other cycle's artifacts: `docs/builder/build-044-*`, `build-045-*`, `bld-044-*`,
+  `bld-045-*`, and everything this plan's own `## Artifact list` above already names.
+- `docs/spec-050-*` … `docs/spec-054-*` and everything under `docs/SPECS/` except the three
+  paths R3 creates. In particular the `TODO-BETA-046-0.1.1` cluster stays as it is (V9).
+- The build plan section **above** this heading.
+
+## Concurrent-writable tracked binary / generated files
+
+`examples/fakeshop/db.sqlite3`, `KANBAN.md`, `KANBAN.html`, `docs/GLOSSARY.md`, `docs/TREE.md`.
+A dirty report on any of these is not proof this cycle caused it, and a same-size binary diff
+is not proof of a no-op. Diff semantic content (`iterdump()` for the DB, a fresh regenerate for
+a rendered doc) before treating churn as revertible, never blind-`git checkout` one, and verify
+DB-backed output by two-consecutive-regenerate byte-stability rather than a clean `git diff`.
+
+## Round shapes and per-round ownership
+
+- **R1 — remediation review (the audit `docs/feedback.md`'s remediation never got).** Input is
+  the diff of `2701f41a` + `ba66ab49` against the four findings. There is no builder pass to
+  precede it: the maintainer committed the remediation outside the cycle, which is why Worker
+  1's planning pass states that the round's "build" is those two commits and leaves the
+  `### Dispatched findings checklist` boxes for Worker 1's own final-verification audit to tick
+  (`ARTIFACT.md`: Worker 1 may "tick any landed box Worker 2 left open"). Worker 3 reviews the
+  diff for correctness, fail-open shapes, DRY, and whether the landed tests actually pin the
+  new boundaries; a defect routes to Worker 2 and back through Worker 3.
+  *Writes:* `docs/builder/bld-046-r1-remediation_review.md`,
+  `docs/builder/temp-tests/r1/**`, and — only if a defect is confirmed —
+  `django_strawberry_framework/views.py`, `django_strawberry_framework/consumers.py`,
+  `django_strawberry_framework/middleware/request_body.py`,
+  `django_strawberry_framework/_request_body.py`, `tests/test_views.py`,
+  `tests/test_routers.py`.
+- **R2 — rationale reconciliation + spec reconciliation.** The rationale gains keyed entries
+  for every post-gate change it lacks and loses every claim the code has retracted; the spec is
+  rewritten to state the **current** contract directly, with no chronology and no amendment
+  block (`BUILD.md` `## Spec rationale extraction`). Both files are custodian-only, so the
+  authoring pass is Worker 1's rather than Worker 2's — the 044 precedent
+  (`bld-044-r1-rationale_move.md` `## Build report (Worker 1, pass 2 — custodian apply)`).
+  Isolation is untouched: Worker 3 still audits, as a separate spawn.
+  *Writes:* `docs/spec-046-transport_security-0_0_15.md`,
+  `docs/spec-046-transport_security-0_0_15-rationale.md`,
+  `docs/builder/bld-046-r2-rationale_reconciliation.md`.
+- **R3 — documentation completion, then the spec archive.** One round, two ordered phases,
+  merged deliberately: phase A rewrites the standing docs and phase B moves the spec, and split
+  across two rounds phase A would author `docs/spec-046-…` paths that phase B immediately
+  rewrites. Phase A: `docs/README.md` (V2, V3), the new middleware's glossary entry and the six
+  orphaned terms plus the CSV rows that link them (V1, V6), the card body's review-file mention
+  (V7), a `docs/TREE.md` regenerate (V5), and a re-check of the spec's own `## Doc updates` and
+  `## Definition of done` against `HEAD`. Phase B: the three files move to `docs/SPECS/` /
+  `docs/SPECS/appx/`, all three cross-reference directions are swept, and `SpecDoc.path` is
+  repointed in the DB with the exports regenerated (`docs/SPECS/NEXT.md` Step 8, archive-only
+  mode — there is no new active spec, so its actions 4 and 6 do not apply). **Worker 1 performs
+  the mechanical move at final verification** and Worker 2 never moves or edits the spec
+  (`BUILD.md` `### Spec stays at its working location`); Worker 2 owns the inbound rewrites,
+  which therefore point at the post-move paths before the move lands.
+  *Writes:* `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`,
+  `examples/fakeshop/db.sqlite3`, `docs/spec-046-transport_security-0_0_15-terms.csv`, any doc
+  carrying a `spec-046` link, the three moved paths under `docs/SPECS/` and
+  `docs/SPECS/appx/`, and `docs/builder/bld-046-r3-doc_completion_and_archive.md`. The spec and
+  its rationale stay R2's, so R3 records any needed spec text under
+  `### Notes for Worker 1 (spec reconciliation)`.
+- **Final gate** — `BUILD.md` `## Final test-run gate` in full, including the
+  `### Deferred work catalog`.
+  *Writes:* `docs/builder/bld-046-final.md`.
+
+Archival is licensed by the maintainer's explicit instruction for this cycle
+(`BUILD.md` `### Spec stays at its working location`).
+
+## Maintainer decision M-A (escalated and decided before any builder was dispatched)
+
+R1's planning pass routed one **contract-level** finding to Worker 0 (its `### Notes for Worker 1`
+item 5): `examples/fakeshop/config/settings.py` does not install
+`GraphQLRequestBodyBoundaryMiddleware`, so a shipped, `__all__`-exported consumer-facing module has
+**package-tier coverage only** and the live tier still exercises the view-local fallback. Escalated
+per `BUILD.md` `### Contract-level findings are escalated as maintainer decisions before dispatch`;
+a research pass was run first over `AGENTS.md`, `START.md`, `GOAL.md`, `docs/TREE.md` and every
+`README.md` in the tree.
+
+**Decision: install it in fakeshop, immediately before `CsrfViewMiddleware`, and keep the fallback
+arrangement covered live under an `override_settings(MIDDLEWARE=...)` suite.** `docs/README.md`
+names the chain-supplied arrangement **recommended** and the view-local re-entry the automatic
+fallback a deployment gets without editing `MIDDLEWARE`. Enacted in **R3**, not as a standalone
+patch, so it cannot race R3's own `docs/README.md` / `docs/TREE.md` writes.
+
+Load-bearing evidence, so the decision is not re-fought:
+
+- The repo already resolved "is a `MIDDLEWARE`-gated line reachable from a real query?" the same
+  way for spec-042: `DebugToolbarMiddleware` is wired into fakeshop's shipped `MIDDLEWARE`, and
+  `examples/fakeshop/test_query/README.md` frames its live suite as possible *"now that fakeshop's
+  shipped settings wire the toolbar."*
+- `test_query/test_transport_api.py` ranks the two evidence tiers itself: *"A probe mount would
+  prove the ordering for a wrapper written in this file; the shipped mount proves it for the
+  deployment shape the README documents."* So the example's chain and the README's recommendation
+  must agree.
+- `docs/README.md`'s spec-046 thesis — *"every GraphQL HTTP request traverses your project's real
+  `MIDDLEWARE`"* — is literally false under the fallback for the CSRF entry, which is what
+  `views.py::_run_after_csrf_check` already calls *"the fallback arrangement."*
+
+Rejected, each with the reason it lost:
+
+- **Leave fakeshop on the fallback and cover the middleware live via `override_settings` only.**
+  Cheapest test churn, but it leaves the README's real-`MIDDLEWARE` thesis half-corrected, presents
+  two arrangements unranked to the exact consumer the middleware exists for (a project with a
+  `CsrfViewMiddleware` subclass, which silently loses its policy under the fallback), and documents
+  an install no shipped-chain row ever demonstrates.
+- **Accept package-tier coverage as the middleware's only home.** Fails `AGENTS.md` #10 under the
+  spec-042 precedent and leaves `docs/README.md` stating a superseded arrangement as the
+  arrangement.
+- **Remove the view-local exemption and stock-class re-entry outright** (the review document's own
+  suggestion). Rejected because it would change behaviour for every deployment that has not edited
+  `MIDDLEWARE`; the withdrawable exemption is what keeps that arrangement unchanged.
+
+Accepted cost, stated rather than discovered later: the fallback — what a consumer who follows only
+the URLconf snippet actually runs — drops from shipped-mount evidence to override-chain evidence,
+and the example stops demonstrating the zero-config shape. The package-tier rows for the fallback
+are **not** stand-ins to retire under the live-first rule: they need a rejecting
+`CsrfViewMiddleware` subclass and misordered chains that fakeshop's single settings module cannot
+express.
+
+**R3's write set therefore grows by two files**, and R3's plan must mirror this decision and its
+rejected alternatives into its own artifact:
+
+- `examples/fakeshop/config/settings.py` — one `MIDDLEWARE` entry plus a spec-046 comment in the
+  existing debug-toolbar comment style (`config/test_settings.py` star-imports it, so the test tier
+  inherits it).
+- `examples/fakeshop/test_query/test_transport_api.py` — the re-pin. R1's planning pass measured
+  that exactly **one** row genuinely breaks
+  (`::test_the_async_view_also_refuses_before_djangos_parser_runs`, whose probe wrapper copies
+  `csrf_exempt` but not the boundary marker, so the parse would beat the boundary); it moves under a
+  fallback-override chain and becomes the async fallback proof. The CSRF-matrix and sync
+  multipart-ordering rows keep passing but their mechanism prose is now wrong and must be re-pinned,
+  one shipped-chain row must assert the project's own CSRF entry runs behind the boundary, and
+  `examples/fakeshop/test_query/README.md`'s transport paragraph follows. Every override row builds a
+  **fresh** `Client` — Django's `ClientHandler.__call__` builds the middleware chain lazily on first
+  request, so a client that has already made one keeps its cached chain.
+
+## Write-set correction W-1: R1 gains two paths (recorded before dispatch)
+
+R1's plan-revision pass decided the layering escalation as a **third private module**, and flagged
+that R1's ownership list does not cover two paths its fix needs. Corrected here rather than written
+silently (`BUILD.md` `### Parallel cohorts under a declared ownership partition`: a worker never
+writes outside its cohort's ownership, and the correction is Worker 0's to record):
+
+- `django_strawberry_framework/_boundary_ordering.py` — **new**. Owns `_BOUNDARY_MARKER`,
+  `_BOUNDARY_ENFORCED`, the ContextVar and `_CsrfOrderingExemption`, so `views.py` and
+  `middleware/request_body.py` both import it and neither imports the other. Private: no
+  `__init__.py` export, no change to the documented `MIDDLEWARE` string, attribute string values
+  carried verbatim. Not a consumer-visible change, hence decided by the architect rather than
+  escalated.
+- `examples/fakeshop/apps/kanban/constants.py` — the generated tracked-path allowlist.
+  `scripts/build_kanban_tracked_path_constants.py` renders it from `git ls-files`, which reads the
+  **index**, so a new file that is not staged is invisible to it. The builder must therefore run
+  after the one new path is staged explicitly (`git add <that one path>`, never `-A` —
+  `AGENTS.md` #34 / `START.md` `## Concurrent sessions`). Skipping it does not fail this cycle; it
+  fails the maintainer's *commit*, where the `kanban-tracked-path-constants` pre-commit hook
+  regenerates, stash-conflicts, and rolls the whole commit back. **Worker 0 authorizes staging
+  exactly that one path**, and nothing else, for this reason.
+
+R3 additionally inherits one measurement obligation from this correction: M-A's re-pin estimate must
+be **re-measured after** the High fix, not inherited. The single live row M-A expects to break
+breaks by exactly the mechanism the fix removes, so it may not need moving at all.
+
+## Worker-0 dispatch decision D-1: R1's failability proofs are Worker 2's to perform
+
+R1's plan assigned all ten proof entries to Worker 3. Worker 0 split them instead: **Worker 2
+performs and records the proofs, Worker 3 audits every record and independently re-runs a subset.**
+`BUILD.md` `### Who performs it` states that division is settled and that neither half is
+redundant, and one agent both performing and auditing its own proof is the collapse the separate
+Worker 2 / Worker 3 spawns exist to prevent. It also halves a pass that would otherwise carry ten
+mutate/run/count/revert/byte-compare loops on top of a whole-diff review — the overload
+`BUILD.md` `### Slice splitting` describes, which surfaces as thin proofs rather than as a refusal.
+The floor run stays with the pass R1's plan named.
+
+## Maintainer decision M-B: what recognition owes a forged boundary marker
+
+Escalated during R1 and **decided before any worker was dispatched at it**, recorded here rather
+than in the round artifact because Worker 0 does not write `bld-*.md`. Per `BUILD.md`
+`### Contract-level findings are escalated as maintainer decisions before dispatch`; a research
+pass over `AGENTS.md` and every document it names ran first, as it did for M-A.
+
+**The condition, verified by Worker 0 against source and independently re-measured by two review
+passes.** `middleware/request_body.py::_package_view_instance` recognizes a package view's callback
+by the private marker `views.py::_RequestBodyBoundaryMixin.as_view` stamps, then builds the instance
+from the callback's `view_class` / `view_initkwargs` the way Django's own `as_view` does.
+Recognition ends at *an instance was produced*, not at *an instance carrying the boundary*, so a
+callback that forges the marker onto a real, buildable class that is not a package view (measured
+with `view_class = dict`, `view_initkwargs = {}`) reaches
+`view._enforce_request_boundary(request)` and raises `AttributeError` out of `process_view` — an
+unhandled `500` from a hook whose every other outcome is a controlled response. That
+controlled-response property is claimed in **five** docstring sites in that module. Nothing
+supported reaches the condition: the marker name is package-private, and Django's `View.as_view`
+validates `initkwargs` at `as_view` time, so a genuine mount cannot arrive here.
+
+**Why it is a contract choice and not a defect.** Both R1 review passes graded it Low on the same
+reasoning: closing it widens what the recognizer is allowed to know about the view's interface,
+which is a design decision, and the prior question — whether the package owes a controlled response
+to a callback forging its private marker at all — is one only the contract can answer. R1's
+remaining Low is path (b) of the same call, which is why R1 closes with it untouched.
+
+**The decision: recognition must reach the boundary itself, probed on the class before any
+construction.** `_package_view_instance` declines unless the callback's `view_class` carries the
+boundary method, tested by attribute on the class; only a class that passes is constructed. The
+attribute name becomes the third fact `_boundary_ordering.py` holds, which is that module's stated
+charter ("the marks and their meanings live here") — so the probe needs **no** import of `views.py`
+and `middleware/request_body.py`'s deliberate property of importing neither `views.py` nor anything
+that imports it survives untouched. There is no upstream symbol for "carries the request-body
+boundary" (`_enforce_request_boundary` is defined only in `views.py`), which is why the probe is for
+the private attribute *name* and why it costs no import. Every other callback is declined and keeps
+the view-local arrangement, exactly as an unbuildable one already does.
+
+**Why the class rather than the built instance.** Probing the instance would close the `500` but
+still run a foreign class's `__init__` first, and the suite already carries a row forbidding exactly
+that — `tests/test_views.py::test_a_callable_view_class_that_is_not_a_class_is_never_called`, whose
+contract is that recognition does not run code the middleware cannot vouch for. The class-level
+probe closes the unhandled `500` and the unvouched constructor call in one clause, and a genuine
+mount — a `_RequestBodyBoundaryMixin` subclass — passes it by construction.
+
+**The law it rests on**, in descending force: `BUILD.md` `### Fail-open shapes`, "guard the ANSWER,
+not one spelling of the incoherent input" — the answer `process_view` consumes is an object whose
+boundary it can run, and nothing probed that; spec Decision 7's own sentence that letting a foreign
+object's failure "fall through as an unrelated `500` is the wrong answer at the one seam this design
+deliberately centralizes"; and `middleware/debug_toolbar.py`, the standing precedent for recognizing
+a package view from a middleware, which probes the property it consumes and declines quietly when
+recognition fails. `_package_view_instance`'s own docstring argues for this and stops one step short
+— "recognition ends at the instance, because the instance is the answer", when the answer is the
+boundary on it.
+
+**Rejected alternatives, and the one-line reason each lost:**
+
+- **(a-instance) Probe the built instance instead of the class** — closes the `500` but leaves the
+  foreign constructor running, which is the one thing the recognizer already has a row saying it
+  must not do.
+- **(b) Declare the forged marker out of contract** — narrowing five docstring claims plus a
+  Decision 18 carve-out is strictly more text than the fix, which is the trade Decision 18's own
+  rationale already rejects by name ("narrowing would be choosing a documented gap over a fix that
+  costs less than the documentation would"), and it would stand as an exception to Decision 7's
+  no-unrelated-`500` doctrine. The genuine precedent for it — spec-045's threat-model carve-out and
+  part 1's unsupported-monkeypatching stance — was bought where the alternative was an unwinnable
+  expansion series; this fix is one clause and complete by construction, since the hook consumes
+  exactly one attribute.
+- **(c) Refuse it outright** — contradicts the accepted state-enumeration contract that every state
+  nobody has thought of answers "no" and falls back, contradicts the four tested decline routes,
+  and risks hard-failing benign unrecognized states such as a future Django bookkeeping change that
+  declining handles safely.
+
+**What stays true regardless.** Forging the package's private marker remains outside the threat
+model — the spec-045 stance that no walk inside the same interpreter is a trust boundary against a
+party already running code in the process. The probe is not added to defend against the forger; it
+is added so the hook's every outcome is a controlled response, which is the property the module
+promises in five places.
+
+**Enactment: a new round R1b, ahead of R2.** The change is production code and tests, so it is a
+builder's and cannot ride in R2, whose authoring pass is the custodian's and whose write set is the
+spec and rationale. R1 is `final-accepted` and closed, so it does not reopen. R1b lands the contract
+and R2 then states it — code first, because the spec states what exists. R2's Decision 18 rewrite
+absorbs the wording; R1's consolidated hand-off carries the item as **M-B** with its five
+over-claiming docstring and test-prose sites.
+
+## Round R1b — boundary-recognition contract enactment (added after R1 closed)
+
+Inserted between R1 and R2 to enact `## Maintainer decision M-B`, which was escalated during R1 and
+decided after R1 reached `final-accepted`. It is a separate round rather than a fifth R1 pass because
+R1 is closed, and rather than part of R2 because it is production code and tests: R2's authoring pass
+is the custodian's and its write set is the spec and the rationale. The full `Status:` chain applies
+— Worker 1 plans, Worker 2 builds, Worker 3 reviews, Worker 1 verifies.
+
+Scope is exactly M-B and nothing else. The recognition clause moves onto the `view_class` ahead of
+construction, the boundary attribute name joins the two marks in `_boundary_ordering.py`, the
+five over-claiming docstring and test-prose sites R1 inventoried become true rather than narrowed,
+and the fifth decline route joins the existing parametrization. Two proof consequences to expect and
+measure rather than assume: the construction `try` / `except TypeError` arm narrows to package
+classes only, so **manifest entries 12 and 15 need re-measuring**, and the new clause owes a row of
+its own. `BUILD.md`'s acceptance rule still forbids a 0-or-1-row entry.
+
+Floor-verification scope: `tests/test_views.py` — the change is on the request-lifecycle path, which
+is a Django integration seam. Hot-path declaration: the recognizer runs once per marked callback in
+`process_view`, so the pass inherits R1's declaration and reproduces its before/after numbers.
+
+*Writes:* `django_strawberry_framework/middleware/request_body.py`,
+`django_strawberry_framework/_boundary_ordering.py`, `tests/test_views.py`,
+`docs/builder/bld-046-r1b-recognition_contract.md`, `docs/builder/temp-tests/r1b/**`. The spec and
+its rationale stay R2's, so R1b records any needed spec text under
+`### Notes for Worker 1 (spec reconciliation)`.
+
+## Maintainer decision M-C: the recognition reads are guarded, the construction guard stays narrow
+
+Escalated during R1b's review and **decided before any worker was dispatched at it**. R1b's review
+measured that `_package_view_instance` is called at `process_view`'s first statement, *outside* the
+`try` that wraps the boundary call, and that all four of its `getattr` reads absorb `AttributeError`
+only — so a callback whose attribute access itself raises (a metaclass `__getattr__` that raises, or
+a raising descriptor for a probed name) escapes `process_view` uncaught. Worker 0 verified both
+against source before escalating. Two properties of the finding matter: it is a **relocated** failure
+rather than a regression, since those reads predate R1b's probe; and it leaves three sentences —
+including the Decision 18 wording R1b hands to R2 — asserting that *every* outcome of the hook is a
+controlled response, which is false while it stands.
+
+**The decision: guard the recognition reads, and only those.** Any failure to determine the answer
+becomes `None`, which is the decline arm and therefore the safe one — a declined callback keeps the
+view-local arrangement, so the cap still runs and the CSRF *class* degrades rather than the ordering.
+The construction guard keeps its narrow `except TypeError`. This covers exactly the two measured
+shapes, satisfies `BUILD.md` `### Fail-open shapes`' rule by guarding the answer rather than a
+spelling of the input, and leaves the three absolute sentences true as written.
+
+**Rejected alternatives, and the one-line reason each lost:**
+
+- **Narrow the three sentences instead, no code change** — this is the documentary narrowing that
+  `## Maintainer decision M-B` rejected one shape over, so taking it here would have the module
+  promise strictly less than M-B's reasoning was buying, for a fix of comparable size.
+- **One broad `except Exception` around the whole recognition, construction included** — simplest to
+  read and makes the absolute unconditionally true, but it replaces the narrow `except TypeError`
+  whose narrowness R1's review examined and accepted on the record, and reversing that without a new
+  reason trades a measured decision for a convenience.
+
+**Enactment: inside R1b**, as an apply-changes pass against the round's existing write set. It adds
+no path: `middleware/request_body.py` and `tests/test_views.py` are already R1b's. The round's
+manifest owes a row for the new guard, and `BUILD.md`'s acceptance rule still forbids a 0-or-1-row
+entry.
+
+## Worker-0 observation O-1, handed to R1b's review rather than adjudicated
+
+Recorded per `worker-0.md` `### Mid-flight instructions are mirrored into the artifact`, which covers
+Worker 0's own out-of-band messages. Worker 0 does not write `bld-*.md`, so it lands here and is
+named in the dispatch prompt for R1b's pass-3 review.
+
+R1b's pass-3 build landed the two documentary amendments Worker 1's final verification specified, and
+the executable bytes are unchanged — verified independently by Worker 0 by reading the recognizer
+after the pass and comparing it to the same region read after pass 2. While verifying, Worker 0
+found a **third** site in `middleware/request_body.py::_package_view_instance`'s docstring carrying
+the same absolute neither amendment touched: the counterfactual clause `#"would still turn a foreign
+callback into an unhandled 500 from a hook whose every other outcome is a controlled response"`.
+Worker 1 measured one outcome of the hook that is **not** a controlled response — a forged
+`view_class` carrying a callable of the probed name whose call raises — so on its face the phrase is
+false in the same way the two amended sentences were. Read narrowly it may scope to the recognition,
+which the surrounding paragraphs now scope carefully, and that reading is what makes it a judgement
+rather than a fact.
+
+**The site is the only one left, swept read-only by Worker 0.** `middleware/request_body.py`'s module
+docstring, `GraphQLRequestBodyBoundaryMiddleware`'s class docstring and `::process_view`'s docstring
+carry **no** version of the absolute — each was rewritten by an earlier pass in this round — so the
+claim now survives at exactly one site, the counterfactual clause above. There is no fourth site in
+the module, and Worker 3 need not re-derive that.
+
+**It is handed to Worker 3, not asserted as a finding.** Worker 0 verifies findings against source
+before dispatching a builder at one, and the verification here establishes that the sentence exists
+and that the residual it would have to survive is real; whether the sentence over-claims is a
+reviewer's call. Two reasons it is worth a round trip rather than a deferral: this same pattern — a
+docstring promising a property the code does not keep — has now driven M-B, M-C and Worker 1's
+`revision-needed` inside this one round, and `middleware/request_body.py` is source, so no later
+round in this cycle can close it (R2 owns the spec and the rationale, R3 the standing docs). If
+Worker 3 judges the phrase sound as written, that judgement is the durable record and the round
+closes with it.
+
+## Closeout artifact list
+
+- `docs/builder/bld-046-r1-remediation_review.md`
+- `docs/builder/bld-046-r1b-recognition_contract.md`
+- `docs/builder/bld-046-r2-rationale_reconciliation.md`
+- `docs/builder/bld-046-r3-doc_completion_and_archive.md`
+- `docs/builder/bld-046-final.md`
+
+## Closeout checklist
+
+- [x] R1: Remediation review of `2701f41a` + `ba66ab49` against the four open findings -> `docs/builder/bld-046-r1-remediation_review.md`
+- [ ] R1b: Boundary-recognition contract enactment (`## Maintainer decision M-B`) -> `docs/builder/bld-046-r1b-recognition_contract.md`
+- [ ] R2: Rationale reconciliation + spec reconciliation -> `docs/builder/bld-046-r2-rationale_reconciliation.md`
+- [ ] R3: Documentation completion + spec archive to `docs/SPECS/` -> `docs/builder/bld-046-r3-doc_completion_and_archive.md`
+- [ ] Final test-run gate -> `docs/builder/bld-046-final.md`

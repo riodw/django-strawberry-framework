@@ -298,12 +298,16 @@ def _measured_remaining(stream: Any) -> int | _Probe:
     both run consumer ``__sub__`` / ``__le__`` code, so a position object whose
     numeric protocol raises anything at all - not just the ``TypeError`` a
     non-number produces - would escape as an unrelated ``500`` from whichever
-    expression touched it first. So no foreign numeric protocol is executed:
-    production Django streams report positions as the built-in ``int``
-    (``SpooledTemporaryFile`` and ``LimitedStream`` both do, on both supported
-    interpreters), that exact type is what this function accepts, and every other
-    shape - an ``int`` subclass included, since it may override either operator -
-    is ``UNMEASURABLE`` and gets the bounded read instead. The type test is
+    expression touched it first. So no foreign numeric protocol is executed: the
+    one production Django stream that reaches this arithmetic reports positions as
+    the built-in ``int`` (``ASGIRequest``'s ``SpooledTemporaryFile``, verified at
+    both supported interpreters), that exact type is what this function accepts,
+    and every other shape - an ``int`` subclass included, since it may override
+    either operator - is ``UNMEASURABLE`` and gets the bounded read instead.
+    ``WSGIRequest``'s ``LimitedStream`` reports no position at all and never gets
+    here: it declares ``seekable()`` ``False`` and its ``tell()`` raises
+    ``io.UnsupportedOperation``, so :func:`_declares_seekable` sends it to the
+    bounded read (verified at both supported Django versions). The type test is
     ``type(x) is int`` rather than ``isinstance`` for the same reason
     ``views.py::_resolved_max_request_body_bytes`` uses one: admitting a subclass
     is admitting overridden operators back inside the boundary.

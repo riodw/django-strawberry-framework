@@ -191,6 +191,7 @@ Source: `django_strawberry_framework/`
 
 ```text
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _boundary_ordering.py         # The marks and the method name the request-body boundary's ordering rests on.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
@@ -237,7 +238,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 ├── middleware/    # Django HTTP middleware integrations for django-strawberry-framework.
-│   └── debug_toolbar.py          # Debug-toolbar middleware exposing panels for Strawberry Django GraphQL views.
+│   ├── debug_toolbar.py          # Debug-toolbar middleware exposing panels for Strawberry Django GraphQL views.
+│   └── request_body.py           # The package's raw-request-body boundary, expressed as a ``MIDDLEWARE`` entry.
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
@@ -310,6 +312,7 @@ Source: `django_strawberry_framework/ (+ planned card paths)`
 
 ```text
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _boundary_ordering.py         # The marks and the method name the request-body boundary's ordering rests on.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
@@ -357,7 +360,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 ├── middleware/    # Django HTTP middleware integrations for django-strawberry-framework.
-│   └── debug_toolbar.py          # Debug-toolbar middleware exposing panels for Strawberry Django GraphQL views.
+│   ├── debug_toolbar.py          # Debug-toolbar middleware exposing panels for Strawberry Django GraphQL views.
+│   └── request_body.py           # The package's raw-request-body boundary, expressed as a ``MIDDLEWARE`` entry.
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
@@ -443,6 +447,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing edge cases.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
@@ -611,6 +616,7 @@ Source: `examples/fakeshop/tests/`
 examples/fakeshop/tests/    # Project/config-level fakeshop tests that belong to no single app and do not use live /graphql HTTP.
 ├── test_export_schema.py         # Fakeshop project command tests for export_schema against the configured schema.
 ├── test_inspect_django_type.py   # Fakeshop project command tests for inspect_django_type against example DjangoTypes.
+├── test_settings_guard.py        # Fakeshop settings-module pin: the development fixture fails loudly as production.
 └── test_urls.py                  # Fakeshop project URL tests for the index view and URL configuration.
 ```
 
@@ -659,6 +665,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing edge cases.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.

@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.17` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.18` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -95,7 +95,8 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-048-0.0.17` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_17.md](docs/spec-048-secure_output_defaults-0_0_17.md) |
+| `WIP-ALPHA-049-0.0.18` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | No dedicated spec |
+| `DONE-048-0.0.17` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_17.md](docs/SPECS/spec-048-secure_output_defaults-0_0_17.md) |
 | `DONE-047-0.0.16` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_16.md](docs/SPECS/spec-047-resource_policy-0_0_16.md) |
 | `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_15.md](docs/SPECS/spec-046-transport_security-0_0_15.md) |
 | `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-045-visibility_boundary-0_0_14.md](docs/SPECS/spec-045-visibility_boundary-0_0_14.md) |
@@ -146,17 +147,13 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
-
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
-### [TODO-ALPHA-049-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
+### [WIP-ALPHA-049-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
 
 - Priority: High
-- Status: To Do
+- Status: WIP
 - Relative size: M
 
 #### Planning note
@@ -172,6 +169,9 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
 - Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
 - .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
+- Slice 5 doc fold-in is outstanding and entirely DB-side: `docs/GLOSSARY.md:20`'s package-version line still reads `0.0.17` and needs `0.0.18`, and the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
+- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_18.md` (still unarchived, the only spec left in `docs/`), then re-render.
+- `README.md`, `docs/README.md` and `TODAY.md` prose are hand-edited and were left for this card's DB-regeneration pass rather than done piecemeal.
 
 #### Definition of done
 
@@ -201,10 +201,18 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 #### Open question
 
 - pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
+- Repository-level default token permissions (spec-049 Decision 3) is a GitHub settings change, not a file in the tree - maintainer action, and nothing in a build can verify it.
+- `osv-scanner`'s inner image tag stays mutable (spec-049 Decision 4); pinning it would need a fork. Recorded in the spec's risks rather than fixed.
+- The workflow `timeout-minutes` values are estimates, not measured p95s (spec-049 Decision 7).
+- `CHANGELOG.md` carries no `0.0.15`, `0.0.16`, `0.0.17` or `0.0.18` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so four shipped patch versions have no release entry.
 
 #### Card references
 
 - Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package"></a>
 ### [TODO-ALPHA-050-0.0.19 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
@@ -281,6 +289,11 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - WP-C structural DRY batch (~500-600 lines): fold `_run_delete` and the plain-form pipeline onto the shared write skeleton, filter converter/normalizer dispatch table, `install_input_namespace()`, bind-drain merge, connection dispatch tails, `slot_child_selections()`, `iter_relation_path()`, budgeted-walk primitive, column-backed conversion sharing (mutations+forms only), finalizer error formatters, underscore alias deletion, `editable_input_fields` onto `resolve_effective_fields`.
 - WP-D contract-level DRY (~150 lines + doc debt): single-window planner scheme through `_divergent_key_windows`, walker `_resolve_field_map` dual-contract retirement (FieldMeta fallback), model relation decoder over the shared spine.
 - Slice 5: docs fold-in, the `0.0.20` version cut (lone card at this patch version owns the quintet), CHANGELOG entry, card wrap.
+- Widen `views.py::_canonicalizes_to_utf8` to catch `ValueError` and `UnicodeEncodeError` alongside `LookupError`. Pre-existing, fail-loud and not reachable from the wire, which is why it was left; a codec whose name canonicalizes but whose lookup raises escapes as an unrelated 500.
+- A shared "is this one of our views?" recognizer with `middleware/debug_toolbar.py` is now a decidable question: the constraint that forced `middleware/request_body.py` to recognize by marker attribute (it must not import `views.py`) was removed when the ordering marks moved to `_boundary_ordering.py`. `debug_toolbar` recognizes a package view by class through an *upstream* `BaseView` import, so a narrower shared recognition needs no `views.py` import either. Revisit only when a third middleware needs the same recognition, or when two need to agree about one callback - not as a DRY sweep for its own sake.
+- `middleware/request_body.py::_package_view_instance`'s docstring still says `process_view` is "a hook whose every other outcome is a controlled response" while the same docstring records that a boundary the recognition *accepted* which raises anything but `HTTPException` leaves the hook uncaught. Scope the absolute to the outcomes the recognition decides. The behaviour must not change: a guard there would sit across the body cap's own errors.
+- `_request_body.py`'s Decision 7 paragraph says the seekability probe "reaches for four capabilities"; the code guards six call sites across five `try` blocks - `_declares_seekable`'s `seekable()`, the position `tell()`, `stream.seek(0, SEEK_END)`, `_position_restored`'s restoring `seek`, its verifying `tell()`, and the `end - position` subtraction, with `_position_restored` guarding two in one `try`. Both the decision paragraph and the spec's `## Edge cases` capability bullet repeat the four-item list, so the fix has two sites; four other sites cite that paragraph's bolded opener by substring, which is why it was not corrected in passing.
+- `consumers.py::send_revalidated_operation_frame`'s docstring calls the derived adapter a "two-line delegation"; `_RevocationGatedWebSocketAdapter.send_json`'s body is four statements. Pre-measured replacement, to carry verbatim rather than re-derive: "a four-statement delegation - the frame-type test, the plain `super()` delegation for a non-information-bearing frame, its `return`, and the gated call". Owner is the next pass that legitimately opens `consumers.py`, not an opening of that file for its own sake.
 
 #### Definition of done
 
@@ -315,6 +328,16 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - Sequenced behind DONE-044-0.0.14: card 044 owns the `0.0.14` joint cut and its TODO anchors sit on the version-quintet sites; this card's Slice 5 (and its quintet anchors) wait until that cut lands.
 - Also sequenced behind TODO-ALPHA-050-0.0.19: the debug extraction ships `0.0.19` first and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
 
+#### Open question
+
+- Two safe-direction costs in the middleware-ordering audit, deliberately left unpinned by any test so a contract sentence is not frozen before it is written. First, a chain spelled `[boundary, csrf, boundary]` is refused at startup, because the audit keeps the *last* boundary index and the *first* CSRF index. Second, two adjacent boundary entries measure the body twice, because `process_view` calls `view._enforce_request_boundary`, not `::_enforce_request_boundary_once`. Decide which is contract; only then does a row pin it.
+- Whether the package owes a controlled response to a callback that forges the private boundary marker over a `view_class` carrying a *callable* of the probed name whose boundary then raises. Measured identically on Python 3.14/Django 6.0 and at the 3.10/5.2 floor: it passes the probe, is constructed, and a non-`HTTPException` leaves `process_view` uncaught. If taken, the change is `except Exception` around `view._enforce_request_boundary(request)` in `process_view`, and its cost is that the guard sits across the body cap's own errors and across a package mount's genuinely broken boundary - which is deliberately as loud with the middleware installed as without it. Three independent passes recommended against the code path. Until it is decided, no permanent test row may assert today's uncontrolled outcome as contract.
+
+#### Note
+
+- Do not consolidate the `SERVER_NAME` / `SERVER_PORT` repetition in `consumers.py::_host_validation_request`. It mirrors `django/core/handlers/asgi.py::ASGIRequest.__init__`'s own if/else item for item, and that mirror is what the projection's oracle row asserts against. Examined and rejected, twice.
+- Do not give the cross-tree test helpers (`_capped_view`, `_strawberry_patch_opted_out`, `_multipart_body` / `_multipart_bytes`) a shared home. No shared home exists between the package tier and the fakeshop live tier, creating one means adding an `__init__.py` to a test tree that deliberately has none, and the duplication is the cheaper trade. Ruled and re-ruled; do not re-raise per helper.
+
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
@@ -332,6 +355,16 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`tests/base/test_init.py`](tests/base/test_init.py)
+
+#### Scope
+
+- Seven glossary terms shipped in `0.0.15` still carry a bare `shipped` status. Set `GlossaryTerm.status_text` to ``shipped (`0.0.15`).`` on `djangographqlview`, `request-body-cap`, `utf-8-wire-contract`, `websocket-consumer-injection-seam`, `websocket-host-boundary`, `websocket-revalidation-window` and `connection-scoped-revocation`, plus `graphqlrequestbodyboundarymiddleware`, then re-render. Bare `shipped` was upheld at the time, not merely tolerated - stamping `0.0.15` while the version quintet still read `0.0.14` would have named a version that existed in no released artifact. That reason has now expired. It travels with the `README.md` / `TODAY.md` "Coming next" -> "Shipped today" move and with the `djangographqlprotocolrouter` entry's own ``shipped (`0.0.14`)`` -> `0.0.15` question. Card 046 authored eight glossary terms and its spec links NONE of them from `## Key glossary references`, so its terms CSV sits at 37 rows covering only pre-existing terms. Linking one without the rest would be worse than linking none: decide the whole set at once, which means editing the CSV AND the spec's `## Key glossary references` + link-def block together, then re-running `import_spec_terms` and `build_glossary_md.py`.
+- `docs/GLOSSARY.md` has no `DjangoSchema` entry, so card 047's glossary rows link to a `#djangoschema` anchor that resolves to nothing, and the schema constructor's two policy arguments are described only from the `ErrorPolicy` / `ResourcePolicy` side.
+- Card 047's root exports - `ResourcePolicy`, `DjangoResourcePolicyExtension` and `DEFAULT_RESOURCE_POLICY` - are absent from the glossary's Public exports list.
+- Card 047's `max_value_depth` bound has no glossary entry, and the `ResourcePolicy` glossary body enumerates the bounds without it.
+- `spec-047-resource_policy-0_0_16.md` and `spec-048-secure_output_defaults-0_0_17.md` have no `-rationale.md` companion in `docs/SPECS/appx/`, where 044, 045 and 046 all do. Decide whether the rationale companion is required for every spec or only where a cycle produced one, and make `docs/SPECS/appx/` consistent either way.
+- `README.md:62`'s `0.0.14` paragraph describes `main`'s router shape inside the released version's sentence. Chosen framing on record: lead with the marker, the shape `docs/README.md:128` and `TODAY.md:384` already use.
+- `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
 
 #### Definition of done
 
@@ -361,10 +394,18 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - release-blocking.
 - final card in the Alpha queue; gates the alpha → beta milestone.
 
+#### Open question
+
+- Upstream argument rejections are masked by the secure-output defaults. The fix is for the package to raise Strawberry's relay/pagination argument rejections as `GraphQLError` carrying an audited `extensions.code`, which brings them under the untouched branch of the structural masking rule without loosening it. Not licensed by spec-048; needs a card or an explicit deferral reason in this card's parity audit.
+- The debug extension's caps are not configurable, deliberately: `AGENTS.md` says add a settings key only when the feature that needs it lands, and a deployment wanting a different ceiling is a deployment running the extension in production. Revisit only if a real consumer need appears.
+
 #### Note
 
 - release / verification card — gates the alpha → beta cut; not an upstream-parity feature.
 - release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
+- Process questions carried out of the retired builder artifacts. These are BUILD-flow questions, not release work, and several may be moot once that flow is replaced - re-home or drop them rather than treating them as this card's scope. (1) Whether the weakly-pinned failability rule is applied literally: twelve boundaries from one round fail the 0-or-1-row test, of which the reviewer judged four to deserve a second row on merit and six adequate on merit, so a literal reading re-loops all twelve; and the rule says "never a recorded exception" while a review artifact recorded one, so the rule needs either a narrow carve-out or that entry becomes revision-needed. (2) Whether the WebSocket-revocation design owes a hot-path number: it holds one connection-local lock through the outbound send, which meets the hot-path definition and which the spec itself calls a hot path; either declare it and re-loop for a before/after number (`_instrument_revalidation`'s `probe.reads` is already the instrument) or waive it explicitly. (3) `AGENTS.md:15` mandates repo-wide `ruff format` / `ruff check --fix` while all four worker role files tell workers to scope them to their own files, because this tree carries concurrent uncommitted work that a repo-wide write-mode run reformats; the role files defer to `AGENTS.md` on conflict, so the scoping instruction is inert until reconciled. Six-plus passes have raised it. (4) Whether a `bld-custodian-*` artifact name is admissible under the build-artifact naming rule. (5) Whether "a downstream doc more accurate than the spec means the contract moved" becomes a first-class integration sweep step: the tell fired four times in one card and located two of nine corrections before an auditor did.
+- Two spec omissions in the WebSocket revalidation decision, each a one-clause addition whenever a pass legitimately opens it. Neither makes anything in the spec false. (1) Why the last-validated timestamp lives on the ASGI `scope` rather than beside the lock and the flag on the consumer instance is stated nowhere: `consumers.py:209-214`'s comment on `_REVALIDATED_AT_SCOPE_KEY` explains only the key's collision-safe namespacing, and neither the spec nor the rationale gives a reason. It belongs to whoever decided it. (2) How the outbound gate reaches the consumer's lock is nowhere stated; the two hops are `websocket.ws_consumer` (the adapter seam) and `handler.view` (admission), and `ws_consumer` appears in the spec zero times.
+- Deliberate no-ops, recorded so a future sweep neither reads them as live claims nor "fixes" them. The closed `docs/review/`, `docs/dry/` and `docs/bug_hunt/` scratchpads still assert the retired "UTF-16 succeeds" contract - they are closed per-cycle records, leave them. The revalidation DRY bullet prices the delegates by `await` count in a way that is true on the natural reading but not literally. The implementation-plan row reading "the adapter-level outbound-frame gate, *its* connection-local lock and *its* one close code" states no ownership location, so it is not false but wants one word if a later pass touches the table. The rationale's Decision 19 historical block still contains "only a factory" on purpose, as the prior spec wording. Two spec phrases describing shipped `0.0.14` behaviour ("This is the only new refusal", "previously a Channels-routed deployment never reached that adapter at") were ruled no-change and are not history-narration defects.
 
 #### Card references
 
@@ -1144,6 +1185,9 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Scope
 
 - Hostile wire values: bad-base64 / wrong-`type_name` GlobalIDs, oversized `in` lists, unicode / emoji / null bytes, `strawberry.UNSET` / `None` across every operator-bag slot.
+- Add a row distinguishing `consumers.py::_attempt_close`'s `ABANDONED` record from `settle`'s cancel-and-await. The two boundaries are currently jointly pinned - the same pair of rows fails for either mutation - so neither is independently proven.
+- `tests/test_views.py::_strawberry_patch_opted_out` lacks the live copy's `assert strawberry_patches._patch_is_installed() is False`, so nothing pins that the package-tier simulation really un-installed the patch.
+- Re-anchor failability manifest entry 6 onto the middleware-ordering audit's decision expression rather than its initialization line, if the manifest is ever re-derived. Anchoring an aggregate inside the guard under test is the trap: one measured attempt reported four rows rather than zero, which would have passed the acceptance rule while measuring a third of its boundary. A zero gets graded; a plausible count gets graded by nobody.
 
 #### Definition of done
 
@@ -1238,7 +1282,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Priority: High
 - Status: Done
 - Relative size: M
-- Spec: [spec-048-secure_output_defaults-0_0_17.md](docs/spec-048-secure_output_defaults-0_0_17.md)
+- Spec: [spec-048-secure_output_defaults-0_0_17.md](docs/SPECS/spec-048-secure_output_defaults-0_0_17.md)
 
 #### Glossary terms
 

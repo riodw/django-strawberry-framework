@@ -94,6 +94,13 @@ MIDDLEWARE = [
     "django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    # spec-046 Decision 18: runs the package view's body boundary from the chain,
+    # so the configured CSRF class below runs AFTER the cap rather than parsing the
+    # form ahead of it. Must precede the CSRF entry -- listing it afterwards raises
+    # ``ConfigurationError`` at startup. Optional for a deployment: without it the
+    # view supplies the same ordering itself, which is the arrangement the
+    # ``override_settings`` rows in ``test_query/test_transport_api.py`` cover.
+    "django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",

@@ -78,7 +78,7 @@ from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpResponseForbidden
 from django.middleware.csrf import get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
-from django.urls import include, path
+from django.urls import include, path, resolve
 from graphql import NoSchemaIntrospectionCustomRule
 from graphql_client import assert_graphql_data, post_graphql
 from strawberry.django.views import GraphQLView as UpstreamGraphQLView
@@ -88,6 +88,8 @@ from strawberry.http.base import BaseView
 from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as strawberry_patches
+from django_strawberry_framework._boundary_ordering import _BOUNDARY_MARKER
+from django_strawberry_framework.middleware.request_body import _package_view_instance
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
     AsyncDjangoGraphQLView,
@@ -270,18 +272,28 @@ class _ParseSpyView(DjangoGraphQLView):
 
 
 def _carrying_the_packages_csrf_mark(view_class):
-    """Copy the package view's own ``csrf_exempt`` mark onto a probe mount wrapper.
+    """Copy the package view's ``csrf_exempt`` mark - and only that one - onto a probe wrapper.
 
     Every probe mount in this file resolves its view per request, so the callback
     the URL resolver hands ``CsrfViewMiddleware.process_view`` is the wrapper
     function here rather than the one ``as_view`` returned - and ``process_view``
-    reads ``csrf_exempt`` off *that* callback. A real mount needs nothing: the mark
-    is on the ``as_view`` callback itself, and every Django view decorator carries
-    it onward through ``functools.wraps`` (which is how fakeshop's own
-    ``ensure_csrf_cookie`` mount at ``/graphql/`` keeps it). A bare wrapper defined
-    here is neither, so it copies the mark for the same reason - otherwise the probe
-    mount, not the package, is what loses the ordering, and a row would be measuring
-    its own scaffolding.
+    reads ``csrf_exempt`` off *that* callback. A real mount needs nothing: ``as_view``
+    stamps **two** ordering marks on its callback, the withdrawable exemption and the
+    boundary marker the chain middleware recognizes, and every Django view decorator
+    carries both onward through ``functools.wraps`` (which is how fakeshop's own
+    ``ensure_csrf_cookie`` mount at ``/graphql/`` keeps them). A bare wrapper defined
+    here carries neither, so it copies the exemption - otherwise the probe mount, not
+    the package, is what loses the ordering, and a row would be measuring its own
+    scaffolding.
+
+    Copying ONLY the exemption is deliberate, and it is what these rows are for.
+    Without the boundary marker the chain middleware declines this callback, so every
+    probe mount here exercises the **view-local fallback** even though fakeshop's
+    ``MIDDLEWARE`` installs the boundary middleware. The declined-callback contract is
+    exactly that: the CSRF class degrades to Django's stock one, while the ordering and
+    the cap do not. Fakeshop's real ``/graphql/`` mount keeps both marks and therefore
+    exercises the chain-supplied arrangement, so the two halves of Decision 18 are both
+    covered live, by construction rather than by an ``override_settings`` toggle.
 
     The value is READ FROM the package rather than hardcoded, so this raises at
     import the day the package stops setting it. The load-bearing ordering evidence
@@ -2503,6 +2515,47 @@ def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
             _assert_no_graphql_envelope(answers[name])
         assert answers["headered"].status_code == 200
         assert answers["headered"].json()["data"] == {"__typename": "Query"}
+
+
+def test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount():
+    """The deployed arrangement is the chain one, and this row is what says so.
+
+    Every other ordering row in this file runs against a probe mount, and a probe
+    mount deliberately carries only the exemption (see
+    ``_carrying_the_packages_csrf_mark``), so the middleware declines it and those
+    rows measure the view-local fallback. Nothing there can fail if the shipped
+    chain silently stopped being the chain arrangement - the fallback would simply
+    absorb it, cap intact, and the only observable loss would be that the project's
+    configured CSRF class no longer runs on this endpoint. That is precisely the
+    failure the middleware exists to prevent, so it gets a row of its own.
+
+    Three facts, and the third is the one a settings edit would break: the boundary
+    entry is installed, it precedes the CSRF entry, and the callback the URL resolver
+    hands ``process_view`` for the real ``/graphql/`` mount is one the middleware
+    actually recognizes. ``ensure_csrf_cookie`` wraps that mount, so the third fact
+    is also the assertion that ``functools.wraps`` carries BOTH ordering marks
+    through a real decorator rather than only the exemption.
+    """
+    chain = list(settings.MIDDLEWARE)
+    boundary = (
+        "django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware"
+    )
+    csrf = "django.middleware.csrf.CsrfViewMiddleware"
+    assert boundary in chain, "fakeshop no longer installs the boundary middleware"
+    assert csrf in chain
+    assert chain.index(boundary) < chain.index(csrf), (
+        "the boundary entry must precede the CSRF entry - the package refuses the "
+        "reverse order at startup, so this ordering is load-bearing"
+    )
+
+    callback = resolve("/graphql/").func
+    assert getattr(callback, _BOUNDARY_MARKER, False), (
+        "the real mount's callback lost the boundary marker, so the chain would "
+        "decline it and fall back to the view-local arrangement"
+    )
+    assert _package_view_instance(callback) is not None, (
+        "the middleware no longer recognizes the real mount"
+    )
 
 
 @pytest.mark.django_db

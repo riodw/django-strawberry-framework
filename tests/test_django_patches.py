@@ -359,6 +359,152 @@ def test_apply_fails_loudly_when_upstream_body_drifts():
         SimpleTestCase._remove_databases_failures = saved
 
 
+def test_validation_accepts_every_audited_upstream_body_and_refuses_a_third():
+    """The body pin is a SET of audited shapes, not a single version's body.
+
+    Django rewrote ``_remove_databases_failures`` once across the supported
+    range: up to 6.0.x the disallowed-method pairs live on the
+    ``SimpleTestCase._disallowed_connection_methods`` class attribute, and from
+    6.1 they are read per connection from
+    ``connection.features.disallowed_simple_test_case_connection_methods``.
+    Both bodies are reimplemented by
+    :func:`_patched_remove_databases_failures`, so validation must accept
+    either regardless of which Django is installed - while a body outside the
+    audited set is still refused. The classes below are declared at nested
+    indentation so their dedented source is compared verbatim against the
+    pinned constants.
+    """
+
+    class _ClassAttributeShape:
+        @classmethod
+        def _remove_databases_failures(cls):
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                for name, _ in cls._disallowed_connection_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
+
+    class _FeatureFlagShape:
+        @classmethod
+        def _remove_databases_failures(cls):
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                disallowed_methods = (
+                    connection.features.disallowed_simple_test_case_connection_methods
+                )
+                for name, _ in disallowed_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
+
+    class _UnauditedShape:
+        @classmethod
+        def _remove_databases_failures(cls):
+            for alias in connections:
+                if alias not in cls.databases:
+                    connections[alias].reset_disallowed_methods()
+
+    audited = (_ClassAttributeShape, _FeatureFlagShape)
+    assert len(_django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES) == len(audited)
+    for shape in audited:
+        with mock.patch.object(
+            _django_patches,
+            "_original_remove_databases_failures",
+            shape.__dict__["_remove_databases_failures"],
+        ):
+            _django_patches._validate_upstream_shape()  # accepted: no raise
+
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        _UnauditedShape.__dict__["_remove_databases_failures"],
+    ):
+        with pytest.raises(RuntimeError, match="upstream body"):
+            _django_patches._validate_upstream_shape()
+
+
+def test_disallowed_methods_read_prefers_the_class_attribute_shape():
+    """Django 5.2.16-6.0.x shape: the pairs come off the test-case class.
+
+    Driven against a synthetic ``cls`` so the branch is covered on ANY
+    installed Django - on 6.1 the real ``SimpleTestCase`` no longer carries
+    the attribute, which would leave this read path uncovered.
+    """
+
+    class _ClassAttributeCls:
+        databases = frozenset()
+        _disallowed_connection_methods = (("cursor", "queries"),)
+
+    class _UnusedFeatures:
+        disallowed_simple_test_case_connection_methods = (("connect", "connections"),)
+
+    class _FakeConnection:
+        features = _UnusedFeatures()
+
+    assert (
+        _django_patches._disallowed_connection_methods(_ClassAttributeCls, _FakeConnection())
+        is _ClassAttributeCls._disallowed_connection_methods
+    )
+
+    connection = connections["default"]
+    original_cursor = connection.cursor
+    sentinel = mock.sentinel.class_attribute_cursor
+    connection.cursor = _database_failure(sentinel)
+    try:
+        _django_patches._patched_remove_databases_failures(_ClassAttributeCls)
+        assert connection.cursor is sentinel
+    finally:
+        connection.cursor = original_cursor
+
+
+def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag():
+    """Django 6.1 shape: the class attribute is gone, the feature flag carries the pairs.
+
+    Driven against a synthetic ``cls`` with no
+    ``_disallowed_connection_methods`` attribute plus a feature flag installed
+    on the real connection, so the branch is covered on ANY installed Django -
+    on 5.2/6.0 the flag does not exist upstream, which would leave this read
+    path uncovered.
+    """
+
+    class _FeatureFlagCls:
+        databases = frozenset()
+
+    assert not hasattr(_FeatureFlagCls, "_disallowed_connection_methods")
+
+    class _Features:
+        disallowed_simple_test_case_connection_methods = (("cursor", "queries"),)
+
+    class _FakeConnection:
+        features = _Features()
+
+    assert (
+        _django_patches._disallowed_connection_methods(_FeatureFlagCls, _FakeConnection())
+        is _Features.disallowed_simple_test_case_connection_methods
+    )
+
+    connection = connections["default"]
+    original_cursor = connection.cursor
+    sentinel = mock.sentinel.feature_flag_cursor
+    connection.cursor = _database_failure(sentinel)
+    # The patched loop visits every alias, so the flag has to be readable on
+    # each one (the sharded settings mode configures more than ``default``).
+    for alias in connections:
+        connections[alias].features.disallowed_simple_test_case_connection_methods = (
+            ("cursor", "queries"),
+        )
+    try:
+        _django_patches._patched_remove_databases_failures(_FeatureFlagCls)
+        assert connection.cursor is sentinel
+    finally:
+        connection.cursor = original_cursor
+        for alias in connections:
+            del connections[alias].features.disallowed_simple_test_case_connection_methods
+
+
 def test_apply_fails_loudly_when_upstream_source_is_unavailable():
     """An unreadable captured original is treated as drift, not approved.
 
@@ -448,8 +594,8 @@ def test_django_dependency_opt_out_silences_drifted_pin_abort(settings):
     """
     with mock.patch.object(
         _django_patches,
-        "_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE",
-        "def drifted(): ...\n",
+        "_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES",
+        ("def drifted(): ...\n",),
     ):
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
         with pytest.raises(RuntimeError, match=r'\{"django": False\}'):

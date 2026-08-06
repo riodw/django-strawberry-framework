@@ -30,7 +30,10 @@ Currently implemented
   unwrap step, so any code path that replaced a connection method
   between ``setUpClass`` and ``tearDownClass`` no longer crashes the
   cleanup loop with ``AttributeError: 'function' object has no
-  attribute 'wrapped'``.
+  attribute 'wrapped'``. The replacement covers both audited upstream
+  shapes of the disallowed-method list (a ``SimpleTestCase`` class
+  attribute up to Django 6.0, a per-connection feature flag from 6.1) -
+  see ``_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``.
 
   Tracks Django Trac #37064 (closed upstream as ``wontfix``):
   <https://code.djangoproject.com/ticket/37064>.
@@ -131,27 +134,58 @@ _original_remove_databases_failures = SimpleTestCase.__dict__.get(
 )
 
 
-# The exact upstream body this module supersedes (verbatim at Django 5.2-6.0,
-# dedented). Because :func:`_patched_remove_databases_failures` REIMPLEMENTS
-# upstream's whole loop instead of wrapping and delegating to it, an upstream
-# body change does not flow through the patch the way it does for the
-# delegating siblings (``_cross_web_patches``/``_strawberry_patches``).
-# ``_validate_upstream_shape`` therefore pins this source so any upstream body
-# change - a renamed ``_disallowed_connection_methods``, a changed
-# ``_DatabaseFailure`` protocol, or an upstream fix of Trac #37064 itself -
-# fails loudly at apply() time instead of clobbering a working teardown.
-_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE = textwrap.dedent(
-    """\
-    @classmethod
-    def _remove_databases_failures(cls):
-        for alias in connections:
-            if alias in cls.databases:
-                continue
-            connection = connections[alias]
-            for name, _ in cls._disallowed_connection_methods:
-                method = getattr(connection, name)
-                setattr(connection, name, method.wrapped)
-    """,
+# Every upstream body this module supersedes, verbatim and dedented. Because
+# :func:`_patched_remove_databases_failures` REIMPLEMENTS upstream's whole loop
+# instead of wrapping and delegating to it, an upstream body change does not
+# flow through the patch the way it does for the delegating siblings
+# (``_cross_web_patches``/``_strawberry_patches``). ``_validate_upstream_shape``
+# therefore pins these sources so any body OUTSIDE the audited set - a renamed
+# method list, a changed ``_DatabaseFailure`` protocol, or an upstream fix of
+# Trac #37064 itself - fails loudly at apply() time instead of clobbering a
+# working teardown.
+#
+# WIDENING THIS SET IS AN AUDIT, NOT A VERSION BUMP: a new upstream body joins
+# the set only after its read path is reimplemented in
+# :func:`_disallowed_connection_methods` and Trac #37064's crash shape is
+# re-confirmed against it.
+#
+# Audited today, two shapes across the whole supported Django range:
+#
+# * 5.2.16-6.0.x - the method list is the ``SimpleTestCase``
+#   ``_disallowed_connection_methods`` CLASS ATTRIBUTE.
+# * 6.1 - that class attribute is gone; the same four ``(name, operation)``
+#   tuples are read per connection from
+#   ``connection.features.disallowed_simple_test_case_connection_methods``.
+_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
+    textwrap.dedent(
+        """\
+        @classmethod
+        def _remove_databases_failures(cls):
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                for name, _ in cls._disallowed_connection_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
+        """,
+    ),
+    textwrap.dedent(
+        """\
+        @classmethod
+        def _remove_databases_failures(cls):
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                disallowed_methods = (
+                    connection.features.disallowed_simple_test_case_connection_methods
+                )
+                for name, _ in disallowed_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
+        """,
+    ),
 )
 
 
@@ -160,14 +194,15 @@ def _validate_upstream_shape() -> None:
 
     Three tiers: the private symbols exist (``_DatabaseFailure`` plus the
     ``_remove_databases_failures`` classmethod descriptor), the ``(cls)``
-    call shape holds, and the captured original's body source still
-    matches ``_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE``. The body pin
-    is the reimplementer's equivalent of the sibling patches' delegation:
-    they only need their call shape validated because upstream body
-    changes flow through the delegated call, while this module supersedes
-    the whole body and must re-audit whenever that body changes.
-    Unreadable source (e.g. a bytecode-only distribution) is treated as
-    drift: an unverifiable body must not be silently superseded.
+    call shape holds, and the captured original's body source is one of
+    the bodies in ``_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``. The
+    body pin is the reimplementer's equivalent of the sibling patches'
+    delegation: they only need their call shape validated because
+    upstream body changes flow through the delegated call, while this
+    module supersedes the whole body and must re-audit whenever that body
+    changes. Any body outside the audited set - including unreadable
+    source (e.g. a bytecode-only distribution) - is treated as drift: an
+    unverifiable body must not be silently superseded.
     """
     descriptor = _original_remove_databases_failures
     function = getattr(descriptor, "__func__", None)
@@ -191,11 +226,11 @@ def _validate_upstream_shape() -> None:
         source = textwrap.dedent(inspect.getsource(function))
     except (OSError, TypeError):
         source = None
-    if source != _UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE:
+    if source not in _AUDITED_REMOVE_DATABASES_FAILURES_SOURCES:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Django patch: "
-            "SimpleTestCase._remove_databases_failures no longer matches the upstream body "
-            "this patch supersedes. "
+            "SimpleTestCase._remove_databases_failures no longer matches any audited "
+            "upstream body this patch supersedes. "
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"django": False} '
             "or use a supported Django version.",
         )
@@ -206,12 +241,34 @@ def _is_database_failure(method: object) -> bool:
     return _DatabaseFailure is not None and isinstance(method, _DatabaseFailure)
 
 
+def _disallowed_connection_methods(cls: type, connection: object) -> object:
+    """Return the ``(name, operation)`` pairs upstream wrapped on ``connection``.
+
+    One read for both audited upstream shapes (see
+    ``_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``). Django 5.2.16-6.0.x
+    carry the pairs as the ``SimpleTestCase._disallowed_connection_methods``
+    class attribute; Django 6.1 dropped that attribute and moved the same
+    four pairs onto the connection feature flag
+    ``disallowed_simple_test_case_connection_methods``. The presence of
+    the class attribute is therefore the discriminator, read off ``cls``
+    rather than off a Django version number so a subclass that still
+    declares its own list keeps being honoured.
+    """
+    if hasattr(cls, "_disallowed_connection_methods"):
+        return cls._disallowed_connection_methods
+    return connection.features.disallowed_simple_test_case_connection_methods
+
+
 def _patched_remove_databases_failures(cls: type) -> None:
     """Defensive replacement for ``SimpleTestCase._remove_databases_failures``.
 
     Identical to Django's upstream classmethod except for the
     ``isinstance(method, _DatabaseFailure)`` guard before the
-    ``setattr(..., method.wrapped)`` line. Without the guard, any code
+    ``setattr(..., method.wrapped)`` line. The method list itself is read
+    through :func:`_disallowed_connection_methods`, which covers both
+    audited upstream shapes (the ``SimpleTestCase`` class attribute and
+    the per-connection feature flag that replaced it). Without the guard,
+    any code
     path that replaced ``connection.<method>`` with something other
     than a ``_DatabaseFailure`` instance between ``setUpClass`` and
     ``tearDownClass`` crashes the cleanup loop with
@@ -243,7 +300,7 @@ def _patched_remove_databases_failures(cls: type) -> None:
         if alias in cls.databases:
             continue
         connection = connections[alias]
-        for name, _ in cls._disallowed_connection_methods:
+        for name, _ in _disallowed_connection_methods(cls, connection):
             method = getattr(connection, name)
             if _is_database_failure(method):
                 setattr(connection, name, method.wrapped)
@@ -284,8 +341,9 @@ def apply() -> None:
     apply-and-revert cycle without spinning up a second AppConfig.
 
     Before installation, validates the private symbol, classmethod
-    descriptor, and ``(cls)`` signature the replacement assumes, plus the
-    upstream body source the replacement supersedes (see
+    descriptor, and ``(cls)`` signature the replacement assumes, plus
+    membership of the captured body in the audited set of upstream bodies
+    the replacement supersedes (see
     :func:`_validate_upstream_shape`). Dependency drift raises a targeted
     ``RuntimeError`` instead of silently dropping the protection;
     consumers can explicitly disable this test-only patch alone

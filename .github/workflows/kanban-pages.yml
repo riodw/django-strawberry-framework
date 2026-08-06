@@ -82,8 +82,13 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Must exceed the deploy step's own polling timeout below, so that a Pages
+    # backend slower than the poller is reported BY the action (a named
+    # deployment timeout) instead of being killed mid-poll by the job. Equal
+    # values race, and the job kill wins: the action's cleanup then cancels a
+    # deployment the backend may still go on to publish, leaving the run red
+    # over a site that updated anyway.
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write
@@ -95,3 +100,12 @@ jobs:
       - name: Deploy artifact
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        with:
+          # How long to poll the Pages API for the deployment to leave
+          # ``deployment_in_progress``. The action's own default is 10 minutes,
+          # which is under the publish latency Pages reaches while degraded --
+          # and a deployment abandoned at the poll ceiling can still publish
+          # afterwards, so a too-low ceiling reports failure for work that
+          # landed. The ceiling bounds how long a genuinely stuck deployment
+          # holds the ``github-pages`` concurrency group, nothing else.
+          timeout: 1200000

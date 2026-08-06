@@ -676,6 +676,99 @@ moves the version quintet to `0.0.16` — `pyproject.toml [project].version`,
 `django_strawberry_framework/__init__.py::__version__`, and the `tests/base/test_init.py`
 assertion that pins them together.
 
+### Decision 13 — Three bounds this policy still owes, and three exclusions that are audited rather than forgotten
+
+**Decision.** The bounds below are not oversights and must not be re-derived. Three are **owed
+work** with a named seam; three are **audited exclusions** that a later pass must not "fix".
+
+**Owed — a package-owned subscription rejection envelope.** Enforcement is not the gap;
+**rendering** is. A subscription enters `extensions_runner.operation()` and `executing()` exactly
+as a query does, so both the document text scan and the value walk *do* run and a violating
+subscription *is* refused. What differs is what the client sees, and the difference is one
+`except` clause in upstream's schema: the **non-streaming** path wraps its whole operation block
+in a broad `except Exception` that returns a `PreExecutionError`, so an HTTP or WebSocket query or
+mutation carries an `errors` entry; the **streaming** path's only pre-execution `except` names
+three errors (`MissingQueryError`, `CannotGetOperationTypeError`, `InvalidOperationTypeError`), so
+anything an extension raises escapes it. Upstream's
+`subscriptions/protocols/graphql_transport_ws/handlers.py::BaseGraphQLTransportWSHandler
+.run_operation` then catches that exception, hands it to `handle_task_exception`, and sends
+`complete`. A rejected subscription therefore closes cleanly instead of carrying
+`extensions.code == "RESOURCE_LIMIT_EXCEEDED"`.
+
+**State the behaviour, never the private method name.** The declared floor is
+`strawberry-graphql>=0.316.0` with no ceiling, and the seam moves inside that range: the private
+implementation is `_subscribe` at the floor and `_stream` at 0.323.2, and the **public** attribute
+a handler dispatches through moved from `subscribe` to `stream` at 0.319.0 — the same instability
+[`spec-046`][spec-046]'s stop-aware result source already answers by wrapping both public names
+unconditionally rather than testing a version. A fix here must be written against the broad-versus-
+narrow `except` asymmetry above and must pin no private upstream symbol; and because the floor is
+open-ended, whether the asymmetry still holds has to be re-measured across the range rather than
+read off the installed wheel.
+
+Closing this means owning an error envelope for a transport whose lifecycle is upstream's, which
+is why [Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation) states
+the boundary rather than claiming parity it does not have.
+
+**Owed — transport-level upload charging.** Uploads are charged post-materialization, which
+[Goals](#goals) 2 already narrows to "before any resolver, serializer, validator or storage
+backend touches the files". Charging *earlier* is a transport concern: Django's upload handlers
+have already streamed a multipart body by the time coerced values exist, so the seam is a
+package-owned upload handler or streaming body reader, alongside
+[`spec-046`][spec-046]'s request-body cap rather than inside this walker.
+
+**Owed — a configured bound on numeric literal size.** CPython's
+`sys.get_int_max_str_digits` (4,300) raises during JSON parsing or graphql-core's literal
+coercion, so an enormous integer literal *is* refused — but as a malformed-input failure, not as
+a typed resource rejection carrying this policy's code. A configured bound means a pre-coercion
+scan of the raw variables JSON, which duplicates the body cap's layer; `_charge_leaf` and
+[Edge cases](#edge-cases-and-constraints) document the behaviour rather than promising the bound.
+
+**Audited exclusion — `utils/connections.py` gets no `check_deadline` call.** Every function in
+it was read: `connection_sidecar_inputs_from_kwargs`, `window_range_plan`, `split_window_rows`,
+`derive_connection_window_bounds`, `resolve_relay_max_results`, `derive_keyset_window_bounds` and
+the assert helpers are all pure window arithmetic with no database access.
+`resolve_relay_max_results` is additionally called at **plan** time, where a deadline check would
+fire outside a resolve and against a plan-time `info`, so it is explicitly the wrong seam rather
+than a missing one.
+
+**Audited exclusion — `forms/resolvers.py::_run_plain_form_pipeline_sync` gets no deadline
+check.** The model-less plain-form flavour has no locate, no relation decode and no model write,
+so there is no database seam to guard. The three model-backed flavours all enter
+`run_write_pipeline_sync`, which has one.
+
+**Audited exclusion — `_charge_container` is deliberately not memoized.** A diamond-shaped value
+(one container referenced from many places) is charged **once per reference**, which is the
+contract [Decision 4](#decision-4--the-document-and-value-budgets-are-one-iterative-walk) states.
+The work is bounded by `max_input_nodes` without a separate bound, because every reference pops a
+stack entry and charges a node before it descends — a value engineered to blow the walk up runs
+out of node budget first.
+
+**Why the cycle guard and the charge counter are two mechanisms and cannot be one.** The deleted
+`_seen: set[int]` was doing cycle-guard duty and charge-once duty at the same time. They have
+different lifetime requirements — ancestor-scoped and owning, versus request-scoped — and only
+one of them is a contract, which is why one object could not correctly be both. The replacement
+is a path tuple for termination and **no cache at all** for charging.
+
+**Three constants whose values are decisions, not defaults.** `max_value_depth` is `20`, matching
+`max_depth`, because the two bound the same idea on the two sides of the text/variable divide and
+a value nested deeper than a document may be is not a shape any legitimate client sends. The
+deadline rejection reports `limit = ceil(configured seconds)` and `charged = limit + 1`, reusing
+the "exceeded a budget integers cannot express" spelling already used for an unmeasurable upload
+rather than putting a monotonic clock reading on the wire; the one branch where `configured is
+None` — a hand-written `dst_resource_deadline` context key with no policy behind it — reports
+`limit = 0` and the word `unknown`, and still rejects, fail-closed. `_is_connection_type` requires
+`node` **and** `cursor` on the edge type, because Strawberry's `ListConnection` edge carries both
+and requiring both is what keeps the collection-cost exemption from being claimable by shape
+accident.
+
+**The live deadline rows drive the clock, not a sleep.** They set
+`execution_deadline_seconds` to `0.000_001`
+(`examples/fakeshop/test_query/test_resource_policy_api.py::DEADLINE_SECONDS`), so the deadline has
+always passed by the time a resolver runs and the rows are deterministic. A sleep would make them
+timing-dependent on CI, and the cooperative contract in
+[Decision 9](#decision-9--the-execution-deadline-is-cooperative-and-says-so) is about *where* the
+check runs rather than about how long anything takes.
+
 ## Implementation plan
 
 | Slice | Files | Delta |
@@ -876,6 +969,24 @@ is a charge that does not happen. `tests/test_list_field.py` adds the constructo
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
 - [x] Docs folded in and the version quintet moved to `0.0.16`.
+
+Carried forward, unticked because they are owed rather than shipped
+([Decision 13](#decision-13--three-bounds-this-policy-still-owes-and-three-exclusions-that-are-audited-rather-than-forgotten)):
+
+- [ ] A rejected **subscription** carries `extensions.code == "RESOURCE_LIMIT_EXCEEDED"` to the
+      client on both WebSocket protocols, instead of closing with `complete` after the handler
+      logs the escaping exception. The enforcement already happens; only the envelope is missing.
+- [ ] Upload bytes are charged before Django's upload handlers stream the body, through a
+      package-owned upload handler or streaming body reader, so the bound stops being
+      post-materialization.
+- [ ] An oversized numeric literal is refused as a typed resource rejection carrying this
+      policy's code rather than as a malformed-input failure from
+      `sys.get_int_max_str_digits`.
+- [ ] `max_value_depth` has a glossary entry, and the `ResourcePolicy` glossary body enumerates
+      it alongside the other bounds.
+- [ ] `ResourcePolicy`, `DjangoResourcePolicyExtension` and `DEFAULT_RESOURCE_POLICY` appear in
+      the glossary's Public exports list, and this spec's glossary rows no longer point at a
+      `#djangoschema` anchor that resolves to nothing.
 
 <!-- LINK DEFINITIONS -->
 

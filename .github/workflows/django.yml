@@ -45,6 +45,30 @@ jobs:
       - name: Trailing-comma layout (>=4 elements; models.py >=2)
         run: uv run python scripts/check_trailing_commas.py --check
 
+      - name: Kanban tracked-path constants
+        # Parity with the `kanban-tracked-path-constants` pre-commit hook, which
+        # REWRITES the constants module rather than reporting on it. A commit
+        # that adds or removes a tracked package/test path without regenerating
+        # leaves the module stale on main, and the next contributor's hook then
+        # fails on a diff they did not create. Enforcing the same invariant on
+        # push keeps that cost on the commit that caused it.
+        run: uv run python scripts/build_kanban_tracked_path_constants.py --check
+
+      - name: Generated docs match their generators
+        # Every one of these files is script-rendered from the fakeshop DB or
+        # from module docstrings, and hand edits to them are silently discarded
+        # by the next render. `--check` writes nothing; it fails when a
+        # committed copy no longer matches what its generator produces, naming
+        # the stale file. Kanban Pages publishes FRESHLY rendered copies of the
+        # first three, so without this gate the published board and the
+        # committed board can disagree with nothing reporting it. The step stops
+        # at the first stale file.
+        run: |
+          uv run python scripts/build_kanban_md.py --check
+          uv run python scripts/build_kanban_html.py --check
+          uv run python scripts/build_glossary_md.py --check
+          uv run python scripts/build_tree_md.py --check
+
   test:
     name: Python ${{ matrix.python }} - Django ${{ matrix.django }} - ${{ matrix.database }}${{ matrix.compatibility_only == '1' && ' [compatibility floor]' || '' }}
     runs-on: ubuntu-latest

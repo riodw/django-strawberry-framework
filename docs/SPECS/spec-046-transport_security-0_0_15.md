@@ -1,12 +1,12 @@
 # Spec: Transport security — Django-owned HTTP, a bounded request body, one UTF-8 wire, and WebSocket actor revalidation
 
-Planned for `0.0.15` (card [`DONE-046-0.0.15`][kanban]). This is **card 1 of a
+Shipped in `0.0.15` (card [`DONE-046-0.0.15`][kanban]). This is **card 1 of a
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's two Blockers (**S1**, **S2**),
 two Mediums (**S9**, **S11**), and the **transport slice of S12**. Cards
-[`TODO-ALPHA-047-0.0.16`][kanban] (request resource policy),
-[`TODO-ALPHA-048-0.0.17`][kanban] (secure defaults), and
-[`TODO-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) each depend on this one:
+[`DONE-047-0.0.16`][kanban] (request resource policy),
+[`DONE-048-0.0.17`][kanban] (secure defaults), and
+[`WIP-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) each depend on this one:
 the program is staged transport-first because every later bound is consumed by the
 transports corrected here.
 
@@ -34,12 +34,22 @@ package's documented API freeze begins at `1.0.0`; correcting a newly confirmed
 security-boundary error during alpha is strictly preferable to preserving an unsafe
 migration convenience.
 
-Status: **BUILT — all five slices (S1, S2, S9, S11, and the S12 transport slice) are
-built, with
+Status: **SHIPPED — all five slices (S1, S2, S9, S11, and the S12 transport slice) are
+built and released, with
 [Decisions 16-19](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
-contracts landing inside them. The `0.0.15` release itself is the joint cut's
-([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)), so the
-version quintet still reads `0.0.14` on disk.** Five slices: Slice 1 (**S1** — the
+contracts landing inside them, and the joint `0.0.15` cut
+([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)) has
+since taken the version quintet past this card's patch line.** Two contracts here were
+corrected after the release and the text below is the corrected form, not the shipped-then
+form:
+[Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)
+now carries **two** CSRF-ordering arrangements — chain-supplied through
+`GraphQLRequestBodyBoundaryMiddleware` and the original view-local fallback — plus the
+declared-`charset` refusal under
+[Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode);
+and [Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
+cancelled-close ruling is now terminal rather than resting in `CLOSING`. Five slices:
+Slice 1 (**S1** — the
 protocol
 split: HTTP to a required Django ASGI application, the package's Django GraphQL view,
 WebSocket-only exact routing), Slice 2 (**S2** — the cumulative body cap plus the
@@ -152,11 +162,12 @@ Each top-level item maps to one commit / PR.
         **before** JSON parsing or schema execution, returning `413`, and they *measure*
         the body rather than materializing it — never `len(request.body)`
         ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)).
-  - [ ] The view is `csrf_exempt` on the outside and re-enters Django's public
-        `csrf_protect` on the inside, **after** the body gate, so the declared multipart
-        ceiling runs before `CsrfViewMiddleware.process_view` can touch `request.POST` and
-        invoke `MultiPartParser`
-        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  - [ ] The declared multipart ceiling runs before `CsrfViewMiddleware.process_view` can touch
+        `request.POST` and invoke `MultiPartParser`, under either arrangement: the chain runs
+        the boundary from `GraphQLRequestBodyBoundaryMiddleware.process_view` where it is
+        installed, and where it is not, the view is `csrf_exempt` on the outside and re-enters
+        Django's public `csrf_protect` on the inside, **after** the body gate
+        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
   - [ ] New `django_strawberry_framework/_request_body.py`: the single compatibility helper
         that names `HttpRequest._stream` / `_body` / `_read_started`, handing the view one
         boolean and pinning the Django 5.2.0-vs-6.0 contract that measurement depends on
@@ -342,7 +353,7 @@ Each top-level item maps to one commit / PR.
         real-`multipart/form-data` control-field rows
         ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard))
         and the `Client(enforce_csrf_checks=True)` ordering row with its parser sentinel
-        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry))
+        ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser))
         are both outside the shared harness, and the file must say so rather than leaving a
         reader to infer it from the absence of a row.
   - [ ] The Slice-2 prose corrections, carried here for the same reason as the `auth/`
@@ -801,9 +812,11 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
   `/graphql` and `/graphql/` and rejects every prefix extension.
 - **A body over the cap gets `413`** with a `text/plain` reason, before `parse_json` and
   before schema execution — and, on a multipart request, before `request.POST`,
-  `request.FILES`, `MultiPartParser`, or any upload handler, because the view is
-  `csrf_exempt` on the outside and re-enters `csrf_protect` on the inside of the gate
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  `request.FILES`, `MultiPartParser`, or any upload handler, because the ordering is supplied
+  either by the chain, where `GraphQLRequestBodyBoundaryMiddleware` is installed, or by the
+  view itself, which is `csrf_exempt` on the outside and re-enters `csrf_protect` on the inside
+  of the gate
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
   That exemption is an **ordering mechanism, not a CSRF bypass**: every request past the
   size boundary still undergoes Django's complete CSRF implementation.
 - **Non-UTF-8 request JSON gets `400`** — the same controlled response malformed JSON
@@ -1100,10 +1113,10 @@ request-body ceiling before `parse_json` and before schema execution:
    per-file size, and aggregate size are [`TODO-ALPHA-047-0.0.16`][kanban] (audit S4);
    this card's contract for multipart is the declared-size gate plus an explicit
    statement of what it does and does not bound. **That gate really does run before
-   Django's parser**, which is a property of the view's ordering rather than of this step
+   Django's parser**, which is a property of the CSRF ordering rather than of this step
    alone: `CsrfViewMiddleware.process_view` reads `request.POST` for every cookie-bearing
-   POST, so without the `csrf_exempt` / `csrf_protect` re-entry of
-   [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)
+   POST, so without one of the two arrangements of
+   [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)
    the declared gate would fire only *after* `MultiPartParser` and the upload handlers had
    already run.
 4. **The limit is configured once, overridable per mount.** `MAX_REQUEST_BODY_BYTES` in
@@ -1285,9 +1298,9 @@ the other's obligation as its own:
   method scoping, and the carve-out must be stated with that scope so a reader cannot read
   the looser half as the whole rule) — and, alongside it, the statement that the
   declaration *is* nonetheless enforced before that parser and its upload handlers run,
-  which is a property of the view's `csrf_exempt` / `csrf_protect` ordering rather than of
+  which is a property of the CSRF ordering — chain-supplied or view-local — rather than of
   the cap
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
 
 **Why this is a decision and not a documentation footnote.** The most likely failure of
 this card is not a code bug — it is a reader concluding "S1 fixed the transport, so S2 is
@@ -1354,6 +1367,36 @@ ownership of the malformed-body contract is unchanged, and so is its subject for
 `cross_web` half — Strawberry's own view. Its subject is *both* mounts for the Strawberry
 half, whose body-envelope guard a package view still reaches through `super().parse_json`;
 what narrows is the *success* set, and it narrows on the package view.
+
+**The declared half: a `charset` this endpoint will not honour is refused at the boundary.**
+The strict decode governs the bytes; `views.py::_RequestBodyBoundaryMixin
+._enforce_body_charset_declaration` governs what the client *said* about them. One byte
+sequence must not be `é` to this view and two Latin-1 characters to any hop that honours the
+declaration, so a request declaring an encoding this endpoint will not decode with is refused
+rather than having its bytes silently reinterpreted. The contract:
+
+- **Absent is not a declaration**, and is the overwhelmingly common case. It passes, leaving
+  the strict decode as the only encoding contract — which is the stronger one, because it
+  inspects the bytes rather than a header.
+- **Anything present must canonicalize to UTF-8.** Every alias Python's codec machinery
+  resolves to UTF-8 is accepted. `utf-8-sig` is **not**: it is a different codec, and its BOM is
+  what [Decision 10](#decision-10--a-utf-8-bom-is-rejected) refuses. An unknown codec name is
+  not either.
+- **A refusal is the shared `HTTPException(400, "Unable to parse request body as JSON")`**, the
+  same wire shape the strict decode's failure produces, so a client cannot distinguish which of
+  the two encoding boundaries refused it.
+- **Multipart is excluded here** and belongs to the narrower owner in
+  [Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard):
+  Django consults the declaration itself on that path, and the package's business there is loss
+  detection on the control documents.
+
+**Method scope, with its one consequence stated rather than discovered.** The guard is skipped
+for `GET` only — deliberately the same scope as
+`::_enforce_request_body_limit`'s, so the two body boundaries do not disagree about which
+requests they govern. The consequence is that a method carrying an unhonourable `charset` which
+this endpoint does not serve is refused with `400` before method routing decides anything, where
+upstream would have answered `405`. The direction is stricter and the reason string is shared,
+which is why the scope agrees with the cap's rather than being widened to enumerate methods.
 
 **Ownership follows lifecycle, so the gate does not carry the policy.** Both patches keep
 installing where they install today — from `apps.py::DjangoStrawberryFrameworkConfig.ready`
@@ -1778,7 +1821,7 @@ regression.
   package metadata rejects is a defect in the hint, not in the test that pins it.
 - `examples/fakeshop/test_query/test_transport_api.py`'s declared-cap rows carry a
   `Client(enforce_csrf_checks=True)` sibling with a parser / upload-handler sentinel
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)),
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)),
   and the file carries the multipart control-field encoding matrix
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
   Status `413` alone is not evidence of ordering, and a plain `Client()` — whose CSRF
@@ -1819,7 +1862,7 @@ where they are convenient. The multipart control-field matrix and the CSRF-order
 **live** — they are request-shaped, and a direct `parse_json(str)` call or a mocked request
 proves nothing about either boundary
 ([Decisions 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)
-and [18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+and [18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
 The active-operation revocation matrix and the WebSocket Host rows stay in
 `tests/test_routers.py`, communicator-driven, under the same documented
 genuinely-unreachable-live exemption the rest of the WebSocket surface already carries —
@@ -2053,7 +2096,10 @@ The five states, and everything that follows from them:
   awaits *that* attempt rather than starting its own.
 - `CLOSED` — terminal: an attempt's own `await` on the adapter's `close` returned, so a
   `4403` was committed to the transport.
-- `ABANDONED` — terminal: the attempt bound is spent and no close ever completed.
+- `ABANDONED` — terminal, and reached two ways: the attempt bound is spent and no close ever
+  completed, **or** the attempt was cancelled. A cancelled attempt records this state itself,
+  before re-raising, which is what keeps it from resting in `CLOSING` — a state that claims an
+  attempt is still in flight.
 
 `decide()` is **synchronous and runs before any await**, which is what lets every checkpoint —
 and the stop-aware result source — refuse on the published decision **read-free**, at no
@@ -2062,9 +2108,10 @@ is a task the **connection** owns (`asyncio.create_task`), awaited through `asyn
 and both halves of that are required: a plain `await` on a task installs it as the awaiter's
 `_fut_waiter`, so cancelling the awaiter cancels the awaited task, and both protocols let a
 client cancel the operation that first observed the revocation (`complete` / `stop`) — the
-close must not die with it. The connection's `disconnect` settles the attempt after
-`super()`, so a task the connection owns cannot outlive the connection, and settling never
-*starts* an attempt: teardown is not a security checkpoint.
+close must not die with it. The connection's `disconnect` reaches settlement through `finally`,
+so a task the connection owns cannot outlive the connection even when upstream's teardown
+raises or is cancelled, and settling never *starts* an attempt: teardown is not a security
+checkpoint.
 
 **The outcome is recorded by the task that awaited the close, after its own await returned** —
 never before it, and never by a bystander. An ASGI `send` is asynchronous and unacknowledged,
@@ -2082,20 +2129,35 @@ every information-bearing frame — the property that does not depend on the clo
 wire at all. Because exactly one attempt is ever in flight and only a *raise* reopens the
 door, the ordinary path can never put two `4403` frames on the socket.
 
-**A CANCELLED close attempt leaves the connection in `CLOSING`, permanently, and that is the
-ruling rather than an omission.** ASGI's `send` returns `None` and offers no acknowledgement,
-so a cancellation delivered while the close is suspended says nothing about whether the frame
-was committed: the outcome is *unobservable*, and a retry would risk a second `4403` for a
-close that probably succeeded. Nothing in the package cancels that attempt — it is the
-connection's, and it is shielded — so the only thing that can is the event loop that owns the
-socket being torn down, at which point no retry could reach a client anyway. `CLOSING` permits
-no new attempt, so the ruling needs no state of its own. The attempt's guard is `Exception`
-and not `BaseException` for the same split: a disconnected transport, a state assertion and an
-`OSError` are failures this connection can still answer for, while an
-`asyncio.CancelledError` is the loop taking the connection away and propagates. The failure is
-recorded and deliberately **not** re-raised out of the task — an awaiting checkpoint's job is
-to know the attempt finished, not to inherit its exception, and an attempt whose awaiter was
-cancelled must not leave an unretrieved exception behind either.
+**A CANCELLED close attempt is TERMINAL, and settlement is what makes that true.** ASGI's
+`send` returns `None` and offers no acknowledgement, so a cancellation delivered while the
+close is suspended says nothing about whether the frame was committed: the outcome is
+*unobservable*, and a retry would risk a second `4403` for a close that probably succeeded. So
+no retry is attempted — but the attempt does not rest in `CLOSING` either, because a state
+claiming an attempt is in flight must not outlive the attempt. The task records `ABANDONED`
+itself, before re-raising, and it is the task that records it rather than its awaiter because
+the task is the only party that knows whether the cancellation arrived before or after its own
+`await` returned.
+
+Only the connection's **final teardown** cancels this task. That premise is what the rest
+rests on: the socket is already going away, so no later attempt could reach a client, which is
+why terminal is the right answer rather than a retry. `settle` is the attempt's terminal owner
+and is reached from `disconnect` through `finally`, so a cancelled or failing upstream teardown
+cannot skip it and no task the connection owns outlives the connection. A cancellation
+delivered to `settle` is answered rather than shielded away: shielding alone would let the
+caller return while the task it was settling stayed suspended on a transport that is going
+away, so `settle` cancels the attempt, awaits it to completion, and re-raises — the caller's
+cancellation is honoured, and nothing retains the connection past it. Under *repeated*
+cancellation the guarantee weakens by exactly one step, stated rather than left to be
+discovered: the attempt is left cancel-requested and terminal rather than awaited to
+completion.
+
+The attempt's guard is `Exception` and not `BaseException` for the matching split: a
+disconnected transport, a state assertion and an `OSError` are failures this connection can
+still answer for, while an `asyncio.CancelledError` is the loop taking the connection away.
+The failure is recorded and deliberately **not** re-raised out of the task — an awaiting
+checkpoint's job is to know the attempt finished, not to inherit its exception, and an attempt
+whose awaiter was cancelled must not leave an unretrieved exception behind either.
 
 There is deliberately **no protocol-specific operation error before the close**. The actor is
 connection-scoped, so the close *is* the rejection; error-then-close only adds protocol
@@ -2338,15 +2400,40 @@ across Django 5.2 through current.
 
 *Rejected alternatives and change record: [rationale companion, Decision 17][rationale-d17].*
 
-### Decision 18 — The body gate runs before Django's multipart parser, via view-local CSRF re-entry
+### Decision 18 — The body gate runs before Django's multipart parser
 
-**Decision.** The package view is `csrf_exempt` on the **outside** and re-enters Django's
-public `csrf_protect` on the **inside**, after the body gate. No package middleware, no
-reimplemented token validation, no ordering system check, and no required `MIDDLEWARE` entry.
+**Decision.** The body gate precedes Django's multipart parser under **two** arrangements, and
+the package ships both: the ordering is supplied by the **middleware chain** where
+`GraphQLRequestBodyBoundaryMiddleware` is installed, and by the **view itself** where it is
+not. Neither reimplements token validation, and neither adds a required `MIDDLEWARE` entry.
+Both enforce the cap and both enforce CSRF; they differ only in which class performs the check.
 
-The fixed order inside the view is:
+**The chain-supplied arrangement.** `GraphQLRequestBodyBoundaryMiddleware` runs the
+whole boundary from `process_view`, which Django calls after URL resolution and before any
+later middleware's `process_view` — hence before the CSRF middleware's. It holds no policy of
+its own: it reaches the limit, the refusal statuses and the wire reasons by instantiating the
+resolved view exactly as `View.as_view` does, so the limit that applies is the mount's own
+`max_request_body_bytes`. An `HTTPException` becomes the same `text/plain` response upstream's
+`dispatch` produces, so a client cannot tell from the response which side of the CSRF check
+refused it.
 
-1. the outer dispatch callback carries `csrf_exempt`, so the global
+Install it **immediately before the project's own CSRF entry**, by the full leaf dotted path
+`django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware` —
+`middleware/__init__.py` deliberately re-exports nothing, so importing the leaf module is the
+opt-in, exactly as
+[`spec-042`][spec-042] pinned for the toolbar middleware. A chain
+that lists it *after* a CSRF entry is refused at startup with `ConfigurationError` rather than
+allowed to fail open,
+because that order would put the parse back in front of the cap. The audit compares entries by
+**resolved class**, so a subclass of either side is recognized; where a chain carries more than
+one CSRF entry it is judged against the **first**, since that is the entry whose `request.POST`
+read would parse the body.
+
+**The view-local fallback.** Where the chain does not supply the ordering, the package view is
+`csrf_exempt` on the **outside** and re-enters Django's public `csrf_protect` on the
+**inside**, after the body gate. The fixed order inside the view is:
+
+1. the outer dispatch callback carries the exemption, so the global
    `CsrfViewMiddleware.process_view` returns before it touches `request.POST` (its earlier
    `process_request` may still run and reads no body — it only reads the cookie secret);
 2. resolve and enforce the package body limit, returning the controlled `413` immediately if
@@ -2355,10 +2442,46 @@ The fixed order inside the view is:
 3. otherwise enter a private continuation wrapped with Django's public `csrf_protect`, which
    delegates to Strawberry's inherited `run`.
 
-`csrf_exempt` is stamped by the package, once, on the callback `as_view()` returns — a single
+The exemption is stamped by the package, once, on the callback `as_view()` returns — a single
 override on the shared mixin, so both views get it and a URLconf author cannot forget it.
 Django's `csrf_exempt` preserves the async view's coroutine marking by construction, so
 `AsyncDjangoGraphQLView` keeps being dispatched on the event loop.
+
+**The switch between them is per-request, not per-deployment.** The callback's `csrf_exempt`
+value is a lazily-evaluated object rather than `True`, because whether the ordering is supplied
+by the chain is not known when a URLconf is imported and a deployment must not have to state
+the same fact twice. It reads **false for a request whose boundary a chain entry has actually
+run** — the narrow fact, and the load-bearing one, since that is the request whose body is
+proven measured — and **true for every other request**. So there are three states, not two:
+
+- the chain ran the boundary, the exemption is false, and the deployment's own configured CSRF
+  class runs in full, after the cap;
+- no boundary middleware is installed, the exemption is true, and the view supplies the
+  ordering itself exactly as it does with this middleware absent;
+- the middleware is installed but **declined this callback** (below), the exemption is true,
+  and the request keeps the view-local arrangement. The CSRF **class** degrades to Django's
+  stock `CsrfViewMiddleware` for that request; the **ordering** does not degrade, and the cap
+  still runs.
+
+The guarantee is scoped to the chain that handles the request. A nested handler invoked inside
+another handler's response cycle is a different chain, and the arrangement each request gets is
+the one its own chain supplies.
+
+**Which callbacks the middleware runs a boundary for.** It recognizes a package view by
+attribute, never by importing the view classes, and the recognition **ends at the boundary**:
+it runs a package view's boundary only for a callback whose `view_class` carries that boundary
+**as something callable**, tested by attribute **on the class, before anything is
+constructed**. It never calls anything that is not a class to try, it builds nothing it has not
+established a boundary on, and **a read it cannot complete is a decline rather than an
+exception out of the hook**. Every other callback is declined and keeps the view-local
+arrangement.
+
+Every outcome the **recognition** reaches is therefore a controlled one — a refusal, a stamp,
+or a decline — including for a callback whose attribute reads raise instead of answering.
+Running a boundary the recognition has *accepted* is a separate question and is deliberately
+not guarded: a boundary that raises anything but `HTTPException` surfaces that mount's own
+failure, package or forged, **exactly as it would with this middleware uninstalled**. A guard
+there would sit across the body cap's own errors.
 
 **The outer exemption is an ORDERING MECHANISM, NOT a CSRF bypass**, and this spec says so in
 those words because it is the single sentence most likely to be misread. Every request that
@@ -2368,20 +2491,23 @@ Django's own code: cookie and header tokens, form tokens, `Origin` / `Referer` c
 package-owned and non-optional; there is **no consumer bypass switch**, no setting, and no
 view kwarg that disables it.
 
-**The invariant it buys.** Because the inner `csrf_protect` is unconditional, the GraphQL POST
-endpoint stays CSRF-protected **even if a consumer omits `CsrfViewMiddleware` from
+**The invariant it buys.** Because the inner `csrf_protect` is entered unconditionally, the
+GraphQL POST endpoint stays CSRF-protected **even if a consumer omits `CsrfViewMiddleware` from
 `MIDDLEWARE` entirely**. The reordering therefore strengthens the boundary it reorders.
 Django's own `csrf_protect` docstring settles the double-processing question — "Using both, or
 using the decorator multiple times, is harmless and efficient" — so a project with the global
-middleware installed pays a second cookie-secret read and nothing else.
+middleware installed pays a second cookie-secret read and nothing else. Where a CSRF check has
+already run for this request, Django's own `csrf_processing_done` makes the continuation's
+`process_view` a no-op, which is what makes **exactly one complete CSRF check** the guarantee in
+all three states rather than one-or-two.
 
 **Why the declared gate needs this at all.** `CsrfViewMiddleware._check_token` reads
 `request.POST.get("csrfmiddlewaretoken", "")` for every cookie-bearing POST — even one that
 will ultimately authenticate through the `X-CSRFToken` header — and `_check_token` runs from
 `process_view`, before the view's `run` reaches
 `_enforce_request_body_limit`. On a multipart request that single access invokes Django's
-multipart parser and the upload handlers. Without the re-entry below, the declared gate
-would therefore run **after** the parser it claims to precede
+multipart parser and the upload handlers. Without one of the two arrangements above, the
+declared gate would therefore run **after** the parser it claims to precede
 ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)
 step 3). A plain `Client()` disables CSRF, so the global middleware exits before
 `_check_token` and a row driven that way observes only the view-local branch: status `413`
@@ -2504,7 +2630,7 @@ wants a different Host policy configures `ALLOWED_HOSTS`, exactly as they would 
 | Slice | Finding | Where | Work | Risk profile |
 |---|---|---|---|---|
 | 1 | S1 | `routers.py`, new `views.py`, `tests/test_routers.py`, new `tests/test_views.py`, live tier | protocol split; required `django_application`; `websocket_url_pattern`; the package view; rewrite 5 router tests; live middleware / Host / CSRF / header / cache / routing proofs | **HIGH** — the breaking change; every downstream slice builds on the new shape |
-| 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper and its **three** probe outcomes ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)); `csrf_exempt` / `csrf_protect` re-entry so the gate really precedes `MultiPartParser` ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)); `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, the CSRF re-entry reorders a security middleware, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
+| 2 | S2 | `views.py`, new `_request_body.py`, `conf.py`, live tier, `tests/test_views.py` | cumulative cap pre-parse, measured not materialized; the one private-attribute compatibility helper and its **three** probe outcomes ([Decision 7](#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared)); `csrf_exempt` / `csrf_protect` re-entry so the gate really precedes `MultiPartParser` ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)); `MAX_REQUEST_BODY_BYTES` + view kwarg; the full regression matrix incl. the py3.10 / Django 5.2.0 floor | MED-HIGH — the measurement pins private Django internals whose seekability shape differs by interpreter, the CSRF re-entry reorders a security middleware, and multipart interaction with the [`Upload`][glossary-upload-scalar] path is the sharp edge |
 | 3 | S9 | `views.py` (the mixin's `parse_json`, the multipart control-field guard, **and** `_RawBodyRequestAdapter`), both patch modules' docstrings, `_strawberry_patches.py`, `test_products_api.py`, `test_transport_api.py`, `tests/test_cross_web_patches.py`, `tests/test_views.py` | strict UTF-8 decode on the view's `parse_json`, fed by the view's own `request_adapter_class`; the multipart control-document encoding + loss guard behind two `parse_multipart` delegates ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)); the patch gate narrowed to upstream defects; invert 3 live tests; re-aim 2 package tests; the kill-switch matrix in both opt-out spellings | LOW-MED — the JSON-body half is measured behavior with one rejection branch; the multipart half adds a second boundary on a path Django decodes first |
 | 4 | S11 | `routers.py`, `consumers.py` (WS consumer + 2 handler pre-hooks + the derived outbound-frame adapter + the private Host validator), `utils/sessions.py`, `exceptions.py`, `auth/sessions.py`, `tests/test_routers.py` | injection seam with a validated factory contract; the shared revalidation decision function; the adapter-level outbound-frame gate, its connection-scoped actor lease and its one close code ([Decision 16](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)); `DjangoWebSocketHostValidator` ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)); window kwarg and its typed domain; the shared safe value-describer; the multi-yield revoke-mid-subscription matrix on both protocols; the `0.316.0` install-hint correction | **HIGH** — async, per-frame, communicator-driven, and the lease is held across a send |
 | 5 | S12 | `docs/`, `spec-041`, glossary DB, kanban DB | migration note; transport guidance; `spec-041` amendment **plus** its stale `0.262.0` floor prose; GLOSSARY + TREE regen; card wrap | mechanical breadth; **no version quintet, no `CHANGELOG.md`** |
@@ -2579,11 +2705,14 @@ removed in the change that ships the slice — the repo's standing staging disci
   they raise reuses the one `_JSON_PARSE_REASON` constant rather than inventing a second
   reason string
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
-- **The CSRF re-entry uses Django's two public decorators and reimplements neither.**
-  `csrf_exempt` on the callback `as_view()` returns, `csrf_protect` around the private
-  continuation — one `as_view` override on the shared mixin so the two views cannot diverge,
-  and no package-authored token validation, cookie rotation, or `Vary` handling anywhere
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+- **Neither CSRF arrangement reimplements any part of Django's check.** The fallback uses
+  Django's two public decorators — `csrf_exempt` on the callback `as_view()` returns,
+  `csrf_protect` around the private continuation, one `as_view` override on the shared mixin so
+  the two views cannot diverge. The chain-supplied arrangement runs the deployment's own
+  configured CSRF class untouched, in its own chain position. No package-authored token
+  validation, cookie rotation, or `Vary` handling exists anywhere, and the ordering audit
+  inspects `MIDDLEWARE` without importing or wrapping any CSRF class
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
 - **The actor is written back to `scope["user"]` rather than plumbed to readers.** The
   existing [Channels request adapter][glossary-channels-request-adapter] and
   [`request_from_info`][glossary-request_from_info] single-siting is preserved; this card
@@ -2593,7 +2722,7 @@ removed in the change that ships the slice — the repo's standing staging disci
   share** — that single-siting, not the placement of the override itself, is what stops the
   sync and async colours diverging. Two of the four are hosted on the mixin directly, because
   upstream spells them identically on both views: `as_view` for the CSRF ordering
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry))
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser))
   and `parse_json` for the wire contract
   ([Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)).
   The other two are declared on each concrete view, because upstream itself splits them by
@@ -2743,9 +2872,10 @@ removed in the change that ships the slice — the repo's standing staging disci
   [`DjangoMutation`][glossary-djangomutation] file path. The cap branches on
   `request.content_type` and applies the declared-size gate only.
 - **The declared multipart gate is an ordering property, not just a cap property.** It runs
-  before `MultiPartParser` only because the view is `csrf_exempt` outside and
+  before `MultiPartParser` only because something supplies the ordering — the boundary
+  middleware from its chain position, or the view being `csrf_exempt` outside and
   `csrf_protect` inside
-  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
   A regression that proves the gate with a plain `Client()` proves nothing about ordering,
   because that client disables CSRF and the global middleware exits before it reads
   `request.POST`. `Client(enforce_csrf_checks=True)` with a real cookie and header, plus a
@@ -3164,8 +3294,11 @@ package, communicator-driven, **once per protocol**):
     then cancel the operation that first observed the revocation (`complete` / `stop`) and
     prove the attempt is neither cancelled nor abandoned — it is still awaited and recorded,
     settled by the consumer's own `disconnect` if nothing else awaits it. And the cancelled-
-    attempt ruling, asserted positively: an attempt cancelled mid-flight leaves the connection
-    in `CLOSING`, no second close is attempted, and no second `4403` reaches the wire.
+    attempt ruling, asserted positively: an attempt cancelled mid-flight is terminal, recording
+    `ABANDONED` itself rather than resting in `CLOSING`; no second close is attempted and no
+    second `4403` reaches the wire; settlement is reached through `finally`, so a teardown that
+    raises **and** a cancellation delivered inside that teardown both still settle the close;
+    and a cancelled settlement cancels the attempt, awaits it, and re-raises.
 
 **Multipart control fields**
 ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard);
@@ -3193,7 +3326,7 @@ live, real multipart requests, **both** package views):
     have added a boundary without taking Django's streaming upload handling away.
 
 **Cap ordering against CSRF**
-([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry);
+([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser);
 live):
 
 45. `Client(enforce_csrf_checks=True)`, a valid CSRF cookie **and** header, an
@@ -3275,11 +3408,19 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
     separate wrappers, that `Host` follows the project's existing `ALLOWED_HOSTS` and
     `USE_X_FORWARDED_HOST` exactly as HTTP does, and that no new setting exists
     ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
-  - **CSRF ordering.** That the GraphQL view is `csrf_exempt` outside and `csrf_protect`
-    inside, in one sentence that leads with *ordering mechanism, not bypass*, and that the
-    endpoint stays CSRF-protected even without the global middleware
-    ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)).
+  - **CSRF ordering.** That the ordering comes from one of two places, in one sentence that
+    leads with *ordering mechanism, not bypass*, and that the endpoint stays CSRF-protected
+    even without the global middleware
+    ([Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)).
     A reader who skims this paragraph must not come away thinking CSRF was relaxed.
+  - **Installing the boundary middleware.** That `GraphQLRequestBodyBoundaryMiddleware` exists,
+    what installing it buys — the deployment's *own* configured CSRF class runs the check
+    instead of Django's stock one — where it goes (immediately before the project's CSRF
+    entry), that a chain listing it afterwards is refused at startup, and that a deployment
+    which never edits `MIDDLEWARE` keeps the view-local arrangement with nothing to change. The
+    withdrawal wording must be the narrow form the code implements: the exemption is false for
+    a request whose boundary a chain entry **ran**, never for any request merely travelling an
+    installed chain.
   - **Multipart control documents.** That `operations` / `map` must be effectively UTF-8 and
     must survive Django's decode without a replacement marker, with the `\uXXXX` escape named
     as the way to send a literal `U+FFFD`
@@ -3379,7 +3520,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   `make_middleware_decorator` branches on `iscoroutinefunction(view_func)` and produces an
   async wrapper, verified at the installed 6.0.5; the same branch is expected at the 5.2.0
   floor but has not been read there in this pass.
-  [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry)
+  [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)
   is written as **decided**, and a builder is verifying the floor empirically in an isolated
   venv. Preferred answer: no change — the decorator is public API and its async support
   predates the floor. Fallback if the floor lacks it: the async view's continuation is wrapped
@@ -3473,8 +3614,15 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 - [ ] The declared multipart ceiling runs **before** `request.POST`, `request.FILES`,
       `MultiPartParser` and every upload handler, proven under
       `Client(enforce_csrf_checks=True)` with a parser / upload-handler sentinel that must not
-      fire — and the `csrf_exempt` / `csrf_protect` re-entry is shown to be an ordering
-      mechanism and not a bypass, including with the global `CsrfViewMiddleware` removed.
+      fire — and the ordering is shown to be an ordering mechanism and not a bypass, including
+      with the global `CsrfViewMiddleware` removed. Proven in **both** arrangements: with
+      `GraphQLRequestBodyBoundaryMiddleware` in the chain, and with the chain supplying nothing
+      so the view-local re-entry is what holds.
+- [ ] `GraphQLRequestBodyBoundaryMiddleware` runs a package view's boundary only for a callback
+      whose `view_class` carries that boundary as something callable, tested on the class before
+      anything is constructed; a callback it declines keeps the view-local arrangement with the
+      cap still enforced; a read it cannot complete declines rather than raising out of
+      `process_view`; and a chain that lists it after a CSRF entry is refused at startup.
 - [ ] `MAX_REQUEST_BODY_BYTES` exists in `conf.py` with a per-mount view-kwarg override
       and the documented precedence; it is the only settings key this card adds.
 - [ ] An `application/json` request body is UTF-8-only: UTF-16 / UTF-32 (BOM and BOM-less)
@@ -3524,10 +3672,14 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
       (`consumers.py::_ConnectionRevocation`): "decided", "in flight" and "completed" stay
       separable; the decision is published synchronously so every checkpoint denies read-free;
       the attempt is a connection-owned task awaited through `asyncio.shield` and settled by
-      the consumer's `disconnect`; the outcome is recorded by the attempt after its own await
+      the consumer's `disconnect` through `finally`, so a raising or cancelled upstream teardown
+      cannot skip settlement; the outcome is recorded by the attempt after its own await
       returns; a raised attempt is retried within
       `consumers.py::_MAX_REVOCATION_CLOSE_ATTEMPTS` and then abandoned; a cancelled attempt is
-      never retried; exactly one `4403` ever reaches the wire; and information-bearing frames
+      never retried and is terminal, recording `ABANDONED` itself rather than resting in
+      `CLOSING`; a cancelled settlement cancels the attempt, awaits it and re-raises so the
+      caller's cancellation is honoured; exactly one `4403` ever reaches the wire; and
+      information-bearing frames
       stay refused in every state, so the refusal never depends on the close having been
       committed.
 - [ ] Once revocation is **decided** the package puts no further frame on the socket, including
@@ -3628,7 +3780,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 [rationale-d15]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
 [rationale-d16]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
 [rationale-d17]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[rationale-d18]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[rationale-d18]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
 [rationale-d19]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
 [rationale-d2]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
 [rationale-d3]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
@@ -3640,6 +3792,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 [rationale-d9]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
 [spec-040]: spec-040-auth_mutations-0_0_13.md
 [spec-041]: spec-041-channels_router-0_0_14.md
+[spec-042]: spec-042-debug_toolbar-0_0_14.md
 [spec-050]: spec-050-debug_extraction-0_0_19.md
 
 <!-- docs/builder/ -->

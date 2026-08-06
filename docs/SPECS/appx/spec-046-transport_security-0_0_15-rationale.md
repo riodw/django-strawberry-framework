@@ -23,6 +23,13 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
 - Round attribution: **Decisions 1-15** were authored from the `docs/feedback2.md` hardening
   audit (findings S1, S2, S9, S11, S12-transport). **Decisions 16-19** are review round 2's
   decided contracts. Round 1's findings were closed and committed before round 2 opened.
+- **Three decisions were amended after `0.0.15` shipped**, and each carries a `Change record`
+  block naming what it used to say and why that changed: [Decision 9][s65-d9] gained the
+  declared-`charset` half, [Decision 16][s65-d16]'s cancelled-close ruling was retracted and
+  replaced, and [Decision 18][s65-d18] gained a second CSRF-ordering arrangement — a package
+  middleware this file had previously recorded as a **rejected** alternative. Where a change
+  record and the spec disagree, the spec is the contract and the change record is why it moved;
+  a claim the decision may no longer make is named in the record rather than deleted silently.
 - Two things deliberately **stayed** in the spec even though they read like deliberation,
   because a builder who never reads them can rewrite a fail-open: the rejected
   rewind-to-zero direction and the "a probed count of zero is a measurement failure, never an
@@ -602,6 +609,34 @@ contract has. Rejected as out of scope for a custodian pass and wrong on the mer
 a workaround for a specific upstream defect (#3398), so it *should* stay opt-out-able, which is
 [Decision 9][s65-d9]'s own lifecycle rule applied in the other direction.
 
+**Change record — the declared-`charset` half was added after the release.** As shipped, this
+decision governed only the bytes: `parse_json` decoded strictly as UTF-8 and nothing read the
+`charset` the client declared on the content type. One byte sequence could therefore be `é` to
+this endpoint and two Latin-1 characters to any hop that honours the declaration, which makes the
+"one wire encoding" claim true of the decode and false of the exchange. The refusal now lives in
+`views.py::_RequestBodyBoundaryMixin._enforce_body_charset_declaration` and the spec states its
+contract.
+
+- **Absent is honourable by default, not a hole.** Rejected: refusing an absent declaration.
+  Absent is the overwhelmingly common case and leaves the strict decode as the only encoding
+  contract — the stronger one, because it inspects bytes rather than a header.
+- **Canonicalization, not string equality.** Rejected: comparing the declared name to a literal
+  set. Python's codec machinery already resolves every legitimate alias, and a hand-kept alias
+  list is a blacklist by another name. `utf-8-sig` is refused despite canonicalizing *near* UTF-8
+  because it is a different codec whose BOM [Decision 10][s65-d10] independently refuses.
+- **The condition is named once and shared.** The JSON gate and the multipart gate both ask
+  whether the declaration is honourable, so the answer is one function
+  (`::_declared_charset_is_unhonourable`) rather than two copies that can drift on what
+  "declared" means — the same reason `::_is_multipart_form_post` is named once.
+- **Method scope follows the cap's, and the consequence is accepted rather than fixed.** The
+  guard is skipped for `GET` only, matching `::_enforce_request_body_limit`'s scope so the two
+  body boundaries cannot disagree about which requests they govern. A method this endpoint does
+  not serve which nonetheless declares an unhonourable `charset` is therefore refused `400`
+  before routing would have answered `405`. Rejected: enumerating methods to preserve upstream's
+  `405`. The direction is stricter, the reason string is shared with the strict decode's, and
+  agreement between the two body boundaries is worth more than the status code on a request that
+  was going to be refused either way.
+
 ### Decision 10 — A UTF-8 BOM is rejected
 
 Spec: [Decision 10][s65-d10]. Cited from
@@ -1158,6 +1193,45 @@ to the socket, delegated frames included** — and the frame-type table describe
   adapter's `close`, not through `send_json`, so it is outside this arm by construction — which
   is also why an arm that refuses everything cannot deadlock the revocation it exists to serve.
 
+**Change record — the cancelled-close ruling was retracted and replaced.** This decision
+originally ruled that *"a CANCELLED close attempt leaves the connection in `CLOSING`,
+permanently, and that is the ruling rather than an omission"*, resting on two premises: that a
+cancellation's outcome is unobservable (which stands, and is still why no retry is attempted) and
+that **nothing in the package cancels the attempt** because it is connection-owned and shielded.
+The second premise was false in the only direction that mattered. Shielding kept the attempt alive
+through a waiter's cancellation but did not keep the waiter awaiting it, so a cancelled settlement
+left the attempt pending, the state at `CLOSING`, and a task still holding the adapter, consumer,
+scope, session and a stale actor after the ASGI application had returned. `CLOSING` claims an
+attempt is in flight; nothing was.
+
+The replacement is that settlement is **terminal**, and the retraction is the interesting half:
+
+- **The attempt records its own terminal state.** A cancelled `_attempt_close` sets `ABANDONED`
+  before re-raising. Rejected: having the awaiter record it. Only the task knows whether the
+  cancellation arrived before or after its own `await` returned, so the awaiter would be guessing.
+- **A cancellation delivered to `settle` is answered, not shielded away.** `settle` cancels the
+  attempt, awaits it to completion, and re-raises, so the caller's cancellation is honoured and no
+  task retains the connection past it. Rejected: shielding alone — it lets the caller return while
+  the task it was settling stays suspended on a transport that is going away, which is the leak
+  restated rather than fixed. The mid-connection shield in `close()` is deliberately **unchanged**:
+  a revocation close racing another caller must still survive that caller's cancellation. Only
+  final teardown ends the task.
+- **`disconnect` reaches settlement through `finally`.** Rejected: a sequential
+  `await super().disconnect(code)` followed by settlement. A `CancelledError` arriving while
+  upstream's teardown is still awaiting would leave `super().disconnect` and never reach a
+  sequential settlement at all, orphaning a close the transport still has parked.
+- **The residual, stated rather than left to be found.** Under *repeated* cancellation the
+  attempt is left cancel-requested and terminal rather than awaited to completion. Accepted: the
+  second cancellation is the loop taking the connection away while the connection is already
+  being taken away, and the state is terminal either way.
+
+**The premise the whole arm rests on**, now stated in the spec because `settle`'s correctness
+depends on it: **only the connection's final teardown cancels this task.** A third-party
+cancellation of the attempt would propagate a `CancelledError` in place of a caller's exception.
+It is unreachable through any supported seam — `attempt.cancel()` occurs once in the package,
+inside `settle` — but it was load-bearing and unwritten, which is the kind of premise that
+survives only until someone adds a second caller.
+
 ### Decision 17 — Multipart control fields stay Django-parsed, behind a strict loss-detection guard
 
 Spec: [Decision 17][s65-d17]. **A review round 2 decision** (round 2's M1): a multipart
@@ -1266,21 +1340,13 @@ no builder wrote too little code from it — but "two-line" is the kind of detai
 literally, and a delegate that reads three lines against a spec that says two is a finding
 argued against correct code.
 
-### Decision 18 — The body gate runs before Django's multipart parser, via view-local CSRF re-entry
+### Decision 18 — The body gate runs before Django's multipart parser
 
-Spec: [Decision 18][s65-d18]. **A review round 2 decision** (round 2's M1 sibling on ordering).
+Spec: [Decision 18][s65-d18]. **A review round 2 decision** (round 2's M1 sibling on ordering),
+**amended twice after the `0.0.15` release** — see the change record below.
 
 **Alternatives rejected.**
 
-- **A narrow package middleware placed before `CsrfViewMiddleware`, plus a system check that
-  detects missing or wrong ordering** (the review's own first suggestion). Rejected: it adds
-  a **required deployment entry** — a `MIDDLEWARE` line every consumer must add in the right
-  position, policed by a check that exists only because the requirement exists — which cuts
-  directly against this card's thesis that Django owns the HTTP stack and against
-  [Decision 6][s65-d6]'s
-  rejection of a `MIDDLEWARE`-shaped cap. It would also apply the GraphQL cap project-wide
-  unless the middleware carried a path predicate, reintroducing the mount-matching problem the
-  view seam removed.
 - **Narrowing the claim without reordering** — "the view cap prevents Strawberry parsing and
   schema execution; proxy and Django upload settings own multipart resource consumption."
   Rejected: the reorder is achievable with two public Django decorators and no deployment
@@ -1290,6 +1356,99 @@ Spec: [Decision 18][s65-d18]. **A review round 2 decision** (round 2's M1 siblin
   Rejected on sight: the package would own CSRF validation, cookie rotation, `Vary`, and
   `CSRF_FAILURE_VIEW` — a partial re-implementation of a security middleware that must track
   Django's security releases forever, which is the same mistake S1 exists to undo.
+- **Removing the exemption and the stock re-entry outright** once the middleware existed, so the
+  chain were the only arrangement. Rejected: it changes behaviour for every deployment that has
+  not edited `MIDDLEWARE`, which is precisely the population the fallback exists for.
+
+**Change record — the package middleware was adopted, having first been rejected.** What shipped
+is `middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`. This entry originally
+rejected *"a narrow package middleware placed before `CsrfViewMiddleware`, plus a
+system check that detects missing or wrong ordering"* on the grounds that it adds a **required
+deployment entry** — a `MIDDLEWARE` line every consumer must add in the right position, policed
+by a check that exists only because the requirement exists — cutting against this card's thesis
+that Django owns the HTTP stack and against [Decision 6][s65-d6]'s rejection of a
+`MIDDLEWARE`-shaped cap, and that it would apply the GraphQL cap project-wide unless it carried
+a path predicate, reintroducing the mount-matching problem the view seam removed.
+
+That reasoning was answered rather than overruled, which is what turns a reversal into a
+resolution:
+
+- **The entry is optional, so there is no required deployment line and no check policing one.**
+  The callback's `csrf_exempt` is a lazily-evaluated object instead of `True`, so a deployment
+  that never edits `MIDDLEWARE` keeps the view-local arrangement unchanged and states nothing
+  twice. What was rejected was middleware **plus a required entry**; what shipped is middleware
+  **minus** the requirement.
+- **There is no Django system check.** Misordering is a **startup raise from the middleware's
+  own `__init__`**, so a chain that would defeat the ordering fails loudly at construction
+  rather than being reported by a check a consumer may never run.
+- **There is no path predicate and no project-wide cap.** The middleware runs a boundary only
+  for callbacks it recognizes as package views, and the limit it applies is the resolved mount's
+  own `max_request_body_bytes`, reached by instantiating the view as `View.as_view` does. It
+  holds no policy, so there is nothing to apply project-wide.
+
+**What forced it.** The fallback re-enters CSRF through `csrf_protect`, which is built from
+Django's *stock* `CsrfViewMiddleware`. On a project whose `MIDDLEWARE` names a subclass —
+strengthened token binding, tenant checks, a different rejection policy — the continuation ran
+the base implementation in that subclass's place, so the endpoint silently lost those additions.
+The configured class is a property of the chain and cannot be recovered from inside the view,
+which is why the ordering had to become available *from* the chain.
+
+**Change record — the exemption's withdrawal is per-request, not chain-wide.** The withdrawal
+was first keyed off a "this middleware is handling a request" flag, which is a property of the
+*chain* rather than of the request. Any callback the middleware did not recognize then travelled
+with the exemption already withdrawn and no boundary run, so neither side supplied the ordering
+and the configured CSRF middleware parsed the form ahead of the cap — the exact failure the
+arrangement exists to prevent, reachable through a wrapper that drops the marker. The withdrawal
+is now keyed off the per-request `_BOUNDARY_ENFORCED` stamp, so "the exemption is withdrawn" and
+"the boundary ran" are one fact about one request. The third state this makes explicit — declined
+callback, exemption intact, CSRF **class** degraded but ordering and cap intact — is stated in
+the spec because it is reachable, not because it is desirable.
+
+**Change record — recognition ends at the boundary, and its reads are guarded.** Recognition
+originally ended at *an instance was produced* rather than *an instance carrying the boundary*, so
+a callback carrying the package's private marker over a real, buildable class that is no package
+view reached `view._enforce_request_boundary(request)` and raised out of `process_view`. Two
+contract calls settled it:
+
+- **Where to probe.** Rejected: probing the **built instance** — it closes the same hole, but only
+  after running a foreign class's `__init__`, which the suite already forbids by a row. Rejected:
+  **declaring the forged marker out of contract** — more text than the fix, and an exception to the
+  no-unrelated-`500` doctrine [Decision 7][s65-d7] establishes. Rejected: **refusing it outright**,
+  with a `ConfigurationError` where detectable — loudest, but it contradicts the accepted
+  state-enumeration contract in which every unforeseen state answers "no" and falls back. Adopted:
+  probe the **class**, before construction, and probe for something **callable** — an attribute of
+  that name which cannot be called is not a boundary this middleware can run either, and
+  recognizing it would hand `process_view` the same uncontrolled failure the probe removes.
+- **How widely to guard.** Rejected: **narrowing the three absolute sentences** instead of guarding
+  — the documentary narrowing already rejected one shape over, for a fix of comparable size.
+  Rejected: **one broad `except Exception` around the recognition and the construction together**
+  — it would replace the narrow `except TypeError` whose narrowness the review examined and
+  accepted, and would convert a package mount's own non-`TypeError` construction failure into a
+  silent decline. Adopted: guard the four recognition **reads** broadly, because a read that raises
+  is no answer at all, and keep the construction's `except TypeError` narrow, because a class that
+  cannot be built from the kwargs it names is a determined answer.
+
+**The probe's limit, stated in both its shapes.** An attribute read on a class consults that
+class's own attribute machinery, and there are two ways to reach it: a **metaclass `__getattr__`**
+and a **class-level descriptor** under the probed name. Either still runs consumer code during
+recognition, which is why every recognition read is guarded rather than merely narrow. This is a
+separate sentence from the threat model and must stay separate: **forging the package's private
+marker is outside the threat model** — the [spec-045][spec-045] stance that no in-interpreter walk
+is a trust boundary against a party already executing code in the process — and the probe plus the
+read guard exist so that every outcome the *recognition* reaches is controlled, **not** to defend
+against a forger. Conflating the two is what invites a later pass to over-promise, which is the
+failure this amendment hit twice before landing.
+
+**What the recognition does not promise.** Running a boundary the recognition has *accepted* is
+outside the absolute, deliberately. A `view_class` carrying a callable of the probed name whose
+boundary raises anything but `HTTPException` leaves `process_view` uncaught — measured identically
+at Python 3.14 / Django 6.0 and at the 3.10 / 5.2 floor, and identically for a package mount and a
+forged one. Guarding it would put an `except` across the body cap's own errors and across a package
+mount's genuinely broken boundary, which the same design deliberately keeps as loud as it would be
+with the middleware uninstalled. Whether the package nonetheless owes a controlled response there
+is an open contract call, recorded on the card that owns the boundary rather than decided here; no
+test row asserts today's uncontrolled outcome as contract, because that would freeze an outcome
+nobody has chosen.
 
 **Claim this decision falsified.** The declared multipart ceiling was documented as running
 before Django's `MultiPartParser`, and as shipped it did not:
@@ -1433,7 +1592,7 @@ reader who takes the bullet as a statement about their own development stack.
 [s65-d15]: ../spec-046-transport_security-0_0_15.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
 [s65-d16]: ../spec-046-transport_security-0_0_15.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
 [s65-d17]: ../spec-046-transport_security-0_0_15.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[s65-d18]: ../spec-046-transport_security-0_0_15.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser-via-view-local-csrf-re-entry
+[s65-d18]: ../spec-046-transport_security-0_0_15.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
 [s65-d19]: ../spec-046-transport_security-0_0_15.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
 [s65-d2]: ../spec-046-transport_security-0_0_15.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
 [s65-d3]: ../spec-046-transport_security-0_0_15.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
@@ -1448,6 +1607,7 @@ reader who takes the bullet as a statement about their own development stack.
 [s65-non-goals]: ../spec-046-transport_security-0_0_15.md#non-goals
 [s65-slice-checklist]: ../spec-046-transport_security-0_0_15.md#slice-checklist
 [spec-040]: ../spec-040-auth_mutations-0_0_13.md
+[spec-045]: ../spec-045-visibility_boundary-0_0_14.md
 [spec-046]: ../spec-046-transport_security-0_0_15.md
 
 <!-- docs/builder/ -->

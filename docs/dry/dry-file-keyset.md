@@ -274,3 +274,175 @@ package, the rejected candidates hold up under independent re-tracing, and the n
 needed.
 
 Status: verified.
+
+## Iterations
+
+### Worker 1 — fresh re-review of current source (post–`KeysetSeekPlan`)
+
+Plan checkbox still open; source has evolved past the first-pass write-up
+(`KeysetSeekPlan` / `build_keyset_seek_plan` / `keyset_seek_sql` already landed in
+`4d46e634`; lateral adapter consumes the shared plan). Fresh system-wide review of
+HEAD against `ITEM_BASELINE` `b1eb47de` — did not seed findings from the sections
+above. Item-scoped source diff
+(`git diff b1eb47de -- django_strawberry_framework/keyset.py` and
+`optimizer/lateral_fetch.py`) is empty before and after this pass.
+
+#### System trace (current)
+
+`keyset.py` owns the keyset cursor + seek vocabulary:
+
+- Declaration / finalization: `split_order_ref`, `validate_cursor_field_references`,
+  `validate_cursor_field_columns`, `cursor_columns_for` (local concrete non-nullable
+  non-JSON unique-terminal contract).
+- Codec: `serialize_cursor_value` / encode+decode through AES-SIV +
+  `KEYSET_CURSOR_PREFIX`; `order_fingerprint` embeds effective order.
+- Seek: `keyset_seek_greater` → `KeysetSeekPlan` / `build_keyset_seek_plan` →
+  dialect renderers `keyset_seek_q` (ORM) and `keyset_seek_sql` (raw SQL);
+  `KeysetSeek` carrier exposes `.q()` and `.plan([adapted values])`.
+
+Callers re-read in full:
+
+- `types/base.py::_validate_cursor_field` /
+  `types/finalizer.py` → validation halves.
+- `connection.py::_keyset_connection_context` /
+  `_keyset_order_state` / `_resolve_keyset_connection` / `_resolve_from_window` →
+  declared cache, root `orderBy:` column derivation (incl. `__` paths via
+  annotation), mint/decode/seek for root and per-parent fallback.
+- `optimizer/nested_planner.py::_keyset_cursor_context` /
+  `_keyset_window_slice_from_arguments` → declared-only nested context + decode;
+  no per-relation `orderBy:` into a nested keyset window.
+- `optimizer/plans.py::apply_window_pagination` → `keyset_seek.q()` only.
+- `optimizer/lateral_fetch.py::_keyset_seek_sql` → lateral-only bind/quote adapter
+  calling `keyset_seek_sql(refs, seek.plan(values))`;
+  `_keyset_seek_quals_match` verifies prefetch WHERE against `seek.plan()` facts
+  (Django post-squash tree shape), not a second direction rule.
+- Live coverage: `examples/fakeshop/test_query/test_keyset_api.py`; package pins in
+  `tests/test_keyset.py` (plan facts, SQL shapes, direction table, codec).
+
+#### Verification (critical lookalikes re-challenged)
+
+1. **`split_order_ref` vs `order_entry_name_and_direction`.** Executable contract
+   table over shared string inputs: agree on `name` / `-name` / `pk`; diverge on
+   `--name` (order_entry returns `("-name", True)`, split raises
+   `ConfigurationError`), `__` paths (order_entry accepts, split rejects), empty /
+   bare `-` (order_entry `None`, split raises), and OrderBy/F expressions
+   (order_entry only). Callers: config-time loud gate vs query-time
+   fallback-tolerant parse that must accept relation paths
+   (`connection.py::_resolve_order_path_field`). **Rejected** — opposite error
+   contracts and a live behavioral split, not two spellings of one rule.
+
+2. **ORM vs SQL seek rendering beyond the shared plan.** Both renderers already
+   consume `KeysetSeekPlan`. Remaining difference is representation: portable `Q`
+   (windowed / non-Postgres) vs parameterized SQL with a uniform-direction
+   row-value shortcut (lateral). Collapsing into one emitter would force a side
+   off its native form for no parity gain — the plan already is the shared
+   structure owner. **Rejected** further merge.
+
+3. **Direction / plan / arity residue in `lateral_fetch`.** No local
+   `keyset_seek_greater`; no inline `descending if flip` formula. `_keyset_seek_sql`
+   is bind+quote only. `_keyset_seek_quals_match` reads `plan.greater` /
+   `plan.lead_greater` / `plan.values`. The `seek_signature == order_columns`
+   guard in `_build_lateral_spec` is column/value alignment, not a parallel
+   direction rule. **Rejected**.
+
+4. **Root vs nested order resolution.**
+   `_keyset_order_state` derives columns from arbitrary effective order (relation
+   annotations, GraphQLError on unanchorable entries);
+   `_keyset_cursor_context` only ever reads declared `cursor_field`. Both already
+   call `cursor_columns_for` + `order_fingerprint` for the declared fast path.
+   Pairing those two calls into a third wrapper would not capture a new rule.
+   **Rejected**.
+
+5. **Codec / fingerprint / serialize.** Single encode/decode path, one
+   fingerprint join, one field codec + inverse with canonical re-serialize check.
+   No parallel mint/decode elsewhere. **Rejected**.
+
+Optional scratch: contract table for (1) via `uv run python` importing both
+parsers (untracked, not retained under `docs/dry/temp-tests/`).
+
+#### Opportunities
+
+None — current source already has one direction rule, one seek plan, and two
+dialect renderers behind that plan; every re-challenged lookalike encodes a
+distinct caller obligation or representation.
+
+#### Judgment
+
+Zero-edit. Prior consolidations (`keyset_seek_greater`, then
+`KeysetSeekPlan` / `keyset_seek_sql`) are the present ownership boundary; this
+pass confirms nothing further should move. Strongest rejected candidates: the
+two order-string parsers (proven divergent on `--name` and `__`), and further
+ORM/SQL renderer collapse past the shared plan. Ready for Worker 2.
+
+#### Implementation (Worker 1)
+
+No production, test, or export edits. Artifact-only update (this Iterations
+block + top `Status: fix-implemented`). Item-scoped source diff vs baseline
+remains empty. Concurrent dirty paths left untouched. Ruff not required (no
+`.py` edits). Pytest deferred per cycle rules. No changelog.
+
+#### Independent verification (Worker 2)
+
+Re-traced current `keyset.py` and its live consumers from source, not from
+prior write-ups. Confirmed item-scoped source diff vs `ITEM_BASELINE`
+`b1eb47de` is empty for
+`django_strawberry_framework/keyset.py`,
+`django_strawberry_framework/optimizer/lateral_fetch.py`, and
+`tests/test_keyset.py` (also empty vs `HEAD` working tree). Zero-edit claim
+holds for this pass.
+
+**Ownership boundary (present).** Direction rule lives only in
+`keyset_seek_greater`; structure in `KeysetSeekPlan` /
+`build_keyset_seek_plan`; dialects are `keyset_seek_q` (ORM) and
+`keyset_seek_sql` (raw SQL). `lateral_fetch._keyset_seek_sql` is bind+quote
+only (`seek.plan(values)` → `keyset_seek_sql`); `_keyset_seek_quals_match`
+reads `plan.greater` / `plan.lead_greater` / `plan.values` — no local
+direction formula. Package-wide search found no `_keyset_seek_greater`, no
+inline `descending if flip` residue, and a single AES-SIV /
+`KEYSET_CURSOR_PREFIX` / `order_fingerprint` / encode+decode path.
+
+**Rejected candidates re-challenged.**
+
+1. **`split_order_ref` vs `order_entry_name_and_direction`.** Executable
+   contract table (fakeshop Django setup): agree on `name` / `-name` /
+   `pk`; diverge on `--name` (split `ConfigurationError`, order_entry
+   `("-name", True)`), `__` paths (split rejects, order_entry accepts —
+   live for root `orderBy:` via `connection._resolve_order_path_field`),
+   empty / bare `-` (raise vs `None`), `---` (raise vs `("--", True)`),
+   and `OrderBy`/`F` (order_entry only). Opposite caller obligations;
+   rejection upheld.
+
+2. **Further ORM/SQL renderer merge.** Both already consume
+   `KeysetSeekPlan`. Remaining difference is representation (portable `Q`
+   vs parameterized SQL + uniform row-value shortcut). Collapsing would
+   force a side off its native form; plan already owns shared structure.
+   Rejection upheld.
+
+3. **`lateral_fetch` direction / plan residue.** `_build_lateral_spec`'s
+   `seek_signature == order_columns` guard is column/value alignment, not
+   a parallel direction rule. Rejection upheld.
+
+4. **Root vs nested order resolution.** `_keyset_order_state` derives
+   arbitrary effective order (incl. `__` annotations + GraphQLError on
+   unanchorable entries); `_keyset_cursor_context` only reads declared
+   `cursor_field`. Nested planner explicitly leaves sidecar
+   `filter:`/`orderBy:` keys UNPLANNED. Both already call
+   `cursor_columns_for` + `order_fingerprint` on the declared fast path.
+   Rejection upheld.
+
+5. **Codec / fingerprint / serialize.** Single path; connection imports
+   `_is_supported_cursor_field` from keyset rather than redefining it.
+   Rejection upheld.
+
+**Missed consolidations.** None found. Consumers route seeks through
+`KeysetSeek.q()` / `.plan()` or the shared SQL renderer; no bypass
+predicate builders.
+
+**Concurrent WIP.** Left untouched: `KANBAN.html`, `KANBAN.md`,
+`docs/feedback2.md`, `examples/fakeshop/db.sqlite3` (and any other
+non-item dirty). Only this artifact + plan checkbox updated.
+
+**Conclusion.** Zero-edit verified. Prior consolidations
+(`keyset_seek_greater`, then `KeysetSeekPlan` / dual renderers) are the
+correct present boundary; lookalikes stay separate for real contract
+reasons. Pytest deferred per cycle rules. Plan item marked complete.

@@ -4,209 +4,164 @@ Status: verified
 
 ## System trace
 
-`permissions.py` owns exactly one responsibility: **call-time cascade visibility**
-(`apply_cascade_permissions` / `aapply_cascade_permissions`). It walks a
-`DjangoType`'s model single-column forward FK/OneToOne edges
-(`_is_cascadable_edge`, `_cascadable_edges`), resolves each edge's target type
-through `registry.get` (primary lookup), and intersects
-`Q(<edge>__in=<target-visible-pks>) | Q(<edge>__isnull=True)` into the caller's
-queryset — narrowing without evaluating, reordering, or projecting. A
-`ContextVar` seen-set (`_cascade_seen`) breaks cascade cycles; `_validate_fields`
-validates an optional `fields=` scoping kwarg against the cascadable-edge set.
-The async twin wraps the single sync walk in
-`sync_to_async(thread_sensitive=True)`.
+`permissions.py` owns **call-time cascade visibility** only:
+`apply_cascade_permissions` / `aapply_cascade_permissions`. A consumer calls the
+helper from inside `DjangoType.get_queryset`; the walk is depth-1 over the
+model's single-column concrete forward FK / OneToOne edges (MTI
+`<parent>_ptr` parent links included). Each edge whose target model has a
+registered primary type contributes a subquery from that type's
+`_default_manager` (pinned to the root DB alias) run through its
+`get_queryset`, intersected as `Q(<edge>__in=<visible>)` plus
+`| Q(<edge>__isnull=True)` when the edge is nullable. Pure `.filter(...)`
+composition — no evaluation, reorder, or projection of the caller's queryset.
 
-Confirmed against the baseline (`git diff 4ea3d68932a9a984204069606d85fa45b47e7e22
--- permissions.py` is empty): the file is unchanged this cycle, so this is a pure
-fresh-eyes review, not a diff review.
+Present-day traversal contract (module docstring is authoritative):
+
+- **Immutable `_TraversalState` on a `ContextVar`.** Frozen
+  `(alias, active type tuple, path frames)`; every root / edge / nested frame
+  installs a new state with a token and resets in `finally`. Fail-closed cycles
+  raise a path-rich `ConfigurationError`; the one permitted re-entry is an
+  explicit zero-edge scope (`fields=[]`).
+- **Every registered target composes** (identity hooks included — a filtered
+  default manager is still a visibility policy). Unregistered target models are
+  skipped.
+- **Unsupported forward relations preflight.** `_edge_plan` caches
+  `cascadable` + `unsupported` (GFK / composite); a full walk over a model
+  carrying an unsupported edge fails before any hook runs; naming one in
+  `fields=` fails at validation.
+- **Hook returns** go through the sealed visibility boundary
+  (`utils/querysets.py::apply_type_visibility_sync` with
+  `require_model_rows=False` and the cascade's `_edge_error_renderer`);
+  cascade-local `_validated_target_subquery` then applies the SQL-composability
+  battery and re-projects to `.values(field.target_field.attname)`.
+- **Root / nested call-site querysets** are validated by the lighter
+  non-sealing `_structural_defect` / `_validate_root_queryset` — the helper is
+  invoked from inside consumer hooks and must `.filter(...)` the caller's
+  object, not rebuild it through the seal.
+- **Async twin** wraps the single sync walk in
+  `utils/querysets.py::run_in_one_sync_boundary` (no second async walk; no
+  inlined `sync_to_async`).
+
+Item-scoped baseline (`8368fec3169eb40be6e93b362ef7c6a678965fcd`) vs working
+tree for `permissions.py` is empty — this pass did not edit production code.
 
 Callers / connected surfaces traced:
 
-- `examples/fakeshop/apps/products/schema.py` — the four products `DjangoType`s
-  (`CategoryType`/`ItemType`/`PropertyType`/`EntryType`) call
-  `apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` from
-  their `get_queryset` hooks — the only real (non-test) consumer.
-- `django_strawberry_framework/__init__.py` re-exports both public entry points.
-- `django_strawberry_framework/utils/querysets.py` supplies the two primitives
-  the walk reuses rather than re-deciding: `model_for` (model lookup) and
-  `apply_type_visibility_sync` (the one sync `get_queryset`-invocation +
-  `SyncMisuseError` site every read/write surface shares). `SyncMisuseError`
-  itself is re-exported here, mirroring the established `types/relay.py`
-  redundant-alias convention — an intentional, already-singly-sourced pattern,
-  not new duplication.
-- `django_strawberry_framework/mutations/resolvers.py` independently applies
-  the SAME `apply_type_visibility_sync` / `model_for` primitives for the write
-  side's relation-visibility and locate steps — confirms these two primitives
-  are already the single owner of "run a target's `get_queryset` safely"; the
-  cascade does not duplicate that contract, it consumes it. (Corrected per
-  Worker 2 — see `## Iterations`: `mutations/permissions.py`, a *different*,
-  still-open sibling plan item, does NOT use either primitive; it is a
-  write-*authorization* module, not a row-visibility one — see the next
-  bullet's distinction.)
-- `django_strawberry_framework/mutations/permissions.py` and
-  `django_strawberry_framework/utils/permissions.py` (both sibling plan items,
-  not consolidated here) own a structurally different concern from the
-  cascade — write-authorization / active-input permission-*gate* checks
-  (`has_permission`, `check_<field>_permission`) — not row-visibility
-  narrowing. `mutations/permissions.py` imports
-  `utils/permissions.py::request_from_info` and
-  `utils/querysets.py::reject_async_in_sync_context` only; it never touches
-  `apply_type_visibility_sync` or `model_for`. No shared code with the
-  cascade; traced only as siblings, not touched.
-- `tests/test_permissions.py` is the dedicated 1:1 test file (per Decision 3)
-  and pins every documented invariant (cycle guard, single-column scope, MTI
-  parent-link exclusion, nullable-FK preservation, multi-DB alias pinning,
-  `fields=` validation shapes, sync-misuse contract, N+1 / FK-id-elision
-  interaction, gate composition). No gaps found; not edited.
+- `examples/fakeshop/apps/products/schema.py` — four products `DjangoType`s call
+  `apply_cascade_permissions` from `get_queryset` (only real non-test consumer).
+- Package root `__init__.py` re-exports both entry points; `SyncMisuseError` is
+  also re-exported from this module (redundant-alias form, same convention as
+  `types/relay.py`) while the class lives in `utils/querysets.py`.
+- `utils/querysets.py` — owns `model_for`, `apply_type_visibility_sync` /
+  `_normalized_visibility_result` (sealed boundary), `SyncMisuseError`,
+  `reject_async_in_sync_context`, and `run_in_one_sync_boundary`. Cascade
+  consumes all four shared primitives; it does not re-decide them.
+- `registry.py` — primary-type lookup per edge (`registry.get(related_model)`).
+- `utils/relations.py::relation_kind` — cardinality classifier used by
+  optimizer / filters / connection; lookalike only (see Verification 1).
+- `mutations/resolvers.py` — write-side consumer of the same visibility
+  primitives (`apply_type_visibility_sync` / `model_for` /
+  `run_in_one_sync_boundary`); different lifecycle (locate / relation decode),
+  not cascade walk ownership.
+- `mutations/permissions.py` and `utils/permissions.py` — sibling plan items;
+  write-authorization / active-input permission *gates*, not row-visibility
+  cascade. No shared cascade code; not touched.
+- `filters/sets.py` / `orders/sets.py` — already import
+  `run_in_one_sync_boundary` from `utils/querysets.py` (prior deferred
+  consolidation has landed package-wide).
+- `tests/test_permissions.py` — dedicated 1:1 suite; pins fail-closed cycles,
+  `fields=[]` re-entry, MTI parent-link *inclusion* + row hiding, unsupported
+  GFK preflight, sealed-boundary interaction, alias pinning, sync-misuse on
+  both variants, and `run_in_one_sync_boundary` off-loop behavior.
 
 ## Verification
 
-Searched for parallel or overlapping implementations of each piece of the
-cascade's contract:
+1. **`_is_cascadable_edge` / `_is_unsupported_forward_edge` / `_edge_plan` vs
+   `utils/relations.py::relation_kind`.** Both classify relation descriptors,
+   and MTI parent links are now *included* in both
+   (`relation_kind` → `"forward_single"`; cascade → cascadable). That alignment
+   does **not** make them the same rule. `relation_kind` answers GraphQL /
+   optimizer cardinality and still classifies a `GenericForeignKey` as
+   `"forward_single"` (fall-through); the cascade's load-bearing
+   `isinstance(field, models.ForeignKey) and column is not None` test (plus the
+   separate unsupported preflight) is the security scope for single-column
+   `__in` composition and for `field.target_field` / `field.null` use in the
+   walk. `connection.py` also layers its own non-null `forward_single` guard
+   for keyset paths — a third independent reason to change. Coupling the
+   cascade predicate to the cardinality classifier would add a cross-domain
+   dependency without removing the column / ForeignKey / unsupported split.
+   **Rejected.**
 
-1. **`_is_cascadable_edge`'s "forward single-column edge, minus M2M / GFK /
-   reverse / MTI-parent-link" predicate vs.
-   `utils/relations.py::relation_kind` + `optimizer/field_meta.py::FieldMeta`.**
-   Both classify Django relation descriptors by shape, and `relation_kind`'s
-   `"forward_single"` bucket documents that it explicitly *includes* the MTI
-   `<parent>_ptr` (`"MTI <parent>_ptr-like -> "forward_single""`), whereas the
-   cascade must explicitly *exclude* it (a child row must not be narrowed by
-   its MTI-parent type's hook — pinned by
-   `test_mti_parent_link_edge_excluded`). Substituting
-   `relation_kind(field) == "forward_single"` would not remove any of
-   `_is_cascadable_edge`'s other guards: `GenericForeignKey` sets none of
-   `many_to_many`/`one_to_many`/`one_to_one`, so `relation_kind` would
-   misclassify it as `"forward_single"` too — the explicit
-   `getattr(field, "column", None) is not None` test is what actually excludes
-   it, and that test is not part of `relation_kind`'s contract at all. The two
-   predicates answer different questions for different reasons to change:
-   `relation_kind` classifies GraphQL/optimizer *cardinality* (list vs. single
-   object; changes with query-shape/elision work), `_is_cascadable_edge`
-   classifies a *security* scope (which edges may narrow visibility; changes
-   with the cascade's own contract, already tightened across 8 spec revisions
-   per `docs/SPECS/spec-034-permissions-0_0_10.md`). Coupling the two would add
-   a cross-domain optimizer dependency to a security-critical predicate while
-   saving nothing (every other guard stays). **Rejected** — no shared
-   responsibility, only coincidental surface similarity.
+2. **`_validate_fields` vs `utils/inputs.py::normalize_field_name_sequence`.**
+   Shared surface: reject a bare string iterated as characters. Contracts
+   diverge: declaration-time `Meta.fields`/`exclude` shape-only → ordered
+   `tuple` (duplicates rejected; membership left to call sites) vs call-time
+   cascade `fields=` → `set` of cascadable edge names (unsupported-forward and
+   non-cascadable membership are cascade-specific). Different lifecycle,
+   membership basis, and wording. **Rejected.**
 
-2. **`_validate_fields`'s bare-string-iterable-of-names validation vs.
-   `utils/inputs.py::normalize_field_name_sequence` and
-   `types/base.py::_format_unknown_fields_error`.** Both guard against a bare
-   string being iterated character-by-character, but the surrounding contract
-   diverges completely: `normalize_field_name_sequence` validates a
-   **declaration-time** `Meta.fields`/`Meta.exclude` sequence (shape only —
-   duplicate-name rejection, no membership check; the model-membership check is
-   explicitly left to each of the three write-flavor call sites per its own
-   docstring) and returns a `tuple`, preserving order. `_validate_fields`
-   validates a **call-time** `fields=` keyword argument against a computed
-   per-model set (the cascadable edges), rejects non-string entries
-   individually (a check `normalize_field_name_sequence` does not perform), and
-   returns a `set`. `_format_unknown_fields_error`'s message shape
-   (`"{model}.Meta.{attr} names unknown fields: ... Available: ..."`) is
-   likewise scoped to `Meta.*` declaration typo-guards by its own docstring;
-   the cascade's unknown-name message ("`fields=[...] on {model} are not
-   cascadable`") answers a narrower question — not "unknown to the model" but
-   "known to the model, not cascadable" — and is not a `Meta.*` construct at
-   all. **Rejected** — different lifecycle (class-creation vs. per-call),
-   different validation scope (shape-only vs. shape-plus-membership), different
-   wording contract; sites do not change together.
+3. **Previously deferred `sync_to_async` / `run_in_one_sync_boundary`
+   consolidation — confirm landed.** Present source:
+   `aapply_cascade_permissions` is solely
+   `await run_in_one_sync_boundary(apply_cascade_permissions, ...)`.
+   `run_in_one_sync_boundary` lives in `utils/querysets.py` and is already
+   reused by `permissions.py`, `filters/sets.py`, `orders/sets.py`,
+   `mutations/resolvers.py`, `auth/mutations.py`, and `schema.py`.
+   `tests/utils/test_querysets.py::test_run_in_one_sync_boundary_is_single_sourced_from_utils`
+   pins the mutations re-export identity. No `sync_to_async(` call remains in
+   `permissions.py` or `orders/sets.py` production code. **Confirmed landed;
+   nothing left in this file's remit.** Remaining inlines elsewhere (if any)
+   are other plan items / project integration.
 
-3. **`aapply_cascade_permissions`'s inlined `sync_to_async(fn,
-   thread_sensitive=True)(*args)` bridge vs. the established generic primitive
-   `mutations/resolvers.py::run_in_one_sync_boundary`.** This IS a genuine
-   repeated responsibility — "run a sync callable in exactly one
-   `sync_to_async(thread_sensitive=True)` worker call" — with real evidence
-   that the package already treats it as a single-sourceable primitive:
-   `run_in_one_sync_boundary(fn, *args, **kwargs)` already exists in
-   `mutations/resolvers.py` (spec-040 D17/P3) and is already reused
-   **cross-module** by `auth/mutations.py` (`from ..mutations.resolvers import
-   run_in_one_sync_boundary`, called twice, via a local/lazy import). Two
-   other sites independently inline the identical shape instead of calling it:
-   `permissions.py::aapply_cascade_permissions` (`return await
-   sync_to_async(apply_cascade_permissions, thread_sensitive=True)(cls,
-   queryset, info, fields)`) and `orders/sets.py`'s async `apply` (`await
-   sync_to_async(cls._run_permission_checks, thread_sensitive=True)(...)`).
-   Corrected per Worker 2 (see `## Iterations`): `filters/sets.py::apply_async`
-   has exactly ONE `sync_to_async` call, wrapping `cls._apply_common_finalize`
-   (`return await sync_to_async(cls._apply_common_finalize,
-   thread_sensitive=True)(...)`) — there is no second, `qs_getter`-wrapped
-   site (`qs_getter` does not exist anywhere in the repository, in any
-   revision). All three sites' docstrings independently cite the SAME
-   rationale (off-event-loop consumer-hook safety) — a real single-changeable
-   rule split three ways.
-   **Verified as real, but forwarded rather than fixed here** (see
-   Opportunities below): `permissions.py` is not this rule's true owner, and
-   `mutations/resolvers.py`, `orders/sets.py`, and `filters/sets.py` are each
-   still-open sibling plan items. Reusing `run_in_one_sync_boundary` from the
-   root `permissions.py` would also invert the package's layering (a root file
-   importing from the `mutations` subpackage — `mutations/resolvers.py`
-   already imports `mutations/permissions.py`, a *different* file, so a root
-   `permissions.py -> mutations.resolvers` edge would introduce a new
-   root-into-subpackage dependency direction). Softened per Worker 2 (see
-   `## Iterations`): this is a **prospective layering inversion**, not an
-   existing import cycle — neither `mutations/permissions.py` nor
-   `mutations/resolvers.py` imports the root `permissions.py` today; the
-   concern is that adding this one edge would be the wrong direction for a
-   root-level module to depend on a subpackage, not that a cycle already
-   exists. The true owner is a neutral, dependency-free home (most naturally
-   `utils/querysets.py`, which already owns the sibling
-   `reject_async_in_sync_context` primitive and is documented as "cycle-safe by
-   construction") that every current site — including `mutations/resolvers.py`
-   itself — could import without inverting any direction.
+4. **Root `_structural_defect` vs sealed boundary
+   (`_seal_or_defect` / `_normalized_visibility_result`).** Hook *returns*
+   already go through the seal (`require_model_rows=False`). The root checker
+   deliberately does **not** seal: cascade must `.filter(...)` the caller's
+   queryset object. Seal also skips sliced rejection when
+   `require_model_rows=False`, which is why sliced / combinator / distinct /
+   group_by / annotation-shadow stay in `_validated_target_subquery` beside the
+   re-projection. Same query flags, different rules (root `.filter` soundness
+   vs subquery re-projection soundness vs seal trust). Extracting a shared
+   "read these flags" helper would optimize line count, not ownership.
+   **Rejected.**
+
+5. **Cascade edge seed
+   (`related_model._default_manager.using(alias).all()` +
+   `apply_type_visibility_sync(...)`) vs
+   `visibility_scoped_related_queryset`.** Same primitive underneath, but the
+   cascade needs root-alias pinning, cascade recourse / error renderer, and
+   `require_model_rows=False` plus post-hook SQL re-projection. Folding into
+   the write-side helper would force mode flags across domains. **Rejected —
+   correct specialized consumer of the shared boundary.**
+
+6. **`_TraversalState` / cycle `ContextVar` vs other package `ContextVar`s.**
+   Optimizer / write-transaction / boundary-ordering ContextVars are unrelated
+   lifecycles. No second cascade-cycle implementation. **Rejected.**
+
+7. **Write-auth siblings (`mutations/permissions.py`,
+   `utils/permissions.py`).** Confirmed still authorization / gate traversal,
+   not row-visibility cascade. **Out of remit** (deferred to those plan items
+   only as sibling distinction, no finding).
 
 ## Opportunities
 
-- **Repeated responsibility:** run a sync callable in exactly one
-  `sync_to_async(thread_sensitive=True)` worker call (the off-event-loop
-  boundary every consumer-overridable sync hook needs).
-- **Sites:** `mutations/resolvers.py::run_in_one_sync_boundary` (existing
-  owner, already reused by `auth/mutations.py`); `permissions.py::aapply_cascade_permissions`
-  (inlined duplicate); `orders/sets.py` async `apply` (inlined duplicate);
-  `filters/sets.py::apply_async` (inlined duplicate, wrapping
-  `cls._apply_common_finalize` — corrected per Worker 2, see `## Iterations`;
-  there is no separate `qs_getter` site).
-- **Evidence:** all three duplicate sites wrap a single callable in the
-  byte-identical `sync_to_async(fn, thread_sensitive=True)(*args)` shape for
-  the identical reason (keep a consumer's blocking sync hook off the event
-  loop); the fourth site (`mutations/resolvers.py`) already promoted it to a
-  named primitive and reused it cross-module.
-- **Owner:** NOT `permissions.py` — a neutral, dependency-free utils module
-  (`utils/querysets.py` is the natural fit: cycle-safe by construction, already
-  hosts the sibling `reject_async_in_sync_context` primitive). NOT implemented
-  here: `mutations/resolvers.py`, `orders/sets.py`, and `filters/sets.py` are
-  each still-open plan items for other workers, and moving the primitive
-  is their call to make (or the project-integration pass's, since it spans
-  four modules across three still-open folders).
-- **Consolidation (deferred):** promote `run_in_one_sync_boundary` to
-  `utils/querysets.py` (or a dedicated neutral module), update
-  `mutations/resolvers.py` to import it instead of defining it, then migrate
-  `permissions.py`, `orders/sets.py`, `filters/sets.py`, and `auth/mutations.py`
-  to the new import path.
-- **Proof:** none created here — deferred to whichever worker implements the
-  move; a permanent test would assert the promoted primitive's identity is
-  reused by all sites (no re-inlining) plus the existing per-site off-loop
-  behavioral pins (`test_aapply_runs_walk_off_event_loop` here) keep passing
-  unchanged.
-- **Risks / non-goals:** do not fold `filters/sets.py::FilterSet._apply_common_finalize` into the generic primitive if its call shape needs filter-specific handling preserved - confirm at the folder pass, not assumed here.
-
-None else — `_is_cascadable_edge`/`relation_kind` and `_validate_fields`
-/`normalize_field_name_sequence` were traced and disproved (Verification 1–2);
-`SyncMisuseError`'s re-export, `model_for`, and `apply_type_visibility_sync`
-are already correctly single-sourced through `utils/querysets.py` and consumed
-identically by every read/write surface, including this one.
+None — present-day `permissions.py` already single-sources every
+cross-module responsibility it shares (`model_for`, sealed
+`apply_type_visibility_sync`, `SyncMisuseError`, `run_in_one_sync_boundary`)
+and keeps cascade-only policy (edge plan, fields validation, traversal state,
+cycle fail-closed, root structural checks, SQL re-projection battery, nullable
+`__isnull` disjunct) local. The prior cycle's only real opportunity (promote /
+reuse `run_in_one_sync_boundary`) has landed at `utils/querysets.py` and is
+consumed here correctly.
 
 ## Judgment
 
-`permissions.py` is a small, mature, single-purpose module whose own contract
-(the cascade walk, its scope predicate, its `fields=` validator) is already
-singly owned and heavily spec-reviewed; it correctly delegates the two
-primitives it shares with every other visibility/write surface
-(`model_for`, `apply_type_visibility_sync`) to `utils/querysets.py` rather than
-re-deriving them. The one real repeated responsibility found — the generic
-sync-to-async worker-boundary wrapper — belongs to a neutral owner outside this
-file's remit; recorded above with full evidence for the worker whose item
-actually owns it (or the project-integration pass). Item-scoped diff to
-`permissions.py` is empty; ruff was not run because no source file was edited.
+Zero-edit. Cascade-visibility ownership is clear and already delegated at the
+right seams; lookalike classifiers and validators were re-disproved against
+current (MTI-including, fail-closed, sealed-boundary) source. Item-scoped diff
+for `django_strawberry_framework/permissions.py` against
+`8368fec3169eb40be6e93b362ef7c6a678965fcd` is empty. No `.py` edit → no ruff
+run owed. Pytest deferred (maintainer did not authorize). Ready for Worker 2.
 
 ## Independent verification (Worker 2)
 
@@ -465,3 +420,135 @@ scoped diff.
 with accurate, source-confirmed corrections; no fabrications or
 misattributions remain in the artifact. Status set to `verified`; plan
 checkbox for `permissions.py` may be marked `[x]`.
+
+## Iterations
+
+### Fresh pass (Worker 1) — present-day source after cascade / seal evolution
+
+Prior top-level prose (and the Worker 2 passes above) described an older
+`permissions.py`: `_cascade_seen` partial-narrow cycles, MTI parent-link
+*exclusion*, identity-hook skip, inlined `sync_to_async` in
+`aapply_cascade_permissions`, and a deferred `run_in_one_sync_boundary`
+promotion. Present source has moved past that contract. This pass did **not**
+treat the old artifact body as evidence; it re-traced current
+`permissions.py` (~717 lines) and connected surfaces, then rewrote
+Status / System trace / Verification / Opportunities / Judgment above.
+Historical Worker 2 / Iterations text is preserved as audit trail only.
+
+**What changed in ownership since the old verified pass (source facts):**
+
+- `_TraversalState` + fail-closed cycles (`fields=[]` escape hatch).
+- MTI parent links cascade; tests pin inclusion and row hiding
+  (`test_mti_parent_link_edge_included`, etc.).
+- `_edge_plan` cascadable/unsupported split + GFK preflight.
+- Hook returns sealed via `apply_type_visibility_sync(..., require_model_rows=False,
+  render_error=...)`; cascade keeps SQL re-projection local.
+- `aapply_cascade_permissions` → `run_in_one_sync_boundary` from
+  `utils/querysets.py` (prior Opportunity closed outside this item).
+
+**Strongest rejected candidates this pass:** (1) fold edge predicates into
+`relation_kind`; (2) fold `fields=` into `normalize_field_name_sequence`;
+(3) fold root/`_validated_target_subquery` checks into the seal; (4) fold
+edge seed into `visibility_scoped_related_queryset`.
+
+**Deferred to other items:** none from this file. Write-auth siblings remain
+separate plan items by design. Any residual `sync_to_async` inline outside
+the already-migrated sites is not owned here.
+
+**Implementation:** none (proved zero-edit).
+`git diff 8368fec3169eb40be6e93b362ef7c6a678965fcd -- django_strawberry_framework/permissions.py`
+empty. Only this artifact updated. Plan checkbox left for Worker 2.
+Status: `fix-implemented`.
+
+## Independent verification (Worker 2) — fresh pass (post cascade/seal)
+
+Independent re-trace of present-day `permissions.py` (~717 lines) and
+connected surfaces against Worker 1's fresh zero-edit claim. Prior
+Worker 2 / Iterations text above describes an older contract and was
+treated as audit trail only, not evidence.
+
+**Scoped production diff empty.** Re-ran
+`git diff 8368fec3169eb40be6e93b362ef7c6a678965fcd -- django_strawberry_framework/permissions.py`
+— empty. Working tree shows no dirty production path for this item
+(only this artifact and the plan). Baseline file is also 717 lines;
+no production edit landed in this item.
+
+**Cascade-visibility ownership re-traced.** Read the full target;
+confirmed `_walk` seeds
+`related_model._default_manager.using(state.alias).all()` then
+`apply_type_visibility_sync(..., require_model_rows=False,
+render_error=_edge_error_renderer(...))` and keeps SQL re-projection in
+`_validated_target_subquery`. Confirmed
+`aapply_cascade_permissions` is solely
+`await run_in_one_sync_boundary(apply_cascade_permissions, ...)`.
+Confirmed root validation stays on non-sealing
+`_structural_defect` / `_validate_root_queryset`. Confirmed
+`examples/fakeshop/apps/products/schema.py` is the only non-test
+consumer (four product `DjangoType`s). Confirmed
+`mutations/permissions.py` / `utils/permissions.py` are write-auth /
+active-input gate siblings with no cascade / `apply_type_visibility_sync`
+/ `model_for` usage. Confirmed package-root re-exports both entry
+points; `SyncMisuseError` redundant-alias re-export matches
+`types/relay.py`.
+
+**Challenged "already landed" sync-boundary claim — upheld.**
+`run_in_one_sync_boundary` lives in `utils/querysets.py` and is the
+sole production `sync_to_async(fn, thread_sensitive=True)` call site
+for ORM boundaries (verified by repo-wide `sync_to_async(` grep:
+owner body + `testing/client.py` login/logout only). Consumers include
+`permissions.py`, `filters/sets.py`, `orders/sets.py`,
+`mutations/resolvers.py`, `auth/mutations.py`, and `schema.py`.
+`tests/utils/test_querysets.py::test_run_in_one_sync_boundary_is_single_sourced_from_utils`
+pins the mutations re-export identity. No remaining consolidation in
+this file's remit.
+
+**Challenged rejected candidate 1** (`_is_cascadable_edge` vs
+`relation_kind`) — upheld with executable proof. Scratch:
+`GenericForeignKey` → `relation_kind` = `"forward_single"` but
+`_is_cascadable_edge` False / `_is_unsupported_forward_edge` True;
+MTI `<parent>_ptr` → both `"forward_single"` and cascadable True.
+Cardinality classifier and security-scope predicate still change for
+different reasons; `connection.py` layers a third independent
+`forward_single` + non-null guard for keyset paths.
+
+**Challenged rejected candidate 2** (`_validate_fields` vs
+`normalize_field_name_sequence`) — upheld. Declaration-time
+shape-only → ordered `tuple` (duplicates rejected; membership deferred)
+vs call-time cascade `fields=` → `set` with unsupported-forward /
+cascadable membership. Different lifecycle and wording.
+
+**Challenged rejected candidate 4** (root / `_validated_target_subquery`
+vs seal) — upheld. Seal docs explicitly leave sliced rejection to the
+cascade when `require_model_rows=False`; cascade must `.filter(...)`
+the caller's root object, so root cannot go through the seal. Shared
+flag reads are not shared ownership.
+
+**Challenged rejected candidate 5** (edge seed vs
+`visibility_scoped_related_queryset`) — upheld.
+`visibility_scoped_related_queryset` is
+`apply_type_visibility_sync(related_type, initial_queryset(...), ...)`
+with default `require_model_rows=True` and no alias pin.
+Cascade needs `.using(alias)`, custom renderer,
+`require_model_rows=False`, and post-hook SQL re-projection.
+
+**Missed consolidations searched.** No second cascade walk; no second
+cascade-cycle `ContextVar`; no production `sync_to_async` inline left
+in this file; write-auth siblings correctly out of remit. Within-file
+sliced/combinator checks in `_structural_defect` vs
+`_validated_target_subquery` share flags but not contracts (root
+`.filter` soundness vs subquery re-projection soundness) — agreeing
+with Verification 4 that a shared "read these flags" helper would be
+line-count, not ownership.
+
+**Factual claims in the fresh System trace / Verification /
+Opportunities / Judgment checked against current source** — no
+blocking fabrications or misattributions found (unlike earlier passes
+that wrongly attributed visibility primitives to
+`mutations/permissions.py` and invented a `qs_getter` site). Those
+older errors are superseded by the rewritten top-level prose and are
+not re-opened here.
+
+**Conclusion:** zero-edit claim verified. Status set to `verified`;
+plan checkbox for `permissions.py` marked `[x]`. No production fix
+owed; no pytest run (not authorized). Concurrent dirty work left
+untouched.

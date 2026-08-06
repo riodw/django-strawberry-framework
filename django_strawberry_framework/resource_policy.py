@@ -1,6 +1,6 @@
 """``ResourcePolicy`` - the one immutable execution resource budget for a request.
 
-Spec: ``docs/SPECS/spec-047-resource_policy-0_0_16.md``.
+Spec: ``docs/SPECS/spec-047-resource_policy-0_0_14.md``.
 Target release: ``0.0.16``.
 
 A GraphQL endpoint's cost is not bounded by its schema. A single small document

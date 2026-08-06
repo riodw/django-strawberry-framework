@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-03
+Last refreshed: 2026-08-06
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.18` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.14` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -95,10 +95,10 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-049-0.0.18` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | No dedicated spec |
-| `DONE-048-0.0.17` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_17.md](docs/SPECS/spec-048-secure_output_defaults-0_0_17.md) |
-| `DONE-047-0.0.16` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_16.md](docs/SPECS/spec-047-resource_policy-0_0_16.md) |
-| `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_15.md](docs/SPECS/spec-046-transport_security-0_0_15.md) |
+| `WIP-ALPHA-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | No dedicated spec |
+| `DONE-048-0.0.14` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md) |
+| `DONE-047-0.0.14` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md) |
+| `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md) |
 | `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-045-visibility_boundary-0_0_14.md](docs/SPECS/spec-045-visibility_boundary-0_0_14.md) |
 | `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/SPECS/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
@@ -150,7 +150,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
-### [WIP-ALPHA-049-0.0.18 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
+### [WIP-ALPHA-049-0.0.14 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
 
 - Priority: High
 - Status: WIP
@@ -162,15 +162,15 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 
 #### Dependencies
 
-- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
 - uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
 - Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
 - .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
-- Slice 5 doc fold-in is outstanding and entirely DB-side: `docs/GLOSSARY.md:20`'s package-version line still reads `0.0.17` and needs `0.0.18`, and the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
-- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_18.md` (still unarchived, the only spec left in `docs/`), then re-render.
+- Slice 5 doc fold-in is outstanding and entirely DB-side: the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
+- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_14.md` (still unarchived, the only spec left in `docs/`), then re-render.
 - `README.md`, `docs/README.md` and `TODAY.md` prose are hand-edited and were left for this card's DB-regeneration pass rather than done piecemeal.
 
 #### Definition of done
@@ -204,11 +204,11 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - Repository-level default token permissions (spec-049 Decision 3) is a GitHub settings change, not a file in the tree - maintainer action, and nothing in a build can verify it.
 - `osv-scanner`'s inner image tag stays mutable (spec-049 Decision 4); pinning it would need a fork. Recorded in the spec's risks rather than fixed.
 - The workflow `timeout-minutes` values are estimates, not measured p95s (spec-049 Decision 7).
-- `CHANGELOG.md` carries no `0.0.15`, `0.0.16`, `0.0.17` or `0.0.18` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so four shipped patch versions have no release entry.
+- `CHANGELOG.md` carries no `0.0.14` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so the patch version this card and its three program siblings target has no release entry.
 
 #### Card references
 
-- Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 ## To Do - Alpha (0.1.0)
 
@@ -362,11 +362,8 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Scope
 
-- Seven glossary terms shipped in `0.0.15` still carry a bare `shipped` status. Set `GlossaryTerm.status_text` to ``shipped (`0.0.15`).`` on `djangographqlview`, `request-body-cap`, `utf-8-wire-contract`, `websocket-consumer-injection-seam`, `websocket-host-boundary`, `websocket-revalidation-window` and `connection-scoped-revocation`, plus `graphqlrequestbodyboundarymiddleware`, then re-render. Bare `shipped` was upheld at the time, not merely tolerated - stamping `0.0.15` while the version quintet still read `0.0.14` would have named a version that existed in no released artifact. That reason has now expired. It travels with the `README.md` / `TODAY.md` "Coming next" -> "Shipped today" move and with the `djangographqlprotocolrouter` entry's own ``shipped (`0.0.14`)`` -> `0.0.15` question. Card 046 authored eight glossary terms and its spec links NONE of them from `## Key glossary references`, so its terms CSV sits at 37 rows covering only pre-existing terms. Linking one without the rest would be worse than linking none: decide the whole set at once, which means editing the CSV AND the spec's `## Key glossary references` + link-def block together, then re-running `import_spec_terms` and `build_glossary_md.py`.
-- `docs/GLOSSARY.md` has no `DjangoSchema` entry, so card 047's glossary rows link to a `#djangoschema` anchor that resolves to nothing, and the schema constructor's two policy arguments are described only from the `ErrorPolicy` / `ResourcePolicy` side.
-- Card 047's root exports - `ResourcePolicy`, `DjangoResourcePolicyExtension` and `DEFAULT_RESOURCE_POLICY` - are absent from the glossary's Public exports list.
-- Card 047's `max_value_depth` bound has no glossary entry, and the `ResourcePolicy` glossary body enumerates the bounds without it.
-- `spec-047-resource_policy-0_0_16.md` and `spec-048-secure_output_defaults-0_0_17.md` have no `-rationale.md` companion in `docs/SPECS/appx/`, where 044, 045 and 046 all do. Decide whether the rationale companion is required for every spec or only where a cycle produced one, and make `docs/SPECS/appx/` consistent either way.
+- `docs/GLOSSARY.md` has no `DjangoSchema` entry, so the schema constructor's two policy arguments are described only from the `ErrorPolicy` / `ResourcePolicy` side, and `DjangoSchema` / `DjangoMutationExecutionContext` are absent from the Public exports list even though both are in `__all__`. Card 047's closeout removed the dangling `#djangoschema` links rather than authoring the entry, matching how the `ErrorPolicy` entries already name the class without linking it; deciding whether the entry should exist is still open.
+- `spec-048-secure_output_defaults-0_0_14.md` has no `-rationale.md` companion in `docs/SPECS/appx/`, where 044, 045, 046 and 047 all do. Decide whether the rationale companion is required for every spec or only where a cycle produced one, and make `docs/SPECS/appx/` consistent either way.
 - `README.md:62`'s `0.0.14` paragraph describes `main`'s router shape inside the released version's sentence. Chosen framing on record: lead with the marker, the shape `docs/README.md:128` and `TODAY.md:384` already use.
 - `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
 
@@ -1282,12 +1279,12 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
 <a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
-### [DONE-048-0.0.17 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
+### [DONE-048-0.0.14 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)
 
 - Priority: High
 - Status: Done
 - Relative size: M
-- Spec: [spec-048-secure_output_defaults-0_0_17.md](docs/SPECS/spec-048-secure_output_defaults-0_0_17.md)
+- Spec: [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md)
 
 #### Glossary terms
 
@@ -1325,9 +1322,9 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [Graphene debug migration](docs/GLOSSARY.md#graphene-debug-migration) | shipped (`0.0.14`) |
 | [Strawberry extension lifecycle](docs/GLOSSARY.md#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
 | [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
-| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.16`) |
-| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.16`) |
-| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.16`) |
+| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.14`) |
+| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.14`) |
+| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.14`) |
 | [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
@@ -1348,7 +1345,7 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 
 #### Dependencies
 
-- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
@@ -1390,31 +1387,31 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 
 #### Card references
 
-- Dependency: Sequenced behind card 046 in the staged security program (independent code). -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Sequenced behind card 046 in the staged security program (independent code). -> `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="execution_resource_policy_central_budget_object_value_cardinality_walker"></a>
-### [DONE-047-0.0.16 - Execution resource policy: central budget object + value-cardinality walker](KANBAN.html#execution_resource_policy_central_budget_object_value_cardinality_walker)
+### [DONE-047-0.0.14 - Execution resource policy: central budget object + value-cardinality walker](KANBAN.html#execution_resource_policy_central_budget_object_value_cardinality_walker)
 
 - Priority: High
 - Status: Done
 - Relative size: L
-- Spec: [spec-047-resource_policy-0_0_16.md](docs/SPECS/spec-047-resource_policy-0_0_16.md)
+- Spec: [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md)
 
 #### Glossary terms
 
 | Term | Status |
 | --- | --- |
-| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.16`) |
-| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.16`) |
-| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.16`) |
-| [Value-budget walker](docs/GLOSSARY.md#value-budget-walker) | shipped (`0.0.16`) |
+| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.14`) |
+| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.14`) |
+| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.14`) |
+| [Value-budget walker](docs/GLOSSARY.md#value-budget-walker) | shipped (`0.0.14`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 | [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [Request-body cap](docs/GLOSSARY.md#request-body-cap) | shipped |
+| [Request-body cap](docs/GLOSSARY.md#request-body-cap) | shipped (`0.0.14`) |
 | [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
 | [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
 | [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
@@ -1437,6 +1434,7 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
+| [`max_value_depth`](docs/GLOSSARY.md#max_value_depth) | shipped (`0.0.14`) |
 
 #### Planning note
 
@@ -1444,7 +1442,7 @@ Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
 
 #### Dependencies
 
-- `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 #### Scope
 
@@ -1486,15 +1484,15 @@ Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
 
 #### Card references
 
-- Dependency: Depends on card 046: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `DONE-046-0.0.15` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+- Dependency: Depends on card 046: the resource policy is consumed by the transports fixed there, and the program is staged transport-first. -> `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation"></a>
-### [DONE-046-0.0.15 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
+### [DONE-046-0.0.14 - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation](KANBAN.html#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation)
 
 - Priority: Critical
 - Status: Done
 - Relative size: L
-- Spec: [spec-046-transport_security-0_0_15.md](docs/SPECS/spec-046-transport_security-0_0_15.md)
+- Spec: [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md)
 
 #### Glossary terms
 

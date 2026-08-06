@@ -1,6 +1,6 @@
 """``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 
-Spec: ``docs/SPECS/spec-047-resource_policy-0_0_16.md``.
+Spec: ``docs/SPECS/spec-047-resource_policy-0_0_14.md``.
 Target release: ``0.0.16``.
 
 ``resource_policy.py`` owns the budget object; this module is the one place that

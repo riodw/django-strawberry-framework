@@ -1,6 +1,6 @@
 # Rationale: spec-046 — Transport security (deliberation, rejected alternatives, change record)
 
-Deliberative companion to [`spec-046-transport_security-0_0_15.md`][spec-046]. The spec is the
+Deliberative companion to [`spec-046-transport_security-0_0_14.md`][spec-046]. The spec is the
 contract and states only what is currently true; everything that explains **how it got there**
 lives here: the alternatives each decision rejected and why each lost, the derivations that do
 not change how a decision is implemented, every change a decision has undergone with the review
@@ -81,7 +81,7 @@ to belong to:
   "Slice 5 remains"; all five are built now, so it states that, plus the fact a reader would
   otherwise infer wrongly — the version quintet still reads `0.0.14` on disk because the
   `0.0.15` release is the joint cut's ([Decision 15][s65-d15]). The opener's card id moved
-  `WIP-ALPHA-046-0.0.15` -> `DONE-046-0.0.15` with the card flip. `Planned for 0.0.15` stays: the
+  `WIP-ALPHA-046-0.0.14` -> `DONE-046-0.0.14` with the card flip. `Planned for 0.0.15` stays: the
   target release is still a target.
 - **`## Doc updates`, the `docs/TREE.md` bullet.** It read as an exhaustive list of the rows the
   regenerate publishes and was three rows short of the render's actual output
@@ -922,7 +922,7 @@ paths is exactly how a reader ends up following the wrong one.
 the record**, deliberately not a fourth supersession. The obligation stays in the spec; only its
 "added by review round 2" label moved here.
 
-### Decision 15 — The `0.0.15` version bump is deferred to the joint cut
+### Decision 15 — The version bump is deferred to the joint cut
 
 Spec: [Decision 15][s65-d15].
 
@@ -1580,35 +1580,35 @@ reader who takes the bullet as a statement about their own development stack.
 [glossary-request_from_info]: ../../GLOSSARY.md#request_from_info
 
 <!-- docs/SPECS/ -->
-[s65-borrowing-posture]: ../spec-046-transport_security-0_0_15.md#borrowing-posture
-[s65-consumer-visible]: ../spec-046-transport_security-0_0_15.md#consumer-visible-behavior
-[s65-current-state]: ../spec-046-transport_security-0_0_15.md#current-state
-[s65-d1]: ../spec-046-transport_security-0_0_15.md#decision-1--spec-filename-and-canonical-naming
-[s65-d10]: ../spec-046-transport_security-0_0_15.md#decision-10--a-utf-8-bom-is-rejected
-[s65-d11]: ../spec-046-transport_security-0_0_15.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
-[s65-d12]: ../spec-046-transport_security-0_0_15.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
-[s65-d13]: ../spec-046-transport_security-0_0_15.md#decision-13--test-strategy-which-existing-tests-change-and-why
-[s65-d14]: ../spec-046-transport_security-0_0_15.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
-[s65-d15]: ../spec-046-transport_security-0_0_15.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
-[s65-d16]: ../spec-046-transport_security-0_0_15.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
-[s65-d17]: ../spec-046-transport_security-0_0_15.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[s65-d18]: ../spec-046-transport_security-0_0_15.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
-[s65-d19]: ../spec-046-transport_security-0_0_15.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
-[s65-d2]: ../spec-046-transport_security-0_0_15.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
-[s65-d3]: ../spec-046-transport_security-0_0_15.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
-[s65-d4]: ../spec-046-transport_security-0_0_15.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
-[s65-d5]: ../spec-046-transport_security-0_0_15.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
-[s65-d6]: ../spec-046-transport_security-0_0_15.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
-[s65-d7]: ../spec-046-transport_security-0_0_15.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
-[s65-d8]: ../spec-046-transport_security-0_0_15.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
-[s65-d9]: ../spec-046-transport_security-0_0_15.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
-[s65-dry]: ../spec-046-transport_security-0_0_15.md#helper-reuse-obligations-dry
-[s65-edge-cases]: ../spec-046-transport_security-0_0_15.md#edge-cases-and-constraints
-[s65-non-goals]: ../spec-046-transport_security-0_0_15.md#non-goals
-[s65-slice-checklist]: ../spec-046-transport_security-0_0_15.md#slice-checklist
+[s65-borrowing-posture]: ../spec-046-transport_security-0_0_14.md#borrowing-posture
+[s65-consumer-visible]: ../spec-046-transport_security-0_0_14.md#consumer-visible-behavior
+[s65-current-state]: ../spec-046-transport_security-0_0_14.md#current-state
+[s65-d1]: ../spec-046-transport_security-0_0_14.md#decision-1--spec-filename-and-canonical-naming
+[s65-d10]: ../spec-046-transport_security-0_0_14.md#decision-10--a-utf-8-bom-is-rejected
+[s65-d11]: ../spec-046-transport_security-0_0_14.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[s65-d12]: ../spec-046-transport_security-0_0_14.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[s65-d13]: ../spec-046-transport_security-0_0_14.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[s65-d14]: ../spec-046-transport_security-0_0_14.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[s65-d15]: ../spec-046-transport_security-0_0_14.md#decision-15--the-version-bump-is-deferred-to-the-joint-cut
+[s65-d16]: ../spec-046-transport_security-0_0_14.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[s65-d17]: ../spec-046-transport_security-0_0_14.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[s65-d18]: ../spec-046-transport_security-0_0_14.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
+[s65-d19]: ../spec-046-transport_security-0_0_14.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[s65-d2]: ../spec-046-transport_security-0_0_14.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[s65-d3]: ../spec-046-transport_security-0_0_14.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[s65-d4]: ../spec-046-transport_security-0_0_14.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[s65-d5]: ../spec-046-transport_security-0_0_14.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[s65-d6]: ../spec-046-transport_security-0_0_14.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[s65-d7]: ../spec-046-transport_security-0_0_14.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[s65-d8]: ../spec-046-transport_security-0_0_14.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[s65-d9]: ../spec-046-transport_security-0_0_14.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[s65-dry]: ../spec-046-transport_security-0_0_14.md#helper-reuse-obligations-dry
+[s65-edge-cases]: ../spec-046-transport_security-0_0_14.md#edge-cases-and-constraints
+[s65-non-goals]: ../spec-046-transport_security-0_0_14.md#non-goals
+[s65-slice-checklist]: ../spec-046-transport_security-0_0_14.md#slice-checklist
 [spec-040]: ../spec-040-auth_mutations-0_0_13.md
 [spec-045]: ../spec-045-visibility_boundary-0_0_14.md
-[spec-046]: ../spec-046-transport_security-0_0_15.md
+[spec-046]: ../spec-046-transport_security-0_0_14.md
 
 <!-- docs/builder/ -->
 

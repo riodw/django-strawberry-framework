@@ -55,7 +55,7 @@ from .types.converters import (  # noqa: E402
 # Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.
 
-__version__ = "0.0.18"
+__version__ = "0.0.14"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared

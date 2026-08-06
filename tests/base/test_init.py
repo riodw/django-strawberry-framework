@@ -18,7 +18,7 @@ from django_strawberry_framework.types import converters
 def test_version():
     # This version-only change must not widen the package-root __all__;
     # DjangoDebugExtension is a subpackage export.
-    assert __version__ == "0.0.18"
+    assert __version__ == "0.0.14"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -49,20 +49,21 @@ def test_public_api_surface_is_pinned():
     # (the structured read-output objects). spec-038 adds two form-mutation
     # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``). spec-040 (the
     # auth-mutations card) owns the ``0.0.13`` cut (Decision 12) jointly with the
-    # spec-039 serializer flavor, so ``test_version`` is asserted at ``0.0.13``
-    # above; the auth surface adds NO package-root exports (submodule-only per
-    # Decision 3). The 0.0.14 mutation-atomicity cut adds the two schema symbols: ``DjangoSchema`` (the
+    # spec-039 serializer flavor; the auth surface adds NO package-root exports
+    # (submodule-only per Decision 3). The mutation-atomicity card adds the two
+    # schema symbols: ``DjangoSchema`` (the
     # REQUIRED schema class for generated mutations - its execution context holds
     # each mutation's transaction open through response completion) and
     # ``DjangoMutationExecutionContext`` (the subclassing seam for consumers with
-    # their own execution context). The 0.0.16 resource-policy cut adds
+    # their own execution context). The resource-policy card (spec-047) adds
     # ``DEFAULT_RESOURCE_POLICY`` / ``RESOURCE_LIMIT_ERROR_CODE`` /
     # ``ResourceLimitExceeded`` / ``ResourcePolicy`` /
-    # ``DjangoResourcePolicyExtension``. The 0.0.17 secure-output cut adds the
+    # ``DjangoResourcePolicyExtension``. The secure-output card (spec-048) adds the
     # two opt-in file/image output objects (``DjangoFilePathType`` /
     # ``DjangoImagePathType``, spec-048 Decision 1) and the three
     # production-error-policy symbols (``DEFAULT_ERROR_POLICY`` /
-    # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7).
+    # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7). All of these
+    # cards target ``0.0.14``, which is what ``test_version`` asserts above.
     assert django_strawberry_framework.__all__ == (
         "DEFAULT_ERROR_POLICY",
         "DEFAULT_RESOURCE_POLICY",

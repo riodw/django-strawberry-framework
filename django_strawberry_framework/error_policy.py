@@ -1,6 +1,6 @@
 """``ErrorPolicy`` - what an unexpected exception says to a client in production.
 
-Spec: ``docs/SPECS/spec-048-secure_output_defaults-0_0_17.md``.
+Spec: ``docs/SPECS/spec-048-secure_output_defaults-0_0_14.md``.
 Target release: ``0.0.17``.
 
 graphql-core's default is to put an unhandled resolver or hook exception's

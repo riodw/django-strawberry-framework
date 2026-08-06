@@ -1,12 +1,15 @@
 # Spec: Execution resource policy — one immutable budget, one value-cardinality walker, bounded collections
 
-Planned for `0.0.16` (card [`DONE-047-0.0.16`][kanban]). This is **card 2 of the
+Targeted at `0.0.14` (card [`DONE-047-0.0.14`][kanban]). This is **card 2 of the
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's **S3** (no coherent resource
 budget for query and response work) and **S4** (unbounded variable-driven input
 cardinality). It depends on [`spec-046`][spec-046], which corrected the transports every
-bound here is consumed by; cards [`TODO-ALPHA-048-0.0.17`][kanban] (secure output and
-error defaults) and [`TODO-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) follow.
+bound here is consumed by; cards [`DONE-048-0.0.14`][kanban] (secure output and
+error defaults) and [`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) follow.
+
+Deliberation, rejected alternatives, and this spec's change record live in its companion
+[`spec-047-resource_policy-0_0_14-rationale.md`][rationale].
 
 **`docs/feedback2.md` is review evidence this spec references, not a substitute for it.**
 The audit established the facts; every decision, default number, public-API shape,
@@ -20,15 +23,16 @@ now ask for it. The package's documented API freeze begins at `1.0.0`, and card 
 already set the precedent that correcting a confirmed security-boundary default during
 alpha outranks migration convenience.
 
-Status: **BUILT — all five slices are built and the `0.0.16` version cut is taken
-here.** The `Status:` line is the completion source of truth (the shipped-spec
-convention); the Slice checklist below records the same state. The work is built but
-**uncommitted** on the working tree.
+Status: **SHIPPED — all five slices are built and released.** The `Status:` line is the
+completion source of truth (the shipped-spec convention); the Slice checklist below
+records the same state.
 
 **Version boundary** (see
-[Decision 12](#decision-12--this-card-is-the-only-non-done-0016-card-so-it-owns-the-bump)):
-this card is the **only** non-Done card at `0.0.16`, so its Slice 5 owns the
-`pyproject.toml` / `__version__` / `tests/base/test_init.py` bump.
+[Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
+this card targets `0.0.14`, the patch its three program siblings and cards 041-045 also
+target. The version quintet already reads `0.0.14`, so there is no bump for this card to
+take; the [joint version cut][glossary-joint-version-cut] rule assigns the release wording
+to the last card of that shared line to land. Slice 5 folds documentation in only.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
 permission. This card's Slice 5 does **not** claim that permission — the release entry is
@@ -73,8 +77,8 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [`seed_data`][glossary-seed_data],
   [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the test tiers and
   disciplines that decide where each regression lives.
-- [Joint version cut][glossary-joint-version-cut] — the release rule this card is
-  explicitly NOT subject to.
+- [Joint version cut][glossary-joint-version-cut] — the release rule this card is subject
+  to, sharing the `0.0.14` line with cards 041-046, 048 and 049.
 - [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] — the hook whose
   refuse-a-sliced-source contract dictates where the row bound may be applied.
 
@@ -103,9 +107,9 @@ Each top-level item maps to one commit / PR.
 - [x] **Slice 4 — the secure relation-shape default**
       `DEFAULT_RELATION_SHAPE` becomes `"connection"`; the example project's explicit
       `"both"` opt-ins; every re-pinned test.
-- [x] **Slice 5 — docs fold-in and the version cut**
-      `docs/GLOSSARY.md`, `docs/TREE.md`, `KANBAN.md`, and the
-      `pyproject.toml` / `__version__` / `tests/base/test_init.py` bump to `0.0.16`.
+- [x] **Slice 5 — docs fold-in**
+      `docs/GLOSSARY.md`, `docs/TREE.md`, and `KANBAN.md`. The version quintet is the
+      joint cut's, not this slice's.
 
 ## Problem statement
 
@@ -215,18 +219,12 @@ What is borrowed:
 - **`MaxAliasesLimiter`'s fragment-expansion shape.** Counting per spread site, with a
   fragment map built once, is upstream's approach and the correct one.
 
-What is deliberately **not** borrowed:
-
-- **Three extensions a consumer must remember.** One policy object, one extension,
-  installed by `DjangoSchema` itself.
-- **`parse_options["max_tokens"]`.** Upstream routes its token limit into graphql-core's
-  parser, which answers with a `GraphQLSyntaxError` carrying no code — indistinguishable to
-  a client from a typo. This package counts tokens itself so the rejection carries the same
-  typed code as every other bound
-  ([Decision 3](#decision-3--the-document-text-scan-runs-before-the-parse)).
-- **Depth measured on the AST.** Upstream's `QueryDepthLimiter` is a validation rule, so it
-  runs *after* the parse it would need to protect
-  ([Decision 3](#decision-3--the-document-text-scan-runs-before-the-parse)).
+What is deliberately **not** borrowed: upstream's three-extension shape, its
+`parse_options["max_tokens"]` routing, and its AST-measured depth. This package installs
+**one** extension from `DjangoSchema` itself, counts tokens itself so the rejection carries
+the same typed code as every other bound, and charges depth before the parse
+([Decision 3](#decision-3--the-document-text-scan-runs-before-the-parse)). Why each was
+declined is in the [rationale][rationale].
 
 Nothing about input cardinality, raw-list rows, or the relation-shape default has an
 upstream analogue in either package; those are this package's own.
@@ -349,9 +347,8 @@ properties follow, and each is load-bearing:
 a bound accepting `True` would silently become `1` — a bound so tight it presents as an
 unrelated bug.
 
-**Alternatives rejected.** A settings-dict read per bound (S3's explicit "do not scatter
-unrelated settings reads across resolvers"). A mutable dataclass with a `freeze()` call
-(the unfrozen window is the bug). Pydantic (a new hard dependency for one object).
+*Alternatives rejected: see the [rationale][rationale] (a per-bound settings read, a
+mutable dataclass with `freeze()`, Pydantic).*
 
 ### Decision 2 — Threaded through the request context, mirroring the optimizer seam
 
@@ -371,9 +368,8 @@ installed the extension, and a resolver invoked outside an operation all read ba
 *bounded* policy. Returning `None` would have forced every caller to write its own
 "no policy means no bound" branch, which is the fail-open shape spelled out in six places.
 
-**Alternatives rejected.** A `contextvars.ContextVar` (invisible to the consumer's context
-object, and the package already owns a context seam — two would be one too many). A
-thread-local (wrong under async).
+*Alternatives rejected: see the [rationale][rationale] (a `contextvars.ContextVar`, a
+thread-local).*
 
 ### Decision 3 — The document text scan runs BEFORE the parse
 
@@ -402,10 +398,8 @@ Two consequences are contractual and are documented rather than hidden:
 - **`depth` is a running bracket balance**, so it is a true nesting depth for a balanced
   document. An unbalanced one is a syntax error by construction and is answered as one.
 
-**Alternatives rejected.** `parse_options["max_tokens"]` (loses the typed code; see
-[Borrowing posture](#borrowing-posture)). A `ValidationRule` for depth (runs after the
-parse). A regex or `str.count` over the document (a brace inside a string literal is not a
-brace; the lexer knows the difference).
+*Alternatives rejected: see the [rationale][rationale] (`parse_options["max_tokens"]`, a
+depth `ValidationRule`, a regex or `str.count` over the document).*
 
 ### Decision 4 — The document and value budgets are one iterative walk
 
@@ -453,28 +447,15 @@ charged in full, including a second reference to one already charged elsewhere i
 request, because a container reached twice is two references' worth of work for the
 coercer, the walkers and the ORM.
 
-This is the same shape the document walk already uses for fragment spreads (a `path`
-carried on the stack), with object identity in place of fragment names. It replaces a
-single request-lifetime set of already-charged `id()` values, which was wrong twice over:
-
-- **An `id()` is unique only among LIVE objects.** The coerced values this walk reads are
-  temporaries; freeing one list lets the next same-sized list reuse its address, so an
-  `id()`-keyed set reports a *fresh* container as already charged. Measured on this
-  package's own walker: 1,650 relation ids charged as 55, because graphql-core's
-  `value_from_ast_untyped` builds fresh same-size lists whose ids recycle through
-  CPython's free list.
-- **Charge-once is not the contract.** One variable spliced into two mutation fields
-  resolves to the same Python list both times, so charge-once made the second field's
-  relation ids free and the aggregate bound never fired — a live request walked past
-  `max_relation_ids_total` and went on to decode ids.
-
 A cycle guard needs ancestor-scoped lifetime and owning references; a charge-once cache
-needs neither. Conflating the two in one set is what produced both bypasses, so they are
-now two separate mechanisms — a path for termination, and no cache at all for charging.
+needs neither. They are therefore two separate mechanisms — a path for termination, and no
+cache at all for charging. *The identity-keyed cache this replaced, and the two measured
+bypasses that forced the change, are in the [rationale][rationale].*
 
 **Value depth is its own bound.** `max_depth` counts brackets in the document TEXT, and a
 value arriving through a variable has none: the document `query($p: JSON!) { blob(payload:
-$p) }` is three brackets deep however deep `$p` is. `max_value_depth` (default `20`) is
+$p) }` is three brackets deep however deep `$p` is.
+[`max_value_depth`][glossary-max_value_depth] (default `20`) is
 charged from the ancestor path's own length during the walk, so a 10,000-deep
 list-of-list-of-… payload is bounded even though every level is one node wide and the node
 total stays small. It also bounds the identity scan each container performs over its
@@ -483,40 +464,28 @@ ancestors, which is what keeps that scan from being a cost of its own.
 **Introspection is charged like any other document shape.** `__schema`, `__type` and
 `__typename` resolve to graphql-core's own `SchemaMetaFieldDef` / `TypeMetaFieldDef` /
 `TypeNameMetaFieldDef`, resolved exactly as that library's executor resolves them
-(`__schema` / `__type` only on the query root). Answering "no field definition" for them
-charged the whole of introspection as ONE selection and then stopped descending — the walk
-ends a branch whose field cannot be resolved — which made introspection the one document
-shape no depth, selection, or collection bound could see, even though `__schema` opens a
-subtree over every type, field, argument and enum value in the schema.
+(`__schema` / `__type` only on the query root). This matters because the walk ends a branch
+whose field cannot be resolved, and `__schema` opens a subtree over every type, field,
+argument and enum value in the schema. *The blind spot this closed is in the
+[rationale][rationale].*
 
-**Alternatives rejected.** A `ValidationRule` (no access to variables, which is the whole of
-S4). Charging only variables and ignoring literals (a literal object is a value too).
-Recursion with a depth guard (a depth guard on a walker that exists to bound depth is
-circular).
+*Alternatives rejected: see the [rationale][rationale] (a `ValidationRule`, charging
+variables but not literals, recursion with a depth guard).*
 
 ### Decision 5 — `DEFAULT_RELATION_SHAPE` becomes `"connection"`: a clean alpha break
 
-The card leaves this open; the spec decides it, and decides it the way card 046 decided its
-own: **a clean break, with no deprecation shim.**
-
-A raw many-side list emitted beside a bounded connection is not a convenience, it is the
-bypass. Every argument for a shim is an argument for keeping the bypass reachable for one
-more release on schemas that never asked for it, and a shim that emits both shapes *is* the
-insecure default under another name. The migration is one line per relation
-(`relation_shapes = {"items": "both"}`), it is discovered at schema build rather than at
-runtime, and the alpha line has already taken a larger break for a smaller reason.
+**A clean break, with no deprecation shim.** A raw many-side list emitted beside a bounded
+connection is not a convenience, it is the bypass. The migration is one line per relation
+(`relation_shapes = {"items": "both"}`) and it is discovered at schema build rather than at
+runtime.
 
 `"both"` survives unchanged as an explicit opt-in, and the list it produces is now
 row-bounded ([Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam)) rather than
 unbounded — so opting in no longer opts out of the cap.
 
-**Alternatives rejected.** A one-release deprecation warning while still emitting both
-(keeps the bypass, and a warning nobody reads is not a mitigation). A settings flag to
-restore the old default (a global switch that re-opens a security default is the worst of
-both — it is invisible in the schema, unlike a `Meta` key). Leaving the default and relying
-on the new row bound alone (bounding the sibling is not the same as not having it: the
-sibling has no cursor, so a client can only ever read the first N rows of it, which is a
-worse API *and* still unbounded across aliases).
+*The derivation, and the alternatives rejected (a one-release deprecation warning, a
+settings flag restoring the old default, relying on the row bound alone), are in the
+[rationale][rationale].*
 
 ### Decision 6 — Every raw list is bounded at one seam
 
@@ -569,9 +538,7 @@ with *nesting* rather than with any one collection, and it is what sees
 Its default is `1_000_000_000`, which is deliberately generous and is not a promise about
 rows. The rows a request can actually return are bounded per collection by `max_page_size`
 and `max_list_rows`; this bound exists to stop the *product* of those from compounding down
-a deep document. A legitimate four-level document that leaves every page unspecified
-already charges `10**8`, and a bound that rejects ordinary documents is a bound the first
-deployment to meet it raises to infinity.
+a deep document. *Why the default is set where it is, is in the [rationale][rationale].*
 
 Two accounting rules are contractual:
 
@@ -619,9 +586,8 @@ database's job and a request timeout is the deployment's. A cooperative deadline
 the request from starting *more* work is honest and useful; a `signal.alarm` or a watchdog
 thread pretending to cancel SQL is neither.
 
-The default is `None` rather than a number because a wall-clock deadline a deployment did
-not choose is a correctness hazard (it truncates legitimate slow requests), not a safety
-one — the opposite of every other bound here, which is why it is the only optional one.
+It is the only optional bound. *Why its default is `None` rather than a number is in the
+[rationale][rationale].*
 
 ### Decision 10 — Per-field overrides narrow; the schema policy is the trusted declaration
 
@@ -664,17 +630,23 @@ because Strawberry constructs one instance per request and a shared instance wou
 one set of charge counters across every concurrent request. A consumer-supplied entry —
 class or instance — suppresses the automatic append, so a consumer who installed the
 extension with their own policy does not get a second copy double-charging the same bounds.
-An endpoint whose only limiter is one a consumer remembered to install is an endpoint with
-no limiter; that is the audit's finding, and automatic installation is the answer to it.
+*Why installation is automatic rather than documented is in the [rationale][rationale].*
 
-### Decision 12 — This card is the only non-Done `0.0.16` card, so it owns the bump
+### Decision 12 — The version bump belongs to the `0.0.14` joint cut
 
-A board scan at authoring time shows `TODO-ALPHA-047-0.0.16` as the only non-Done card at
-`0.0.16`; the neighbouring cards target `0.0.17`, `0.0.18` and `0.0.19`. The
-[joint version cut][glossary-joint-version-cut] rule therefore does not apply, and Slice 5
-moves the version quintet to `0.0.16` — `pyproject.toml [project].version`,
-`django_strawberry_framework/__init__.py::__version__`, and the `tests/base/test_init.py`
-assertion that pins them together.
+This card does **not** move the version quintet. It targets `0.0.14`, sharing that patch
+with the three other cards of this security program (046, 048, 049) and with cards 041-045
+before them. The quintet — `pyproject.toml [project].version`,
+`django_strawberry_framework/__init__.py::__version__`, the `tests/base/test_init.py`
+assertion that pins them together, the glossary's package-version line, and the package's
+own `uv.lock` entry — already reads `0.0.14`, so there is no bump for this card to take.
+
+Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
+to the **last** card of a shared line to land, never to an individual card's slices. Slice 5
+therefore owns the documentation fold-in only.
+
+*This decision originally claimed a `0.0.16` cut of its own. What it claimed, and why an
+authoring-time board scan could not have known better, is in the [rationale][rationale].*
 
 ### Decision 13 — Three bounds this policy still owes, and three exclusions that are audited rather than forgotten
 
@@ -684,26 +656,19 @@ work** with a named seam; three are **audited exclusions** that a later pass mus
 **Owed — a package-owned subscription rejection envelope.** Enforcement is not the gap;
 **rendering** is. A subscription enters `extensions_runner.operation()` and `executing()` exactly
 as a query does, so both the document text scan and the value walk *do* run and a violating
-subscription *is* refused. What differs is what the client sees, and the difference is one
-`except` clause in upstream's schema: the **non-streaming** path wraps its whole operation block
-in a broad `except Exception` that returns a `PreExecutionError`, so an HTTP or WebSocket query or
-mutation carries an `errors` entry; the **streaming** path's only pre-execution `except` names
-three errors (`MissingQueryError`, `CannotGetOperationTypeError`, `InvalidOperationTypeError`), so
-anything an extension raises escapes it. Upstream's
-`subscriptions/protocols/graphql_transport_ws/handlers.py::BaseGraphQLTransportWSHandler
-.run_operation` then catches that exception, hands it to `handle_task_exception`, and sends
-`complete`. A rejected subscription therefore closes cleanly instead of carrying
-`extensions.code == "RESOURCE_LIMIT_EXCEEDED"`.
+subscription *is* refused. What differs is what the client sees: upstream's non-streaming path
+converts a pre-execution exception into an `errors` entry and its streaming path does not, so a
+rejected subscription closes with `complete` instead of carrying
+`extensions.code == "RESOURCE_LIMIT_EXCEEDED"`. *The `except`-clause asymmetry that produces
+this is traced in the [rationale][rationale].*
 
-**State the behaviour, never the private method name.** The declared floor is
-`strawberry-graphql>=0.316.0` with no ceiling, and the seam moves inside that range: the private
-implementation is `_subscribe` at the floor and `_stream` at 0.323.2, and the **public** attribute
-a handler dispatches through moved from `subscribe` to `stream` at 0.319.0 — the same instability
-[`spec-046`][spec-046]'s stop-aware result source already answers by wrapping both public names
-unconditionally rather than testing a version. A fix here must be written against the broad-versus-
-narrow `except` asymmetry above and must pin no private upstream symbol; and because the floor is
-open-ended, whether the asymmetry still holds has to be re-measured across the range rather than
-read off the installed wheel.
+**State the behaviour, never the private method name.** A fix here must be written against that
+broad-versus-narrow `except` asymmetry and must pin no private upstream symbol: the declared floor
+is `strawberry-graphql>=0.316.0` with no ceiling, and the seam moves inside that range. Because
+the floor is open-ended, whether the asymmetry still holds has to be **re-measured across the
+whole range** rather than read off the installed wheel. [`spec-046`][spec-046]'s stop-aware result
+source already answers the same instability by wrapping both public names unconditionally rather
+than testing a version. *The measured version drift is in the [rationale][rationale].*
 
 Closing this means owning an error envelope for a transport whose lifecycle is upstream's, which
 is why [Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation) states
@@ -743,11 +708,11 @@ The work is bounded by `max_input_nodes` without a separate bound, because every
 stack entry and charges a node before it descends — a value engineered to blow the walk up runs
 out of node budget first.
 
-**Why the cycle guard and the charge counter are two mechanisms and cannot be one.** The deleted
-`_seen: set[int]` was doing cycle-guard duty and charge-once duty at the same time. They have
+**Why the cycle guard and the charge counter are two mechanisms and cannot be one.** They have
 different lifetime requirements — ancestor-scoped and owning, versus request-scoped — and only
-one of them is a contract, which is why one object could not correctly be both. The replacement
-is a path tuple for termination and **no cache at all** for charging.
+one of them is a contract, so one object cannot correctly be both. A path tuple terminates the
+walk; **no cache at all** charges it. *The single object that once did both duties, and the two
+bypasses it produced, are in the [rationale][rationale].*
 
 **Three constants whose values are decisions, not defaults.** `max_value_depth` is `20`, matching
 `max_depth`, because the two bound the same idea on the two sides of the text/variable divide and
@@ -787,7 +752,6 @@ check runs rather than about how long anything takes.
 | 4 | `examples/fakeshop/apps/{library,products}/schema.py` | Explicit `"both"` opt-ins where the example's live coverage needs the raw list; `CategoryType.properties` deliberately left on the new default. |
 | 4 | `tests/test_relay_connection.py`, `tests/test_connection.py`, `tests/optimizer/test_extension.py` | Re-pinned to the new default, with the `"both"` shape pinned separately. |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/TREE.md`, `KANBAN.md` (DB) | Fold-in. |
-| 5 | `pyproject.toml`, `__init__.py`, `tests/base/test_init.py` | `0.0.16`. |
 
 ## Helper-reuse obligations (DRY)
 
@@ -904,8 +868,10 @@ is a charge that does not happen. `tests/test_list_field.py` adds the constructo
 ## Doc updates
 
 - `docs/GLOSSARY.md` (DB-backed): new entries for **Execution resource policy**,
-  **`ResourcePolicy`**, **`DjangoResourcePolicyExtension`**, and **[Value-budget walker][glossary-value-budget-walker]**;
-  updated bodies for [`DjangoListField`][glossary-djangolistfield],
+  **`ResourcePolicy`**, **`DjangoResourcePolicyExtension`**,
+  **[Value-budget walker][glossary-value-budget-walker]** and
+  **[`max_value_depth`][glossary-max_value_depth]**; this card's root exports added to the
+  Public exports list; updated bodies for [`DjangoListField`][glossary-djangolistfield],
   [`Meta.relation_shapes`][glossary-metarelation_shapes] and
   [Relation handling][glossary-relation-handling].
 - `docs/TREE.md`: regenerated for the three new modules.
@@ -914,29 +880,28 @@ is a charge that does not happen. `tests/test_list_field.py` adds the constructo
 
 ## Risks and open questions
 
-- **`max_collection_cost`'s default is generous by design.** Preferred answer for `0.0.16`:
+*Each risk's fallback position — the answer that would be taken if the preferred one failed —
+is in the [rationale][rationale].*
+
+- **`max_collection_cost`'s default is generous by design.** Preferred answer for `0.0.14`:
   the shape-bound framing in
   [Decision 8](#decision-8--max_collection_cost-is-a-shape-bound-and-its-default-says-so),
-  with per-collection bounds carrying the row promise. Fallback if deployments report the
-  compounding is still too permissive: a per-level multiplier cap, which bounds nesting
-  directly rather than through a product.
+  with per-collection bounds carrying the row promise.
 - **Response-byte accounting is out of scope.** Preferred answer: a future card adding a
-  serialization-time budget with a defined partial-response policy. Fallback: the
-  deployment's reverse proxy, which already bounds response size.
+  serialization-time budget with a defined partial-response policy.
 - **Field-level cost annotation** (`Meta.cost` / a `@cost` directive) is the natural
   successor to `max_collection_cost` and is deliberately deferred; the policy object is the
   place it would attach.
 - **The `ids` argument-name rule** is the walker's one name-based classification. Preferred
-  answer: keep it, because Relay's node refetch has no distinguishing type. Fallback: a
-  marker on the generated field that the walker reads instead.
+  answer: keep it, because Relay's node refetch has no distinguishing type.
 - **The relation-shape break has no telemetry.** A consumer discovers it at schema build (a
   field vanished from the SDL) rather than through a warning. Accepted: schema-build
   discovery is earlier and louder than a log line.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Secure output and error defaults — [`TODO-ALPHA-048-0.0.17`][kanban] (S5-S8).
-- Dependency and CI hardening — [`TODO-ALPHA-049-0.0.18`][kanban].
+- Secure output and error defaults — [`DONE-048-0.0.14`][kanban] (S5-S8).
+- Dependency and CI hardening — [`WIP-ALPHA-049-0.0.14`][kanban].
 - Persisted queries / document allow-listing — not carded.
 - Rate limiting per client or per IP — a deployment concern, not a schema one.
 
@@ -968,7 +933,19 @@ is a charge that does not happen. `tests/test_list_field.py` adds the constructo
 - [x] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
-- [x] Docs folded in and the version quintet moved to `0.0.16`.
+- [x] Docs folded in; the version quintet rides the joint cut with cards 048 and 049
+      ([Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)).
+- [x] [`max_value_depth`][glossary-max_value_depth] has a glossary entry, and the
+      [`ResourcePolicy`][glossary-resourcepolicy] glossary body enumerates it alongside the
+      other bounds.
+- [x] This card's root exports appear in the glossary's Public exports list —
+      `ResourcePolicy` (naming `DEFAULT_RESOURCE_POLICY` the way the `ErrorPolicy` row names
+      its own default), `DjangoResourcePolicyExtension`, `ResourceLimitExceeded` and
+      `RESOURCE_LIMIT_ERROR_CODE` — and no glossary row points at a `#djangoschema` anchor
+      that resolves to nothing.
+- [x] The deliberative layer is extracted to
+      [`spec-047-resource_policy-0_0_14-rationale.md`][rationale], and every decision the
+      release falsified states the corrected contract directly rather than its own history.
 
 Carried forward, unticked because they are owed rather than shipped
 ([Decision 13](#decision-13--three-bounds-this-policy-still-owes-and-three-exclusions-that-are-audited-rather-than-forgotten)):
@@ -982,11 +959,6 @@ Carried forward, unticked because they are owed rather than shipped
 - [ ] An oversized numeric literal is refused as a typed resource rejection carrying this
       policy's code rather than as a malformed-input failure from
       `sys.get_int_max_str_digits`.
-- [ ] `max_value_depth` has a glossary entry, and the `ResourcePolicy` glossary body enumerates
-      it alongside the other bounds.
-- [ ] `ResourcePolicy`, `DjangoResourcePolicyExtension` and `DEFAULT_RESOURCE_POLICY` appear in
-      the glossary's Public exports list, and this spec's glossary rows no longer point at a
-      `#djangoschema` anchor that resolves to nothing.
 
 <!-- LINK DEFINITIONS -->
 
@@ -1012,6 +984,7 @@ Carried forward, unticked because they are owed rather than shipped
 [glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
 [glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
 [glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-max_value_depth]: ../GLOSSARY.md#max_value_depth
 [glossary-metarelation_shapes]: ../GLOSSARY.md#metarelation_shapes
 [glossary-per-operation-extension-isolation]: ../GLOSSARY.md#per-operation-extension-isolation
 [glossary-plan-cache]: ../GLOSSARY.md#plan-cache
@@ -1032,7 +1005,8 @@ Carried forward, unticked because they are owed rather than shipped
 [glossary-value-budget-walker]: ../GLOSSARY.md#value-budget-walker
 
 <!-- docs/SPECS/ -->
-[spec-046]: spec-046-transport_security-0_0_15.md
+[rationale]: appx/spec-047-resource_policy-0_0_14-rationale.md
+[spec-046]: spec-046-transport_security-0_0_14.md
 
 <!-- docs/builder/ -->
 

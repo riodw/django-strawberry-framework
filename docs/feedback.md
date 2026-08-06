@@ -119,7 +119,7 @@ against the installed Django/Channels stack and the production helpers.
 
 <!-- docs/ -->
 
-[spec-046]: SPECS/spec-046-transport_security-0_0_15.md
+[spec-046]: SPECS/spec-046-transport_security-0_0_14.md
 
 <!-- docs/SPECS/ -->
 

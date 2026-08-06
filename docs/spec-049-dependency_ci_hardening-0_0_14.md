@@ -45,7 +45,7 @@
 > `Status:` line remains the completion source of truth per this repo's shipped-card closeout
 > convention.
 
-Planned for `0.0.18` (card [`TODO-ALPHA-049-0.0.18`][kanban]). This is **card 4 of 4**,
+Targeted at `0.0.14` (card [`WIP-ALPHA-049-0.0.14`][kanban]). This is **card 4 of 4**,
 the last card of the four-card security-remediation program derived from the hardening
 audit in [`docs/feedback2.md`][feedback2]; it closes that audit's **S6** (the locked Django
 resolution predates published security releases, and no audit / update automation exists)
@@ -66,20 +66,22 @@ package *does*, and this one changes what the project *ships and proves* — a d
 worth keeping visible, because a governance card that quietly grows a source diff is a
 governance card nobody can review.
 
-Status: **BUILT — all five slices are built and the `0.0.18` version cut is taken here.**
+Status: **BUILT — all five slices are built.**
 Slice 1 (**S6** — the lock refresh), Slice 2 (**S7** — least-privilege permissions,
 `persist-credentials`, immutable pins, timeouts), Slice 3 (**S6** — the audit workflow and
-the Dependabot configuration), Slice 4 (the governance test), Slice 5 (docs fold-in and
-the version cut). The Slice checklist boxes below stay unticked because the `Status:` line
+the Dependabot configuration), Slice 4 (the governance test), Slice 5 (docs fold-in).
+The Slice checklist boxes below stay unticked because the `Status:` line
 is the completion source of truth (the shipped-spec convention). The work is built but
-**uncommitted** on the working tree, and `CHANGELOG.md` carries no `0.0.18` entry —
+**uncommitted** on the working tree, and `CHANGELOG.md` carries no `0.0.14` entry —
 [`AGENTS.md`][agents] reserves that entry for the maintainer.
 
 **Version boundary** (see
-[Decision 10](#decision-10--this-card-is-the-only-non-done-0018-card-so-it-owns-the-bump)):
-this card is the **only** non-Done card at `0.0.18`, so its Slice 5 owns the
-`pyproject.toml` / `__version__` / `tests/base/test_init.py` bump. The
-[Joint version cut][glossary-joint-version-cut] rule does not apply.
+[Decision 10](#decision-10--the-version-bump-belongs-to-the-0014-joint-cut)):
+this card targets `0.0.14`, which the version quintet already reads, so its Slice 5 owns
+the documentation fold-in and no part of the quintet. As the last card of the four-card
+program to land, it is the natural owner of the
+[Joint version cut][glossary-joint-version-cut]'s release wording whenever that cut is
+taken.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
 permission. This card's Slice 5 does **not** claim that permission — the release entry is
@@ -140,8 +142,7 @@ Each top-level item maps to one commit / PR.
       structurally; `pyproject.toml` gains the `pyyaml` dev-group row it needs.
 - [ ] **Slice 5 — docs fold-in and the version cut**
       `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`,
-      `KANBAN.md`, and the `pyproject.toml` / `__version__` / `tests/base/test_init.py`
-      bump to `0.0.18`.
+      and `KANBAN.md`. The version quintet is the joint cut's, not this slice's.
 
 ## Problem statement
 
@@ -349,7 +350,7 @@ The cell earns its place: `django>=5.2` is an advertised floor, and an advertise
 no test is a guess. It is also the only node that force-installs
 `strawberry-graphql==0.316.0`, so it is simultaneously the evidence for the
 [Per-operation extension isolation][glossary-per-operation-extension-isolation] floor. Its
-`0.0.15` / `0.0.16` predecessors did not remove it and neither does this card.
+Its predecessors on this patch line did not remove it and neither does this card.
 
 But `5.2.0` predates `5.2.15` and `5.2.16`, so a green tick on that cell is now adjacent to
 a version carrying published advisories — and an adjacent green tick is exactly how a
@@ -611,15 +612,19 @@ that version's blast radius, and this card's Slice 1 is the change that moved it
 it would create the specific failure this repository has hit before: a downstream doc more
 accurate than the thing it documents.
 
-### Decision 10 — This card is the only non-Done `0.0.18` card, so it owns the bump
+### Decision 10 — The version bump belongs to the `0.0.14` joint cut
 
-A board scan at authoring time shows `TODO-ALPHA-049-0.0.18` as the only non-Done card at
-`0.0.18`; the neighbouring cards target `0.0.19` and `0.0.20`. The
-[Joint version cut][glossary-joint-version-cut] rule therefore does not apply, and Slice 5
-moves the version quintet to `0.0.18` — `pyproject.toml [project].version`,
-`django_strawberry_framework/__init__.py::__version__`, the `tests/base/test_init.py`
-assertion that pins them together, this glossary's package-version line, and the package's
-own `version` entry in `uv.lock` through an editable rebuild.
+This card does **not** move the version quintet. It targets `0.0.14`, sharing that patch
+with cards 041-045 and with its three program siblings (046, 047, 048). The quintet —
+`pyproject.toml [project].version`, `django_strawberry_framework/__init__.py::__version__`,
+the `tests/base/test_init.py` assertion that pins them together, the glossary's
+package-version line, and the package's own `version` entry in `uv.lock` — already reads
+`0.0.14`, so there is no bump for this card to take.
+
+Under the [Joint version cut][glossary-joint-version-cut] rule the release wording belongs
+to the **last** card of a shared line to land. This card is the last of the four-card
+program, so it is the natural owner of that wording — but the wording is the cut's, not
+this slice's, and Slice 5 claims only the documentation fold-in.
 
 ## Implementation plan
 
@@ -634,7 +639,6 @@ own `version` entry in `uv.lock` through an editable rebuild.
 | 4 | `tests/test_ci_governance.py` (new) | The eleven assertions in [Decision 8](#decision-8--the-governance-posture-is-asserted-by-a-test-not-by-review), parametrized per workflow file. |
 | 4 | `pyproject.toml` | The `pyyaml>=6.0.2` dev-group row and its rationale comment. |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`, `KANBAN.md` (DB) | Fold-in and the secure-version note. |
-| 5 | `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `uv.lock` | `0.0.18`. |
 | — | **Amendment (2026-08-05)** — `pyproject.toml`, `uv.lock`, `.github/workflows/django.yml`, `.github/workflows/postgres.yml`, `tests/test_ci_governance.py` | Post-card, by maintainer decision: the declared Django floor becomes `Django>=5.2.16`; the exact-floor matrix cell force-installs `Django==5.2.16` and keeps its `compatibility_only` key, `[compatibility floor]` job-name suffix, and contract comment; the governance test tracks the raised floor. Not part of what card 049 built — recorded here so the row-2 delta above is not read as live. |
 
 ## Helper-reuse obligations (DRY)
@@ -728,23 +732,23 @@ Slice 5, all of it fold-in rather than new surface:
 
 - `README.md` — the supported-versions prose gains the secure-version sentence: the
   `django>=5.2` floor is an API-compatibility floor, and production consumers must install
-  the newest patch in their supported Django series. The `0.0.18` release line.
+  the newest patch in their supported Django series.
 - `docs/README.md` — the same secure-version note beside the version table, and the
-  `0.0.18` "Shipped today" move.
+  "Shipped today" move.
 - **Amendment (2026-08-05):** the secure-version statement is written against the raised
   `Django>=5.2.16` floor and lands in `docs/README.md`'s
   [Production security profile][docs-readme-production-profile] — the section a deployment
   review actually walks — with a condensed mirror in [`SECURITY.md`][security] beside its
   supported-versions table. `README.md` carries no dependency-floor prose to attach it to.
-- `docs/GLOSSARY.md` (DB-rendered) — the package-version line to `0.0.18`, and the
-  secure-version statement folded into the [Hard dependency][glossary-hard-dependency]
+- `docs/GLOSSARY.md` (DB-rendered) — the secure-version statement folded into the
+  [Hard dependency][glossary-hard-dependency]
   entry, whose subject is exactly the unconditionally-installed packages this concerns. No
   new term.
 - `docs/TREE.md` (script-rendered) — regenerated for `tests/test_ci_governance.py`.
 - `TODAY.md` — the capability snapshot, and the security-remediation program recorded as
   complete now that card 4 of 4 lands.
 - `KANBAN.md` (DB-rendered) — the card to Done and its `SpecDoc`.
-- `CHANGELOG.md` — **not** touched; the `0.0.18` entry is the maintainer's per
+- `CHANGELOG.md` — **not** touched; the `0.0.14` entry is the maintainer's per
   [`AGENTS.md`][agents].
 
 `docs/GLOSSARY.md`, `docs/TREE.md`, and `KANBAN.md` are generated. Their edits are made in
@@ -755,7 +759,7 @@ never by hand.
 
 - **Dependabot's `uv` lockfile handling has open upstream issues.** Reports exist of update
   PRs that move `pyproject.toml` without regenerating `uv.lock`, or the reverse. Preferred
-  answer for `0.0.18`: ship the `uv` ecosystem anyway, because the audit in
+  answer for `0.0.14`: ship the `uv` ecosystem anyway, because the audit in
   [Decision 5](#decision-5--osv-scanner-against-uv-lock-on-a-clock-and-on-every-resolution-diff)
   reads `uv.lock` directly and would fail on a PR that left it stale — the two mechanisms
   check each other. Fallback if the PRs prove unusable: keep the `github-actions` ecosystem,
@@ -773,7 +777,7 @@ never by hand.
   supply-chain incident touches that image: pin `ghcr.io/google/osv-scanner-action` by
   digest via a fork, accepting the maintenance cost then rather than now.
 - **The daily audit will eventually fail on an advisory with no fixed version available.**
-  Preferred answer for `0.0.18`: handle it as it arises, since the correct response depends
+  Preferred answer for `0.0.14`: handle it as it arises, since the correct response depends
   entirely on whether the affected package is a
   [hard dependency][glossary-hard-dependency], a
   [soft dependency][glossary-soft-dependency], or dev-only. Fallback if it becomes routine:
@@ -850,8 +854,8 @@ never by hand.
 - [ ] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, and `scripts/check_trailing_commas.py --check` all
       clean.
-- [ ] Docs folded in with the secure-version note, and the version quintet moved to
-      `0.0.18`.
+- [ ] Docs folded in with the secure-version note; the version quintet rides the joint
+      `0.0.14` cut.
 
 <!-- LINK DEFINITIONS -->
 
@@ -872,9 +876,9 @@ never by hand.
 [glossary-soft-dependency]: GLOSSARY.md#soft-dependency
 
 <!-- docs/SPECS/ -->
-[spec-046]: SPECS/spec-046-transport_security-0_0_15.md
-[spec-047]: SPECS/spec-047-resource_policy-0_0_16.md
-[spec-048]: SPECS/spec-048-secure_output_defaults-0_0_17.md
+[spec-046]: SPECS/spec-046-transport_security-0_0_14.md
+[spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
+[spec-048]: SPECS/spec-048-secure_output_defaults-0_0_14.md
 
 <!-- docs/builder/ -->
 [bld-049]: builder/bld-049.md

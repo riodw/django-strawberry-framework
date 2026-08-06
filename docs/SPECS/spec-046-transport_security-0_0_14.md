@@ -1,12 +1,12 @@
 # Spec: Transport security — Django-owned HTTP, a bounded request body, one UTF-8 wire, and WebSocket actor revalidation
 
-Shipped in `0.0.15` (card [`DONE-046-0.0.15`][kanban]). This is **card 1 of a
+Targeted at `0.0.14` (card [`DONE-046-0.0.14`][kanban]). This is **card 1 of a
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's two Blockers (**S1**, **S2**),
 two Mediums (**S9**, **S11**), and the **transport slice of S12**. Cards
-[`DONE-047-0.0.16`][kanban] (request resource policy),
-[`DONE-048-0.0.17`][kanban] (secure defaults), and
-[`WIP-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) each depend on this one:
+[`DONE-047-0.0.14`][kanban] (request resource policy),
+[`DONE-048-0.0.14`][kanban] (secure defaults), and
+[`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) each depend on this one:
 the program is staged transport-first because every later bound is consumed by the
 transports corrected here.
 
@@ -37,9 +37,9 @@ migration convenience.
 Status: **SHIPPED — all five slices (S1, S2, S9, S11, and the S12 transport slice) are
 built and released, with
 [Decisions 16-19](#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam)'s
-contracts landing inside them, and the joint `0.0.15` cut
-([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)) has
-since taken the version quintet past this card's patch line.** Two contracts here were
+contracts landing inside them; the version quintet already reads this card's target patch,
+so the [joint version cut][glossary-joint-version-cut] has no bump to take for it
+([Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)).** Two contracts here were
 corrected after the release and the text below is the corrected form, not the shipped-then
 form:
 [Decision 18](#decision-18--the-body-gate-runs-before-djangos-multipart-parser)
@@ -60,13 +60,14 @@ actor revalidation at both the admission and the outbound-frame checkpoint), Sli
 `spec-041` amendment, and the doc fold-in).
 
 **Version boundary** (see
-[Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)): this
-card **shares the `0.0.15` patch line** with [`TODO-ALPHA-050-0.0.19`][kanban], so the
-version bump is owned by the [joint version cut][glossary-joint-version-cut] — the last
-`0.0.15` card to land — and **no slice here moves any part of the version quintet**.
+[Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)): this
+card **shares the `0.0.14` patch line** with cards 041-045 and with its three program
+siblings (047, 048, 049), so the version is owned by the
+[joint version cut][glossary-joint-version-cut] — the last card of that line to land — and
+**no slice here moves any part of the version quintet**.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without
-explicit permission. Because the `0.0.15` `CHANGELOG.md` entry is part of the joint cut
+explicit permission. Because the `0.0.14` `CHANGELOG.md` entry is part of the joint cut
 rather than this card, **no slice in this spec grants or exercises that permission** —
 the grant travels with the cut, exactly as [`spec-041`][spec-041] Decision 10 pinned
 for the joint `0.0.14` cut.
@@ -385,7 +386,7 @@ Each top-level item maps to one commit / PR.
         rows stay exactly as accepted.
   - [ ] Card flip to Done + `KANBAN.md` / `KANBAN.html` regeneration from the DB.
   - [ ] **No version quintet movement, and no `CHANGELOG.md` edit**
-        ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
+        ([Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)).
 
 ## Problem statement
 
@@ -566,10 +567,10 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   `SINGLE_PARENT_FAST_PATH`, `TESTING_ENDPOINT`, `HIDE_FLAT_FILTERS`, and
   `RELAY_GLOBALID_STRATEGY`. Per [`AGENTS.md`][agents] #"Add settings keys only when the
   feature that needs them lands", this card adds exactly one.
-- **The `0.0.15` line has two non-Done cards.** [`TODO-ALPHA-050-0.0.19`][kanban] (the
-  debug extraction) and this one, so the
+- **The `0.0.14` line carries several cards.** Cards 041-045 landed there before this
+  one, and its three program siblings (047, 048, 049) target it too, so the
   [joint version cut][glossary-joint-version-cut] rule applies
-  ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
+  ([Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)).
 
 ## Goals
 
@@ -612,14 +613,14 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
 
 - **A central request resource-policy object.** Query depth / complexity / cost budgets,
   variable cardinality, collection bounds, and per-file upload limits are
-  [`TODO-ALPHA-047-0.0.16`][kanban] (audit S3 / S4). This card ships exactly one
+  [`DONE-047-0.0.14`][kanban] (audit S3 / S4). This card ships exactly one
   transport bound — the cumulative body cap — and deliberately does not invent the policy
   object that later card owns.
 - **Secure defaults for the IDE, GET, introspection, and error masking.** The card's
   regressions *prove* `graphql_ide=None` and `allow_queries_via_get=False` are supported
   on the new view; *changing the shipped defaults*, plus `DjangoSchema`-level production
   error policy and the [`DjangoDebugExtension`][glossary-djangodebugextension] disclosure
-  gate (audit S8 / S10), belongs to [`TODO-ALPHA-048-0.0.17`][kanban].
+  gate (audit S8 / S10), belongs to [`DONE-048-0.0.14`][kanban].
 - **The full deployment contract.** The `SECURITY.md` production-security profile and the
   mechanical `check --deploy`-style checklist (the rest of audit S12) belong to the later
   cards' doc slices; this card ships only the transport slice
@@ -929,11 +930,11 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/SPECS/spec-046-transport_security-0_0_15.md`: card NNN `046`, topic
-slug `transport_security`, target version `0.0.15` with dots as underscores, per the
+This spec lives at `docs/SPECS/spec-046-transport_security-0_0_14.md`: card NNN `046`, topic
+slug `transport_security`, target version `0.0.14` with dots as underscores, per the
 [`docs/SPECS/NEXT.md`][next] Step 6 convention. The companion term ledger is
-`docs/SPECS/appx/spec-046-transport_security-0_0_15-terms.csv`, and the companion **rationale** file —
-[`spec-046-transport_security-0_0_15-rationale.md`][rationale], carrying the rejected
+`docs/SPECS/appx/spec-046-transport_security-0_0_14-terms.csv`, and the companion **rationale** file —
+[`spec-046-transport_security-0_0_14-rationale.md`][rationale], carrying the rejected
 alternatives, the derivations, and the change record for every decision below, keyed to the
 decision it belongs to — is where this spec's deliberative layer lives. This document is the
 contract and states only what is currently true; it never narrates its own history.
@@ -1110,7 +1111,7 @@ request-body ceiling before `parse_json` and before schema execution:
    `MultiPartParser` rather than reading `request.body` — reading it would force the whole
    payload into memory and defeat Django's streaming upload handlers, breaking the
    [`Upload` scalar][glossary-upload-scalar] path this package ships. Per-file count,
-   per-file size, and aggregate size are [`TODO-ALPHA-047-0.0.16`][kanban] (audit S4);
+   per-file size, and aggregate size are [`DONE-047-0.0.14`][kanban] (audit S4);
    this card's contract for multipart is the declared-size gate plus an explicit
    statement of what it does and does not bound. **That gate really does run before
    Django's parser**, which is a property of the CSRF ordering rather than of this step
@@ -1917,26 +1918,24 @@ disagree.
 
 *Rejected alternatives and change record: [rationale companion, Decision 14][rationale-d14].*
 
-### Decision 15 — The `0.0.15` version bump is deferred to the joint cut
+### Decision 15 — The version bump is deferred to the joint cut
 
 **Decision.** No slice in this card edits any part of the version quintet:
 `[project].version` in `pyproject.toml`, `__version__` in
 `django_strawberry_framework/__init__.py`, `tests/base/test_init.py::test_version`, the
 [`docs/GLOSSARY.md`][glossary] package-version line, or the root package `version` entry
-in `uv.lock`. This card **shares the `0.0.15` patch line** with
-[`TODO-ALPHA-050-0.0.19`][kanban] (both non-Done at authoring time), so the bump from
-`0.0.14` to `0.0.15` is owned by the [joint version cut][glossary-joint-version-cut] —
-the last `0.0.15` card to land — exactly as [`spec-041`][spec-041] Decision 10 pinned for
-the joint `0.0.14` cut.
+in `uv.lock`. This card **shares the `0.0.14` patch line** with cards 041-045 before it and
+with its three program siblings (047, 048, 049), so the version is owned by the
+[joint version cut][glossary-joint-version-cut] — the last card of that line to land —
+exactly as [`spec-041`][spec-041] Decision 10 pinned for the same patch. The quintet
+already reads `0.0.14`, so there is no bump outstanding.
 
 The release-status wording splits the same way. Slice 5 updates
 **implemented-on-main** docs — the GLOSSARY entry bodies, the regenerated
 [`docs/TREE.md`][tree], the migration note and transport guidance in
-[`docs/README.md`][docs-readme] — but the public `shipped (0.0.15)` status flips, the
+[`docs/README.md`][docs-readme] — but the
 [`README.md`][readme] / [`docs/README.md`][docs-readme] "Coming next" → "Shipped today"
-moves, and the `CHANGELOG.md` bullets all defer to the cut. Otherwise the repo would
-advertise a released `0.0.15` transport contract while `__version__` still reports
-`0.0.14`.
+moves and the `CHANGELOG.md` bullets defer to the cut.
 
 **`uv.lock` is not touched at all by this card.** Unlike `spec-041`, this card adds no
 dependency: `channels` is already in the dev group, and the new view rides the existing
@@ -2894,7 +2893,7 @@ removed in the change that ships the slice — the repo's standing staging disci
   ([Decision 17](#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard)).
   It must not be written as a `bytes` decode, because there are no bytes left to decode.
 - **GET requests carry no body.** The cap is a no-op on GET; the `variables` /
-  `extensions` query-param size is a `TODO-ALPHA-047-0.0.16` concern (S4), and the
+  `extensions` query-param size is a `DONE-047-0.0.14` concern (S4), and the
   existing `_patched_parse_query_params` shield keeps the body contract off those parses.
 - **`ALLOWED_HOSTS = []` with `DEBUG=True`** (fakeshop's shape) makes Django substitute
   `[".localhost", "127.0.0.1", "[::1]"]` — so every `*.localhost` subdomain is accepted, by
@@ -3449,9 +3448,9 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 - **[`README.md`][readme]** and **[`TODAY.md`][today]** — the `0.0.14`
   [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] paragraphs, which
   currently advertise "serving GraphQL on both HTTP and WebSocket in one import" and
-  "constructor-compatible with upstream", both now false. The public `shipped (0.0.15)`
-  status flip and the "Coming next" → "Shipped today" move stay with the joint cut
-  ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
+  "constructor-compatible with upstream", both now false. The public status flip and
+  the "Coming next" → "Shipped today" move stay with the joint cut
+  ([Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)).
 - **[`spec-041`][spec-041]** — the amendment banner and the three superseded items
   ([Decision 14](#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions)).
 - **`examples/fakeshop/test_query/README.md`** — the new S1/S2/S9 acceptance rows (the file
@@ -3467,17 +3466,13 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 ## Risks and open questions
 
-- **`spec-050` Decision 7 is now factually stale, and the joint cut needs one owner.**
-  [`spec-050`][spec-050] Decision 7 asserts it is "the **only** card at `0.0.15`" and
-  therefore owns the version cut. Card `046` has since joined that patch line, so the
-  premise no longer holds and two specs would both claim the quintet. Preferred answer:
-  `spec-050` Decision 7 is amended to the joint-cut deferral shape, and whichever of
-  `050` / `046` lands **last** carries the quintet plus the `CHANGELOG.md` entry — the
-  [joint version cut][glossary-joint-version-cut] rule as written. Fallback: the
-  maintainer nominates the cut owner explicitly in the card body, and both specs cite that
-  nomination. This spec is written for the deferral either way, so it needs no change
-  under either resolution. **Flagged for the maintainer** because amending `spec-050`
-  is outside this card's boundary and that spec anchors in-flight work.
+- **The `0.0.14` joint cut needs one owner.** Eight cards now target this patch — 041-045,
+  this one, and its three program siblings — so no individual spec may claim the quintet.
+  Preferred answer: whichever card lands **last** carries the quintet plus the
+  `CHANGELOG.md` entry, the [joint version cut][glossary-joint-version-cut] rule as
+  written. Fallback: the maintainer nominates the cut owner explicitly in the card body and
+  every spec on the line cites that nomination. This spec is written for the deferral
+  either way, so it needs no change under either resolution.
 - **Whether the required `urlpatterns` entry should be a package-provided
   `include()`.** A `path("graphql/", include("django_strawberry_framework.urls"))` would
   shorten the migration but would have to source the schema from a settings key — a new
@@ -3504,7 +3499,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
   connection-local lock: it is bounded by the single `thread_sensitive` executor thread that
   every connection's actor read shares, so the ceiling is **per process**, not per socket.
   Second, the fallback this bullet used to name — a session-store-level cache deferred to
-  [`TODO-ALPHA-047-0.0.16`][kanban] — is **refuted**: an in-memory session backend measured
+  [`DONE-047-0.0.14`][kanban] — is **refuted**: an in-memory session backend measured
   in the same order of magnitude as `db`, because the store was never the bottleneck. Anyone
   reaching for a faster session store to fix this will buy nothing. Preferred answer,
   unchanged in substance and now evidence-backed: keep the default at `0.0`, because a
@@ -3558,31 +3553,31 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 - **Audit S3 / S4 — the request resource policy.** Query depth / complexity / cost
   budgets, variable cardinality, collection bounds, per-file and aggregate upload limits,
-  and bounded Relay many-side defaults: [`TODO-ALPHA-047-0.0.16`][kanban]. This card
+  and bounded Relay many-side defaults: [`DONE-047-0.0.14`][kanban]. This card
   ships one transport bound and hands that card the view seam to hang the rest on.
 - **Audit S5 — `DjangoFileType.path` in the safe generated output.**
-  [`TODO-ALPHA-047-0.0.16`][kanban] / [`TODO-ALPHA-048-0.0.17`][kanban] per the program's
+  [`DONE-047-0.0.14`][kanban] / [`DONE-048-0.0.14`][kanban] per the program's
   staging; the [`DjangoFileType`][glossary-djangofiletype] /
   [`DjangoImageType`][glossary-djangoimagetype] output shape is untouched here.
 - **Audit S8 / S10 — debug and unexpected-error disclosure failing closed under
-  `DEBUG=False`.** [`TODO-ALPHA-048-0.0.17`][kanban]. The
+  `DEBUG=False`.** [`DONE-048-0.0.14`][kanban]. The
   [developer-only debug posture][glossary-developer-only-debug-posture] and the
   [debug-toolbar middleware][glossary-debug-toolbar-middleware] gating are named in this
   card's transport guidance but not changed by it.
 - **Audit S6 / S7 — stale Django resolutions and CI authority / supply-chain pins.**
-  [`TODO-ALPHA-049-0.0.18`][kanban].
+  [`WIP-ALPHA-049-0.0.14`][kanban].
 - **The rest of audit S12 — the full deployment contract.** The `SECURITY.md`
   production-security profile, the mechanical `check --deploy`-style checklist, the
   GlobalID-is-not-a-capability statement, upload-safety guidance beyond body size, and the
   "fakeshop must never be deployed" conspicuous notice: the later cards' doc slices. This
   card ships **only** the migration note plus transport deployment guidance.
 - **Secure-default changes to `graphql_ide` / `allow_queries_via_get` / introspection.**
-  [`TODO-ALPHA-048-0.0.17`][kanban]. This card proves the knobs work; it does not move
+  [`DONE-048-0.0.14`][kanban]. This card proves the knobs work; it does not move
   their defaults.
 - **A fakeshop ASGI surface and live Channels acceptance tier.** The
   fakeshop-activation card, if the maintainer wants it at all.
-- **The `0.0.15` version quintet and `CHANGELOG.md` entry.** The joint cut
-  ([Decision 15](#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut)).
+- **The version quintet and the `CHANGELOG.md` entry.** The joint cut
+  ([Decision 15](#decision-15--the-version-bump-is-deferred-to-the-joint-cut)).
 
 ## Definition of done
 
@@ -3714,7 +3709,7 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
       and `makemigrations --check` clean.
 - [ ] Card flipped Done and `KANBAN.md` / `KANBAN.html` regenerated from the DB.
 - [ ] **No version quintet movement and no `CHANGELOG.md` edit** — both belong to the
-      joint `0.0.15` cut.
+      joint `0.0.14` cut.
 
 <!-- LINK DEFINITIONS -->
 
@@ -3770,30 +3765,29 @@ Slice 5's set. Every generated doc is regenerated from its source, never hand-ed
 
 <!-- docs/SPECS/ -->
 [next]: NEXT.md
-[rationale]: appx/spec-046-transport_security-0_0_15-rationale.md
-[rationale-d1]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-1--spec-filename-and-canonical-naming
-[rationale-d10]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-10--a-utf-8-bom-is-rejected
-[rationale-d11]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
-[rationale-d12]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
-[rationale-d13]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
-[rationale-d14]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
-[rationale-d15]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-15--the-0015-version-bump-is-deferred-to-the-joint-cut
-[rationale-d16]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
-[rationale-d17]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
-[rationale-d18]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
-[rationale-d19]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
-[rationale-d2]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
-[rationale-d3]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
-[rationale-d4]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
-[rationale-d5]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
-[rationale-d6]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
-[rationale-d7]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
-[rationale-d8]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
-[rationale-d9]: appx/spec-046-transport_security-0_0_15-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
+[rationale]: appx/spec-046-transport_security-0_0_14-rationale.md
+[rationale-d1]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d10]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-10--a-utf-8-bom-is-rejected
+[rationale-d11]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-11--a-websocket-consumer-classfactory-injection-seam-with-a-revalidating-package-default
+[rationale-d12]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-12--maximum-connection-lifetime-is-documented-and-seamed-not-silently-enforced
+[rationale-d13]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-13--test-strategy-which-existing-tests-change-and-why
+[rationale-d14]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-14--this-card-amends-spec-041-and-supersedes-three-of-its-decisions
+[rationale-d15]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-15--the-version-bump-is-deferred-to-the-joint-cut
+[rationale-d16]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-16--revocation-is-connection-scoped-and-gated-at-the-websocket-adapters-outbound-frame-seam
+[rationale-d17]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-17--multipart-control-fields-stay-django-parsed-behind-a-strict-loss-detection-guard
+[rationale-d18]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-18--the-body-gate-runs-before-djangos-multipart-parser
+[rationale-d19]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check
+[rationale-d2]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-2--http-dispatches-directly-to-a-required-consumer-supplied-django-asgi-application
+[rationale-d3]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-3--django_application-is-required-omission-fails-at-construction-with-no-compatibility-fallback
+[rationale-d4]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-4--url_pattern-becomes-websocket_url_pattern-with-exact-matching-as-the-secure-default
+[rationale-d5]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-5--compatibility-policy-an-intentional-alpha-breaking-change-to-a-security-boundary
+[rationale-d6]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-6--the-graphql-http-endpoint-is-a-package-owned-django-view-in-the-consumers-urlconf
+[rationale-d7]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-7--the-app-level-body-cap-lives-in-the-package-django-view-counted-not-declared
+[rationale-d8]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-8--the-deployment-layer-cap-is-a-co-requirement-not-an-alternative
+[rationale-d9]: appx/spec-046-transport_security-0_0_14-rationale.md#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode
 [spec-040]: spec-040-auth_mutations-0_0_13.md
 [spec-041]: spec-041-channels_router-0_0_14.md
 [spec-042]: spec-042-debug_toolbar-0_0_14.md
-[spec-050]: spec-050-debug_extraction-0_0_19.md
 
 <!-- docs/builder/ -->
 

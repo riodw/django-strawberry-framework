@@ -2173,7 +2173,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 [spec-021]: spec-021-apps-0_0_7.md
 [spec-039]: spec-039-serializer_mutations-0_0_13.md
 [spec-040]: spec-040-auth_mutations-0_0_13.md
-[spec-046]: spec-046-transport_security-0_0_15.md
+[spec-046]: spec-046-transport_security-0_0_14.md
 
 <!-- docs/builder/ -->
 

@@ -1,12 +1,12 @@
 # Spec: Secure output and error defaults — drop the filesystem path, fail the debug extension closed, mask production errors
 
-Planned for `0.0.17` (card [`DONE-048-0.0.17`][kanban]). This is **card 3 of the
+Targeted at `0.0.14` (card [`DONE-048-0.0.14`][kanban]). This is **card 3 of the
 four-card security-remediation program** derived from the hardening audit in
 [`docs/feedback2.md`][feedback2]; it closes that audit's **S5** (generated file output
 exposes absolute server paths), **S8** (the debug extension does not fail closed under
 `DEBUG=False`), and **S10** (production exception masking remains opt-in). It follows
 [`spec-046`][spec-046] (transport security) and [`spec-047`][spec-047] (the execution
-resource policy); card [`TODO-ALPHA-049-0.0.18`][kanban] (dependency / CI hygiene) closes
+resource policy); card [`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) closes
 the program.
 
 **`docs/feedback2.md` is review evidence this spec references, not a substitute for it.**
@@ -20,22 +20,20 @@ The package's documented API freeze begins at `1.0.0`, and cards 046 and 047 bot
 precedent that correcting a confirmed security-boundary default during alpha outranks
 migration convenience.
 
-Status: **BUILT — all five slices are built and the `0.0.17` version cut is taken
-here.** Slice 1 (**S5** — `path` leaves the default file and image outputs for the two
+Status: **BUILT — all five slices are built.** Slice 1 (**S5** — `path` leaves the default file and image outputs for the two
 opt-in sibling types and the `Meta.filesystem_path_fields` per-column declaration),
 Slice 2 (**S8** — the debug extension's `allow_unsafe_production` acknowledgement, its
 `settings.DEBUG` gate, and the bounded payload), Slice 3 (**S10** — `ErrorPolicy`,
 `DjangoErrorPolicyExtension`, and the `DjangoSchema(error_policy=…)` prepend), Slice 4
-(rows across all three test trees), Slice 5 (docs fold-in and the version quintet).
+(rows across all three test trees), Slice 5 (docs fold-in).
 The Slice checklist boxes below stay unticked because the `Status:` line is the
-completion source of truth (the shipped-spec convention). The work is built but
-**uncommitted** on the working tree, and `CHANGELOG.md` carries no `0.0.17` entry —
-[`AGENTS.md`][agents] reserves that entry for the maintainer.
+completion source of truth (the shipped-spec convention). `CHANGELOG.md` carries no
+`0.0.14` entry — [`AGENTS.md`][agents] reserves that entry for the maintainer.
 
 **Version boundary** (see
-[Decision 12](#decision-12--this-card-is-the-only-non-done-0017-card-so-it-owns-the-bump)):
-this card is the **only** non-Done card at `0.0.17`, so its Slice 5 owns the
-`pyproject.toml` / `__version__` / `tests/base/test_init.py` bump.
+[Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
+this card targets `0.0.14`, which the version quintet already reads, so its Slice 5 owns
+the documentation fold-in and no part of the quintet.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
 permission. This card's Slice 5 does **not** claim that permission — the release entry is
@@ -140,10 +138,9 @@ Each top-level item maps to one commit / PR.
 - [ ] **Slice 4 — tests across the three trees**
       Live rows in `examples/fakeshop/test_query/`, package rows in `tests/`, and the
       per-app rows the SDL and settings-override probes need.
-- [ ] **Slice 5 — docs fold-in and the version cut**
+- [ ] **Slice 5 — docs fold-in**
       `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`,
-      `KANBAN.md`, and the `pyproject.toml` / `__version__` / `tests/base/test_init.py`
-      bump to `0.0.17`.
+      and `KANBAN.md`. The version quintet is the joint cut's, not this slice's.
 
 ## Problem statement
 
@@ -185,7 +182,8 @@ overrides `Schema.process_errors`. A focused probe confirmed that
 client with that message intact. It is not an undisclosed vulnerability; it is a weak
 default for the package's *required* schema class.
 [`DjangoSchema`][glossary-execution-resource-policy] already centralizes mutation
-integrity and — since `0.0.16` — the execution resource policy, so it is precisely the
+integrity and — since the resource-policy card ([`spec-047`][spec-047]) — the execution
+resource policy, so it is precisely the
 place a production error policy belongs. A production deployment should not become unsafe
 by forgetting one Strawberry extension.
 
@@ -990,14 +988,18 @@ invisible to a consumer who builds their own). Accepting the gap for subscriptio
 disclosure is identical to the query one, and a subscription is exactly the surface where a
 long-lived client accumulates them).
 
-### Decision 12 — This card is the only non-Done `0.0.17` card, so it owns the bump
+### Decision 12 — The version bump belongs to the `0.0.14` joint cut
 
-A board scan at authoring time shows `WIP-ALPHA-048-0.0.17` as the only non-Done card at
-`0.0.17`; the neighbouring cards target `0.0.18`, `0.0.19` and `0.0.20`. The
-[joint version cut][glossary-joint-version-cut] rule therefore does not apply, and Slice 5
-moves the version quintet to `0.0.17` — `pyproject.toml [project].version`,
-`django_strawberry_framework/__init__.py::__version__`, the `tests/base/test_init.py`
-assertion that pins them together, and `uv.lock` through an editable rebuild.
+This card does **not** move the version quintet. It targets `0.0.14`, sharing that patch
+with cards 041-045 and with its three program siblings (046, 047, 049). The quintet —
+`pyproject.toml [project].version`, `django_strawberry_framework/__init__.py::__version__`,
+the `tests/base/test_init.py` assertion that pins them together, the glossary's
+package-version line, and the package's own `uv.lock` entry — already reads `0.0.14`, so
+there is no bump for this card to take.
+
+Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
+to the **last** card of a shared line to land, never to an individual card's slices.
+Slice 5 therefore owns the documentation fold-in only.
 
 ### Decision 13 — What the masking rule does not reach, and the two seams it still owes
 
@@ -1058,7 +1060,6 @@ constants look like they want a setting.
 | 3 | `schema.py` | `DjangoSchema(error_policy=…)`, `schema.error_policy`, `_with_error_policy_extension` (prepending). |
 | 4 | `examples/fakeshop/test_query/`, `examples/fakeshop/apps/*/tests/`, `tests/` | The rows in [Test plan](#test-plan). |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`, `KANBAN.md` (DB) | Fold-in and the migration note. |
-| 5 | `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `uv.lock` | `0.0.17`. |
 
 ## Helper-reuse obligations (DRY)
 
@@ -1249,7 +1250,7 @@ synthetic string — the pure-function rows a live query cannot pin precisely.
 
 **Base tier.** `tests/base/test_init.py` gains the `ErrorPolicy` /
 `DjangoErrorPolicyExtension` / `DjangoFilePathType` / `DjangoImagePathType` export rows and
-its version pin moves to `0.0.17`. `tests/base/test_conf.py` gains the
+its version pin stays at `0.0.14`. `tests/base/test_conf.py` gains the
 `error_policy_setting()` rows.
 
 ## Doc updates
@@ -1290,11 +1291,11 @@ its version pin moves to `0.0.17`. `tests/base/test_conf.py` gains the
   is discoverable without re-arming anything.
 - **The opt-in changes the SDL type NAME, not just the field set.** A client using a
   fragment type condition on `DjangoFileType` against an opted-in field must update it.
-  Preferred answer for `0.0.17`: accept it, because the alternative — one type whose fields
+  Preferred answer for `0.0.14`: accept it, because the alternative — one type whose fields
   vary — is not expressible in GraphQL. Fallback: an interface both types implement, which
   would let a fragment condition survive; deferred because it adds a type to every schema
   for a case no consumer has reported.
-- **The debug caps are not configurable.** Preferred answer for `0.0.17`: module constants,
+- **The debug caps are not configurable.** Preferred answer for `0.0.14`: module constants,
   per [`AGENTS.md`][agents]'s "add a settings key only when the feature needs it". Fallback
   if a deployment reports a real ceiling problem: fold the caps into the
   [`ResourcePolicy`][glossary-resourcepolicy] rather than adding a second policy object —
@@ -1332,7 +1333,7 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Dependency and CI hardening (S6, S7) — [`TODO-ALPHA-049-0.0.18`][kanban].
+- Dependency and CI hardening (S6, S7) — [`WIP-ALPHA-049-0.0.14`][kanban].
 - The execution resource policy (S3, S4) — shipped in [`spec-047`][spec-047].
 - Transport security (S1, S2, S9, S11) — shipped in [`spec-046`][spec-046].
 - Field-level cost annotation — deferred by [`spec-047`][spec-047]'s risks section.
@@ -1375,7 +1376,8 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 - [ ] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
-- [ ] Docs folded in with the migration note, and the version quintet moved to `0.0.17`.
+- [ ] Docs folded in with the migration note; the version quintet rides the joint `0.0.14`
+      cut ([Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)).
 
 **Carried forward — owed rather than shipped**, and separated from the list above because that
 list describes the released contract while these describe work the release left open
@@ -1458,8 +1460,8 @@ list describes the released contract while these describe work the release left 
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->
-[spec-046]: spec-046-transport_security-0_0_15.md
-[spec-047]: spec-047-resource_policy-0_0_16.md
+[spec-046]: spec-046-transport_security-0_0_14.md
+[spec-047]: spec-047-resource_policy-0_0_14.md
 
 <!-- docs/builder/ -->
 

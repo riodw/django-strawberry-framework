@@ -3408,14 +3408,15 @@ def _join_with_filtered_relation(query):
 
 
 def test_mutating_a_candidate_where_leaf_cannot_change_the_sealed_predicate():
-    """A retained ``where`` leaf's ``rhs`` is the visibility predicate's own value."""
+    """A retained ``where`` leaf's ``rhs`` mutation shows on the candidate, never on the seal."""
     source = Category.objects.filter(is_private=False)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     before = sealed.query.sql_with_params()
+    source_before = source.query.sql_with_params()
     source.query.where.children[0].rhs = True
     assert sealed.query.sql_with_params() == before
-    assert 'NOT "products_category"."is_private"' in before[0]
+    assert source.query.sql_with_params() != source_before
 
 
 def test_mutating_a_candidate_annotation_expression_cannot_change_the_sealed_sql():
@@ -3434,17 +3435,18 @@ def test_mutating_a_candidate_annotation_expression_cannot_change_the_sealed_sql
 
 
 def test_mutating_a_candidate_filtered_relation_cannot_change_the_sealed_join():
-    """A retained ``FilteredRelation`` condition cannot rewrite the sealed join's ON clause."""
+    """A retained ``FilteredRelation`` condition mutation shows on the candidate, not the seal."""
     source = Category.objects.annotate(
         visible=FilteredRelation("items", condition=Q(items__is_private=False)),
     ).filter(visible__name="widget")
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     before = sealed.query.sql_with_params()
+    source_before = source.query.sql_with_params()
     source_join = _join_with_filtered_relation(source.query)
     source_join.filtered_relation.resolved_condition.children[0].rhs = True
     assert sealed.query.sql_with_params() == before
-    assert 'NOT visible."is_private"' in before[0]
+    assert source.query.sql_with_params() != source_before
 
 
 def test_mutating_a_candidate_raw_sql_parameter_container_cannot_change_the_sealed_params():

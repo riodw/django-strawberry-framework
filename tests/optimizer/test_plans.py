@@ -523,9 +523,12 @@ class TestDiffPlanForQueryset:
     def test_wildcard_select_related_does_not_drop_explicit_entries(self):
         # A wildcard ``select_related()`` follows only non-null FKs; the
         # optimizer may name nullable FKs explicitly.  Treat the
-        # wildcard as no overlap and pass entries through unchanged.
+        # wildcard as no overlap and pass entries through unchanged.  The
+        # wildcard query state is set directly because that state, not the
+        # call spelling that produces it, is the contract under test.
         plan = OptimizationPlan(select_related=["item", "property"])
-        qs = Entry.objects.select_related()
+        qs = Entry.objects.all()
+        qs.query.select_related = True
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan is plan
         assert delta_plan.select_related == ["item", "property"]

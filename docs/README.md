@@ -394,6 +394,21 @@ Routing GraphQL through Django restores the authoritative middleware lifecycle. 
 
 One detail of the view's own plumbing reads like a relaxation and is the opposite of one. The view callback is marked `csrf_exempt` on the outside — an **ordering mechanism, not a CSRF bypass**. Its only effect is that the global middleware's `process_view` cannot touch `request.POST`, and so cannot run Django's multipart parser, *before* the body cap has decided whether to accept the request at all. Every request that passes the cap immediately enters a package-owned continuation wrapped in Django's own public `csrf_protect`, so Django's complete CSRF implementation still runs on it, with the same tokens, the same referer checks, and the same `403`. The net effect is stricter than the ordinary arrangement, not looser: because the protection is applied by the view rather than borrowed from the middleware stack, this endpoint stays CSRF-protected even in a project that has omitted `CsrfViewMiddleware` from `MIDDLEWARE` altogether.
 
+**If you subclass `CsrfViewMiddleware`, install the boundary middleware.** The arrangement above re-enters CSRF through `csrf_protect`, which Django builds from its *stock* `CsrfViewMiddleware`. So on a project whose `MIDDLEWARE` names a subclass — strengthened token binding, a tenant check, a different rejection policy — that continuation runs the base implementation in your subclass's place, and this endpoint quietly loses those additions. `GraphQLRequestBodyBoundaryMiddleware` moves the ordering into the chain so your own class does the work instead:
+
+```python
+MIDDLEWARE = [
+    # ...
+    "django_strawberry_framework.middleware.request_body.GraphQLRequestBodyBoundaryMiddleware",
+    "myproject.middleware.MyCsrfViewMiddleware",  # your CsrfViewMiddleware subclass
+    # ...
+]
+```
+
+Install it **immediately before your CSRF entry**. It runs the package view's own body boundary from its chain position — the mount's own `max_request_body_bytes`, refused with the same `413` and the same `text/plain` body the view produces — and then your configured CSRF class runs in full, after the cap. A chain that lists it *after* a CSRF entry is refused at startup with `ConfigurationError` rather than allowed to fail open, because that order would put the parse back in front of the cap. Comparison is by resolved class, so a subclass on either side is recognized.
+
+Nothing about this is required. The exemption withdraws itself for exactly those requests whose boundary a chain entry **ran** — not for every request travelling an installed chain — so a project that never edits `MIDDLEWARE` keeps the view-local arrangement with nothing to change, and a request the middleware does not recognize as a package view's keeps it too. In every arrangement the cap runs and exactly one complete CSRF check runs; what differs is only which class performs it.
+
 WebSocket is the exception and always was: a Channels consumer runs no `CsrfViewMiddleware`, so on that protocol the router's handshake defences are `DjangoWebSocketHostValidator` (`Host`) and `AllowedHostsOriginValidator` (`Origin`) rather than a CSRF token — two separate checks, both reading your project's `ALLOWED_HOSTS`, neither standing in for the other. Keep that setting tight.
 
 **Cache and `Vary`.** An authenticated GraphQL response must never be served from a shared cache to a different actor. Django already patches `Vary: Cookie` once the session is read or the CSRF cookie is set, but a reverse proxy or CDN in front of the endpoint has to honor it. The safest posture for a cookie-authenticated schema is to mark the GraphQL location uncacheable at the edge and let the application decide.

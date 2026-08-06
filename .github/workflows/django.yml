@@ -149,6 +149,22 @@ jobs:
         # Only the minimum-support nodes pin the exact floor; the other nodes run
         # the uv.lock-resolved (latest compatible) strawberry-graphql. Recording
         # the resolved version makes the exercised floor auditable in the log.
+        #
+        # Both ends are load-bearing, and the TOP end is the one that is easy to
+        # lose: the WebSocket transport wraps whichever schema attribute upstream's
+        # protocol handlers dispatch an operation's results through, and upstream
+        # has renamed that attribute inside the supported range (0.319.0 moved
+        # graphql-transport-ws from `subscribe` + `execute` to `stream`). An
+        # unwrapped rename is silent -- the delegating wrapper forwards it to the
+        # real schema and the protocol keeps working, minus the masking and the
+        # revocation stop. `tests/test_routers.py` re-derives the read set from the
+        # INSTALLED handler modules and fails on a name the wrapper does not cover,
+        # so what protects consumers is that some node runs the top of the range:
+        # a stale `uv.lock` makes every unpinned node another floor run and the
+        # tripwire silent. Dependabot's weekly `uv` PR is what keeps the lock at the
+        # top (.github/dependabot.yml), and that PR going red IS the intended
+        # notification -- do not pin strawberry-graphql on the coverage node to
+        # float, which would move the alarm onto main.
         if: matrix.strawberry
         run: |
           uv pip install "strawberry-graphql==${{ matrix.strawberry }}"

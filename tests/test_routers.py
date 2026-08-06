@@ -108,6 +108,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -126,6 +127,8 @@ from django.core.handlers.asgi import ASGIRequest
 from django.http import HttpRequest, JsonResponse
 from django.test import AsyncClient, RequestFactory, override_settings
 from django.urls import path
+from graphql import GraphQLError
+from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 
 import django_strawberry_framework
 import django_strawberry_framework.consumers as consumers_module
@@ -4859,16 +4862,51 @@ def _upstream_handler_sources():
     ]
 
 
+#: Every ``self.schema.<name>`` upstream's two handler modules read that the wrapper
+#: deliberately does NOT define, with the reason delegation is the right answer for
+#: it. A name here is a name whose call produces no result source to stop or mask:
+#: ``execute`` returns one already-torn-down result and never loops, which is why the
+#: releases that use it (<=0.318.1, for a query or mutation over graphql-transport-ws)
+#: need nothing from this wrapper. Every OTHER name upstream reads must be one the
+#: wrapper defines, or it is a result source escaping the seam.
+_AUDITED_DELEGATED_SCHEMA_READS = frozenset({"execute"})
+
+
+def _wrapped_schema_reads():
+    """The result-source names ``_StopAwareSchema`` actually overrides.
+
+    Derived from the class rather than restated, so the row below compares upstream's
+    reads against what the wrapper really covers and cannot pass on a name that was
+    documented as covered but never defined.
+    """
+    return frozenset(
+        name
+        for name, value in vars(consumers_module._StopAwareSchema).items()
+        if not name.startswith("_") and callable(value)
+    )
+
+
 def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
     """The substituted schema is transparent, measured against upstream's own source.
 
     The stop protocol works by replacing the handler's own ``self.schema`` with a
-    per-connection wrapper, and a wrapper is only safe while everything upstream
-    asks of that object still resolves to the real one. So the name set is DERIVED
-    from the installed handler modules rather than asserted from memory: every
-    ``self.schema.<name>`` either is the wrapper's own ``subscribe`` - the one call
-    whose result has to become stoppable - or resolves through ``__getattr__`` to
-    the identical attribute of the real schema.
+    per-connection wrapper, and a wrapper is only safe while everything upstream asks
+    of that object either becomes stoppable or resolves to the real one. So the name
+    set is DERIVED from the installed handler modules rather than asserted from
+    memory: every ``self.schema.<name>`` is either one the wrapper defines - a call
+    whose result source has to become stoppable and masked - or an explicitly audited
+    delegation that reaches the real schema through ``__getattr__``.
+
+    **The assertion is a partition, not an equality, and that is the whole point of
+    the row.** Pinning the exact pair of names one release happens to read makes this
+    row fail on every upstream release that reads a different pair - including the
+    ones the wrapper already covers - while an unaudited NEW name is the failure that
+    actually matters: it resolves silently to the real schema, and a protocol's every
+    frame then reaches the wire unmasked and unstoppable. Upstream renamed this exact
+    seam once already (graphql-transport-ws moved from ``subscribe`` + ``execute`` to
+    ``stream`` at 0.319.0), so the row is written to hold across
+    ``strawberry-graphql>=0.316.0`` and to fail loudly on a fourth name rather than
+    on the second and third.
 
     The second half is the ``isinstance`` question, which ``__getattr__`` cannot
     answer for: a handler that type-tested the schema it was handed would reject the
@@ -4890,11 +4928,90 @@ def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
             "wrapper cannot satisfy"
         )
 
-    assert reads == {"subscribe", "execute"}, reads
+    wrapped = _wrapped_schema_reads()
+    assert reads, "no self.schema read found at all - the regex or the modules moved"
+    uncovered = sorted(reads - wrapped - _AUDITED_DELEGATED_SCHEMA_READS)
+    assert not uncovered, (
+        "upstream reaches an operation's results through a schema attribute "
+        f"_StopAwareSchema does not cover: {uncovered}. Wrap it, or add it to "
+        "_AUDITED_DELEGATED_SCHEMA_READS with the reason its call produces nothing "
+        "to stop or mask."
+    )
+
     wrapper = consumers_module._StopAwareSchema(SCHEMA, None)
-    for name in reads - {"subscribe"}:
+    # Every audited delegation is asserted whether or not the installed release reads
+    # it: the audit's claim is about the wrapper, and a release that stops reading a
+    # name must not be able to retire the proof that the name still delegates.
+    for name in _AUDITED_DELEGATED_SCHEMA_READS:
         assert getattr(wrapper, name) == getattr(SCHEMA, name), name
-    assert wrapper.subscribe != SCHEMA.subscribe
+    # Every name the wrapper claims is a name it really intercepts, whether or not
+    # the installed release reads it: a covered-but-delegating entry would be the
+    # same silent bypass with a reassuring docstring.
+    # ``getattr(..., None)`` rather than a plain read: a release below 0.319.0 has no
+    # ``Schema.stream`` at all, which is still not the real schema's attribute.
+    for name in wrapped:
+        assert getattr(wrapper, name) != getattr(SCHEMA, name, None), name
+    # ...and at least one of them is what the INSTALLED release actually dispatches
+    # through, so a release whose seam moved entirely outside the wrapper's surface
+    # cannot pass on the audited-delegation clause alone.
+    assert reads & wrapped, sorted(reads)
+
+
+class _UnrenderableFrame:
+    """A streamed value the error policy cannot mask, standing in for a patch frame.
+
+    ``stream``'s third element type is a raw graphql-core incremental-delivery frame
+    (``@defer`` / ``@stream``), whose errors are nested inside incremental payloads
+    rather than on an ``errors`` attribute. The real shape is unreachable here -
+    incremental delivery needs graphql-core 3.3 and the installed floor is 3.2 - so
+    the stand-in reproduces the one property the gate turns on: reading ``errors``
+    off it raises, which is what would take the policy's fail-closed degrade.
+    """
+
+    @property
+    def errors(self):
+        raise AttributeError("an incremental patch frame carries no flat error list")
+
+
+async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unchanged():
+    """The masking shape gate passes an unmaskable frame through by IDENTITY.
+
+    The seam now covers ``schema.stream``, which yields more shapes than a
+    subscription's events, and the failure this row exists to catch is a masking pass
+    that "succeeds" on one of them. ``mask_execution_result`` fails CLOSED on a result
+    whose errors it cannot read - by design - and its degraded value is an
+    ``ExecutionResult``. That is precisely the shape upstream's transport tests for to
+    decide a frame has no wire representation and the operation must be REJECTED, so
+    masking an unrenderable frame would convert a rejection into a malformed ``next``
+    payload. Identity, not equality, is the assertion: a copy would mean the policy
+    rewrote something.
+
+    The maskable value beside it is what keeps the row honest - the gate has to
+    exclude by shape rather than simply do nothing.
+    """
+    leaked = GraphQLError("the resolver's own words", original_error=ValueError("raw"))
+    maskable = StrawberryExecutionResult(data={"ok": None}, errors=[leaked])
+    unrenderable = _UnrenderableFrame()
+
+    async def source():
+        yield unrenderable
+        yield maskable
+
+    consumer = SimpleNamespace(_revocation=SimpleNamespace(revoked=False))
+    delivered = [
+        result
+        async for result in consumers_module._stop_aware_results(
+            source(),
+            consumer,
+            _masking_schema(),
+        )
+    ]
+
+    assert delivered[0] is unrenderable
+    masked = delivered[1]
+    assert masked is not maskable, "the maskable result was not masked at all"
+    assert [error.message for error in masked.errors] == [DEFAULT_ERROR_POLICY.message]
+    assert maskable.errors == [leaked], "the engine's own result object was rewritten"
 
 
 # ---------------------------------------------------------------------------

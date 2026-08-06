@@ -14,14 +14,17 @@ message and a correlation identifier, while the original exception is logged
 server-side under that same identifier.
 
 **There are two seams, because a response is not always one result.** A query or
-mutation produces exactly one result, so this extension's ``on_operation``
-teardown is the whole story for them. A SUBSCRIPTION delivers one
-``ExecutionResult`` PER EVENT through the result source the transport iterates,
-and that teardown runs only when the operation ENDS - so every event's errors
-would already be on the wire by the time it ran. The per-event seam is therefore
-the transport's own result source (``consumers.py::_stop_aware_results``), which
-masks each yielded result through ``mask_execution_result`` below. One masking
-implementation, two places it is applied, and neither re-states the
+mutation answered through ``schema.execute`` produces exactly one already-torn-down
+result, so this extension's ``on_operation`` teardown is the whole story for it. A
+STREAMED operation is not: a subscription delivers one ``ExecutionResult`` PER EVENT
+through the result source the transport iterates, and a query or mutation run over a
+streaming transport has its single result yielded from inside the operation
+lifecycle - either way that teardown runs only when the operation ENDS, so the
+errors would already be on the wire by the time it ran. The per-result seam is
+therefore the transport's own result source
+(``consumers.py::_stop_aware_results``), which masks each yielded value through
+``mask_execution_result`` below, under the shared ``is_maskable_result`` shape gate.
+One masking implementation, two places it is applied, and neither re-states the
 classification or the replacement.
 
 ``mask_execution_result`` RETURNS a masked value rather than editing the result
@@ -62,7 +65,12 @@ from strawberry.types.execution import ExecutionResult as StrawberryExecutionRes
 from .. import logger
 from ..error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, new_correlation_id
 
-__all__ = ["DjangoErrorPolicyExtension", "mask_execution_result", "masking_is_active"]
+__all__ = [
+    "DjangoErrorPolicyExtension",
+    "is_maskable_result",
+    "mask_execution_result",
+    "masking_is_active",
+]
 
 
 def _is_unexpected(error: GraphQLError) -> bool:
@@ -156,6 +164,28 @@ def masking_is_active(policy: ErrorPolicy) -> bool:
     that matters is the one true while the response is being built.
     """
     return policy.enabled and not settings.DEBUG
+
+
+def is_maskable_result(value: Any) -> bool:
+    """Whether ``value`` is the execution-result shape this policy can rewrite.
+
+    Both seams ask this one question, so neither can drift on the shape gate. The
+    two admitted shapes are the only ones carrying a flat ``errors`` list this
+    policy knows how to classify and replace; a strawberry ``PreExecutionError`` is
+    itself an ``ExecutionResult`` and is admitted, contributing nothing to mask
+    because its errors carry no ``original_error``.
+
+    What the gate excludes is what makes it necessary rather than decorative. The
+    operation-teardown seam meets a sync parse or validation early-return, which
+    has nothing masked to begin with. The per-event seam meets a raw graphql-core
+    incremental-delivery frame (``@defer`` / ``@stream``), whose errors are nested
+    inside incremental payloads: masking it would take the fail-closed degrade -
+    the policy cannot read its errors - and the degrade is an ``ExecutionResult``,
+    the shape the transport tests for to decide the frame is unrenderable and the
+    operation must be rejected. Excluding it by shape leaves that rejection intact,
+    which discloses nothing: the frame never reaches the wire at all.
+    """
+    return isinstance(value, (GraphQLExecutionResult, StrawberryExecutionResult))
 
 
 def schema_error_policy(schema: Any) -> ErrorPolicy:
@@ -263,19 +293,18 @@ class DjangoErrorPolicyExtension(SchemaExtension):
     def on_operation(self) -> Iterator[None]:
         """Apply the policy to the completed result, once, at teardown.
 
-        The completed result is the WHOLE response for a query or a mutation, and
-        for a subscription it is only the operation's end - each event was already
-        masked at the transport's result source (see the module docstring). A
-        ``result`` that is neither execution-result shape is a sync parse or
-        validation early-return, which has nothing masked to begin with; the async
-        path's ``PreExecutionError`` IS a strawberry ``ExecutionResult``, and its
-        errors carry no ``original_error``, so it passes through the classifier
-        untouched rather than being excluded by shape.
+        The completed result is the WHOLE response for a query or a mutation
+        upstream ran through ``schema.execute``, and for anything the transport
+        streamed - every subscription, and a query or mutation over a streaming
+        transport - it is only the operation's end, because each yielded result was
+        already masked at the transport's result source (see the module docstring).
+        The shape gate is ``is_maskable_result``, which carries what it admits and
+        what it excludes.
         """
         yield
         policy = self._policy()
         if not masking_is_active(policy):
             return
         result = self.execution_context.result
-        if isinstance(result, (GraphQLExecutionResult, StrawberryExecutionResult)):
+        if is_maskable_result(result):
             self._process_result(result, policy)

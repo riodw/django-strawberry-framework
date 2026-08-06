@@ -72,7 +72,7 @@ class CategoryType(DjangoType):
             "updated_date",
         )
         interfaces = (relay.Node,)
-        # Explicit ``"both"`` opt-in for ``items`` only (0.0.16: the default is
+        # Explicit ``"both"`` opt-in for ``items`` only (0.0.14: the default is
         # ``"connection"``). ``properties`` deliberately stays on the default, so
         # this one type covers both shapes live: ``items`` proves the bounded
         # opt-in raw list, ``properties`` proves the connection-only default -

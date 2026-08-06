@@ -151,7 +151,7 @@ class BookType(DjangoType):
             "loans",
         )
         interfaces = (relay.Node,)
-        # Explicit ``"both"`` opt-in: since 0.0.16 the package default for a
+        # Explicit ``"both"`` opt-in: since 0.0.14 the package default for a
         # many-side relation on a Relay-Node-shaped type is ``"connection"``
         # alone, so the raw list sibling is a shape a schema author asks for.
         # These two keep it because the raw-list relation surface (and its row

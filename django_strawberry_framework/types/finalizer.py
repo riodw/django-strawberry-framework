@@ -488,7 +488,7 @@ def _synthesize_relation_connections() -> None:
       the generated list annotation and the Phase-2 list resolver before Phase 3
       freezes the annotation set, so the SDL never carries the list form.
     - ``"both"`` - keep the generated ``list[T]`` field AND add the connection
-      sibling. An explicit opt-in since ``0.0.16``: a list sibling beside a
+      sibling. An explicit opt-in since ``0.0.14``: a list sibling beside a
       connection is a bypass of the connection's page cap, so it is a shape a
       schema author asks for rather than one they receive.
     - ``"list"`` - synthesize nothing.

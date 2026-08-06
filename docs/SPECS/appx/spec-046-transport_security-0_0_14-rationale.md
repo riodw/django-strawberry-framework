@@ -23,7 +23,7 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
 - Round attribution: **Decisions 1-15** were authored from the `docs/feedback2.md` hardening
   audit (findings S1, S2, S9, S11, S12-transport). **Decisions 16-19** are review round 2's
   decided contracts. Round 1's findings were closed and committed before round 2 opened.
-- **Three decisions were amended after `0.0.15` shipped**, and each carries a `Change record`
+- **Three decisions were amended after the card shipped**, and each carries a `Change record`
   block naming what it used to say and why that changed: [Decision 9][s65-d9] gained the
   declared-`charset` half, [Decision 16][s65-d16]'s cancelled-close ruling was retracted and
   replaced, and [Decision 18][s65-d18] gained a second CSRF-ordering arrangement — a package
@@ -80,9 +80,9 @@ to belong to:
 - **The header `Status:` line and the card id.** The status line said Slices 1-4 were built and
   "Slice 5 remains"; all five are built now, so it states that, plus the fact a reader would
   otherwise infer wrongly — the version quintet still reads `0.0.14` on disk because the
-  `0.0.15` release is the joint cut's ([Decision 15][s65-d15]). The opener's card id moved
-  `WIP-ALPHA-046-0.0.14` -> `DONE-046-0.0.14` with the card flip. `Planned for 0.0.15` stays: the
-  target release is still a target.
+  release wording is the joint cut's ([Decision 15][s65-d15]). The opener's card id moved
+  `WIP-ALPHA-046-0.0.14` -> `DONE-046-0.0.14` with the card flip, and the target-release line
+  stays a target rather than a release.
 - **`## Doc updates`, the `docs/TREE.md` bullet.** It read as an exhaustive list of the rows the
   regenerate publishes and was three rows short of the render's actual output
   (`examples/fakeshop/test_query/test_transport_api.py`, `tests/test_prove_failability.py`, and
@@ -928,7 +928,7 @@ Spec: [Decision 15][s65-d15].
 
 **Alternatives rejected.**
 
-- **Bump to `0.0.15` in Slice 5.** Rejected: card `050` also ships into `0.0.15`; a
+- **Bump the version in Slice 5.** Rejected: this card shares its patch line with others; a
   per-card bump races the joint cut and gets reconciled twice.
 - **Claim the cut for this card because it is the higher-numbered / more urgent one.**
   Rejected: the rule keys on *last to land*, not on card number or priority, and the
@@ -1343,7 +1343,7 @@ argued against correct code.
 ### Decision 18 — The body gate runs before Django's multipart parser
 
 Spec: [Decision 18][s65-d18]. **A review round 2 decision** (round 2's M1 sibling on ordering),
-**amended twice after the `0.0.15` release** — see the change record below.
+**amended twice after the card shipped** — see the change record below.
 
 **Alternatives rejected.**
 

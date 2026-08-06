@@ -1,7 +1,7 @@
 """``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
 
 Spec: ``docs/SPECS/spec-048-secure_output_defaults-0_0_14.md``.
-Target release: ``0.0.17``.
+Target release: ``0.0.14``.
 
 ``error_policy.py`` owns the policy object; this module is the one place that
 applies it. ``DjangoSchema`` installs the extension automatically, so a schema

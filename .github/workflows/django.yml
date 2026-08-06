@@ -101,6 +101,10 @@ jobs:
             {"django": "6.0.*", "python": "3.13", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "6.0.*", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "6.0.*", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "6.1.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "6.1.*", "python": "3.12", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "6.1.*", "python": "3.13", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "6.1.*", "python": "3.13", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[

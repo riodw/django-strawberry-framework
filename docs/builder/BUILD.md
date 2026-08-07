@@ -6,11 +6,11 @@ The spec is the input contract delivered to Worker 0, not something Worker 0 inv
 
 ## Spec and build-plan filename pattern
 
-Spec files live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; build plans at `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` — same segments, different directory and prefix. `<NNN>` is the 3-digit zero-padded KANBAN card number (`013` from `DONE-017-0.0.6`), `<topic>` a lowercase underscore-separated slug (`deferred_scalars`), `<0_0_X>` the target release version with dots as underscores (`0_0_6`).
+Spec files live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; build plans at `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` — same segments, different directory and prefix. `<NNN>` is the 3-digit zero-padded KANBAN card number (`017` from `DONE-017-0.0.6`), `<topic>` a lowercase underscore-separated slug (`deferred_scalars`), `<0_0_X>` the target release version with dots as underscores (`0_0_6`).
 
 NNN is the build's anchor identity: spec and build plan share it, every artifact references it, KANBAN cards link to it. DONE cards use the bare `DONE-<NNN>-<X.X.X>` form; TODO/BLOCKED cards keep the milestone prefix (`TODO-ALPHA-<NNN>`, `BLOCKED-ALPHA-<NNN>`, …) until they ship.
 
-Example: spec `docs/spec-017-deferred_scalars-0_0_6.md` pairs with build plan `docs/builder/build-013-deferred_scalars-0_0_6.md`. Specs predating this pattern may lack the NNN/version segments; new ones use it. A spec has two tracked siblings sharing its stem: `…-terms.csv` (glossary terms) and `…-rationale.md` (the deliberative layer moved out at pre-flight — see `## Spec rationale extraction`).
+Example: spec `docs/spec-017-deferred_scalars-0_0_6.md` pairs with build plan `docs/builder/build-017-deferred_scalars-0_0_6.md`. Specs predating this pattern may lack the NNN/version segments; new ones use it. A spec has two tracked siblings sharing its stem: `…-terms.csv` (glossary terms) and `…-rationale.md` (the deliberative layer moved out at pre-flight — see `## Spec rationale extraction`).
 
 !!IMPORTANT!!
 Begin by reading `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md`, `GOAL.md`, and the active spec file at `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
@@ -504,11 +504,11 @@ The gate closes the build cycle. Worker 0 then marks the final checkbox `- [x]`.
 
 ## Floor verification
 
-Every command in the gate above runs in the shared `.venv`. **The shared `.venv` is not the supported floor** — it tracks the newest supported versions, so a green sweep in it proves only that the build works on a version many consumers are not running. The supported floor is Django **5.2.0** on Python **3.10** with strawberry-graphql **0.316.0**.
+Every command in the gate above runs in the shared `.venv`. **The shared `.venv` is not the supported floor** — it tracks the newest supported versions, so a green sweep in it proves only that the build works on a version many consumers are not running. The supported floor is Django **5.2.16** on Python **3.10** with strawberry-graphql **0.316.0**.
 
 **Never state `.venv`'s own versions from memory or from a number written down in a document.** They move on every dependency bump; a floor number does not. When a pass needs to know what the shared environment carries, read it — `uv pip list` — and cite the reading.
 
-**This section is the single canonical statement of the floor versions.** `pyproject.toml` is the **ultimate source for the dependency floor** (`Django>=5.2`, `strawberry-graphql>=0.316.0`, `requires-python >=3.10`); the exact version a floor run installs is a **policy choice recorded here**, because a lower bound is a range and a floor run needs one point in it. When the floor moves, `pyproject.toml` and this section change together and nothing else has to — the role files name this section rather than restate the numbers, per `### Where a mechanism belongs: this document, pointed at from the role files`.
+**This section is the single canonical statement of the floor versions.** `pyproject.toml` is the **ultimate source for the dependency floor**; the exact version a floor run installs is a **policy choice recorded here**, because a lower bound is a range and a floor run needs one point in it. When the floor moves, `pyproject.toml` and this section change together and nothing else has to — the role files name this section rather than restate the numbers, per `### Where a mechanism belongs: this document, pointed at from the role files`.
 
 **Reading a newer version's source to answer a floor question is not verification.** Neither is reasoning from a changelog or a version classifier. The floor is something you execute. Two concrete costs of conflating the two: reading 6.0.5's source to answer a 5.2.0 capability question nearly shipped an unverified async-capability claim, and Python 3.10's `SpooledTemporaryFile` lacking a `seekable` attribute — it became an `io.IOBase` subclass only in 3.11 — was caught **only** by executing at the floor.
 
@@ -527,7 +527,7 @@ Build it under a scratch path outside the repo, and install with an explicit `--
 ```shell
 uv venv /tmp/dsf-floor --python 3.10
 uv pip install --python /tmp/dsf-floor/bin/python -e . --group dev
-uv pip install --python /tmp/dsf-floor/bin/python 'django==5.2.0' 'strawberry-graphql==0.316.0'
+uv pip install --python /tmp/dsf-floor/bin/python 'django==5.2.16' 'strawberry-graphql==0.316.0'
 /tmp/dsf-floor/bin/python -m pytest <focused scope> --no-cov
 ```
 

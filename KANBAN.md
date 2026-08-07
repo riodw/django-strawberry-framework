@@ -312,7 +312,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
 - Promote a spec/rationale consistency checker into `scripts/`. Nothing there matches `link|anchor|overlap` today, so every documentation pass hand-writes its own. The checks each spec-plus-rationale pair owes: link scaffold (defs / uses / undefined / orphan), the 10 canonical group headers in positional order, alphabetical order within group, on-disk resolution of every def target with the fragment stripped and URLs excluded, in-page anchors slugged by a markup-rendering slugger, an inline cross-file-link sweep, a rule-27 raw `path:NN` sweep, and a maximal-shared-shingle scan - the only thing that turns "it was a move, not a copy" into a measurement. Four slugger defects, each measured on an independent hand-roll of this checker, to encode as its regression tests. (a) A heading that is itself a reference link, slugged without rendering the markup out first: the link-definition key survives into the slug, so a correct in-page anchor reports as dangling. (b) Whitespace runs collapsed. GitHub replaces spaces one at a time, so a heading with a double space slugs to a double hyphen; a checker that collapses runs reports a false PASS - the only silent defect of the four, and so the most dangerous to leave unencoded. (c) Code spans deleted rather than masked before reference links are matched. A label spelled as a code span collapses to an empty label, which the usual bracket-capture pattern cannot match; one run reported 3 spec and 12 rationale false orphans from this alone. Mask span content to same-length filler instead, preserving the brackets. (d) `_` stripped as an emphasis marker before slugging. It destroys `django_types`, so the anchor for a heading naming `spec-001-django_types-0_0_1.md` reports unresolved against a correct link definition - a false positive whose natural fix is to corrupt a good link. Defect (d) is the argument for a tool rather than more prose: it was measured, written into a hand-off, and re-introduced from scratch two rounds later by a reader who had that hand-off.
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` carries one status-shaped section left: `## Visibility status`. The spec-002 residual cycle discharged the rest - `## Open questions` and `## Current state` are gone, and `## Shipped slices` and `## Implementation checklist` survive the argument on their merits, since a past-tense fact about what shipped is not a promise about the present. `## Visibility status` stays because two live pointers would break with it. First, `spec-006-public_surface-0_0_3.md` names it **twice** - once as the quoted section title "Visibility status", once as "the local visibility-status amendment" - as the place the optimizer-visibility decision is recorded. Second, the companion `docs/SPECS/appx/spec-002-optimizer-0_0_2-rationale.md` is the only file that cites spec-002 by `#anchor` at all, and one of its link definitions targets `#visibility-status`, so a retitle must re-point that definition in the same change. Retire the heading in the cycle that owns `spec-006`, not this one, and re-point the companion there. `spec-003-optimizer_nested_prefetch_chains-0_0_2.md`'s "current state, visibility status, and checklist" instruction is now stale in wording: it is a discharged when-O4-ships note naming a section that no longer exists.
-- Sweep the dead card id `TODO-BETA-053-0.1.5`, which names nothing: card 053 is now `FieldSet` at 0.1.1 and the likely intended target is `TODO-BETA-060-0.1.5` (same version, same subject). 32 occurrences across 10 files - TODAY.md (3), six archived specs 030/032/033/037/041/042 (26), spec-044 (1), plus `apps/products/schema.py` and `test_query/test_products_api.py` (1 each). One owner, one sweep, or not at all: repointing any single file leaves it disagreeing with nine. Confirm 060 is still the natural host first - its planning note assigns per-subsystem activation to the Layer-3 cards Slice 4.
+- Swept 2026-08-07: all 32 occurrences of the dead card id `TODO-BETA-053-0.1.5` across 10 files (TODAY.md, seven archived specs, `apps/products/schema.py`, `test_query/test_products_api.py`) now read `TODO-BETA-060-0.1.5`, after confirming 060 is the natural host - its scope (node / nodes, `totalCount`, the subscription surface) covers every referencing subject.
 - `import_spec_terms::_sync_spec_mentions` orphans GlossarySpecMention rows instead of repointing them: it deletes only rows at the NEW spec_path, never the old one, so every spec archive leaves the pre-archive path rows behind forever. The accumulated orphans have been reaped (0 remain), but the cause is unfixed and the next archive recreates them.
 - `spec-003-optimizer_nested_prefetch_chains-0_0_2.md` is stale at four sites, three of them beyond the one this board already notes. `:4` still says the remaining O-slice is O4, though O4 shipped; the replacement states that O4 is shipped and that its record is this spec's. `:27` publishes `plan_optimizations(selected_fields, model, info=None)` at the pre-reconciliation arity - HEAD adds keyword-only `runtime_prefixes` and `source_type` - and names `_collect_scalar_only_fields` in the present tense, a symbol with zero occurrences in `django_strawberry_framework/`. `:333` is a discharged when-O4-ships instruction naming `## Current state`, a section that no longer exists. `:335` asks a later pass to update the parent spec's older O4 references, which the spec-002 reconciliation did. Do not sweep up `spec-006-public_surface-0_0_3.md:136` and `:147` on the same pass: both name `## Visibility status`, and both are live and correct.
 - `docs/GLOSSARY.md` dates `DjangoOptimizerExtension` and `only()` projection to `0.0.2`, matching card `DONE-002-0.0.2`'s target version, while `CHANGELOG.md`'s `[0.0.2]` entry calls the extension early and depth-1 and its `[0.0.3]` entry dates the end-to-end optimizer surface - selection-tree planning, `select_related`, nested `Prefetch` chains, same-query recursion, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade - to `0.0.3`. Whether a shipped-version stamp names first-shipped or complete is an editorial call about the glossary's dating convention for a subsystem that shipped across two releases, and it is not unilaterally correctable: `GlossaryTerm.body`, the card's target version, the card id, and the spec filename ending `-0_0_2.md` must move together. This card owns the CHANGELOG promotion, so the decision belongs on it.
@@ -5059,9 +5059,12 @@ Enforcement: `scripts/check_alpha_parity.py` fails if any non-`internal` Alpha c
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
 [glossary-filterset]: docs/GLOSSARY.md#filterset
 [glossary-metafilterset_class]: docs/GLOSSARY.md#metafilterset_class
+[glossary-metaorderset_class]: docs/GLOSSARY.md#metaorderset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
 [glossary-optimizerhint]: docs/GLOSSARY.md#optimizerhint
+[glossary-orderset]: docs/GLOSSARY.md#orderset
 [glossary-relatedfilter]: docs/GLOSSARY.md#relatedfilter
+[glossary-relatedorder]: docs/GLOSSARY.md#relatedorder
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 [spec-021]: docs/SPECS/spec-027-filters-0_0_8.md
@@ -5072,13 +5075,13 @@ Enforcement: `scripts/check_alpha_parity.py` fails if any non-`internal` Alpha c
 [spec-019]: docs/SPECS/spec-023-multi_db-0_0_7.md
 
 <!-- docs/builder/ -->
-[build-020-scalar-map-helper-0-0-7]: docs/builder/build-020-scalar_map_helper-0_0_7.md
 
 <!-- django_strawberry_framework/ -->
 [apps]: django_strawberry_framework/apps.py
 [converters]: django_strawberry_framework/types/converters.py
 [django-patches]: django_strawberry_framework/_django_patches.py
 [filters]: django_strawberry_framework/filters/
+[orders]: django_strawberry_framework/orders/
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
 [test-init]: django_strawberry_framework/testing/__init__.py
@@ -5093,6 +5096,7 @@ Enforcement: `scripts/check_alpha_parity.py` fails if any non-`internal` Alpha c
 [db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
 [example-schema]: examples/fakeshop/config/schema.py
 [fakeshop-library]: examples/fakeshop/apps/library/
+[fakeshop-test-library]: examples/fakeshop/test_query/test_library_api.py
 [kanban-app]: examples/fakeshop/apps/kanban/
 [fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [settings]: examples/fakeshop/config/settings.py

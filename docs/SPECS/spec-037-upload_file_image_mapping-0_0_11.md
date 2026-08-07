@@ -1259,7 +1259,7 @@ not introduced here and would be rejected if proposed.
 > synthetic-model package tests below **remain** for the storage-backend
 > fault-injection and corrupt-image-dimension edges, which need a mocked
 > non-filesystem backend and so are genuinely unreachable from a live request. The
-> broader products/fakeshop activation stays [`TODO-BETA-053-0.1.5`][kanban]. The
+> broader products/fakeshop activation stays [`TODO-BETA-060-0.1.5`][kanban]. The
 > original (now-historical) deferral rationale follows.
 
 No fakeshop model has a file/image field, and adding one solely for this card
@@ -1283,7 +1283,7 @@ file/image model that exists only for a converter branch belongs in package
 tests. Per the [`docs/SPECS/NEXT.md`][next] "prefer the card" rule (the card DoD
 scopes to synthetic-model tests), the synthetic-model strategy wins and a live
 fakeshop file-upload surface is deferred to fakeshop activation
-([`TODO-BETA-053-0.1.5`][kanban]); the tension is recorded, not silently
+([`TODO-BETA-060-0.1.5`][kanban]); the tension is recorded, not silently
 resolved.
 
 **Fixture shape.** Converter-only tests can use an unmanaged synthetic model with
@@ -1673,7 +1673,7 @@ implementation reveals it is wrong.
   ([`SerializerMutation`][glossary-serializermutation]) — `0.0.13`; serializer
   upload handling builds on this scalar.
 - **A live fakeshop file-upload surface** — deferred to fakeshop activation
-  ([`TODO-BETA-053-0.1.5`][kanban]); this card covers both directions with
+  ([`TODO-BETA-060-0.1.5`][kanban]); this card covers both directions with
   synthetic-model tests
   ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 - **Field-level read gates** — `FieldSet` / per-field permission hooks in

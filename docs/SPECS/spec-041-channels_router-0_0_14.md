@@ -800,7 +800,7 @@ A true description of the repo as this spec is authored:
   question this card only scopes ([Risks](#risks-and-open-questions)).
 - **A fakeshop ASGI surface.** No `asgi.py`, no `channels` in the example's runtime
   path, no live `/graphql/` Channels tests. A future fakeshop ASGI dogfooding pass
-  belongs with the fakeshop-activation card ([`TODO-BETA-053-0.1.5`][kanban]) if the
+  belongs with the fakeshop-activation card ([`TODO-BETA-060-0.1.5`][kanban]) if the
   maintainer wants it at all
   ([Decision 8](#decision-8--test-strategy-package-tests-only-communicator-driven-execution-eviction-simulated-absence)).
 - **Subscriptions machinery.** `GraphQLWSConsumer` speaks the `graphql-transport-ws`
@@ -1042,7 +1042,7 @@ Alternatives considered (and rejected):
 - **Add the fakeshop `asgi.py` now for dogfooding.** Rejected: it drags `channels`
   into the example's runtime and the live suite is WSGI `django.test.Client` —
   the new surface would be dead weight until a Channels-aware acceptance harness
-  exists ([`TODO-BETA-053-0.1.5`][kanban] territory).
+  exists ([`TODO-BETA-060-0.1.5`][kanban] territory).
 
 ### Decision 3 — The symbol is `DjangoGraphQLProtocolRouter` — distinctly ours, pinned now
 
@@ -2041,7 +2041,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
   [Auth mutations][glossary-auth-mutations] GLOSSARY wording is corrected in
   Slice 2 either way.
 - **Fakeshop ASGI activation / Channels acceptance lane** — the
-  fakeshop-activation card [`TODO-BETA-053-0.1.5`][kanban] if ever.
+  fakeshop-activation card [`TODO-BETA-060-0.1.5`][kanban] if ever.
 - **Subscriptions as a package surface** — no card; the router transports whatever
   the consumer's schema defines.
 - **The migration guide itself** — [`TODO-BETA-065-0.1.7`][kanban]; this card only

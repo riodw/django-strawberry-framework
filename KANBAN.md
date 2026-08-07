@@ -824,12 +824,17 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 - `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
 
+#### Scope
+
+- Add a subscription surface to the fakeshop example so subscription behaviour can be exercised at the live tier. Today there is no subscription app anywhere in `examples/fakeshop`, and `django.test.Client` cannot reach a WebSocket, so every subscription row in the suite is a consumer-tier substitution.
+
 #### Definition of done
 
 - [ ] Wire the Relay `node` (single-object refetch) and `nodes` (batch refetch) root entry points into the fakeshop product-catalog schema, built on the shipped Relay story (`DONE-032-0.0.9`).
 - [ ] Add the connection `totalCount` opt-in on the product-catalog `DjangoConnectionField` roots, leaving connections that do not opt in unchanged.
 - [ ] Add in-process `schema.execute_sync` coverage under `examples/fakeshop/apps/products/tests/` for the `node` / `nodes` entry points and `totalCount`.
 - [ ] Add live `/graphql/` coverage under `examples/fakeshop/test_query/` exercising a `node` refetch by GlobalID, a `nodes` batch refetch, and a `totalCount` query.
+- [ ] The per-event error-policy masking rows run at the live tier against that surface, replacing the consumer-tier substitution in `tests/test_routers.py` that spec-048 carried forward: two events on both WebSocket protocols, each frame carrying the policy message and its own correlation id, plus the `error_policy={"enabled": False}` control row.
 
 #### Note
 

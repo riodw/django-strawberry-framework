@@ -944,42 +944,36 @@ Slice 5 therefore owns the documentation fold-in only.
 *This card was authored and built against a `0.0.17` cut of its own. What it claimed, and
 the program-wide retarget that withdrew it, is in the [rationale][rationale].*
 
-### Decision 13 — What the masking rule does not reach, and the two seams it still owes
+### Decision 13 — What the masking rule does not reach
 
-**Decision.** The consequences below follow from
+**Decision.** The four consequences below follow from
 [Decision 8](#decision-8--the-classification-rule-is-structural-not-an-allowlist)'s structural
-rule and from where the masking hook is installed. Two are **owed work**; two are **deliberate
-boundaries** a later pass must not read as gaps.
+rule and from where the masking hook is installed. Each is a boundary of the shipped contract
+rather than a gap in it, and a later pass must not read one as an omission.
 
-**Owed — upstream's own argument rejections are masked.** The rule is structural rather than an
+**Upstream's own argument rejections are masked.** The rule is structural rather than an
 allowlist, so an error is left untouched when it carries a code the package audits. Strawberry's
 relay and pagination **argument** rejections carry none, so they fall into the masked branch and
 reach the client as `policy.message` plus a correlation id — a client that passed a bad `first` /
-`last` combination learns nothing actionable. The fix is **not** to loosen the rule: it is for the
-package to raise those rejections as a `GraphQLError` carrying an audited `extensions.code`, which
-brings them under the untouched branch the rule already has. That is a behaviour change this
-spec does not license, so it is stated here rather than done.
+`last` combination learns nothing actionable. Loosening the rule is not the remedy: bringing those
+rejections under the untouched branch it already has would mean the package raising them as a
+`GraphQLError` carrying an audited `extensions.code`, which is a behaviour change this spec does
+not license.
 
-**Owed — the subscription masking rows are consumer-tier, not live.** `examples/fakeshop` has no
-subscription app and the live tier cannot reach a WebSocket through `django.test.Client`, so the
-per-event masking rows live in `tests/test_routers.py`. Under the
-[live-first coverage mandate][glossary-live-first-coverage-mandate] that is a substitution, not a
-preference, and a fakeshop subscription surface is its own card.
-
-**Boundary — a consumer-built plain `GraphQLWSConsumer` gets no per-event masking.** The seam is
+**A consumer-built plain `GraphQLWSConsumer` gets no per-event masking.** The seam is
 installed by `consumers.py::build_revalidating_consumer_class`, which the package router builds.
 A consumer who constructs `strawberry.channels.GraphQLWSConsumer` directly therefore keeps
 upstream's unmasked per-event delivery. This is the **same** boundary the operation-stop protocol
 already has, and it is the documented reason the package router is the supported mount rather than
 one option among several.
 
-**Boundary — non-WebSocket subscription transports have no seam here.** The package's own
+**Non-WebSocket subscription transports have no seam here.** The package's own
 subscription seam is the Channels consumer result source, and nothing in the package serves
-subscriptions over HTTP today. If a future card exposes subscriptions over multipart or SSE
-through a package-owned view, that transport needs the same `mask_execution_result` call at its
-own per-event delivery point; the requirement travels with the transport that creates it.
+subscriptions over HTTP today. A transport that later serves subscriptions over multipart or SSE
+through a package-owned view needs the same `mask_execution_result` call at its own per-event
+delivery point; the requirement travels with the transport that creates it.
 
-**Deliberate — the debug payload caps are not configurable, and that is not an omission.**
+**The debug payload caps are not configurable, and that is not an omission.**
 [`AGENTS.md`][agents] pins the rule: add a settings key when the feature that needs it lands, not
 in anticipation. A deployment wanting a different ceiling is a deployment running the debug
 extension in production, which
@@ -1170,7 +1164,10 @@ upstream handler modules, the set of names they read off the schema they were ha
 proves it a partition — every read is a wrapper-defined name (`subscribe`, `stream`),
 derived from the class rather than restated, or an explicitly reasoned delegation
 (`execute`) — so an unaudited NEW upstream dispatch name fails loudly instead of silently
-bypassing the seam.
+bypassing the seam. These rows sit at the consumer tier rather than the live one because
+`examples/fakeshop` has no subscription app and `django.test.Client` cannot reach a WebSocket;
+under the [live-first coverage mandate][glossary-live-first-coverage-mandate] that is a
+substitution, not a preference.
 
 **Package tier — `tests/test_error_policy.py`.** What no request can express: every
 `ErrorPolicy` field's validation including the unknown-key rejection; the three-level
@@ -1310,33 +1307,15 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
       code, permission denials, and [`FieldError` envelopes][glossary-fielderror-envelope]
       are untouched.
 - [ ] Sync and async transports return identical masked entries from one synchronous hook.
+- [ ] Per-event subscription masking is installed by the consumer the package router builds,
+      and `docs/README.md`'s production-error-policy section states the boundary for
+      consumers — a hand-rolled Channels consumer masks only at the operation's end
+      ([Decision 13](#decision-13--what-the-masking-rule-does-not-reach)).
 - [ ] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
 - [ ] Docs folded in with the migration note; the version quintet rides the joint `0.0.14`
       cut ([Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)).
-
-**Carried forward — owed rather than shipped**, and separated from the list above because that
-list describes the released contract while these describe work the release left open
-([Decision 13](#decision-13--what-the-masking-rule-does-not-reach-and-the-two-seams-it-still-owes)):
-
-- [ ] Upstream's own relay / pagination **argument** rejections reach the client as a
-      `GraphQLError` carrying an audited `extensions.code`, so the structural rule's untouched
-      branch covers them instead of masking them. Not licensed by this spec, and the fix must
-      not loosen the rule to achieve it.
-- [ ] `docs/GLOSSARY.md` has a `DjangoSchema` entry, so the constructor's two policy arguments
-      are described from the schema side rather than only from the `ErrorPolicy` /
-      `ResourcePolicy` side — and [`spec-047`][spec-047]'s glossary rows stop pointing at a
-      `#djangoschema` anchor that resolves to nothing.
-- [ ] A consumer who builds a plain `strawberry.channels.GraphQLWSConsumer` themselves either
-      gets per-event masking or is documented as not getting it. The seam is installed by
-      `consumers.py::build_revalidating_consumer_class`, which only the package router builds,
-      so this is the same boundary the operation-stop protocol already has and the same reason
-      the package router is the supported mount.
-- [ ] The subscription masking rows run at the **live** tier. They are consumer-tier in
-      `tests/test_routers.py` today because `examples/fakeshop` has no subscription app and the
-      live tier cannot reach a WebSocket through `django.test.Client`; a fakeshop subscription
-      surface is its own card.
 
 <!-- LINK DEFINITIONS -->
 

@@ -2,7 +2,7 @@
 
 Status: final-accepted
 
-Spec: [`docs/spec-048-secure_output_defaults-0_0_17.md`][spec-048]
+Spec: [`docs/SPECS/spec-048-secure_output_defaults-0_0_14.md`][spec-048]
 Plan: [`docs/builder/build-048-secure_output_defaults-0_0_17.md`][plan-048]
 Card: `TODO-ALPHA-048-0.0.17`
 
@@ -89,13 +89,31 @@ Floor venv built outside the repo at `/tmp/dsf-floor48`, Python **3.10.19**, Dja
 | 1 + 2 | `/tmp/dsf-floor48/bin/python -m pytest tests/types/ tests/extensions/test_debug.py --no-cov` | 481 passed, 2 skipped |
 | 3 | `/tmp/dsf-floor48/bin/python -m pytest tests/test_error_policy.py examples/fakeshop/test_query/test_error_policy_api.py --no-cov` | 48 passed |
 
-## Deferred work catalog
+## Deferred work catalog — dispositions
 
-- **Upstream argument rejections are masked** (this artifact, "A consequence worth stating plainly"). The fix is for the package to raise Strawberry's relay/pagination argument rejections as `GraphQLError` carrying an audited `extensions.code`, which brings them under the untouched branch of the structural rule without loosening it. Not licensed by this spec; belongs to a follow-up card.
-- **The debug extension's caps are not configurable.** Deliberate ([`AGENTS.md`][agents]: add a settings key only when the feature that needs it lands, and a deployment wanting a different ceiling is a deployment running the extension in production). Revisit only if a real consumer need appears.
-- **`docs/GLOSSARY.md` has no `DjangoSchema` entry**, so the constructor's two policy arguments are described only from the `ErrorPolicy` / `ResourcePolicy` side. Card `047`'s glossary rows link to a `#djangoschema` anchor that resolves to nothing. Not this card's rows; surfaced for the maintainer.
-- **Card `047`'s root exports** (`ResourcePolicy`, `DjangoResourcePolicyExtension`, `DEFAULT_RESOURCE_POLICY`) are absent from the glossary's Public exports list. That card's to fix.
-- **`CHANGELOG.md`** carries no `0.0.17` entry. [`AGENTS.md`][agents] reserves it and this card did not claim the permission; the release entry is the maintainer's.
+Every item this cycle deferred now has a durable home, so this artifact holds no work that
+would be lost with it.
+
+- **Upstream argument rejections are masked.** Stated as a shipped consequence in
+  [`spec-048`][spec-048] Decision 13; the remedy is tracked on card `052`.
+- **The debug extension's caps are not configurable.** Deliberate, not owed. In
+  [`spec-048`][spec-048] Decision 13 and its risks section.
+- **`docs/GLOSSARY.md` has no `DjangoSchema` entry**, so card `047`'s glossary rows link to a
+  `#djangoschema` anchor that resolves to nothing. Tracked on card `052`.
+- **Card `047`'s root exports** are absent from the glossary's Public exports list. **Closed** —
+  `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ErrorPolicy` and `DjangoErrorPolicyExtension`
+  are all present.
+- **`CHANGELOG.md`.** The claim recorded here — that no entry exists — was wrong: `0.0.14`
+  is present and dated `2026-07-20`. What is true is that it predates the security program's
+  retarget, so it names `DONE-041`-`DONE-044` and covers none of `046`-`049`.
+  [`AGENTS.md`][agents] reserves the file; the entry is the maintainer's.
+
+The two items this cycle left owed are also closed. Per-event masking for a consumer-built plain
+`GraphQLWSConsumer` was "implement or document", and `docs/README.md`'s production-error-policy
+section already documents it — a hand-rolled Channels consumer masks only at the operation's end
+— so it is now a shipped line in [`spec-048`][spec-048]'s definition of done. Running the
+subscription masking rows at the live tier needs a fakeshop subscription surface, which does not
+exist; that is card `060`'s, and it left the spec with it.
 
 <!-- LINK DEFINITIONS -->
 
@@ -103,7 +121,7 @@ Floor venv built outside the repo at `/tmp/dsf-floor48`, Python **3.10.19**, Dja
 [agents]: ../../AGENTS.md
 
 <!-- docs/ -->
-[spec-048]: ../SPECS/spec-048-secure_output_defaults-0_0_17.md
+[spec-048]: ../SPECS/spec-048-secure_output_defaults-0_0_14.md
 
 <!-- docs/SPECS/ -->
 

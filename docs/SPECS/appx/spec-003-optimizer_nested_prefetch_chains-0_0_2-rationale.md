@@ -369,6 +369,13 @@ entry's `[spec-003-docs]` key, and a reader of the spec alone would then have no
 section ever declared anything. A one-line pointer is the shape rule 1 of the move prescribes for
 exactly this case.
 
+*Changed — the maintainer chose the deletion at closeout (2026-08-07).* The rejected alternative
+above is now the shipped state: a spec is done when its features are implemented, no other spec
+carries a documentation-obligations section, and a discharged instruction earns no heading. The
+section is gone from the spec; this entry is the whole account of what it declared and what
+discharged each obligation, and the `[spec-003-docs]` key now points at the spec file rather than
+the removed heading.
+
 **Claims the spec no longer makes.** That `spec-002` has a `## Current state` section to update.
 That `TODO(spec-003…)` anchors exist to remove. That `resolvers.py` has a
 `_get_relation_field_name` or an `_is_fk_id_elided` to update. That any obligation from this
@@ -969,8 +976,13 @@ the rest of bullet 8 (run the formatter and the linter) stands as the ordinary
 rule, which is a fair argument for cutting it. It stays because a definition of done that omits
 the lint gate reads as licensing a build that skips it, and the cost of the bullet is one line.
 
+*Changed — the maintainer chose the deletion at closeout (2026-08-07).* The rejected alternative
+above is now the shipped state: the lint gate is [`AGENTS.md`][agents]'s standing repo-wide rule,
+equally true of every spec, so restating it in one spec's definition of done adds no contract. The
+definition of done now ends at the tests bullet.
+
 *Claims the spec no longer makes.* That any TODO-anchored pseudo-code finding exists to leave
-untouched.
+untouched. That running the formatter and linter is part of O4's own definition of done.
 
 ### The former `` ## Missing `.py` files ``
 
@@ -1026,7 +1038,7 @@ exists to keep out of the spec.
 [spec-003]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md
 [spec-003-current]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#plan-shape
 [spec-003-design]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#implementation-design
-[spec-003-docs]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#documentation-updates-when-o4-ships
+[spec-003-docs]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md
 [spec-003-dod]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#definition-of-done
 [spec-003-flattening]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#lookup-path-flattening
 [spec-003-lookup-vs-key]: ../spec-003-optimizer_nested_prefetch_chains-0_0_2.md#lookup-paths-vs-resolver-sentinel-keys

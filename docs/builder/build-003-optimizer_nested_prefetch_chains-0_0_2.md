@@ -248,8 +248,8 @@ The archive already landed, so this table is R3's **verification** list, not a r
 | `KANBAN.md:144`, `:4819` (+ hits in `KANBAN.html`) | `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md` | **Generated** — already correct; never hand-edit |
 | `KANBAN.md:240`, `:317` | card `TODO-ALPHA-052-0.1.0` scope items naming this spec's stale sites | Generated; the prose is `CardItem.text`. `:317`'s four named sites are all in the drift table (D1, D2, D14-i, D14 parent-spec clause). R3 decides whether a discharged scope item is R3's to retire or card 052's — **default is card 052's** |
 | `docs/SPECS/spec-002-optimizer-0_0_2.md` `## Purpose` | "the detailed O4 design and implementation record belongs to `docs/SPECS/spec-003-…`" | Read-only sibling; **correct and load-bearing** — it is the clause that makes this spec the O4 record |
-| `docs/SPECS/appx/spec-001-django_types-0_0_1-rationale.md`, `docs/SPECS/appx/spec-002-optimizer-0_0_2-rationale.md` (8 hits) | the two prior rationales' accounts of the optimizer split | Read-only; **R1 must not duplicate their content** — spec-002's rationale already narrates why O4 was extracted into its own spec |
-| `docs/builder/build-002-optimizer-0_0_2.md` (5 hits) | the prior cycle's plan | Historical artifact; correct as history |
+| `docs/SPECS/appx/spec-001-django_types-0_0_1-rationale.md`, `docs/SPECS/appx/spec-002-optimizer-0_0_2-rationale.md` (10 occurrences across 10 lines) | the two prior rationales' accounts of the optimizer split | Read-only; **R1 must not duplicate their content** — spec-002's rationale already narrates why O4 was extracted into its own spec |
+| `docs/builder/build-002-optimizer-0_0_2.md` (11 occurrences across 10 lines) | the prior cycle's plan | Historical artifact; correct as history |
 
 No hit in `CHANGELOG.md`, `README.md`, `GOAL.md`, `TODAY.md`, `AGENTS.md`, `docs/GLOSSARY.md`, `docs/TREE.md`, or `docs/README.md`. The sweep is re-run by R3, not trusted from this table.
 

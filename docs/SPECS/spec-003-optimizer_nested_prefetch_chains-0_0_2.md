@@ -188,9 +188,6 @@ Resolver-focused tests in `tests/types/test_resolvers.py`:
 - `test_b2_forward_fk_id_elision_does_not_leak_across_parent_types` for the parent-type leak a bare field name allowed.
 - A runtime-path helper test that proves numeric list indexes are stripped and aliases/response keys are preserved.
 
-## Documentation updates when O4 ships
-Every obligation this section declared is discharged. Each of the four, and what discharged it, is recorded in the [rationale file][spec-003-rationale].
-
 ## Definition of done
 O4 is complete when:
 
@@ -201,7 +198,6 @@ O4 is complete when:
 - B2 and B3 context sentinels use branch-sensitive resolver identities (parent type + field + runtime response path, or an equivalent scheme) and do not leak across siblings, parent types, aliases, or root fields.
 - The `lookup_paths` flattening helper exists on `plans.py` for B8/debugging, recurses through nested `Prefetch` objects to arbitrary depth, and is kept separate from resolver strictness keys.
 - The walker, extension, live, and resolver tests above pass.
-- `uv run ruff format .` and `uv run ruff check .` have been run after edits.
 
 <!-- LINK DEFINITIONS -->
 

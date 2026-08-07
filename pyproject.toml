@@ -50,9 +50,9 @@ dev = [
     # present path while ordinary consumers avoid a compiled dependency.
     "cryptography>=44.0.0",
     "djangorestframework>=3.17.0",
-    "faker>=33.0.0",
+    "faker>=40.36.0",
     "pillow>=10.0.0",
-    "pytest>=9.0.2",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.0.0",
     # channels is a SOFT dependency of the package ([project].dependencies is
     # untouched); the dev group installs it (with Channels' own [daphne] extra,
@@ -74,7 +74,7 @@ dev = [
     # scopes, immutable action/image pins, and per-job timeouts are asserted
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
-    "ruff>=0.15.0",
+    "ruff>=0.16.1",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the

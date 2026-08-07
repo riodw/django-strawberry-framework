@@ -82,6 +82,7 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: build
+    runs-on: ubuntu-latest
     # Must exceed the deploy step's own polling timeout below, so that a Pages
     # backend slower than the poller is reported BY the action (a named
     # deployment timeout) instead of being killed mid-poll by the job. Equal

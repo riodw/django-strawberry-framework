@@ -117,6 +117,30 @@ def test_every_job_declares_a_timeout(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
+def test_every_job_declares_a_runner(path):
+    """Every job says what it runs on, so the whole file stays schedulable.
+
+    ``runs-on`` is required, and omitting it does not fail the one job: GitHub
+    refuses to parse the WORKFLOW, so a push that should have deployed reports
+    an invalid-file error and nothing runs at all. That is worth a structural
+    assertion rather than review, because the property is invisible from inside
+    the suite and the omission is easy to introduce: this test exists because an
+    edit meant to raise one job's ``timeout-minutes`` replaced the adjacent
+    ``runs-on`` line along with it, and the timeout assertion above -- the one
+    property the edit happened to preserve -- passed over the result.
+    """
+    workflow = _load(path)
+    for name, job in _jobs(workflow).items():
+        job = job or {}
+        if "uses" in job:
+            # A reusable-workflow call names no runner; the called workflow's own
+            # jobs declare theirs, exactly as they declare their timeouts.
+            continue
+        runs_on = job.get("runs-on")
+        assert runs_on, f"{path.name}: job {name!r} declares no runs-on (got {runs_on!r})"
+
+
+@pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
 def test_every_external_action_is_pinned_to_a_full_commit_sha(path):
     """Third-party and first-party actions alike are pinned by commit SHA.
 

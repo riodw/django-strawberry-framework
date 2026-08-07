@@ -4848,7 +4848,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Verified in upstream
 
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_hints_from_django_relation` builds a depth>1 nested plan by recursing through `_get_model_hints(..., level=level + 1)`, rebasing the child `OptimizerStore`'s `only`/`select_related` under the relation path, and emitting `Prefetch(path, queryset=field_qs)` for many-side branches -- the identical behavior this card ships in `optimizer/walker.py` (`_build_prefetch_child_queryset` recurses one level deeper and `_plan_prefetch_relation` emits `Prefetch(full_path, queryset=child_queryset)`, while `_plan_select_relation` recurses through single-valued chains preserving `select_related` + `only()`), so O4 nested-prefetch-chain planning is required parity with strawberry-django's nested relation hinting.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_hints_from_django_relation` builds a depth>1 nested plan by recursing through `_get_model_hints(..., level=level + 1)`, rebasing the child `OptimizerStore`'s `only`/`select_related` under the relation path, and emitting `Prefetch(path, queryset=field_qs)` for many-side branches -- the identical behavior this card ships in `optimizer/walker.py` (`_build_prefetch_child_queryset` recurses one level deeper and `_plan_prefetch_relation` emits `Prefetch(lookup_path, queryset=child_queryset)`, while `_plan_select_relation` recurses through single-valued chains preserving `select_related` + `only()`), so O4 nested-prefetch-chain planning is required parity with strawberry-django's nested relation hinting.
 
 #### Note
 

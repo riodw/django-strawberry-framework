@@ -151,7 +151,7 @@ if hint and hint.force_prefetch:
 
 **Test surface.** `SKIP` suppresses a relation from the plan. `.prefetch(Prefetch(...))` appears in the plan instead of a plain string. `.select_related()` forces select_related on a many-side relation. Unknown field name raises `ConfigurationError`. Non-`OptimizerHint` value raises `ConfigurationError`.
 
-**Depends on.** O3 (shipped). The `SKIP` hint is independent of O4–O6. The `.prefetch(Prefetch(...))` hint composes naturally with O4 (nested chains) and O6 (downgrade rule) once those land.
+**Depends on.** O3 (shipped). The `SKIP` hint is independent of O4–O6. The `.prefetch(Prefetch(...))` hint composes naturally with O4 (nested chains) and O6 (downgrade rule).
 
 ### B5 — Plan introspection via context
 

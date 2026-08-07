@@ -2094,7 +2094,7 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
 
 # The products conversion (spec-033) deliberately adds NO Meta.connection opt-in on the four
 # products types (no totalCount; minimal cookbook-mirror conversion) and NO root
-# node(id:) / nodes(ids:) entry points (those stay TODO-BETA-060-0.1.5).
+# node(id:) / nodes(ids:) entry points (those stay TODO-BETA-061-0.1.5).
 
 
 # =============================================================================

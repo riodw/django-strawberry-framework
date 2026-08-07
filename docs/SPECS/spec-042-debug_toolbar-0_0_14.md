@@ -305,7 +305,7 @@ Revision history (kept inline so the spec is self-contained):
   ship-time text it names). The example project's debug-toolbar opt-in that
   [Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)
   scoped OUT (deferred to the fakeshop-activation card
-  [`TODO-BETA-060-0.1.5`][kanban]) was brought forward: **fakeshop's shipped
+  [`TODO-BETA-061-0.1.5`][kanban]) was brought forward: **fakeshop's shipped
   settings now wire the toolbar** — `"debug_toolbar"` in `INSTALLED_APPS`, the
   package `DebugToolbarMiddleware` near the front of `MIDDLEWARE` (replacing no
   stock entry — fakeshop never carried one), `INTERNAL_IPS = ["127.0.0.1"]`, and
@@ -748,7 +748,7 @@ A true description of the repo as this spec is authored:
   ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence));
   a dev-ergonomics opt-in in the example (a `DEBUG`-gated conditional settings
   block) is a maintainer call for the fakeshop-activation card
-  ([`TODO-BETA-060-0.1.5`][kanban]) if wanted at all.
+  ([`TODO-BETA-061-0.1.5`][kanban]) if wanted at all.
 - **A package view class.** The Strawberry-view detection targets Strawberry's
   engine-owned `BaseView`
   ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge));
@@ -1178,7 +1178,7 @@ of work are explicitly out:
   middleware per-test instead
   ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence));
   a dogfooding opt-in belongs to the fakeshop-activation card
-  ([`TODO-BETA-060-0.1.5`][kanban]) if the maintainer wants it.
+  ([`TODO-BETA-061-0.1.5`][kanban]) if the maintainer wants it.
 - **Not a Channels / ASGI toolbar integration.** Three precise statements, so
   "Django served under ASGI" is never conflated with "Channels consumer
   traffic": (1) the **tested contract** is sync Django test-client traffic
@@ -2443,11 +2443,11 @@ joint `0.0.14` cut:
   this card's tests use `django.test.Client` directly. The async verification
   handoff ([Risks](#risks-and-open-questions)) lands there if anywhere.
 - **Fakeshop toolbar dogfooding** (a `DEBUG`-gated settings opt-in in the
-  example) — the fakeshop-activation card [`TODO-BETA-060-0.1.5`][kanban] if
+  example) — the fakeshop-activation card [`TODO-BETA-061-0.1.5`][kanban] if
   the maintainer wants it; when it lands, the covering tests move live and the
   package stand-ins are deleted per the
   [live-first promotion rule][glossary-live-first-coverage-mandate].
-- **The migration guide itself** — [`TODO-BETA-065-0.1.7`][kanban]; this card
+- **The migration guide itself** — [`TODO-BETA-066-0.1.7`][kanban]; this card
   hands it the one-row settings-string mapping
   (`strawberry_django.middlewares.debug_toolbar.DebugToolbarMiddleware` →
   `django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware`,
@@ -2533,7 +2533,7 @@ joint `0.0.14` cut:
       (`fail_under = 100`) holds with `middleware/debug_toolbar.py` included,
       each branch mapped to a named test owner.
 - [ ] The migration-guide handoff row content is recorded for
-      [`TODO-BETA-065-0.1.7`][kanban] (the one settings-string swap, behavior
+      [`TODO-BETA-066-0.1.7`][kanban] (the one settings-string swap, behavior
       unchanged) ([Goal 3](#goals)).
 - [ ] Slice 2 doc updates land per [Doc updates](#doc-updates): the GLOSSARY
       entry body (status flip deferred), the regenerated

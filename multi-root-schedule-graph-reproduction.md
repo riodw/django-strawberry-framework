@@ -75,7 +75,7 @@ consumer to hand-build too much infrastructure:
 
 If every non-Done KANBAN card lands exactly as currently written, search and computed scalar
 fields improve substantially, but the complete schedule graph remains unowned. The most
-important strategic change is to promote card 054's graph path, exact-owner, per-hop
+important strategic change is to promote card 055's graph path, exact-owner, per-hop
 visibility, correlated `EXISTS`, and same-row machinery into a framework-wide graph-planning
 substrate before FieldSet, search, and AggregateSet freeze separate abstractions.
 
@@ -110,12 +110,12 @@ keep this guide inside that mission:
    state listed in the executive conclusion; the substrate exists to remove that
    hand-building, not to add a second framework beside the Meta surface.
 3. No ORM abstraction layer. Predicate plans are selections over consumer-shaped querysets
-   (the multiset contract card 054 already anchors to [`GOAL.md`][goal]): they never
+   (the multiset contract card 055 already anchors to [`GOAL.md`][goal]): they never
    multiply rows, never collapse consumer duplicates, never hide Django querysets behind a
    new query language.
 4. The two recommended cards are pre-`1.0.0` Beta-milestone foundation work in service of
    the five Layer-3 Meta keys the 1.0.0 contract already promises. They change how cards
-   053, 054, and 056 are built — one shared substrate instead of three private ones — not
+   054, 055, and 057 are built — one shared substrate instead of three private ones — not
    what [`GOAL.md`][goal]'s success criteria promise. The "Defer graph foundations until
    after 1.0" entry under rejected approaches is the inverse statement: landing them after
    the API freeze would force incompatible public concepts into the stable surface.
@@ -522,7 +522,7 @@ The audit found important existing foundations that should be reused rather than
 
 `django_strawberry_framework/utils/relations.py` classifies reverse FK, forward and reverse
 M2M, generic relations, reverse one-to-one, and multi-level paths. It records the first
-row-multiplying hop and the complete relation chain. Card 054 already depends on this strict
+row-multiplying hop and the complete relation chain. Card 055 already depends on this strict
 classification.
 
 ### Row-preserving generated filters
@@ -1023,7 +1023,7 @@ user satisfies both conditions.
 The rotation director rule has the same conceptual requirement: `block_id` and
 `rotation_id` must match one `UserSchedule` row.
 
-Card 054 already recognizes the alias-sharing rule for relational search: visibility and
+Card 055 already recognizes the alias-sharing rule for relational search: visibility and
 terminal predicates for one relation arm must build into one `Q` tree submitted in one
 `.filter()` call.
 
@@ -1078,7 +1078,7 @@ fixture can accidentally let two aliases land on the same child.
 
 ### Current planned behavior
 
-Card 053 and its [`FieldSet specification`][fieldset-spec] add:
+Card 054 and its [`FieldSet specification`][fieldset-spec] add:
 
 - field resolvers;
 - `check_<field>_permission`;
@@ -1098,7 +1098,7 @@ It cannot describe Session participants or Event invitees.
 
 ### Required behavior
 
-Expand the dependency vocabulary before card 053 freezes:
+Expand the dependency vocabulary before card 054 freezes:
 
 ```python
 FieldDependencyPlan(
@@ -1397,7 +1397,7 @@ unions correctness sentinel sets so nested plans coexist, but stores
 One five-root operation therefore exposes only the last published plan. Under asynchronous
 sibling resolution, the surviving plan can depend on completion order.
 
-Card 062's current explain design assumes this single context plan.
+Card 063's current explain design assumes this single context plan.
 
 ### Required behavior
 
@@ -1609,7 +1609,7 @@ Layer 3 subsystem.
 ### Required public declaration specification
 
 The plan objects below are internal vocabulary. Sharing internal vocabulary is not by itself
-enough to prevent cards 053, 054, and 056 from shipping incompatible public surfaces, because
+enough to prevent cards 054, 055, and 057 from shipping incompatible public surfaces, because
 those cards are consumed through declarations, not through plan classes.
 
 A dedicated framework specification must therefore define the public declaration surface
@@ -1774,7 +1774,7 @@ close the schedule gaps.
 
 ### Directly relevant cards
 
-#### `TODO-BETA-053` — FieldSet
+#### `TODO-BETA-054` — FieldSet
 
 Direct benefits:
 
@@ -1798,7 +1798,7 @@ Required amendment:
 Without the amendment, FieldSet helps rotation `displayName` but does not safely optimize
 Session participants or Event invitees.
 
-#### `TODO-BETA-054` — `Meta.search_fields`
+#### `TODO-BETA-055` — `Meta.search_fields`
 
 This is the most important graph-aware card. It remains planned: current synthesized
 connections expose `filter:` and `orderBy:`, not `search:`. Its
@@ -1826,7 +1826,7 @@ Remaining gap:
 - search scope is immutable and type-definition-wide; two roots over one model that need
   different path sets require distinct primary/secondary GraphQL types.
 
-#### `TODO-BETA-056` — Aggregation
+#### `TODO-BETA-057` — Aggregation
 
 Directly useful concepts:
 
@@ -1841,7 +1841,7 @@ Required amendment:
 - do not create an aggregate-private child visibility abstraction;
 - require row-identity/cardinality semantics for child aggregates.
 
-#### `TODO-BETA-058` — `Meta.redaction_mode`
+#### `TODO-BETA-059` — `Meta.redaction_mode`
 
 This card handles hidden forward non-null targets with optional sentinel redaction. It does
 not scope selected to-many children.
@@ -1865,7 +1865,7 @@ Required coordination:
 - otherwise more queries enter the current per-parent sidecar fallback;
 - the resource estimator should account for explicit fallback cost until batching exists.
 
-#### `TODO-BETA-062` — optimizer explain mode
+#### `TODO-BETA-063` — optimizer explain mode
 
 Direct benefit:
 
@@ -1877,7 +1877,7 @@ Required amendment:
 - expose every root, cache hit/miss, visibility binding, predicate shape, edge scope,
   row-identity proof, nested strategy, and fallback reason.
 
-#### `TODO-BETA-066` — adversarial tests
+#### `TODO-BETA-067` — adversarial tests
 
 Add:
 
@@ -1902,24 +1902,24 @@ semantics by itself.
 The new graph-planning boundary should be decided before this card freezes optimizer
 subsystem boundaries.
 
-#### `TODO-BETA-055` — PostgreSQL full-text search
+#### `TODO-BETA-056` — PostgreSQL full-text search
 
 Useful for search ranking and annotation planning. It does not solve graph permissions.
 Its annotation mechanism should consume the shared selection-aware shaping stage.
 
-#### `TODO-BETA-057` — Layer 3 Meta-key promotion
+#### `TODO-BETA-058` — Layer 3 Meta-key promotion
 
 Useful binding/finalization bookkeeping. It does not add graph behavior.
 
-#### `TODO-BETA-060` and `TODO-BETA-061` — fakeshop activation and HTTP coverage
+#### `TODO-BETA-061` and `TODO-BETA-062` — fakeshop activation and HTTP coverage
 
-Useful acceptance vehicles, but their current KANBAN scope is narrower: card 060 owns the
-product-catalog `node` / `nodes` roots and `totalCount`, while card 061 owns the related
+Useful acceptance vehicles, but their current KANBAN scope is narrower: card 061 owns the
+product-catalog `node` / `nodes` roots and `totalCount`, while card 062 owns the related
 product-catalog live HTTP tests. Neither card currently ships the schedule-shaped five-root
 dashboard. That dashboard and its graph-security fixtures may use these test-placement
 patterns only through a separately scoped future slice whose dependencies are explicit.
 
-#### `TODO-BETA-065` — migration and adoption guides
+#### `TODO-BETA-066` — migration and adoption guides
 
 Document the correct DRF migration:
 
@@ -1930,7 +1930,7 @@ Document the correct DRF migration:
 - give each model a scope adapter;
 - declare nested edge visibility independently from root visibility.
 
-#### `TODO-STABLE-067` — stable release
+#### `TODO-STABLE-068` — stable release
 
 Release verification only. The graph foundations must land before its public API freeze.
 
@@ -1940,9 +1940,9 @@ Release verification only. The graph foundations must land before its public API
 - `TODO-ALPHA-049` — dependency and CI hardening, except runtime compatibility hygiene.
 - `TODO-ALPHA-050` — debug package extraction.
 - `TODO-ALPHA-052` — beta release.
-- `TODO-BETA-059` — enum naming.
-- `TODO-BETA-063` — mutation idempotency.
-- `TODO-BETA-064` — configurable filter key names.
+- `TODO-BETA-060` — enum naming.
+- `TODO-BETA-064` — mutation idempotency.
+- `TODO-BETA-065` — configurable filter key names.
 
 These cards may be important to the project but do not close schedule graph planning.
 
@@ -2020,7 +2020,7 @@ vocabulary becomes the substrate's constraint. Either way the overlap should be 
 
 Neither card exists yet. Both are recommendations from this audit: they are not present in
 [`KANBAN.md`][kanban], they have no card numbers, and the amendments they imply for cards
-053, 054, 056, 062, and 066 have not been written into those cards. Acting on the existing
+054, 055, 057, 063, and 067 have not been written into those cards. Acting on the existing
 cards before these are created and sequenced risks producing exactly the divergent Layer 3
 abstractions this guide argues against.
 
@@ -2034,7 +2034,7 @@ themselves are framework-internal vocabulary.
 
 ### New foundation card: graph policy and field dependency planning
 
-Land before card 053.
+Land before card 054.
 
 Scope:
 
@@ -2062,7 +2062,7 @@ Consumers:
 
 ### New optimizer card: structural templates and nested sidecar batching
 
-Land before card 062 and before stable.
+Land before card 063 and before stable.
 
 Scope:
 
@@ -2082,16 +2082,16 @@ Scope:
 047 execution budgets
 051 boundary/DRY preparation
 graph policy and dependency foundation
-053 FieldSet on shared dependencies
-054 search on shared predicates and visibility
-055 full-text on shared annotation shaping
-056 aggregation on shared edge scope
-057/058 Layer 3 binding and redaction
+054 FieldSet on shared dependencies
+055 search on shared predicates and visibility
+056 full-text on shared annotation shaping
+057 aggregation on shared edge scope
+058/059 Layer 3 binding and redaction
 structural templates and nested sidecar batching
-062 explain over operation plan map
-066 adversarial graph suite
-065 migration guide update
-067 stable audit
+063 explain over operation plan map
+067 adversarial graph suite
+066 migration guide update
+068 stable audit
 ```
 
 Cards without dependencies on this work can continue independently. The order above is about
@@ -2698,7 +2698,7 @@ Prove:
 
 ### Phase 3: shared graph path and predicate plans
 
-Extract relation metadata used by card 054 into shared immutable plans.
+Extract relation metadata used by card 055 into shared immutable plans.
 
 Implement:
 
@@ -2726,7 +2726,7 @@ Integrate with:
 
 ### Phase 5: structured FieldSet dependencies
 
-Expand `Meta.depends_on` before card 053 implementation is finalized.
+Expand `Meta.depends_on` before card 054 implementation is finalized.
 
 Add:
 
@@ -2752,7 +2752,7 @@ strategies only to proven row-identity shapes.
 
 ### Phase 8: explain and adversarial coverage
 
-Amend cards 062 and 066 to expose and attack every new abstraction.
+Amend cards 063 and 067 to expose and attack every new abstraction.
 
 ### Phase 9: Medtrics recreation
 
@@ -2792,7 +2792,7 @@ The framework work is complete only when:
 16. Multi-database aliases remain pinned correctly.
 17. Strictness reports real fallbacks and never accepts a plan that failed to attach.
 18. The migration guide teaches the scoped multi-root pattern.
-19. Cards 053, 054, and 056 consume one graph substrate.
+19. Cards 054, 055, and 057 consume one graph substrate.
 20. No request value, user, tenant, queryset, or database alias enters a cross-request
     structural cache.
 
@@ -2920,7 +2920,7 @@ Before implementation:
   contracts.
 - Write the public declaration specification for the graph substrate.
 - Create the two recommended foundation cards in [`KANBAN.md`][kanban] with real numbers and
-  dependencies, and amend cards 053, 054, 056, 062, and 066 accordingly.
+  dependencies, and amend cards 054, 055, 057, 063, and 067 accordingly.
 - Create an approved implementation plan for the graph work; the raw-SQL pagination plan does
   not cover it.
 - Run R1, R5, R7, R8, and R10 to capture current baselines.
@@ -2978,9 +2978,9 @@ Before review:
 
 <!-- docs/SPECS/ -->
 [connection-optimizer-spec]: docs/SPECS/spec-033-connection_optimizer-0_0_9.md
-[fieldset-spec]: docs/SPECS/spec-053-fieldset-0_1_1.md
+[fieldset-spec]: docs/SPECS/spec-054-fieldset-0_1_1.md
 [permissions-spec]: docs/SPECS/spec-034-permissions-0_0_10.md
-[search-spec]: docs/SPECS/spec-054-search_fields-0_1_2.md
+[search-spec]: docs/SPECS/spec-055-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

@@ -1,20 +1,21 @@
 # Spec: graph substrate — shared graph policy and dependency planning
 
-Planned for `0.1.1` (proposed card `TODO-BETA-068-0.1.1`; **the card does not
-exist in [`KANBAN.md`][kanban] yet — creating it, confirming its number, and
-sequencing it ahead of `TODO-BETA-053-0.1.1` is a maintainer action this spec
-cannot perform**, see [Decision 1](#decision-1--one-substrate-card-created-and-sequenced-before-layer-3-freezes)).
-`TODO-BETA-053-0.1.1` shares this patch version and lands after this card, so
+Planned for `0.1.1` (card `TODO-BETA-053-0.1.1`, created 2026-08-07 as the
+first Beta card on [`KANBAN.md`][kanban], sequenced ahead of
+`TODO-BETA-054-0.1.1`; the former cards 053-068 shifted up by one, and this
+spec's filename follows the card,
+see [Decision 1](#decision-1--one-substrate-card-created-and-sequenced-before-layer-3-freezes)).
+`TODO-BETA-054-0.1.1` shares this patch version and lands after this card, so
 the `0.1.1` version bump belongs to the joint cut and this spec defers every
-release-state artifact to card 053
-([Decision 10](#decision-10--joint-cut-at-011--release-state-defers-to-card-053)).
+release-state artifact to card 054
+([Decision 10](#decision-10--joint-cut-at-011--release-state-defers-to-card-054)).
 
 This is the first of two foundation cards — the framework-internal
 graph-planning vocabulary (`GraphPathPlan`, `PredicatePlan`, `EdgeScope`,
 `FieldDependencyPlan`, `RowIdentityProof`) plus the operation-scoped
 dependency memo, extracted into one shared package boundary **before**
-[`FieldSet`][glossary-fieldset] (card 053), search (card 054), and
-[`AggregateSet`][glossary-aggregateset] (card 056) freeze three private
+[`FieldSet`][glossary-fieldset] (card 054), search (card 055), and
+[`AggregateSet`][glossary-aggregateset] (card 057) freeze three private
 versions of the same machinery. The second foundation card (structural
 optimization templates + nested sidecar batching) is **not** this spec; it is
 tracked under `Out of scope`.
@@ -27,7 +28,8 @@ classes consistent with [`Meta.filterset_class`][glossary-metafilterset_class]
 never a parallel imperative registration API. The plan objects themselves are
 internal vocabulary, not shipped API.
 
-Status: **PLANNED — no slice built yet; card creation pending.**
+Status: **PLANNED — no slice built yet; card created
+(`TODO-BETA-053-0.1.1`); the consumer-card amendments are still to land.**
 Five slices: Slice 1 (**`graph/` package + operation dependency memo**),
 Slice 2 (**`GraphPathPlan` + path/lookup splitter + `RowIdentityProof`
 vocabulary**), Slice 3 (**`PredicatePlan` compiler** — sequential-fold
@@ -38,8 +40,8 @@ tracked-path constants + card wrap**).
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This spec grants none — the `0.1.1` entry, the
-version quintet, and all release-state prose are owned by the card-053 joint
-cut ([Decision 10](#decision-10--joint-cut-at-011--release-state-defers-to-card-053)).
+version quintet, and all release-state prose are owned by the card-054 joint
+cut ([Decision 10](#decision-10--joint-cut-at-011--release-state-defers-to-card-054)).
 
 ---
 
@@ -47,15 +49,15 @@ cut ([Decision 10](#decision-10--joint-cut-at-011--release-state-defers-to-card-
 
 Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 
-- [`FieldSet`][glossary-fieldset] — planned for `0.1.1` (card 053); consumes
+- [`FieldSet`][glossary-fieldset] — planned for `0.1.1` (card 054); consumes
   `FieldDependencyPlan` per this spec's amendment obligation
   ([Decision 8](#decision-8--fielddependencyplan-normalizes-metadepends_on)).
 - [`Meta.search_fields`][glossary-metasearch_fields] — planned for `0.1.2`
-  (card 054); its path planning moves onto `GraphPathPlan` per the amendment
+  (card 055); its path planning moves onto `GraphPathPlan` per the amendment
   scope [Decision 2](#decision-2--a-dedicated-graph-package-boundary) pins.
 - [`AggregateSet`][glossary-aggregateset] / [`RelatedAggregate`][glossary-relatedaggregate]
   / [`get_child_queryset`][glossary-get_child_queryset] — planned for `0.1.3`
-  (card 056); consume `EdgeScope` instead of a private child-visibility hook.
+  (card 057); consume `EdgeScope` instead of a private child-visibility hook.
 - [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] —
   shipped; the binding slot `PredicatePlan` and `EdgeScope` compose with.
 - [`apply_cascade_permissions`][glossary-apply_cascade_permissions] — shipped;
@@ -145,7 +147,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   grouping object keyed on the classifier's complete relation chain **plus a
   terminal-is-relation flag** (a relation-terminal arm like `patron` and a
   scalar-terminal arm like `patron__name` share a `relation_chain` but must
-  not share a correlated body; test-pinned — the key card 054's arm-grouping
+  not share a correlated body; test-pinned — the key card 055's arm-grouping
   needs), exact owning-`DjangoTypeDefinition`
   identity with injected (not `graph/`-resolved) type references, and
   per-hop target-visibility metadata slots. `graph/proofs.py`: the
@@ -204,7 +206,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   window and every per-parent fallback path. Strictness resolver keys
   publish only after successful attachment. `graph/dependencies.py`: frozen
   `FieldDependencyPlan(columns=...)` plus the column-tuple shorthand
-  normalizer — **only** the members card 053 consumes at `0.1.1`
+  normalizer — **only** the members card 054 consumes at `0.1.1`
   (Decision 8). Meta surface: `Meta.edge_scopes` added to
   `ALLOWED_META_KEYS` as a **net-new key** (not a `DEFERRED_META_KEYS`
   promotion; the provenance comment block in `types/base.py` gains its
@@ -212,7 +214,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [`Meta.relation_shapes`][glossary-metarelation_shapes] pattern
   (Decision 11). Live fakeshop activation: `Loan.confidential` column +
   migration in `examples/fakeshop/apps/library/models.py`, the
-  `LoanType.get_queryset` visibility hook (a fixture shared with card 054,
+  `LoanType.get_queryset` visibility hook (a fixture shared with card 055,
   created here) **plus `Meta.primary = True` on `LoanType`** (the R9
   secondary type otherwise trips the finalizer's primary-ambiguity audit),
   the **rewrite** of the existing `BookType.get_queryset` (the shipped
@@ -220,7 +222,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   live baselines must survive the `PredicatePlan` form), the
   `edge_scopes` declaration on `BookType.loans`, the R9 secondary Loan type
   + acceptance connection riding the existing `FAKESHOP_TEST_LOAN_CONNECTION`
-  flag (coordinated with card 054's planned
+  flag (coordinated with card 055's planned
   `DjangoConnectionField(LoanType)` so one card owns it), live HTTP tests
   under `examples/fakeshop/test_query/` covering R3 (edge-selection half,
   including the `filter:`-argument fallback case), R4/R5/R9 result
@@ -236,10 +238,10 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `PredicatePlan`, `EdgeScope`, `FieldDependencyPlan`, `RowIdentityProof`,
   and the operation dependency memo, then regenerate `docs/GLOSSARY.md`;
   update `examples/fakeshop/test_query/README.md` suite descriptions; record
-  the card-053/054/056/062/066 amendment obligations on those cards in the
-  kanban DB and regenerate the board; flip card 068. Leave README / GOAL /
+  the card-054/055/057/063/067 amendment obligations on those cards in the
+  kanban DB and regenerate the board; flip card 053. Leave README / GOAL /
   TODAY release prose, `CHANGELOG.md`, and the version quintet untouched —
-  all owned by the card-053 joint cut.
+  all owned by the card-054 joint cut.
 
 ## Problem statement
 
@@ -262,7 +264,7 @@ package should generate:
   visible", nothing answers "which children may this viewer see through this
   edge"; `permissions.py::apply_cascade_permissions` is forward-FK/one-to-one
   by design);
-- computed-field dependency plans beyond concrete columns (card 053's
+- computed-field dependency plans beyond concrete columns (card 054's
   `Meta.depends_on` is column-only, so a participants/invitees-shaped
   computed field degenerates to per-parent lazy reads);
 - row-identity awareness (the window gate
@@ -271,8 +273,8 @@ package should generate:
   emitting 9 SQL rows for 3 child identities, which would corrupt window
   counts and page flags).
 
-Every non-Done Layer 3 card — [`FieldSet`][glossary-fieldset] (053), search
-(054), [`AggregateSet`][glossary-aggregateset] (056) — needs the same path
+Every non-Done Layer 3 card — [`FieldSet`][glossary-fieldset] (054), search
+(055), [`AggregateSet`][glossary-aggregateset] (057) — needs the same path
 classification, visibility composition, exact-owner identity, and
 row-preserving compilation. Built independently they will diverge on owner
 identity, async visibility, alias sharing, database pinning, and strictness.
@@ -375,8 +377,8 @@ All claims below verified against source at authoring time.
    optimizer already builds and consumed through the accessor-keyed prefetch
    cache, with strictness keys published only after attachment and no
    fail-open path (prefetched, fallback, or optimizer-off).
-5. A structured field-dependency vocabulary that card 053 normalizes
-   `Meta.depends_on` into — shipped in this card only to the extent card 053
+5. A structured field-dependency vocabulary that card 054 normalizes
+   `Meta.depends_on` into — shipped in this card only to the extent card 054
    consumes it at `0.1.1`.
 6. Query growth for every shipped shape bounded by selection, never by
    parent row count: `queries(1 parent) == queries(100 parents)`.
@@ -417,7 +419,7 @@ both accept JOIN-plus-`DISTINCT` fan-out in that position. The borrowing here
 is internal: the substrate extracts and generalizes machinery this package
 already shipped and proved (the `utils/relations.py` classifier, the
 `optimizer/predicates.py` primitives, the exact-owner and alias-sharing rules
-pinned by the [search spec][spec-054]). Both upstream-shaped alternatives are
+pinned by the [search spec][spec-055]). Both upstream-shaped alternatives are
 rejected here: consumer-queryset authorization by Decision 7, JOIN-plus-`DISTINCT`
 fan-out by Decision 4.
 
@@ -478,7 +480,7 @@ class BookType(ModelType):
         }
 ```
 
-`Meta.depends_on`'s structured form is declared through card 053's `FieldSet`
+`Meta.depends_on`'s structured form is declared through card 054's `FieldSet`
 surface and normalizes into `FieldDependencyPlan`; this card ships the
 `columns` plan member and the shorthand normalizer, nothing more
 ([Decision 8](#decision-8--fielddependencyplan-normalizes-metadepends_on)).
@@ -488,15 +490,14 @@ surface and normalizes into `FieldDependencyPlan`; this card ships the
 ### Decision 1 — one substrate card, created and sequenced before Layer 3 freezes
 
 The root-cause fix for the divergences catalogued above is a shared substrate, not five
-per-subsystem implementations. This card must be created in the kanban DB
-with a real number and sequenced after `TODO-ALPHA-052-0.1.0` and before
-`TODO-BETA-053-0.1.1`, and cards 053, 054, 056, 062, and 066 must be amended
-to consume it. **The amendment obligations must land on those cards at this
-card's creation, not at its Slice 5** — if card 054 starts first, the private
-path-plan twin this substrate exists to prevent gets built anyway. `068` is
-the next free number at authoring time; whether the maintainer keeps it or
-renumbers to preserve planned-order numbering is a card-creation decision,
-and this spec's filename follows the card. **Rejected:** letting each Layer 3
+per-subsystem implementations. The card was created 2026-08-07 as
+`TODO-BETA-053-0.1.1` — sequenced after `TODO-ALPHA-052-0.1.0` and before
+`TODO-BETA-054-0.1.1`, shifting the former cards 053-068 up by one; this
+spec's filename follows the card. Cards 054, 055, 057, 063, and 067 must be
+amended to consume it. **The amendment obligations must land on those cards
+at this card's creation, not at its Slice 5** — if card 055 starts first,
+the private path-plan twin this substrate exists to prevent gets built
+anyway. **Rejected:** letting each Layer 3
 card ship private path/visibility/identity machinery (the divergence this
 spec catalogues); deferring the substrate past the `1.0.0` API freeze
 (incompatible public concepts become un-unifiable).
@@ -521,10 +522,10 @@ Slice 1 makes the extension a `graph/` consumer); and because
 than eagerly re-entering a partially initialized package. Type references
 inside plan objects are **injected by the caller** (the finalizer, the
 walker, the search builder) as opaque `DjangoTypeDefinition` handles —
-`graph/` never resolves a model to a type itself. The card-054 amendment scope this boundary implies:
-`GraphPathPlan` + `GraphPathPlanSet` (chain-keyed grouping) subsume 054's
-path classification and arm grouping, while 054's `LOOKUP_PREFIXES` prefix
-rejection and its permission-dispatch plan **stay 054-local** — they are
+`graph/` never resolves a model to a type itself. The card-055 amendment scope this boundary implies:
+`GraphPathPlan` + `GraphPathPlanSet` (chain-keyed grouping) subsume 055's
+path classification and arm grouping, while 055's `LOOKUP_PREFIXES` prefix
+rejection and its permission-dispatch plan **stay 055-local** — they are
 search policy, not substrate. **Rejected:** folding into `optimizer/` — the
 optimizer is one *consumer* of the vocabulary, and card 051 is about to
 freeze optimizer subsystem boundaries; a substrate both layers import must
@@ -659,7 +660,7 @@ pinned because the primitives make the naive alternative silently wrong:
 
 The compiler never adds `DISTINCT` and never adds a multiplying outer join —
 and it **enforces** that: `direct()` accepts to-one paths only (they
-legitimately join outer; the [search spec][spec-054] keeps to-one arms
+legitimately join outer; the [search spec][spec-055] keeps to-one arms
 outer), and every `direct` leaf is classified pre-compilation with to-many
 paths (`first_many_index` non-null) rejected via typed
 [`ConfigurationError`][glossary-configurationerror] pointing at `related` /
@@ -687,7 +688,7 @@ let a stray condition on a different relation silently reintroduce the
 two-alias leak the construct exists to prevent. Ordinary flat filters keep
 Django semantics untouched; same-row grouping is opt-in for consumer
 predicates and preserved by search where visibility and terminal condition
-share a relation arm (the alias-sharing rule the [search spec][spec-054]
+share a relation arm (the alias-sharing rule the [search spec][spec-055]
 already pins). Tests assert both result behavior and **inner-query** alias
 sharing (the outer query holds only the reserved alias) — a result-only
 fixture can pass with two aliases accidentally landing on one child.
@@ -702,7 +703,7 @@ GraphQL types ([`Meta.primary`][glossary-metaprimary]), the plan carries the
 exact owning identity, never a registry primary lookup — a search over a
 secondary Loan type applies the secondary visibility to the re-entered Loan
 hop. The identity carrier is the **`DjangoTypeDefinition`** (matching the
-[search spec][spec-054]'s rule — never a bare `(type_name, model)` pair);
+[search spec][spec-055]'s rule — never a bare `(type_name, model)` pair);
 a `DjangoType` class passed as `owner=` resolves through its definition
 handle. Structural identities key on that definition, and two types over one
 model never compare equal as owners.
@@ -839,18 +840,18 @@ context, planning explosion, cycle hazards).
 ### Decision 8 — `FieldDependencyPlan` normalizes `Meta.depends_on`
 
 This card ships `FieldDependencyPlan(columns=...)` and the column-tuple
-shorthand normalizer — **only** what card 053 consumes at `0.1.1`. The card
-053 amendment is precise: 053's `depends_on` lives on the **FieldSet's**
+shorthand normalizer — **only** what card 054 consumes at `0.1.1`. The card
+054 amendment is precise: 054's `depends_on` lives on the **FieldSet's**
 `Meta` (not a `DjangoType` Meta key — nothing "promotes"); its binder
 returns `{field_name: FieldDependencyPlan}` instead of
 `{field_name: tuple[str, ...]}`, and its `only_fields` merge reads
-`plan.columns`. The amended surfaces are 053's dependency-normalization
+`plan.columns`. The amended surfaces are 054's dependency-normalization
 Decision, its Slice 3 row, and its `depends_on` tests. The expanded
 vocabulary — `select_related` paths, plain prefetch paths, annotations,
 contextual prefetch factories, batch assemblers (which must consume
 prefetched relations through `.all()`, never `.filter()` / `.exists()` /
 `.count()` on a prefetched manager) — ships **with its first consumer**:
-card 053's computed-relation slice or the sibling optimizer card, whichever
+card 054's computed-relation slice or the sibling optimizer card, whichever
 lands first. Shipping consumer-less vocabulary here would leave uncoverable
 lines under the 100% gate and violate the no-reserved-surface rule.
 `BACKLOG.md`'s `computed_field_optimizer_hints` / `computed_fields_binding`
@@ -884,12 +885,12 @@ added (an open question, see `Risks and open questions`). **Rejected:**
 shipping the gate here without the sidecar-normalization machinery that
 gives non-strict mode a correct fallback.
 
-### Decision 10 — joint cut at `0.1.1`: release state defers to card 053
+### Decision 10 — joint cut at `0.1.1`: release state defers to card 054
 
-`TODO-BETA-053-0.1.1` shares the patch version and lands after this card, so
-053 owns the `pyproject.toml` / `__init__.py` / `tests/base/test_init.py`
+`TODO-BETA-054-0.1.1` shares the patch version and lands after this card, so
+054 owns the `pyproject.toml` / `__init__.py` / `tests/base/test_init.py`
 bump, `CHANGELOG.md`, and all release-state prose
-([Joint version cut][glossary-joint-version-cut]). Card 053's existing
+([Joint version cut][glossary-joint-version-cut]). Card 054's existing
 lone-card version-bump decision (its Decision 10) must be amended at card
 creation: it keeps bump ownership, but as the joint cut's last lander rather
 than as the lone `0.1.1` card. **Rejected:** this card owning the bump
@@ -924,7 +925,7 @@ recorded on the edge identity is the one the walker will resolve, Decision 6)
 waits for [`finalize_django_types`][glossary-finalize_django_types]
 phase 2.5, placed per the `cursor_field` precedent: it runs before phase 3
 flips `finalized` and stays idempotent under the partial-finalize rerun.
-(c) structured field dependencies declare through card 053's `FieldSet`
+(c) structured field dependencies declare through card 054's `FieldSet`
 surface. Declaration-time structure validates at type creation or
 finalization; request values bind only at execution and never enter any
 cross-request structure. **Rejected:** a sidecar `EdgeScopeSet` class —
@@ -978,7 +979,7 @@ ownership partition applies.
 - Reserved naming: the `_dst_` namespace (with the `$` response-key escape)
   stays the only reserved-attribute discipline; no second naming scheme.
 - The search spec's path-plan builder migrates onto
-  `GraphPathPlan` / `GraphPathPlanSet` in card 054's amended form rather
+  `GraphPathPlan` / `GraphPathPlanSet` in card 055's amended form rather
   than keeping a private twin; this card must not copy any of its logic
   forward.
 
@@ -1093,7 +1094,7 @@ raise paths, and interleavings a real query cannot produce.
   its Slice 5 amendment obligations), so its per-parent counts are
   characterized, not required equal. The other R3 arms — hidden children
   not qualifying search, not contributing to counts/aggregates — are
-  deferred to cards 054/056 and recorded in their Slice 5 amendment
+  deferred to cards 055/057 and recorded in their Slice 5 amendment
   obligations.
 - **R4 — same-related-row (package SQL-shape, Slice 3; live result
   semantics, Slice 4):** the split-`.filter()` false positive demonstrated
@@ -1111,7 +1112,7 @@ raise paths, and interleavings a real query cannot produce.
 - **R6 (package half) — dependency normalization
   (`tests/graph/test_dependencies.py`, Slice 4):** column-tuple shorthand
   normalizes to `FieldDependencyPlan(columns=...)`; live activation of a
-  computed `borrowers`-shaped field is card 053's, after it consumes the
+  computed `borrowers`-shaped field is card 054's, after it consumes the
   plan.
 - **R9 — exact owner (package identity, Slice 3; live, Slice 4):** primary
   and secondary Loan types with different visibility; the secondary root's
@@ -1134,20 +1135,19 @@ Slice 5 owns: `docs/TREE.md` regenerate (new `graph/` package + new
 pre-commit hook otherwise rolls back commits that add tracked files),
 `docs/GLOSSARY.md` via glossary DB entries for the five plan objects and the
 memo, `examples/fakeshop/test_query/README.md`, and the kanban card
-amendments (053, 054, 056, 062, 066 gain explicit consume-the-substrate
-scope lines; 054/056 additionally record the deferred R3 arms) with board
+amendments (054, 055, 057, 063, 067 gain explicit consume-the-substrate
+scope lines; 055/057 additionally record the deferred R3 arms) with board
 regeneration. `README.md`, `GOAL.md`, `TODAY.md`, `CHANGELOG.md`, and the
 version quintet stay untouched (Decision 10).
 
 ## Risks and open questions
 
-- **The card does not exist.** Number `068`, the `0.1.1` version slot, and
-  the before-053 sequencing are this spec's proposal; card creation, any
-  renumber, and the 053/054/056/062/066 amendments are maintainer actions —
-  and per Decision 1 the amendments must land at card creation, not at this
-  card's Slice 5. If the maintainer re-versions the card, this spec's
-  filename and Decision 10 follow the card. Preferred: create as
-  `TODO-BETA-068-0.1.1`.
+- **The consumer-card amendments are not yet recorded.** The card was
+  created 2026-08-07 as `TODO-BETA-053-0.1.1` (the spec's preferred number
+  and sequencing; the former cards 053-068 shifted up by one), but the
+  054/055/057/063/067 consume-the-substrate amendments are maintainer
+  actions still to land — and per Decision 1 they must land now, at card
+  creation, not at this card's Slice 5.
 - **Consumer row-identity assertion.** Should a consumer be able to assert a
   validated row-identity contract for a custom queryset (unlocking windows
   over shapes the framework didn't build)? Preferred for `0.1.1`: no —
@@ -1174,12 +1174,12 @@ version quintet stay untouched (Decision 10).
   would ship a live leak on `Book.loans` (pinned list-only by an existing
   test), so the resolver visibility composition is on Slice 4's critical
   path, not optional hardening.
-- **Fixture collision with card 054.** Card 054's spec plans
+- **Fixture collision with card 055.** Card 055's spec plans
   `LoanType.Meta.search_fields` and a `DjangoConnectionField(LoanType)`
-  acceptance surface over the same library schema this card extends; 054
+  acceptance surface over the same library schema this card extends; 055
   already assumes a `LoanType` visibility hook exists, which this card
   creates. One card must own each shared fixture — this spec claims the
-  visibility hook and the R9 secondary-type surface, and the card-054
+  visibility hook and the R9 secondary-type surface, and the card-055
   amendment records the dependency.
 - **Open product decisions in the originating consumer application**
   (unauthorized target-user
@@ -1191,18 +1191,18 @@ version quintet stay untouched (Decision 10).
 
 - **Structural optimization templates + nested sidecar batching + operation
   plan map + row-identity gate enforcement** — the second foundation card
-  (proposed `069`, before card 062 and the stable freeze); owns
+  (proposed `070`, before card 063 and the stable freeze); owns
   reproductions R1, R7, R8, and R10.
-- **`FieldSet` itself** — card 053 ([spec][spec-053]), amended to consume
+- **`FieldSet` itself** — card 054 ([spec][spec-054]), amended to consume
   `FieldDependencyPlan(columns=...)`; the expanded dependency vocabulary
   ships with its first consumer (Decision 8).
-- **Search** — card 054 ([spec][spec-054]), amended to consume
+- **Search** — card 055 ([spec][spec-055]), amended to consume
   `GraphPathPlan` / `GraphPathPlanSet` / `PredicatePlan`;
   `LOOKUP_PREFIXES` rejection and the permission-dispatch plan stay
-  054-local (Decision 2).
-- **Aggregation child scoping** — card 056, amended to consume `EdgeScope`.
-- **Optimizer explain over an operation plan map** — card 062.
-- **Adversarial graph suite** — card 066.
+  055-local (Decision 2).
+- **Aggregation child scoping** — card 057, amended to consume `EdgeScope`.
+- **Optimizer explain over an operation plan map** — card 063.
+- **Adversarial graph suite** — card 067.
 - **Per-event subscription memo scope** — deferred with an explicit
   invalidation-rule requirement (Decision 3).
 - **Optional PostgreSQL repeatable-read snapshot policy** — R11;
@@ -1250,51 +1250,51 @@ version quintet stay untouched (Decision 10).
 - [ ] 100% package coverage; live-first placement respected; ruff +
   trailing-comma + pre-commit clean; tracked-path constants regenerated.
 - [ ] TREE/GLOSSARY/test_query README updated; card amendments recorded;
-  card 068 flipped; version quintet and CHANGELOG untouched (Decision 10).
+  card 053 flipped; version quintet and CHANGELOG untouched (Decision 10).
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-get_child_queryset]: GLOSSARY.md#get_child_queryset
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-relatedaggregate]: GLOSSARY.md#relatedaggregate
-[glossary-relatedfilter]: GLOSSARY.md#relatedfilter
-[glossary-request_from_info]: GLOSSARY.md#request_from_info
-[glossary-sealed-execution-queryset]: GLOSSARY.md#sealed-execution-queryset
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
-[row-preserving-pg]: row-preserving-predicates-part1-pg-explain.md
+[glossary]: ../GLOSSARY.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get_child_queryset]: ../GLOSSARY.md#get_child_queryset
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metarelation_shapes]: ../GLOSSARY.md#metarelation_shapes
+[glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-relatedaggregate]: ../GLOSSARY.md#relatedaggregate
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
+[glossary-request_from_info]: ../GLOSSARY.md#request_from_info
+[glossary-sealed-execution-queryset]: ../GLOSSARY.md#sealed-execution-queryset
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-visibility-boundary]: ../GLOSSARY.md#visibility-boundary
+[row-preserving-pg]: ../row-preserving-predicates-part1-pg-explain.md
 
 <!-- docs/SPECS/ -->
-[spec-053]: SPECS/spec-053-fieldset-0_1_1.md
-[spec-054]: SPECS/spec-054-search_fields-0_1_2.md
+[spec-054]: spec-054-fieldset-0_1_1.md
+[spec-055]: spec-055-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

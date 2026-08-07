@@ -2623,7 +2623,7 @@ against a real ASGI-request prototype rather than prose:
 - **Fakeshop opting into the extension** (and replacing the probe URLconf
   with the shipped URLconf in the existing live tests) — the
   fakeshop-activation beta card
-  ([`TODO-BETA-060-0.1.5`][kanban]) is the natural host
+  ([`TODO-BETA-061-0.1.5`][kanban]) is the natural host
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - **Production-gating knobs** (enable predicates, slow-query thresholds,
   row caps, redaction) — follow-on once a consumer asks

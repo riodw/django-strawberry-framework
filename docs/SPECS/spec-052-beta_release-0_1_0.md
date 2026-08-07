@@ -293,7 +293,7 @@ to happen once, in order, with evidence.
   discovered mid-verification that needs code gets its own card
   ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
 - **No API freeze.** Strict SemVer begins at `1.0.0`
-  (`TODO-STABLE-067-1.0.0`), not here. Beta may still break pre-`1.0`
+  (`TODO-STABLE-068-1.0.0`), not here. Beta may still break pre-`1.0`
   contracts with documented migrations, exactly as alpha did.
 - **No beta-line feature pull-forward.** [`FieldSet`][glossary-fieldset] /
   [`Meta.fields_class`][glossary-metafields_class] (`0.1.1`),
@@ -303,7 +303,7 @@ to happen once, in order, with evidence.
   [`Meta.choice_enum_names`][glossary-metachoice_enum_names] (`0.1.4`) stay
   `planned`; the doc flips must not soften their status.
 - **No migration-guide authoring.** Migration and adoption guides are
-  `TODO-BETA-065-0.1.7`.
+  `TODO-BETA-066-0.1.7`.
 - **No CI matrix redesign.** The matrix is exercised as it exists; adding
   rows or version floors is not this card.
 
@@ -691,7 +691,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   fakeshop activation + Layer-3 HTTP tests + optimizer explain mode
   (`0.1.5`), mutation idempotency + the filter-key namespace (`0.1.6`),
   and migration guides + the adversarial suite (`0.1.7`).
-- The API freeze and stable cut-over — `TODO-STABLE-067-1.0.0`.
+- The API freeze and stable cut-over — `TODO-STABLE-068-1.0.0`.
 - Release-pipeline automation (CI-driven tag/publish) — raised and rejected
   in Decision 8; a future card if the beta cadence warrants it.
 - The [Cross-subsystem invariants][glossary-cross-subsystem-invariants]

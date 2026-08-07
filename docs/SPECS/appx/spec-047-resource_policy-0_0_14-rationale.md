@@ -25,7 +25,7 @@ nowhere else.
   the DoD are all contract. So are three passages that read like deliberation and are not:
   Decision 3's two contractual consequences (structural depth, and leaving a malformed document
   to the real parser), Decision 6's ordering constraint against the visibility hook, and the
-  whole of Decision 13 — whose owed-work entries and audited exclusions are instructions to a
+  whole of Decision 13 — whose boundary entries and audited exclusions are instructions to a
   future builder ("must not be re-derived", "a later pass must not fix"), not a record of
   thinking. Only Decision 13's upstream forensics moved.
 
@@ -124,9 +124,18 @@ meta-fields now resolve to graphql-core's own `SchemaMetaFieldDef` / `TypeMetaFi
 ### Decision 13 was written after the release
 
 The remediation round's deferral catalog was folded into the spec as Decision 13 a day after the
-release commit. It is the only substantive post-release edit to the spec, and it is purely
-additive: three owed bounds with named seams, three audited exclusions a later pass must not
-"fix", and the five carried-forward Definition-of-done boxes.
+release commit — the only substantive post-release edit to the spec, and purely additive: three
+bounds with named seams, three audited exclusions a later pass must not "fix", and the
+carried-forward Definition-of-done boxes that tracked the first three.
+
+Those boxes are gone, and the decision no longer calls the three bounds owed. A spec whose
+`Status:` line says shipped cannot also hold unticked work: the boxes were a promise the card
+had already stopped being able to keep, and every one of the three is a transport-adjacent bound
+this walker is the wrong layer to carry — none could be discharged by editing this spec. They are
+scope on card `TODO-ALPHA-051-0.0.20` instead, which is where the request-body cap's layer and
+the boundary-hardening work already live. Decision 13 keeps the full technical statement of each,
+because *where the bound does not reach* is contract a consumer needs; what it no longer claims is
+that this card still owes it.
 
 ## Decision entries
 

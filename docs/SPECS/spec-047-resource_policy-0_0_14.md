@@ -648,12 +648,14 @@ therefore owns the documentation fold-in only.
 *This decision originally claimed a `0.0.16` cut of its own. What it claimed, and why an
 authoring-time board scan could not have known better, is in the [rationale][rationale].*
 
-### Decision 13 — Three bounds this policy still owes, and three exclusions that are audited rather than forgotten
+### Decision 13 — What this policy does not bound, and why each boundary is deliberate
 
-**Decision.** The bounds below are not oversights and must not be re-derived. Three are **owed
-work** with a named seam; three are **audited exclusions** that a later pass must not "fix".
+**Decision.** The six boundaries below are not oversights and must not be re-derived. Three are
+transport-adjacent bounds this walker is the wrong layer to carry, and they are carried as scope
+on card `TODO-ALPHA-051-0.0.20`; three are audited exclusions that a later pass must not "fix".
+Each is a boundary of the shipped contract rather than a gap in it.
 
-**Owed — a package-owned subscription rejection envelope.** Enforcement is not the gap;
+**Not this layer — a package-owned subscription rejection envelope.** Enforcement is not the gap;
 **rendering** is. A subscription enters `extensions_runner.operation()` and `executing()` exactly
 as a query does, so both the document text scan and the value walk *do* run and a violating
 subscription *is* refused. What differs is what the client sees: upstream's non-streaming path
@@ -674,14 +676,14 @@ Closing this means owning an error envelope for a transport whose lifecycle is u
 is why [Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation) states
 the boundary rather than claiming parity it does not have.
 
-**Owed — transport-level upload charging.** Uploads are charged post-materialization, which
+**Not this layer — transport-level upload charging.** Uploads are charged post-materialization, which
 [Goals](#goals) 2 already narrows to "before any resolver, serializer, validator or storage
 backend touches the files". Charging *earlier* is a transport concern: Django's upload handlers
 have already streamed a multipart body by the time coerced values exist, so the seam is a
 package-owned upload handler or streaming body reader, alongside
 [`spec-046`][spec-046]'s request-body cap rather than inside this walker.
 
-**Owed — a configured bound on numeric literal size.** CPython's
+**Not this layer — a configured bound on numeric literal size.** CPython's
 `sys.get_int_max_str_digits` (4,300) raises during JSON parsing or graphql-core's literal
 coercion, so an enormous integer literal *is* refused — but as a malformed-input failure, not as
 a typed resource rejection carrying this policy's code. A configured bound means a pre-coercion
@@ -946,19 +948,6 @@ is in the [rationale][rationale].*
 - [x] The deliberative layer is extracted to
       [`spec-047-resource_policy-0_0_14-rationale.md`][rationale], and every decision the
       release falsified states the corrected contract directly rather than its own history.
-
-Carried forward, unticked because they are owed rather than shipped
-([Decision 13](#decision-13--three-bounds-this-policy-still-owes-and-three-exclusions-that-are-audited-rather-than-forgotten)):
-
-- [ ] A rejected **subscription** carries `extensions.code == "RESOURCE_LIMIT_EXCEEDED"` to the
-      client on both WebSocket protocols, instead of closing with `complete` after the handler
-      logs the escaping exception. The enforcement already happens; only the envelope is missing.
-- [ ] Upload bytes are charged before Django's upload handlers stream the body, through a
-      package-owned upload handler or streaming body reader, so the bound stops being
-      post-materialization.
-- [ ] An oversized numeric literal is refused as a typed resource rejection carrying this
-      policy's code rather than as a malformed-input failure from
-      `sys.get_int_max_str_digits`.
 
 <!-- LINK DEFINITIONS -->
 

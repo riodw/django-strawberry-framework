@@ -96,7 +96,7 @@ A quick summary:
 
 **Shipped today** (`0.0.14`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
-- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, choice enums; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects — `name` / `size` / `url`, plus `width` / `height` on images, with the server's absolute filesystem path deliberately absent from the default and available per column through `Meta.filesystem_path_fields` — nullable by default, so an empty stored file resolves to `null` regardless of the column's `null` / `blank` — with the filter / scalar-input value staying `str`)
+- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, choice enums; `DurationField` and `BinaryField` are deliberately absent from the default map and raise `ConfigurationError` until a consumer registers a scalar — see [`GLOSSARY.md#scalar-field-conversion`][glossary-scalar-field-conversion]; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects — `name` / `size` / `url`, plus `width` / `height` on images, with the server's absolute filesystem path deliberately absent from the default and available per column through `Meta.filesystem_path_fields` — nullable by default, so an empty stored file resolves to `null` regardless of the column's `null` / `blank` — with the filter / scalar-input value staying `str`)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
 - relation conversion (forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M)
 - `Meta.interfaces = (relay.Node,)` for Relay-node-shaped types with `id: GlobalID!`
@@ -974,6 +974,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-orderset]: GLOSSARY.md#orderset
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
+[glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 [glossary-serializermutation]: GLOSSARY.md#serializermutation
 [glossary-testclient]: GLOSSARY.md#testclient

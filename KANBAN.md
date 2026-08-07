@@ -280,6 +280,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 - Do not consolidate the `SERVER_NAME` / `SERVER_PORT` repetition in `consumers.py::_host_validation_request`. It mirrors `django/core/handlers/asgi.py::ASGIRequest.__init__`'s own if/else item for item, and that mirror is what the projection's oracle row asserts against. Examined and rejected, twice.
 - Do not give the cross-tree test helpers (`_capped_view`, `_strawberry_patch_opted_out`, `_multipart_body` / `_multipart_bytes`) a shared home. No shared home exists between the package tier and the fakeshop live tier, creating one means adding an `__init__.py` to a test tree that deliberately has none, and the duplication is the cheaper trade. Ruled and re-ruled; do not re-raise per helper.
+- Examined and explicitly not a defect: `filters/sets.py`'s `models.DurationField -> DurationFilter` row. It reads as contradicting the consumer docs, which say `DurationField` is absent from `types/converters.py::SCALAR_MAP` and raises `ConfigurationError` at type creation. The row is a deliberate mirror of django-filter's own table and becomes reachable exactly when a consumer registers the `SCALAR_MAP` entry the corrected docs tell them to register. Do not re-flag it on a DRY sweep.
 
 #### Card references
 
@@ -305,6 +306,8 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - `spec-048-secure_output_defaults-0_0_14.md` has no `-rationale.md` companion in `docs/SPECS/appx/`, where 044, 045, 046 and 047 all do. Decide whether the rationale companion is required for every spec or only where a cycle produced one, and make `docs/SPECS/appx/` consistent either way.
 - `README.md:62`'s `0.0.14` paragraph describes `main`'s router shape inside the released version's sentence. Chosen framing on record: lead with the marker, the shape `docs/README.md:128` and `TODAY.md:384` already use.
 - `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
+- Promote a spec/rationale consistency checker into `scripts/`. Nothing there matches `link|anchor|overlap` today, so every documentation pass hand-writes its own. The checks each spec-plus-rationale pair owes: link scaffold (defs / uses / undefined / orphan), the 10 canonical group headers in positional order, alphabetical order within group, on-disk resolution of every def target with the fragment stripped and URLs excluded, in-page anchors slugged by a markup-rendering slugger, an inline cross-file-link sweep, a rule-27 raw `path:NN` sweep, and a maximal-shared-shingle scan - the only thing that turns "it was a move, not a copy" into a measurement.
+- `docs/SPECS/spec-002-optimizer-0_0_2.md` carries four status-shaped sections: `## Current state`, `## Shipped slices`, `## Visibility status`, `## Open questions`. All four are accurate at HEAD today, so nothing is wrong now - the deferral is the standing-promise shape itself, which spec-001 retired by retitling `## Current state` to `## Prior art` on the reasoning that a section named for the present is a promise no shipped spec can keep. Nothing anywhere cites spec-002 by `#anchor`, so retitling breaks no link, but `spec-003-optimizer_nested_prefetch_chains-0_0_2.md` names those sections in prose.
 
 #### Definition of done
 
@@ -1129,6 +1132,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - Add a row distinguishing `consumers.py::_attempt_close`'s `ABANDONED` record from `settle`'s cancel-and-await. The two boundaries are currently jointly pinned - the same pair of rows fails for either mutation - so neither is independently proven.
 - `tests/test_views.py::_strawberry_patch_opted_out` lacks the live copy's `assert strawberry_patches._patch_is_installed() is False`, so nothing pins that the package-tier simulation really un-installed the patch.
 - Re-anchor failability manifest entry 6 onto the middleware-ordering audit's decision expression rather than its initialization line, if the manifest is ever re-derived. Anchoring an aggregate inside the guard under test is the trap: one measured attempt reported four rows rather than zero, which would have passed the acceptance rule while measuring a third of its boundary. A zero gets graded; a plausible count gets graded by nobody.
+- Pin `optimizer/hints.py::OptimizerHint.prefetch`'s interaction with a target type's custom `get_queryset`. A consumer-supplied `Prefetch` is used verbatim, so the hinted child queryset bypasses `utils/querysets.py::apply_type_visibility_sync` - deliberate, per `optimizer/walker.py::_apply_hint`, and unpinned in either direction (`tests/optimizer/test_hints.py` contains no `get_queryset` occurrence). An unpinned deliberate divergence on a data-isolation path is indistinguishable from a bug to the next reader, and is exactly what a future refactor can "fix" silently. Two rows close it, one a positive control.
 
 #### Definition of done
 

@@ -76,18 +76,28 @@ REF_TARGET_GLOSSARY_ANCHOR = re.compile(r"GLOSSARY\.md#(\S+)")
 DOCS_GROUP_HEADER = "<!-- docs/ -->"
 # Subfolder holding an archived spec's companion files, beside the archived spec
 COMPANION_DIRNAME = "appx"
+# A heading that is itself a link slugs from its visible text, so both link
+# forms are rendered down to that text before the heading is slugged.
+HEADING_INLINE_LINK = re.compile(r"\[([^\[\]]*)\]\([^()]*\)")
+HEADING_REFERENCE_LINK = re.compile(r"\[([^\[\]]*)\]\[[^\[\]]*\]")
 
 
 def github_anchor(heading: str) -> str:
     """Approximate GitHub's H2 auto-anchor slugger for ``docs/GLOSSARY.md``.
 
-    Drops backticks, lowercases, strips non-word characters other than
+    Renders both markdown link forms down to their visible text, drops
+    backticks, lowercases, strips non-word characters other than
     whitespace and hyphens, then collapses whitespace runs to single
     hyphens. Underscores and existing hyphens are preserved. Matches the
     anchor form GitHub renders for headings like ``## `Meta.primary``` ->
-    ``metaprimary`` and ``## Relation handling`` -> ``relation-handling``.
+    ``metaprimary``, ``## Relation handling`` -> ``relation-handling``,
+    and ``## [Scalar field conversion][glossary-scalar-field-conversion]``
+    -> ``scalar-field-conversion``. Slugging the raw markup instead would
+    fold the link target into the anchor, which matches no rendered page.
     """
-    text = heading.replace("`", "").lower()
+    text = HEADING_INLINE_LINK.sub(r"\1", heading)
+    text = HEADING_REFERENCE_LINK.sub(r"\1", text)
+    text = text.replace("`", "").lower()
     text = re.sub(r"[^\w\s\-]", "", text)
     return re.sub(r"\s+", "-", text.strip())
 

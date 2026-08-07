@@ -6,7 +6,7 @@ This parent spec records the optimizer architecture and the shipped foundation s
 O4 was extracted out of this document during implementation. The O4 design record remains in `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md`; keep detailed O4 rationale there rather than duplicating it here.
 
 ## Problem statement
-`spec-001-django_types-0_0_1.md` predicted that the optimizer half of its scope would eventually warrant its own document; running the early DjangoType slice tests confirmed it. Two concrete failures pushed the optimizer story into its own subsystem:
+`spec-001-django_types-0_0_1.md` predicted that the optimizer half of its scope would eventually warrant its own document; running the early DjangoType slice tests confirmed it. That prediction is recorded in `docs/SPECS/appx/spec-001-django_types-0_0_1-rationale.md`. Two concrete failures pushed the optimizer story into its own subsystem:
 
 - Reverse relations exposed by [`DjangoType`][glossary-djangotype] need generated resolvers because Strawberry's default resolver returns a Django `RelatedManager`, which is not directly iterable.
 - Query planning needs to run from the operation root so the optimizer can inspect the GraphQL selection tree before relation resolvers evaluate model attributes.
@@ -69,7 +69,7 @@ Custom resolver opt-out: consumers should eventually be able to override generat
 `only()` opt-out per consumer field: strawberry-graphql-django ships `disable_optimization=True` on individual fields. A similar flag should be considered in a future optimizer-control spec.
 
 ## References
-graphene-django relation resolver wrap: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py:308-471`.
+graphene-django relation resolver wrap: the three relation converters registered on `graphene_django/converter.py::convert_django_field` - `::convert_onetoone_field_to_djangomodel`, `::convert_field_to_list_or_connection`, and `::convert_field_to_djangomodel`.
 
 graphene-django-optimizer top-level walk: `https://github.com/tfoxy/graphene-django-optimizer`.
 

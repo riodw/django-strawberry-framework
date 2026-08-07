@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-06
+Last refreshed: 2026-08-07
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,11 +81,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**71.6% complete** toward `1.0.0` - 48 of 67 cards done (72.7% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**73.1% complete** toward `1.0.0` - 49 of 67 cards done (74.1% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 48/52 (92.3%) | 91.4% |
+| Alpha (pre-0.1.0) | 49/52 (94.2%) | 93.3% |
 | Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
@@ -95,7 +95,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | No dedicated spec |
+| `DONE-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | [spec-049-dependency_ci_hardening-0_0_14.md](docs/spec-049-dependency_ci_hardening-0_0_14.md) |
 | `DONE-048-0.0.14` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md) |
 | `DONE-047-0.0.14` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md) |
 | `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md) |
@@ -147,68 +147,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
-### [WIP-ALPHA-049-0.0.14 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
-
-- Priority: High
-- Status: WIP
-- Relative size: M
-
-#### Planning note
-
-Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
-
-#### Dependencies
-
-- `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
-
-#### Scope
-
-- uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
-- Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
-- .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
-- Slice 5 doc fold-in is outstanding and entirely DB-side: the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
-- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_14.md` (still unarchived, the only spec left in `docs/`), then re-render.
-- `README.md`, `docs/README.md` and `TODAY.md` prose are hand-edited and were left for this card's DB-regeneration pass rather than done piecemeal.
-
-#### Definition of done
-
-- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
-- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
-
-#### Architectural posture
-
-- Refresh uv.lock to at least Django 5.2.16 and 6.0.7 for their respective Python markers. KEEP the exact Django 5.2.0 compatibility CI cell but label it compatibility-only and never use it for deployment examples or security assertions -- compatibility support and secure-deployment support are different contracts.
-- Add an automated dependency audit on pull requests and a scheduled run (audit the production resolution + optional extras; handle the intentional 5.2.0 compatibility environment separately); add automated update coverage for Python dependencies and GitHub Actions. State that production users must install the newest patch in their supported Django series; the Django>=5.2 floor is not a secure-version recommendation.
-- CI least privilege: top-level permissions: contents: read, with only the exact additional grant to the one step/job that needs it; persist-credentials: false on every non-pushing checkout; pin every action to a reviewed full commit SHA (keep the readable version comment); pin the Postgres image by digest; add timeout-minutes to every networked/test job.
-
-#### Why it matters
-
-- S6 (High): uv.lock resolves Django 5.2.14 (py<3.12) and 6.0.5 (py>=3.12), but the Django project shipped security releases 5.2.16 and 6.0.7 (CVE-2026-48588, a shared-cache private-data exposure) plus 5.2.15/6.0.6 fixing five more issues in the currently locked versions. No dependency-audit command, scheduled security workflow, or update configuration exists.
-- S7 (Medium): the test job grants contents: write though only the Coveralls upload consumes the token (which does not need repo-write); checkout persists its credential by default; first-party actions use mutable major tags and Postgres uses postgres:16; networked/test jobs have no timeout-minutes.
-
-#### Dependencies
-
-- Sequenced behind card 046 in the staged security program; S6 independently urgent.
-
-#### Test plan
-
-- The dependency audit runs on the production resolution + extras and handles the 5.2.0 environment separately; the refreshed lock still resolves the whole matrix.
-- CI permission and pin assertions where mechanically testable; the exact 5.2.0 compatibility cell still proves API compatibility with the advertised floor.
-
-#### Open question
-
-- pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
-- Repository-level default token permissions (spec-049 Decision 3) is a GitHub settings change, not a file in the tree - maintainer action, and nothing in a build can verify it.
-- `osv-scanner`'s inner image tag stays mutable (spec-049 Decision 4); pinning it would need a fork. Recorded in the spec's risks rather than fixed.
-- The workflow `timeout-minutes` values are estimates, not measured p95s (spec-049 Decision 7).
-- `CHANGELOG.md` carries no `0.0.14` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so the patch version this card and its three program siblings target has no release entry.
-
-#### Card references
-
-- Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
 
 ## To Do - Alpha (0.1.0)
 
@@ -1277,6 +1216,79 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 ## Done
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
+
+<a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
+### [DONE-049-0.0.14 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
+
+- Priority: High
+- Status: Done
+- Relative size: M
+- Spec: [spec-049-dependency_ci_hardening-0_0_14.md](docs/spec-049-dependency_ci_hardening-0_0_14.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
+| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
+| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
+| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
+
+#### Planning note
+
+Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
+
+#### Dependencies
+
+- `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
+
+#### Scope
+
+- uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
+- Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
+- .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
+- Slice 5 doc fold-in is outstanding and entirely DB-side: the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
+- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_14.md` (still unarchived, the only spec left in `docs/`), then re-render.
+- `README.md`, `docs/README.md` and `TODAY.md` prose are hand-edited and were left for this card's DB-regeneration pass rather than done piecemeal.
+
+#### Definition of done
+
+- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
+- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
+
+#### Architectural posture
+
+- Refresh uv.lock to at least Django 5.2.16 and 6.0.7 for their respective Python markers. KEEP the exact Django 5.2.0 compatibility CI cell but label it compatibility-only and never use it for deployment examples or security assertions -- compatibility support and secure-deployment support are different contracts.
+- Add an automated dependency audit on pull requests and a scheduled run (audit the production resolution + optional extras; handle the intentional 5.2.0 compatibility environment separately); add automated update coverage for Python dependencies and GitHub Actions. State that production users must install the newest patch in their supported Django series; the Django>=5.2 floor is not a secure-version recommendation.
+- CI least privilege: top-level permissions: contents: read, with only the exact additional grant to the one step/job that needs it; persist-credentials: false on every non-pushing checkout; pin every action to a reviewed full commit SHA (keep the readable version comment); pin the Postgres image by digest; add timeout-minutes to every networked/test job.
+
+#### Why it matters
+
+- S6 (High): uv.lock resolves Django 5.2.14 (py<3.12) and 6.0.5 (py>=3.12), but the Django project shipped security releases 5.2.16 and 6.0.7 (CVE-2026-48588, a shared-cache private-data exposure) plus 5.2.15/6.0.6 fixing five more issues in the currently locked versions. No dependency-audit command, scheduled security workflow, or update configuration exists.
+- S7 (Medium): the test job grants contents: write though only the Coveralls upload consumes the token (which does not need repo-write); checkout persists its credential by default; first-party actions use mutable major tags and Postgres uses postgres:16; networked/test jobs have no timeout-minutes.
+
+#### Dependencies
+
+- Sequenced behind card 046 in the staged security program; S6 independently urgent.
+
+#### Test plan
+
+- The dependency audit runs on the production resolution + extras and handles the 5.2.0 environment separately; the refreshed lock still resolves the whole matrix.
+- CI permission and pin assertions where mechanically testable; the exact 5.2.0 compatibility cell still proves API compatibility with the advertised floor.
+
+#### Open question
+
+- pip-audit vs safety vs osv for the audit step, and dependabot vs a scheduled uv upgrade job: the spec picks concrete tooling.
+- Repository-level default token permissions (spec-049 Decision 3) is a GitHub settings change, not a file in the tree - maintainer action, and nothing in a build can verify it.
+- `osv-scanner`'s inner image tag stays mutable (spec-049 Decision 4); pinning it would need a fork. Recorded in the spec's risks rather than fixed.
+- The workflow `timeout-minutes` values are estimates, not measured p95s (spec-049 Decision 7).
+- `CHANGELOG.md` carries no `0.0.14` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so the patch version this card and its three program siblings target has no release entry.
+
+#### Card references
+
+- Dependency: Sequenced behind card 046 in the staged security program; S6 independently urgent. -> `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation
 
 <a id="secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy"></a>
 ### [DONE-048-0.0.14 - Secure output and error defaults: drop file path, fail-closed debug, prod error policy](KANBAN.html#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy)

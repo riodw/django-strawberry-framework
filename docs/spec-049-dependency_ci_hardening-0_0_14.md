@@ -66,14 +66,11 @@ package *does*, and this one changes what the project *ships and proves* — a d
 worth keeping visible, because a governance card that quietly grows a source diff is a
 governance card nobody can review.
 
-Status: **BUILT — all five slices are built.**
-Slice 1 (**S6** — the lock refresh), Slice 2 (**S7** — least-privilege permissions,
-`persist-credentials`, immutable pins, timeouts), Slice 3 (**S6** — the audit workflow and
-the Dependabot configuration), Slice 4 (the governance test), Slice 5 (docs fold-in).
-The Slice checklist boxes below stay unticked because the `Status:` line
-is the completion source of truth (the shipped-spec convention). The work is built but
-**uncommitted** on the working tree, and `CHANGELOG.md` carries no `0.0.14` entry —
-[`AGENTS.md`][agents] reserves that entry for the maintainer.
+Status: **SHIPPED — all five slices are built and released.** The `Status:` line is the
+completion source of truth (the shipped-spec convention); the Slice checklist boxes below
+stay unticked. Card [`DONE-049-0.0.14`][kanban] closes the four-card security-remediation
+program. `CHANGELOG.md` carries no `0.0.14` entry — [`AGENTS.md`][agents] reserves that
+entry for the maintainer.
 
 **Version boundary** (see
 [Decision 10](#decision-10--the-version-bump-belongs-to-the-0014-joint-cut)):
@@ -123,6 +120,12 @@ Each top-level item maps to one commit / PR.
       (`>= '3.12'`), and moves `cryptography` and `pillow` off the versions the audit
       flags. `pyproject.toml` dependency floors are untouched
       ([Decision 1](#decision-1--the-lock-moves-the-declared-floors-do-not)).
+      **Amendment (2026-08-06):** the lock tracks the top of the AUDITED range, not a
+      version frozen at authoring time, because an unpinned CI node resolves from the lock
+      and a stale one turns every such node into a second floor run — leaving the
+      top-of-range tripwires silent on a green board. Django 6.1 was audited and supported
+      the same day it broke the unbounded range, so the lock now reads `5.2.17` / `6.1`.
+      The declared floors still do not move.
 - [ ] **Slice 2 — least-privilege CI**
       `.github/workflows/django.yml`, `postgres.yml`, `kanban-pages.yml`: top-level
       `permissions: contents: read`, the test job's `contents: write` deleted,

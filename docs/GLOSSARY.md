@@ -1033,6 +1033,8 @@ The `graphene-django`-shaped unittest family: `GraphQLTestMixin` (the reusable m
 
 A package installed unconditionally with `django-strawberry-framework`, so package code may import it without an optional-import guard or install hint. Django and `strawberry-graphql` are hard dependencies. Spec 044 adds no dependency: `SchemaExtension` comes from the existing Strawberry requirement and SQL capture comes from Django; it only raises the Strawberry version floor for [Per-operation extension isolation](#per-operation-extension-isolation). This is the opposite of a [Soft dependency](#soft-dependency), whose feature boundary must remain import-clean when the extra is absent.
 
+A hard dependency's declared FLOOR is an API-compatibility bound frozen at release time, never a secure-version recommendation. `pyproject.toml` declares `Django>=5.2.16` and `strawberry-graphql>=0.316.0`; a deployment installs the newest patch in whichever supported series it runs (`5.2.x`, `6.0.x`, or `6.1.x` for Django), which moves past any floor a release can encode. The floors are deliberately open-ended at the top for the same reason, so the version a consumer resolves is never the one this project happens to have installed - which is why an upstream seam is audited across every published wheel from the floor to the newest release rather than against the local environment.
+
 **See also:** [Soft dependency](#soft-dependency) · [`require_optional_module`](#require_optional_module) · [Per-operation extension isolation](#per-operation-extension-isolation).
 
 ## Input type generation

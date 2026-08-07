@@ -33,6 +33,9 @@ it. Text marked *Moved* below was cut out of the spec, not copied: it exists her
   (`## Provenance of the reconciliation record`) is the one that read HEAD and decided which of those
   claims still hold. Where the two disagree about a claim's status, the reconciliation pass is
   current.
+- **Read `## Standing notes` before editing the spec.** It records one deliberate gap (the terms
+  CSV stands at three anchors) and three wordings that read as defects and are not. All four are
+  decisions already taken, and all four are things a passing sweep would otherwise "correct".
 - **This spec is the parent of an optimizer family.** `spec-003` (nested prefetch chains),
   `spec-004` (optimizer beyond), and the later `spec-033` / `spec-035` optimizer specs own the
   detail. Deliberation belonging to one of those documents is not duplicated here.
@@ -444,6 +447,54 @@ That the many-side returns `list(manager.all())` unconditionally. That `plan_opt
 three parameters. That a symbol named `_optimizer_field_map` exists. That the context stash is for
 introspection. That column projection applies to every operation. That the planner invokes a target's
 `get_queryset` directly.
+
+## Standing notes — deliberate gaps, and wordings not to "fix"
+
+Neither of these is a deferral. They are the reverse: decisions already taken, recorded here because
+a do-not-touch note is worth nothing in a place nobody reads before editing. Anyone opening
+[the spec][spec-002] to correct something should read this section first.
+
+### The terms CSV stands at three anchors, and four unlinked terms are deliberate
+
+`spec-002-optimizer-0_0_2-terms.csv` carries three data rows and three distinct anchors, each
+carried by exactly one link in the spec body. Four further glossary-backed terms are named in that
+body **without** a link: `DjangoConnectionField` (in `## Architecture decision`),
+`finalize_django_types` and FK-id elision (both in `### O1`), and the visibility boundary (in
+`### O6`).
+
+That gap is not an oversight. `AGENTS.md` rule 26 gives glossary fold-in to the **completing spec's
+shipping slice**, and this spec's shipping slice closed at `0.0.2`; a later pass that adds a link
+without owning the fold-in desynchronizes the CSV from the board. Reopening therefore requires a
+cycle that owns both this spec's body **and** card 2's board record — not a documentation sweep that
+happens to be passing through.
+
+If such a cycle does open, the order is mechanical and worth not re-deriving: add the link to the
+spec body first, then the CSV row, then run `check_spec_glossary` and `import_spec_terms --check`
+together (the first validates the pair, the second validates every done card's links, so a green
+first command is not sufficient), and only then re-render `KANBAN.md`. Adding the CSV row before the
+body link fails `check_spec_glossary` on an anchor nothing carries.
+
+### Three wordings that look like defects and are not
+
+Each was examined and deliberately left. A later reader is likely to reach for the same three.
+
+*The repeated `when` in `## Architecture decision`* — "must return correct results **when** the
+optimizer is disabled **and when** a relation is not already loaded". The repetition is the
+disambiguator: it distributes the obligation across two independent conditions rather than one
+conjunction of them. Collapsing it to a single `when` silently narrows the contract to the case
+where both hold at once.
+
+*"Where one of them changed how one of the slices below behaves" in `## Purpose`* — the only
+before-implying verb in the reconciled spec, and the one thing a chronology sweep will flag. It
+survives because the change it describes is a **sibling spec changing package behavior**, not this
+document changing its own text. The rule forbids a spec narrating its own revision history; it does
+not forbid stating that another spec moved a contract.
+
+*The rationale pointer appears three times, not five* — in `## Purpose`, `## Problem statement`, and
+`## Architecture decision`. A literal reading of the per-section pointer convention yields five. On a
+document this short, five would make the pointer the loudest recurring element in three consecutive
+sections and would crowd out the contract it is annotating. Three was chosen for that reason; do not
+"complete" the set.
 
 <!-- LINK DEFINITIONS -->
 

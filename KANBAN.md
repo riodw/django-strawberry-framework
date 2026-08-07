@@ -95,7 +95,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | [spec-049-dependency_ci_hardening-0_0_14.md](docs/spec-049-dependency_ci_hardening-0_0_14.md) |
+| `DONE-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | [spec-049-dependency_ci_hardening-0_0_14.md](docs/SPECS/spec-049-dependency_ci_hardening-0_0_14.md) |
 | `DONE-048-0.0.14` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md) |
 | `DONE-047-0.0.14` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md) |
 | `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md) |
@@ -237,6 +237,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - `conf.py`'s `MAX_REQUEST_BODY_BYTES` docstring carries the clause "EXCEPT for a multipart request" without saying that the multipart carve-out is POST-scoped. A multipart content type on any other method is counted like any other body, which is the stricter direction and what the other four surfaces of this wording already say. Grep `POST-scoped` over `conf.py` to confirm it is still open.
 - `auth/mutations.py` carries repeated literals - `password` seven times, `register` four, `current_user` three. Pre-existing rather than introduced by the transport work, which is why it was never folded into a security pass.
 - The DRY `parse_json` note attributes `_validate_upstream_shape` to "the upstream-mounted path". That gate decides whether the patch installs at all, for **every** mount, so pairing it with the genuinely path-scoped `UnicodeDecodeError` translation under one prepositional phrase is loose. It makes no "only mount" claim, so nothing is false - it is imprecise, and it is the shape a stricter reviewer will raise.
+- The `_optimizer_field_map` rename left four live-code sites naming a symbol the package no longer defines. It has zero occurrences in `django_strawberry_framework/`; the walker reads `DjangoTypeDefinition.field_map` through `optimizer/walker.py::_resolve_field_map`. The sites: `tests/optimizer/test_field_meta.py:322` `::test_optimizer_field_map_populated`, `:339` `::test_optimizer_field_map_contains_relations`, `:362` `::test_optimizer_field_map_respects_fields_filter`, and the token in `scripts/review_inspect.py:42`. Fold into WP-D's `_resolve_field_map` dual-contract retirement, which already opens both the walker and its tests. The prose survivals in `CHANGELOG.md` / `KANBAN.md` / `spec-010` / `spec-016` are correct as history and are not in the sweep - widening it into a documentation sweep is the error to avoid. A second instance of the same shape is carried by `TODO-ALPHA-052-0.1.0`: `_collect_scalar_only_fields` is likewise absent from the package while `spec-003-optimizer_nested_prefetch_chains-0_0_2.md:27` still names it in the present tense.
 
 #### Definition of done
 
@@ -306,10 +307,12 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - `spec-048-secure_output_defaults-0_0_14.md` has no `-rationale.md` companion in `docs/SPECS/appx/`, where 044, 045, 046 and 047 all do. Decide whether the rationale companion is required for every spec or only where a cycle produced one, and make `docs/SPECS/appx/` consistent either way.
 - `README.md:62`'s `0.0.14` paragraph describes `main`'s router shape inside the released version's sentence. Chosen framing on record: lead with the marker, the shape `docs/README.md:128` and `TODAY.md:384` already use.
 - `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
-- Promote a spec/rationale consistency checker into `scripts/`. Nothing there matches `link|anchor|overlap` today, so every documentation pass hand-writes its own. The checks each spec-plus-rationale pair owes: link scaffold (defs / uses / undefined / orphan), the 10 canonical group headers in positional order, alphabetical order within group, on-disk resolution of every def target with the fragment stripped and URLs excluded, in-page anchors slugged by a markup-rendering slugger, an inline cross-file-link sweep, a rule-27 raw `path:NN` sweep, and a maximal-shared-shingle scan - the only thing that turns "it was a move, not a copy" into a measurement.
+- Promote a spec/rationale consistency checker into `scripts/`. Nothing there matches `link|anchor|overlap` today, so every documentation pass hand-writes its own. The checks each spec-plus-rationale pair owes: link scaffold (defs / uses / undefined / orphan), the 10 canonical group headers in positional order, alphabetical order within group, on-disk resolution of every def target with the fragment stripped and URLs excluded, in-page anchors slugged by a markup-rendering slugger, an inline cross-file-link sweep, a rule-27 raw `path:NN` sweep, and a maximal-shared-shingle scan - the only thing that turns "it was a move, not a copy" into a measurement. Four slugger defects, each measured on an independent hand-roll of this checker, to encode as its regression tests. (a) A heading that is itself a reference link, slugged without rendering the markup out first: the link-definition key survives into the slug, so a correct in-page anchor reports as dangling. (b) Whitespace runs collapsed. GitHub replaces spaces one at a time, so a heading with a double space slugs to a double hyphen; a checker that collapses runs reports a false PASS - the only silent defect of the four, and so the most dangerous to leave unencoded. (c) Code spans deleted rather than masked before reference links are matched. A label spelled as a code span collapses to an empty label, which the usual bracket-capture pattern cannot match; one run reported 3 spec and 12 rationale false orphans from this alone. Mask span content to same-length filler instead, preserving the brackets. (d) `_` stripped as an emphasis marker before slugging. It destroys `django_types`, so the anchor for a heading naming `spec-001-django_types-0_0_1.md` reports unresolved against a correct link definition - a false positive whose natural fix is to corrupt a good link. Defect (d) is the argument for a tool rather than more prose: it was measured, written into a hand-off, and re-introduced from scratch two rounds later by a reader who had that hand-off.
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` carries one status-shaped section left: `## Visibility status`. The spec-002 residual cycle discharged the rest - `## Open questions` and `## Current state` are gone, and `## Shipped slices` and `## Implementation checklist` survive the argument on their merits, since a past-tense fact about what shipped is not a promise about the present. `## Visibility status` stays because two live pointers would break with it. First, `spec-006-public_surface-0_0_3.md` names it **twice** - once as the quoted section title "Visibility status", once as "the local visibility-status amendment" - as the place the optimizer-visibility decision is recorded. Second, the companion `docs/SPECS/appx/spec-002-optimizer-0_0_2-rationale.md` is the only file that cites spec-002 by `#anchor` at all, and one of its link definitions targets `#visibility-status`, so a retitle must re-point that definition in the same change. Retire the heading in the cycle that owns `spec-006`, not this one, and re-point the companion there. `spec-003-optimizer_nested_prefetch_chains-0_0_2.md`'s "current state, visibility status, and checklist" instruction is now stale in wording: it is a discharged when-O4-ships note naming a section that no longer exists.
 - Sweep the dead card id `TODO-BETA-053-0.1.5`, which names nothing: card 053 is now `FieldSet` at 0.1.1 and the likely intended target is `TODO-BETA-060-0.1.5` (same version, same subject). 32 occurrences across 10 files - TODAY.md (3), six archived specs 030/032/033/037/041/042 (26), spec-044 (1), plus `apps/products/schema.py` and `test_query/test_products_api.py` (1 each). One owner, one sweep, or not at all: repointing any single file leaves it disagreeing with nine. Confirm 060 is still the natural host first - its planning note assigns per-subsystem activation to the Layer-3 cards Slice 4.
 - `import_spec_terms::_sync_spec_mentions` orphans GlossarySpecMention rows instead of repointing them: it deletes only rows at the NEW spec_path, never the old one, so every spec archive leaves the pre-archive path rows behind forever. The accumulated orphans have been reaped (0 remain), but the cause is unfixed and the next archive recreates them.
+- `spec-003-optimizer_nested_prefetch_chains-0_0_2.md` is stale at four sites, three of them beyond the one this board already notes. `:4` still says the remaining O-slice is O4, though O4 shipped; the replacement states that O4 is shipped and that its record is this spec's. `:27` publishes `plan_optimizations(selected_fields, model, info=None)` at the pre-reconciliation arity - HEAD adds keyword-only `runtime_prefixes` and `source_type` - and names `_collect_scalar_only_fields` in the present tense, a symbol with zero occurrences in `django_strawberry_framework/`. `:333` is a discharged when-O4-ships instruction naming `## Current state`, a section that no longer exists. `:335` asks a later pass to update the parent spec's older O4 references, which the spec-002 reconciliation did. Do not sweep up `spec-006-public_surface-0_0_3.md:136` and `:147` on the same pass: both name `## Visibility status`, and both are live and correct.
+- `docs/GLOSSARY.md` dates `DjangoOptimizerExtension` and `only()` projection to `0.0.2`, matching card `DONE-002-0.0.2`'s target version, while `CHANGELOG.md`'s `[0.0.2]` entry calls the extension early and depth-1 and its `[0.0.3]` entry dates the end-to-end optimizer surface - selection-tree planning, `select_related`, nested `Prefetch` chains, same-query recursion, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade - to `0.0.3`. Whether a shipped-version stamp names first-shipped or complete is an editorial call about the glossary's dating convention for a subsystem that shipped across two releases, and it is not unilaterally correctable: `GlossaryTerm.body`, the card's target version, the card id, and the spec filename ending `-0_0_2.md` must move together. This card owns the CHANGELOG promotion, so the decision belongs on it.
 
 #### Definition of done
 
@@ -1236,7 +1239,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Priority: High
 - Status: Done
 - Relative size: M
-- Spec: [spec-049-dependency_ci_hardening-0_0_14.md](docs/spec-049-dependency_ci_hardening-0_0_14.md)
+- Spec: [spec-049-dependency_ci_hardening-0_0_14.md](docs/SPECS/spec-049-dependency_ci_hardening-0_0_14.md)
 
 #### Glossary terms
 
@@ -1251,7 +1254,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 #### Planning note
 
-Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is independently time-sensitive and may be expedited at maintainer discretion.
+Security-audit remediation program, card 4 of 4. S6 is independently time-sensitive and may be expedited at maintainer discretion.
 
 #### Dependencies
 
@@ -1262,8 +1265,8 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - uv.lock refresh (>=5.2.16 / >=6.0.7); keep + relabel the 5.2.0 compatibility cell.
 - Dependency-audit + scheduled-security + auto-update workflows (pip-audit/dependabot shape).
 - .github/workflows: least-privilege permissions, persist-credentials, SHA/digest pins, timeouts.
-- Slice 5 doc fold-in is outstanding and entirely DB-side: the secure-version statement is not yet folded into the `Hard dependency` glossary entry. Edit the fakeshop glossary DB and re-render with `scripts/build_glossary_md.py`; never hand-edit the generated file.
-- This card has no `SpecDoc` row, so `KANBAN.md` renders it with no spec link. Create it pointing at `docs/spec-049-dependency_ci_hardening-0_0_14.md` (still unarchived, the only spec left in `docs/`), then re-render.
+- Slice 5 doc fold-in landed DB-side at the release: the `Hard dependency` glossary entry now carries the secure-version statement - a declared floor is an API-compatibility bound frozen at release time, never advice about which version is safe to run - written into the fakeshop glossary DB and re-rendered with `scripts/build_glossary_md.py` rather than hand-edited into the generated file.
+- The card shipped with no `SpecDoc` row, so `KANBAN.md` rendered it without a spec link. The row was seeded at the release, and the spec has since been archived, so the link resolves to `docs/SPECS/spec-049-dependency_ci_hardening-0_0_14.md` with its terms companion under `docs/SPECS/appx/`.
 - `README.md`, `docs/README.md` and `TODAY.md` prose are hand-edited and were left for this card's DB-regeneration pass rather than done piecemeal.
 
 #### Definition of done
@@ -1297,7 +1300,7 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 - Repository-level default token permissions (spec-049 Decision 3) is a GitHub settings change, not a file in the tree - maintainer action, and nothing in a build can verify it.
 - `osv-scanner`'s inner image tag stays mutable (spec-049 Decision 4); pinning it would need a fork. Recorded in the spec's risks rather than fixed.
 - The workflow `timeout-minutes` values are estimates, not measured p95s (spec-049 Decision 7).
-- `CHANGELOG.md` carries no `0.0.14` entry. `AGENTS.md` reserves CHANGELOG to the maintainer, so the patch version this card and its three program siblings target has no release entry.
+- `CHANGELOG.md`'s `0.0.14` entry predates this program: it is dated 2026-07-20 and covers cards `DONE-041` through `DONE-044`, so none of the four security cards that target the same patch version appear in it. `AGENTS.md` reserves `CHANGELOG.md` to the maintainer, so closing that gap is maintainer action rather than a card task.
 
 #### Card references
 
@@ -1371,7 +1374,7 @@ Security-audit remediation program, card 4 of 4 (docs/feedback2.md). S6 is indep
 
 #### Planning note
 
-Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
+Security-audit remediation program, card 3 of 4.
 
 #### Dependencies
 
@@ -1468,7 +1471,7 @@ Security-audit remediation program, card 3 of 4 (docs/feedback2.md).
 
 #### Planning note
 
-Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
+Security-audit remediation program, card 2 of 4.
 
 #### Dependencies
 
@@ -1568,7 +1571,7 @@ Security-audit remediation program, card 2 of 4 (docs/feedback2.md).
 
 #### Planning note
 
-Security-audit remediation program, card 1 of 4 (docs/feedback2.md). Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
+Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
 
 #### Scope
 

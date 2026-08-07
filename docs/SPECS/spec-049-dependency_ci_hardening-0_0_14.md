@@ -863,28 +863,28 @@ never by hand.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[kanban]: ../KANBAN.md
-[security]: ../SECURITY.md
+[agents]: ../../AGENTS.md
+[kanban]: ../../KANBAN.md
+[security]: ../../SECURITY.md
 
 <!-- docs/ -->
-[docs-readme-production-profile]: README.md#production-security-profile
-[feedback2]: feedback2.md
-[glossary]: GLOSSARY.md
-[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
-[glossary-require_optional_module]: GLOSSARY.md#require_optional_module
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
+[docs-readme-production-profile]: ../README.md#production-security-profile
+[feedback2]: ../feedback2.md
+[glossary]: ../GLOSSARY.md
+[glossary-hard-dependency]: ../GLOSSARY.md#hard-dependency
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-per-operation-extension-isolation]: ../GLOSSARY.md#per-operation-extension-isolation
+[glossary-require_optional_module]: ../GLOSSARY.md#require_optional_module
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
 
 <!-- docs/SPECS/ -->
-[spec-046]: SPECS/spec-046-transport_security-0_0_14.md
-[spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
-[spec-048]: SPECS/spec-048-secure_output_defaults-0_0_14.md
+[spec-046]: spec-046-transport_security-0_0_14.md
+[spec-047]: spec-047-resource_policy-0_0_14.md
+[spec-048]: spec-048-secure_output_defaults-0_0_14.md
 
 <!-- docs/builder/ -->
-[bld-049]: builder/bld-049.md
+[bld-049]: ../builder/bld-049.md
 
 <!-- django_strawberry_framework/ -->
 

@@ -9,6 +9,9 @@ exposes absolute server paths), **S8** (the debug extension does not fail closed
 resource policy); card [`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) closes
 the program.
 
+Deliberation, rejected alternatives, and this spec's change record live in its companion
+[`spec-048-secure_output_defaults-0_0_14-rationale.md`][rationale].
+
 **`docs/feedback2.md` is review evidence this spec references, not a substitute for it.**
 The audit established the facts; every decision, default, public-API shape, compatibility
 promise, and test row below is this spec's own.
@@ -20,15 +23,10 @@ The package's documented API freeze begins at `1.0.0`, and cards 046 and 047 bot
 precedent that correcting a confirmed security-boundary default during alpha outranks
 migration convenience.
 
-Status: **BUILT — all five slices are built.** Slice 1 (**S5** — `path` leaves the default file and image outputs for the two
-opt-in sibling types and the `Meta.filesystem_path_fields` per-column declaration),
-Slice 2 (**S8** — the debug extension's `allow_unsafe_production` acknowledgement, its
-`settings.DEBUG` gate, and the bounded payload), Slice 3 (**S10** — `ErrorPolicy`,
-`DjangoErrorPolicyExtension`, and the `DjangoSchema(error_policy=…)` prepend), Slice 4
-(rows across all three test trees), Slice 5 (docs fold-in).
-The Slice checklist boxes below stay unticked because the `Status:` line is the
-completion source of truth (the shipped-spec convention). `CHANGELOG.md` carries no
-`0.0.14` entry — [`AGENTS.md`][agents] reserves that entry for the maintainer.
+Status: **SHIPPED — all five slices are built and released.** The `Status:` line is the
+completion source of truth (the shipped-spec convention); the Slice checklist boxes below
+stay unticked. `CHANGELOG.md` carries no `0.0.14` entry — [`AGENTS.md`][agents] reserves
+that entry for the maintainer.
 
 **Version boundary** (see
 [Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
@@ -108,10 +106,13 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 - [Schema audit][glossary-schema-audit] — the build-time surface audit whose failure
   vocabulary the new `Meta` key's rejections match.
 
-Terms this spec ADDS to the glossary in Slice 5: `Meta.filesystem_path_fields` (the opt-in
-key), `DjangoFilePathType` and `DjangoImagePathType` (the two opt-in output types),
-`ErrorPolicy` (the policy object), `DjangoErrorPolicyExtension` (the masking extension),
-and a fail-closed-gate paragraph folded into the existing
+Terms this spec ADDED to the glossary in Slice 5:
+[`Meta.filesystem_path_fields`][glossary-metafilesystem_path_fields] (the opt-in key),
+[`DjangoFilePathType`][glossary-djangofilepathtype] and
+[`DjangoImagePathType`][glossary-djangoimagepathtype] (the two opt-in output types),
+[`ErrorPolicy`][glossary-errorpolicy] (the policy object),
+[`DjangoErrorPolicyExtension`][glossary-djangoerrorpolicyextension] (the masking
+extension), and a fail-closed-gate paragraph folded into the existing
 [`DjangoDebugExtension`][glossary-djangodebugextension] and
 [Developer-only debug posture][glossary-developer-only-debug-posture] entries.
 
@@ -287,17 +288,9 @@ What is borrowed:
   dataclass, a `resolve_*` function with a three-level precedence ladder, a thin `conf.py`
   reader, and a `DjangoSchema` argument resolved once at construction.
 
-What is deliberately **not** borrowed:
-
-- **`MaskErrors`' all-or-nothing default predicate.** It masks every error including this
-  package's own deliberate coded rejections, so a client can no longer tell
-  `RESOURCE_LIMIT_EXCEEDED` from a crash
-  ([Decision 8](#decision-8--the-classification-rule-is-structural-not-an-allowlist)).
-- **`MaskErrors`' silence.** It carries no correlation identifier, so a masked error is
-  unfindable in the log from the client's report.
-- **`Schema.process_errors` as the masking seam.** It is a logging hook; see
-  [Decision 9](#decision-9--masking-is-gated-on-debug-and-the-correlation-id-is-what-reaches-the-client).
-- **Upstream's `path` field.** See above.
+What is deliberately **not** borrowed: `MaskErrors`' all-or-nothing default predicate and
+its silence, `Schema.process_errors` as the masking seam, and upstream's `path` field.
+Why each was declined is in the [rationale][rationale].
 
 ## User-facing API
 
@@ -317,9 +310,10 @@ class DocumentType(DjangoType):
 
 Accepted values are a `tuple`, `list`, `set`, or `frozenset` of column names selected by
 [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude]. Anything else
-— an unknown name, a name the type does not select, a relation target, or a non-file column
-— raises [`ConfigurationError`][glossary-configurationerror] naming the offending field at
-type-construction time.
+— an unknown name, a name the type does not select, a column whose annotation or
+`strawberry.field` the consumer already owns, or a non-file column (a relation target
+included) — raises [`ConfigurationError`][glossary-configurationerror] naming the offending
+field at type-construction time.
 
 The resulting SDL:
 
@@ -464,27 +458,8 @@ Four properties follow, and each is load-bearing:
   by "a client whose query names the type in a fragment condition updates that name";
   Python inheritance is not GraphQL subtyping, and only an `interface` would be.
 
-**Alternatives rejected.**
-
-- **Delete `path` entirely.** A real filesystem-path consumer exists (a server-side export
-  job, a management surface). Deleting the field forces that consumer to fork the generated
-  type wholesale, which loses every future improvement to the file surface and puts a
-  hand-rolled `path` resolver — without the storage guard — into consumer code. The audit
-  itself asks for "an explicit `Meta` opt-in", not deletion.
-- **One type with a nullable `path` that always resolves `None` unless opted in.** The SDL
-  still advertises it, introspection still finds it, and a client that sees
-  `path: String` and gets `null` files a bug report. Worse, the "unless opted in" branch
-  lives in a resolver, which means the security boundary is a runtime condition rather than
-  a schema fact.
-- **A global settings flag** (`DJANGO_STRAWBERRY_FRAMEWORK["EXPOSE_FILE_PATHS"] = True`).
-  One key silently re-arms every schema, every type, and every column in the process. It is
-  invisible in the type's own declaration, so a reviewer reading `DocumentType` cannot tell
-  whether `path` is exposed, and there is no per-field audit at all. This is the same
-  argument card 047 made against a settings flag restoring the old relation-shape default,
-  and it is the same argument the audit makes against a global debug permission.
-- **A permission class on the field.** Per-field permission hooks answer "may this
-  requester see it", not "should this schema publish it". The path is not sensitive *per
-  requester*; it is server-internal for all of them.
+*Alternatives rejected: see the [rationale][rationale] (deleting `path` entirely, a
+nullable always-`None` `path`, a global settings flag, a permission class on the field).*
 
 ### Decision 2 — The opt-in is a per-field `Meta` key, validated exactly like the override sets
 
@@ -511,8 +486,12 @@ Threading mirrors [`Meta.nullable_overrides`][glossary-metanullable_overrides] a
    [`ConfigurationError`][glossary-configurationerror] naming the offending field: **unknown
    name** (no such model field), **non-selected name** (excluded by
    [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude]),
-   **relation target** (a `ForeignKey` / M2M, which has no file), and **non-file column**
-   (any concrete field that is not a `FileField` or subclass).
+   **consumer-authored column** (a consumer annotation or `strawberry.field` already owns
+   that field's output type, so the opt-in could not take effect), and **non-file column**
+   (any selected field whose output type is not a file/image object — which is how a
+   relation target is refused too, since a `ForeignKey` / M2M has no file to publish).
+   The first two reuse `_selected_meta_targets`, so their consumer-visible shape matches
+   every other `Meta.*` target key; the last two are this key's own domain checks.
 3. The frozenset threads into `types/base.py::_build_annotations` and on into
    `types/converters.py::convert_field_output(..., expose_filesystem_path=...)`, whose only
    job is to pick the path-bearing sibling type from a single mapping
@@ -528,22 +507,9 @@ a typo'd opt-in must not silently fail open into "no path" (invisible) or silent
 closed into a crash on the first query (late). The type refuses to build and names the
 field.
 
-**Alternatives rejected.**
-
-- **A schema-wide settings key.** Not per-field, not per-type, not visible in the
-  declaration a reviewer reads. See Decision 1's rejection of the same shape.
-- **A consumer-authored `strawberry.field`.** This is already possible today and remains
-  fully supported — a consumer can always add their own resolver. It is rejected as *the*
-  answer because it is undiscoverable (nothing in the package points at it), and because it
-  forces the consumer to re-implement `_safe_file_attr`'s storage guard, which they will get
-  wrong: the naive spelling either crashes on a remote storage backend that raises
-  `NotImplementedError` for `path`, or swallows `SuspiciousFileOperation` along with it.
-- **A marker on the model field** (`models.FileField(expose_graphql_path=True)`). Changing a
-  Django model to alter a GraphQL surface is the wrong layer. It also makes the opt-in
-  global to every `DjangoType` over that model, which defeats the per-type audit, and it
-  puts a GraphQL concern into a migration.
-- **A `Meta.exclude`-style negative key** (`Meta.hide_filesystem_path`). An opt-*out* means
-  the default is unsafe; the whole card is that the default must be safe.
+*Alternatives rejected: see the [rationale][rationale] (a schema-wide settings key, a
+consumer-authored `strawberry.field` as THE answer, a marker on the Django model field, a
+negative `Meta.hide_filesystem_path` key).*
 
 ### Decision 3 — Path failures stay narrow, and are never masked
 
@@ -591,10 +557,9 @@ fragment condition or an inline fragment updates that name; a client that only s
 fields does not change at all. The note lands in `docs/README.md` and in `README.md` prose,
 where a migrating reader is already looking.
 
-**Alternatives rejected.** A deprecation release that keeps `path` and warns (keeps the
-disclosure, and a deprecation directive nobody reads is not a mitigation). A settings flag
-to restore the old default (Decision 1). Keeping `path` on `DjangoFileType` and adding
-*narrower* types without it (the default stays unsafe, which inverts the goal).
+*Alternatives rejected: see the [rationale][rationale] (a warning deprecation release, a
+settings flag restoring the old default, narrower path-less siblings beside an unsafe
+default).*
 
 ### Decision 5 — The debug extension fails CLOSED under `DEBUG=False`, by going inert
 
@@ -646,27 +611,9 @@ Inertness is chosen carefully, and each half matters:
   overridden per test and per settings module, and an import-time read pins whichever value
   happened to be live when the module first loaded.
 
-**Alternatives rejected.**
-
-- **Raise a `GraphQLError` / `ConfigurationError` at operation start.** This converts a
-  diagnostics misconfiguration into a total production outage: every operation on that
-  schema fails. The fail-closed goal here is **non-disclosure**, and inertness achieves it
-  completely — nothing sensitive is published either way. A raising extension is
-  additionally a denial-of-service lever: anyone who can get a debug entry into a
-  production schema list can take the endpoint down, which is a worse outcome than the
-  disclosure it was meant to prevent.
-- **Refuse at schema construction.** There is no construction hook on a class entry —
-  Strawberry builds the instance per operation, and the class is stored unexamined. Even
-  with a hook it would be wrong: `DEBUG` is readable at operation time and can legitimately
-  differ per settings override, so a construction-time verdict would be stale for exactly
-  the test and multi-settings deployments that need it most.
-- **A global settings key** (`DJANGO_STRAWBERRY_FRAMEWORK["ALLOW_UNSAFE_DEBUG"]`). Broader
-  and less auditable than a per-schema constructor argument — the audit says so directly,
-  and [`AGENTS.md`][agents]'s "add a settings key only when the feature needs it" rule
-  applies: this feature does not need one.
-- **Gate on something other than `DEBUG`** (a package-owned "production" setting). Django
-  already owns the development/production distinction, every deployment already sets it, and
-  inventing a second one guarantees the two disagree.
+*Alternatives rejected: see the [rationale][rationale] (raising at operation start — a
+denial-of-service lever, refusing at schema construction, a global settings key, gating on
+a package-owned production flag instead of `DEBUG`).*
 
 ### Decision 6 — Deterministic, marked payload caps as module constants
 
@@ -773,11 +720,9 @@ exactly as a consumer-supplied
 `_with_resource_policy_extension`'s append. Consumer code remains trusted; it simply has to
 say so.
 
-**Alternatives rejected.** A boolean `DjangoSchema(mask_errors=True)` (no room for the
-message or the extension key, and every later option becomes another constructor argument).
-A settings-key-only configuration with no schema argument (a process running two schemas —
-a public one and an internal one — cannot differ). Validating in the settings reader rather
-than the dataclass (two gates drift; card 047's Decision 1 argument applies unchanged).
+*Alternatives rejected: see the [rationale][rationale] (a boolean `mask_errors=True`, a
+settings-key-only configuration, validating in the settings reader instead of the
+dataclass).*
 
 ### Decision 8 — The classification rule is STRUCTURAL, not an allowlist
 
@@ -817,27 +762,21 @@ consumer who raises a `GraphQLError` from their own resolver is making the ident
 statement: *this message is for the client*. So the rule is not a heuristic about this
 package's internals; it is the GraphQL type system's own way of saying "client-facing".
 
-**Why this beats a curated code allowlist.** An allowlist of `extensions.code` values has to
-be extended by every future rejection site — every new bound, every new validation, every
-new mutation guard — and when someone forgets, the allowlist **fails OPEN**: the new
-deliberate rejection gets masked, the client sees "An unexpected error occurred", and the
-regression is a UX bug nobody attributes to the security card. The structural rule has the
-opposite failure mode: a new plain-Python exception anywhere in the package or in consumer
-code is masked by default, with no registration step. **It fails CLOSED for exactly the
-class of thing that is dangerous, and fails open only for something a developer explicitly
-typed as client-facing.**
+The rule is structural rather than a curated `extensions.code` allowlist because the two
+fail in opposite directions: an unmaintained allowlist masks the next deliberate rejection
+(fails open), while the structural rule masks every unregistered plain exception by
+default. **It fails CLOSED for exactly the class of thing that is dangerous, and fails open
+only for something a developer explicitly typed as client-facing.** *The full comparison is
+in the [rationale][rationale].*
 
 [`FieldError` envelopes][glossary-fielderror-envelope] need no rule at all: a validation
 failure from a form or serializer mutation is returned in `data` as a structured payload,
 not raised as an error. They are untouched **by construction**, and this is stated so a
 future reader does not add a redundant carve-out for them.
 
-**Alternatives rejected.** A curated `extensions.code` allowlist (fails open; see above). A
-module-prefix check on `type(original_error).__module__` (`__module__` is spoofable, a
-lesson this repo already learned in the visibility-boundary work, and it would mask a
-consumer's deliberate error while permitting a framework accident). An opt-in exception
-base class the consumer must subclass (a registration step, so it fails open the same way an
-allowlist does, and `GraphQLError` already *is* that base class).
+*Alternatives rejected: see the [rationale][rationale] (a curated `extensions.code`
+allowlist, a module-prefix check on the spoofable `__module__`, an opt-in exception base
+class).*
 
 ### Decision 9 — Masking is gated on `DEBUG`, and the correlation id is what reaches the client
 
@@ -891,22 +830,9 @@ argument or the setting. A single stable string with **no interpolation** of the
 error, the exception type, or the field name — an interpolated message is a disclosure
 channel wearing a template's clothes, and the whole card is about not having one.
 
-**Alternatives rejected.**
-
-- **Reuse Strawberry's `MaskErrors`.** It masks everything, including this package's own
-  deliberate coded rejections, so `RESOURCE_LIMIT_EXCEEDED` and `GLOBALID_INVALID` become
-  indistinguishable from a crash — a direct regression against contracts cards 046 and 047
-  just established. It also carries no correlation id, so a masked error cannot be found in
-  the log from a user's report.
-- **Override `Schema.process_errors`.** It is a **logging** hook: it is handed the errors
-  and its return value is discarded. It cannot change what reaches the client, so an
-  implementation built on it would have to *also* rewrite the result somewhere else, and
-  then there would be two seams.
-- **A per-operation single id.** See above.
-- **Omitting `path` / `locations` from the masked error.** No security gain (the client
-  wrote the query), real cost to every client-side error renderer.
-- **A monotonic counter or a request-scoped sequence as the id.** Not unique across
-  processes or restarts, and a counter leaks traffic volume.
+*Alternatives rejected: see the [rationale][rationale] (Strawberry's `MaskErrors`,
+overriding `Schema.process_errors`, a per-operation single id, omitting
+`path` / `locations`, a counter or derived hash as the id).*
 
 ### Decision 10 — Extension ORDER is load-bearing, and the install PREPENDS
 
@@ -932,13 +858,10 @@ on a `DjangoSchema` that also carries the debug extension, so a future refactor 
 "tidies" the install into a symmetric append fails loudly rather than silently un-masking
 the debug payload's exception rows.
 
-**Alternatives rejected.** Appending for symmetry with the resource policy (breaks the debug
-extension's documented contract and, worse, does so silently — the payload simply reports
-masked errors). Documenting the required order and leaving it to the consumer (the audit's
-finding is precisely that consumer-remembered security is absent security). Masking in
-`get_results` or in the view (per-transport, and there are four transports).
+*Alternatives rejected: see the [rationale][rationale] (appending for symmetry, documenting
+the order for the consumer, masking in `get_results` or in the view).*
 
-### Decision 11 — Sync/async parity comes from the hook; a subscription needs a SECOND seam
+### Decision 11 — Sync/async parity comes from the hook; a STREAMED operation needs a second seam
 
 The teardown is **one synchronous generator** serving both execution colors — the engine
 enters sync generator hooks on the async path too. This is the precedent
@@ -947,26 +870,43 @@ enters sync generator hooks on the async path too. This is the precedent
 color-specific branch to keep in step.
 
 The single implementation handles both result shapes it can be handed: graphql-core's
-`ExecutionResult` and Strawberry's `ExecutionResult`. Both expose an `errors` sequence; the
-masking reads it, replaces the entries it must, and the extension assigns the list back. A
-result that is `None` (a sync parse/validation early return) or carries no errors is a no-op.
+`ExecutionResult` and Strawberry's `ExecutionResult` — the shared shape gate is
+`is_maskable_result`, which both seams ask so neither can drift on the question. Both
+admitted shapes expose an `errors` sequence; the masking reads it, replaces the entries it
+must, and the extension assigns the list back. A result that is `None` (a sync
+parse/validation early return), carries no errors, or is not an admitted shape is a no-op.
 
 **One seam is not enough, because a response is not always one result.** A query or a
-mutation produces exactly one `ExecutionResult`, so the operation teardown IS the response
-for them. A **subscription** delivers one `ExecutionResult` per EVENT through the result
-source the transport iterates, and the operation teardown runs only when the operation
-*ends* — so masking bolted to the teardown alone is a **complete no-op for every
-subscription event**: each event's raw exception message is serialized and sent long before
-the teardown runs, and the teardown then rewrites a result nobody reads. Transport parity
-is therefore NOT a free structural property; it is a property of applying the policy at
-every seam that delivers a result.
+mutation answered through `schema.execute` produces exactly one already-torn-down
+`ExecutionResult`, so the operation teardown IS the response for it. A **streamed
+operation** is not: a subscription delivers one `ExecutionResult` per EVENT through the
+result source the transport iterates, and a query or mutation run over a streaming
+transport (`graphql-transport-ws` dispatches EVERY operation type through `schema.stream`
+from strawberry-graphql 0.319.0 on) has its single result yielded from *inside* the
+operation lifecycle. Either way the operation teardown runs only when the operation
+*ends* — so masking bolted to the teardown alone is a **complete no-op for every streamed
+result**: the raw exception message is serialized and sent long before the teardown runs,
+and the teardown then rewrites a result nobody reads. Transport parity is therefore NOT a
+free structural property; it is a property of applying the policy at every seam that
+delivers a result.
 
-The second seam is the package's own subscription result source,
-`consumers.py::_stop_aware_results` — the one generator every event of every subscription
-passes through on both WebSocket protocols, already owned by this package for the
-operation-stop protocol. It masks each result immediately before the transport renders it,
-through the same `mask_execution_result` the teardown uses: one classifier, one replacement
-builder, one degrade policy, two application sites. Two further properties are pinned:
+The second seam is the package's own streamed-result source,
+`consumers.py::_stop_aware_results` — the one generator every result of every streamed
+operation passes through on both WebSocket protocols, already owned by this package for the
+operation-stop protocol. The stop-aware schema wrapper defines **both** upstream dispatch
+names, `subscribe` and `stream`, unconditionally and routes them through one shared
+wrapping step, so the two cannot diverge on what a result source is wrapped with; `execute`
+stays delegated because it returns one already-torn-down result and never loops. The seam
+masks each yielded result immediately before the transport renders it, through the same
+`mask_execution_result` the teardown uses: one classifier, one replacement builder, one
+degrade policy, two application sites. `stream`'s third element type — a raw graphql-core
+incremental-delivery frame (`@defer` / `@stream`), whose errors are nested inside
+incremental payloads rather than on an `errors` attribute — is excluded by
+`is_maskable_result` and passes through untouched: masking it would produce the fail-closed
+degrade, whose value IS an `ExecutionResult`, precisely the shape upstream's transport
+tests for to decide a frame is unrenderable and the operation must be rejected. Excluding
+it by shape leaves that rejection intact and discloses nothing — the frame never reaches
+the wire at all. Two further properties are pinned:
 
 - **Masking returns a masked COPY, never an in-place rewrite.** The object the engine
   assigned to `execution_context.result` keeps its originals, so
@@ -981,12 +921,12 @@ A pre-execution error on a subscription (`PreExecutionError`, the operation-scop
 frame) travels through the same seam and passes the classifier untouched, because a
 validation error carries no `original_error`.
 
-**Alternatives rejected.** Masking inside the transport's frame writer (per protocol, and
-there are two, and the frame is already JSON by then). Masking in `Schema.subscribe`'s
-generator by subclassing the schema (the schema class is the consumer's; a wrapper there is
-invisible to a consumer who builds their own). Accepting the gap for subscriptions (the
-disclosure is identical to the query one, and a subscription is exactly the surface where a
-long-lived client accumulates them).
+*Alternatives rejected: see the [rationale][rationale] (the transport's frame writer, a
+schema subclass, accepting the gap for subscriptions, an upper strawberry version bound
+instead of wrapping the renamed upstream seam). The two rewrites this decision underwent —
+the remediation round's seam addition and the post-release `stream` coverage, including the
+audited `{subscribe, stream, execute}` upstream read set across `0.316.0`-`0.323.2` — are
+in the change record there.*
 
 ### Decision 12 — The version bump belongs to the `0.0.14` joint cut
 
@@ -1000,6 +940,9 @@ there is no bump for this card to take.
 Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
 to the **last** card of a shared line to land, never to an individual card's slices.
 Slice 5 therefore owns the documentation fold-in only.
+
+*This card was authored and built against a `0.0.17` cut of its own. What it claimed, and
+the program-wide retarget that withdrew it, is in the [rationale][rationale].*
 
 ### Decision 13 — What the masking rule does not reach, and the two seams it still owes
 
@@ -1055,7 +998,7 @@ constants look like they want a setting.
 | 3 | `error_policy.py` (new) | `ErrorPolicy`, `DEFAULT_ERROR_POLICY`, `resolve_error_policy`. |
 | 3 | `conf.py` | `ERROR_POLICY_KEY` and `error_policy_setting()`, a thin reader that validates nothing. |
 | 3 | `extensions/error_policy.py` (new) | `DjangoErrorPolicyExtension`: the teardown, the structural classifier, the replacement builder, the correlation id, the log call, the two fail-closed degrades, and the `isinstance`-guarded `schema_error_policy` read. |
-| 3 | `consumers.py` | `_stop_aware_results` masks each subscription EVENT through `mask_execution_result` before the transport renders it; `_StopAwareSchema.subscribe` hands the real schema through so the policy is the executing schema's (Decision 11). |
+| 3 | `consumers.py` | `_stop_aware_results` masks each streamed result through `mask_execution_result` (under the shared `is_maskable_result` gate) before the transport renders it; the stop-aware schema wrapper defines `subscribe` AND `stream` through one shared wrapping step and hands the real schema through so the policy is the executing schema's (Decision 11). |
 | 3 | `extensions/__init__.py`, `__init__.py` | Exports; the extension is root-exported because it is part of the default recipe. |
 | 3 | `schema.py` | `DjangoSchema(error_policy=…)`, `schema.error_policy`, `_with_error_policy_extension` (prepending). |
 | 4 | `examples/fakeshop/test_query/`, `examples/fakeshop/apps/*/tests/`, `tests/` | The rows in [Test plan](#test-plan). |
@@ -1079,9 +1022,9 @@ constants look like they want a setting.
   is one function, so the sync and async result shapes cannot diverge on either.
 - **`mask_execution_result` is the ONLY application of the policy**, called by the operation
   teardown and by `consumers.py::_stop_aware_results`. The transport seam re-states no
-  classification, no replacement shape, no correlation id, and no `DEBUG` gate — it calls
-  `masking_is_active` for the gate and `schema_error_policy` for the policy, like the
-  extension does.
+  classification, no replacement shape, no correlation id, no `DEBUG` gate, and no shape
+  gate — it calls `masking_is_active` for the gate, `schema_error_policy` for the policy,
+  and `is_maskable_result` for the shape, like the extension does.
 - **[`request_from_info`][glossary-request_from_info] is the only info-to-request seam** if
   the extension ever needs the request; it does not re-derive one.
 
@@ -1140,10 +1083,12 @@ constants look like they want a setting.
   without rebuilding the schema.
 - **A correlation id is generated only for errors that are actually masked**, so an
   operation whose only failure was a deliberate rejection writes no error log line.
-- **A subscription's errors are masked PER EVENT**, at `consumers.py::_stop_aware_results`,
-  each with its own correlation id and its own log record. The operation teardown still runs
-  at the operation's end, and by then it has nothing left to do — every event was masked on
-  its way out (Decision 11).
+- **A streamed operation's errors are masked PER YIELDED RESULT**, at
+  `consumers.py::_stop_aware_results` — every subscription event on both WebSocket
+  protocols, and the single result of a query or mutation dispatched through
+  `schema.stream` — each masked error with its own correlation id and its own log record.
+  The operation teardown still runs at the operation's end, and by then it has nothing left
+  to do — every result was masked on its way out (Decision 11).
 
 ## Test plan
 
@@ -1220,7 +1165,12 @@ exception's own text absent from the raw frame, and one server-side log record p
 carrying the original exception. Requiring two events is what separates per-delivery masking
 from a single pass over a final result. The control row on the same subscription with
 `error_policy={"enabled": False}` returns the resolver's own message, so the seam is the
-policy's and not a blanket rewrite.
+policy's and not a blanket rewrite. A transparency row re-derives, from the installed
+upstream handler modules, the set of names they read off the schema they were handed and
+proves it a partition — every read is a wrapper-defined name (`subscribe`, `stream`),
+derived from the class rather than restated, or an explicitly reasoned delegation
+(`execute`) — so an unaudited NEW upstream dispatch name fails loudly instead of silently
+bypassing the seam.
 
 **Package tier — `tests/test_error_policy.py`.** What no request can express: every
 `ErrorPolicy` field's validation including the unknown-key rejection; the three-level
@@ -1283,47 +1233,33 @@ its version pin stays at `0.0.14`. `tests/base/test_conf.py` gains the
 
 ## Risks and open questions
 
+Each risk's pre-planned fallback position, should a real consumer need appear, is in the
+[rationale][rationale].
+
 - **The `path` removal has no telemetry.** A consumer discovers it as a validation error on
   their next query rather than through a deprecation warning. Accepted, and it is the same
   trade card 047 accepted for the relation-shape default: an immediate, unambiguous failure
-  beats a warning nobody reads. Fallback if migration friction is reported: a build-time
-  informational log when a type has file columns and no `filesystem_path_fields` key, which
-  is discoverable without re-arming anything.
+  beats a warning nobody reads.
 - **The opt-in changes the SDL type NAME, not just the field set.** A client using a
   fragment type condition on `DjangoFileType` against an opted-in field must update it.
-  Preferred answer for `0.0.14`: accept it, because the alternative — one type whose fields
-  vary — is not expressible in GraphQL. Fallback: an interface both types implement, which
-  would let a fragment condition survive; deferred because it adds a type to every schema
-  for a case no consumer has reported.
-- **The debug caps are not configurable.** Preferred answer for `0.0.14`: module constants,
-  per [`AGENTS.md`][agents]'s "add a settings key only when the feature needs it". Fallback
-  if a deployment reports a real ceiling problem: fold the caps into the
-  [`ResourcePolicy`][glossary-resourcepolicy] rather than adding a second policy object —
-  the resource policy is already the package's one place for "what a request may spend".
-- **Masked errors log one record each, so an error storm is a log storm.** Preferred answer:
-  accept it — a deployment's logging stack already owns rate limiting, and dropping error
-  records to save volume would defeat the correlation id. Fallback: a policy field capping
-  logged errors per operation, which bounds the storm without touching the wire.
-- **`correlationId` could collide** with a consumer's own extension key. Preferred answer:
-  it is configurable (`correlation_extension_key`), and the default matches the common
-  convention. Fallback: namespace it under a package-owned sub-object, which is uglier for
-  every consumer who does not collide.
+  Accepted for `0.0.14`, because the alternative — one type whose fields vary — is not
+  expressible in GraphQL.
+- **The debug caps are not configurable.** Module constants, per [`AGENTS.md`][agents]'s
+  "add a settings key only when the feature needs it".
+- **Masked errors log one record each, so an error storm is a log storm.** Accepted — a
+  deployment's logging stack already owns rate limiting, and dropping error records to save
+  volume would defeat the correlation id.
+- **`correlationId` could collide** with a consumer's own extension key. It is configurable
+  (`correlation_extension_key`), and the default matches the common convention.
 - **The structural classifier trusts consumer `GraphQLError`s.** A consumer who raises
   `GraphQLError(str(exc))` from a bare `except` re-opens the disclosure in their own code.
-  Preferred answer: document it — consumer code is trusted, which is the package's standing
-  posture and the audit's own framing. Fallback: none; a package that second-guesses an
-  explicit `GraphQLError` cannot support deliberate client-facing errors at all.
+  Documented — consumer code is trusted, which is the package's standing posture and the
+  audit's own framing.
 - **`settings.DEBUG` is the gate for two unrelated behaviors** (the debug extension and the
   masking policy), so a deployment that runs `DEBUG=True` in a staging environment reachable
   by untrusted clients gets neither protection. Accepted: that deployment is already outside
   Django's own security model, and inventing a package-specific production flag would create
   a second source of truth that can disagree with Django's.
-- **No conflict was found between the card body and the Step 1 reading**; the card's three
-  architectural-posture bullets are carried into Decisions 1-11 unchanged, and both of the
-  card's open questions are resolved here (the opt-in shape in
-  [Decision 2](#decision-2--the-opt-in-is-a-per-field-meta-key-validated-exactly-like-the-override-sets),
-  the correlation-id format, log destination, and message configurability in
-  [Decision 9](#decision-9--masking-is-gated-on-debug-and-the-correlation-id-is-what-reaches-the-client)).
 
 ## Non-goals
 
@@ -1351,7 +1287,8 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
       same terms as [`Meta.nullable_overrides`][glossary-metanullable_overrides] /
       [`Meta.required_overrides`][glossary-metarequired_overrides], raising
       [`ConfigurationError`][glossary-configurationerror] naming the offending field for an
-      unknown, non-selected, relation, or non-file target.
+      unknown, non-selected, consumer-authored, or non-file target (a relation being refused
+      as a non-file column).
 - [ ] `_safe_file_attr`'s narrow catch is unchanged and `SuspiciousFileOperation` still
       propagates; the retained fields still degrade safely on a storage backend that cannot
       answer.
@@ -1409,7 +1346,6 @@ list describes the released contract while these describe work the release left 
 
 <!-- docs/ -->
 [feedback2]: ../feedback2.md
-[glossary]: ../GLOSSARY.md
 [glossary-async-sql-capture-boundary]: ../GLOSSARY.md#async-sql-capture-boundary
 [glossary-bounded-query-log-rollover]: ../GLOSSARY.md#bounded-query-log-rollover
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
@@ -1421,12 +1357,16 @@ list describes the released contract while these describe work the release left 
 [glossary-developer-only-debug-posture]: ../GLOSSARY.md#developer-only-debug-posture
 [glossary-django-debug-cursor-capture]: ../GLOSSARY.md#django-debug-cursor-capture
 [glossary-djangodebugextension]: ../GLOSSARY.md#djangodebugextension
+[glossary-djangoerrorpolicyextension]: ../GLOSSARY.md#djangoerrorpolicyextension
+[glossary-djangofilepathtype]: ../GLOSSARY.md#djangofilepathtype
 [glossary-djangofiletype]: ../GLOSSARY.md#djangofiletype
+[glossary-djangoimagepathtype]: ../GLOSSARY.md#djangoimagepathtype
 [glossary-djangoimagetype]: ../GLOSSARY.md#djangoimagetype
 [glossary-djangomodelformmutation]: ../GLOSSARY.md#djangomodelformmutation
 [glossary-djangomutation]: ../GLOSSARY.md#djangomutation
 [glossary-djangoresourcepolicyextension]: ../GLOSSARY.md#djangoresourcepolicyextension
 [glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-errorpolicy]: ../GLOSSARY.md#errorpolicy
 [glossary-execution-resource-policy]: ../GLOSSARY.md#execution-resource-policy
 [glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
 [glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
@@ -1436,6 +1376,7 @@ list describes the released contract while these describe work the release left 
 [glossary-masking-extension-ordering]: ../GLOSSARY.md#masking-extension-ordering
 [glossary-metaexclude]: ../GLOSSARY.md#metaexclude
 [glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafilesystem_path_fields]: ../GLOSSARY.md#metafilesystem_path_fields
 [glossary-metamodel]: ../GLOSSARY.md#metamodel
 [glossary-metanullable_overrides]: ../GLOSSARY.md#metanullable_overrides
 [glossary-metarequired_overrides]: ../GLOSSARY.md#metarequired_overrides
@@ -1458,8 +1399,10 @@ list describes the released contract while these describe work the release left 
 [glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
 [glossary-testclient]: ../GLOSSARY.md#testclient
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[glossary]: ../GLOSSARY.md
 
 <!-- docs/SPECS/ -->
+[rationale]: appx/spec-048-secure_output_defaults-0_0_14-rationale.md
 [spec-046]: spec-046-transport_security-0_0_14.md
 [spec-047]: spec-047-resource_policy-0_0_14.md
 

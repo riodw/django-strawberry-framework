@@ -1290,6 +1290,11 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 | Term | Status |
 | --- | --- |
+| [`Meta.filesystem_path_fields`](docs/GLOSSARY.md#metafilesystem_path_fields) | shipped (`0.0.14`) |
+| [`DjangoFilePathType`](docs/GLOSSARY.md#djangofilepathtype) | shipped (`0.0.14`) |
+| [`DjangoImagePathType`](docs/GLOSSARY.md#djangoimagepathtype) | shipped (`0.0.14`) |
+| [`ErrorPolicy`](docs/GLOSSARY.md#errorpolicy) | shipped (`0.0.14`) |
+| [`DjangoErrorPolicyExtension`](docs/GLOSSARY.md#djangoerrorpolicyextension) | shipped (`0.0.14`) |
 | [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
 | [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |

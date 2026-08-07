@@ -1,4 +1,9 @@
 term,anchor,notes
+Meta.filesystem_path_fields,metafilesystem_path_fields,the per-column opt-in this spec ships (Decision 2)
+DjangoFilePathType,djangofilepathtype,the opt-in file output type this spec ships (Decision 1)
+DjangoImagePathType,djangoimagepathtype,the opt-in image output type this spec ships (Decision 1)
+ErrorPolicy,errorpolicy,the production error-policy object this spec ships (Decision 7)
+DjangoErrorPolicyExtension,djangoerrorpolicyextension,the masking extension this spec ships (Decisions 7-10)
 DjangoFileType,djangofiletype,S5 subject - loses the path field from its default set
 DjangoImageType,djangoimagetype,S5 subject - inherits the removal
 DjangoType,djangotype,the type declaration Meta.filesystem_path_fields joins
@@ -45,5 +50,5 @@ TestClient,testclient,live test tier
 Probe URLconf,probe-urlconf,narrow probe schemas for the opt-in and gate rows
 seed_data,seed_data,mandatory first line of every catalog test
 Live-first coverage mandate,live-first-coverage-mandate,decides where each regression lives
-Joint version cut,joint-version-cut,the rule this lone-card cut is NOT subject to
+Joint version cut,joint-version-cut,the rule this card IS subject to; the shared 0.0.14 line's last card owns the wording
 Single-upstream parity,single-upstream-parity,makes the file path field optional rather than foundational

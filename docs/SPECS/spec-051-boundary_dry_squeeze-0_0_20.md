@@ -232,9 +232,9 @@ duplication that makes every cross-cutting change cost more than it should.
 - The per-file DRY review cycle (`docs/dry/dry-0_0_13.md`, workflow
   `docs/dry/DRY.md`) is mid-flight and independent: it reviews one file at a
   time; this card is the cross-file strategic pass. Neither blocks the other.
-- Card `WIP-ALPHA-044-0.0.14`
-  ([`DjangoDebugExtension`][glossary-djangodebugextension]) is mid-flight and owns
-  the `0.0.14` joint cut; card `TODO-ALPHA-050-0.0.19`
+- Card `DONE-044-0.0.14`
+  ([`DjangoDebugExtension`][glossary-djangodebugextension]) shipped in the
+  `0.0.14` joint cut; card `TODO-ALPHA-050-0.0.19`
   ([`docs/SPECS/spec-050-debug_extraction-0_0_19.md`][spec-050]) then **extracts
   that extension into the standalone `django-strawberry-debug` package**.
   This card is sequenced behind BOTH: by the time its slices run,
@@ -552,10 +552,10 @@ package entry in `uv.lock`), the release-status doc moves, and the
 
 Per the repo's staging discipline, staged-but-unbuilt slices carry
 `TODO(spec-051 Slice N)` source anchors at the sites they will change,
-removed in the change that ships the slice. Caveat: the version-quintet
-sites currently carry `TODO(spec-044 Slice 3)` anchors owned by the
-in-flight `0.0.14` cut; this card adds its Slice 5 anchors **only after**
-spec-044's cut lands and removes them ([Risks](#risks-and-open-questions)).
+removed in the change that ships the slice. The version-quintet sites are
+clear: spec-044's `0.0.14` cut landed and took its own
+`TODO(spec-044 Slice 3)` anchors with it, so this card's Slice 5 anchors have
+no prior claim to wait on ([Risks](#risks-and-open-questions)).
 
 ## Implementation plan
 

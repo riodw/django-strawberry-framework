@@ -291,10 +291,13 @@ debug implementation:
 The resulting cookbook migration is a **debug-only delta applied after the
 cookbook's broader Strawberry port** — [`GOAL.md`][goal]'s "Cookbook parity"
 target example, whose ported aggregate `cookbook/schema.py` takes the
-canonical shape [`config/schema.py`][config-schema] demonstrates today
-(`finalize_django_types()`, `_optimizer = DjangoOptimizerExtension()`,
+query-only shape (`finalize_django_types()`,
+`_optimizer = DjangoOptimizerExtension()`,
 `strawberry.Schema(query=Query, config=strawberry_config(),
-extensions=[lambda: _optimizer])`). That baseline port — a separate effort
+extensions=[lambda: _optimizer])`) — plain `strawberry.Schema` being correct
+for a schema carrying no generated mutations, where
+[`config/schema.py`][config-schema] builds `DjangoSchema` because it carries
+them. That baseline port — a separate effort
 this card does not own — supplies the `strawberry` / `strawberry_config`
 imports, the `_optimizer` construction, and the `Query` conversion; this
 card's delta is only the debug lines. On the Graphene side, shown against

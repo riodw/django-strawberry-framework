@@ -52,7 +52,7 @@ cut][glossary-joint-version-cut]. So the `pyproject.toml` / `__version__` /
 this card — the same shared-cut posture [`spec-041`][spec-041] Decision 10 and
 [`spec-039`][spec-039] Decision 14 took. No slice below bumps the version.
 
-Status: **COMPLETE (card `DONE-042-0.0.14`) — both slices built and the card-wrap landed; the `0.0.14` version release rides the joint cut (043 / 044 pending).**
+Status: **COMPLETE (card `DONE-042-0.0.14`) — both slices built and the card-wrap landed; the `0.0.14` version release rode the joint cut.**
 Two slices (the card is an M with one module, one template, and one test file):
 Slice 1 (**the dependency gate + `middleware/debug_toolbar.py` + the template +
 `tests/middleware/test_debug_toolbar.py`** — the `django-debug-toolbar` dev-group

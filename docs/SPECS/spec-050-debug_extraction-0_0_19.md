@@ -170,9 +170,9 @@ evidence — is exactly right for this module, on the same evidence standard.
   with spec-044 Decision 6's
   [per-operation extension isolation][glossary-per-operation-extension-isolation]
   rationale comment.
-- Card `WIP-ALPHA-044-0.0.14` is mid-flight and owns the `0.0.14`
-  [joint version cut][glossary-joint-version-cut]; this card is sequenced
-  strictly behind it ([Risks](#risks-and-open-questions)).
+- Card `DONE-044-0.0.14` shipped the extension in the `0.0.14`
+  [joint version cut][glossary-joint-version-cut], so the sequencing this card
+  was written behind is already satisfied ([Risks](#risks-and-open-questions)).
 - The boundary+DRY card (`TODO-ALPHA-051-0.0.20`) is sequenced behind THIS
   card and writes its import-linter `extensions/`-leaf contract against the
   post-extraction tree.
@@ -387,10 +387,9 @@ Per the repo's staging discipline, staged-but-unbuilt slices carry
 `TODO(spec-050 Slice N)` source anchors at the sites they will change
 (`extensions/__init__.py`, `extensions/debug.py`, `pyproject.toml`'s
 optional-dependencies block), removed in the change that ships the slice.
-Caveat: the version-quintet sites currently carry `TODO(spec-044 Slice 3)`
-anchors owned by the in-flight `0.0.14` cut; this card adds its Slice 3
-anchors **only after** spec-044's cut lands and removes them
-([Risks](#risks-and-open-questions)).
+The version-quintet sites are clear: spec-044's `0.0.14` cut landed and took its
+own `TODO(spec-044 Slice 3)` anchors with it, so this card's Slice 3 anchors have
+no prior claim to wait on ([Risks](#risks-and-open-questions)).
 
 ## Implementation plan
 

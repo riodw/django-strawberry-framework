@@ -69,7 +69,7 @@ cut][glossary-joint-version-cut]. So the `pyproject.toml` / `__version__` /
 this card — the same shared-cut posture [`spec-042`][spec-042] Decision 10 and
 [`spec-041`][spec-041] Decision 10 took. No slice below bumps the version.
 
-Status: **COMPLETE (card `DONE-043-0.0.14`) — all three slices built and the card-wrap landed; the `0.0.14` version release rides the joint cut (044 pending).**
+Status: **COMPLETE (card `DONE-043-0.0.14`) — all three slices built and the card-wrap landed; the `0.0.14` version release rode the joint cut.**
 Three slices (the card is an M with one module, one settings key, one unit-test
 file, and a mechanically-wide but semantically-shallow live-suite switchover):
 Slice 1 (**the `TESTING_ENDPOINT` settings key + `testing/client.py` + the

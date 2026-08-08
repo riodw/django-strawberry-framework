@@ -1,0 +1,10 @@
+term,anchor,notes
+`DjangoOptimizerExtension`,djangooptimizerextension,owner of the plan cache and context publication this card restructures
+plan cache,plan-cache,re-keyed from whole-operation AST to root-subtree fingerprints
+connection-aware optimizer planning,connection-aware-optimizer-planning,the nested planning layer that gains sidecar batching
+`DjangoConnectionField`,djangoconnectionfield,per-parent fallback site; batched sidecar results attach here
+`get_queryset` visibility hook,get_queryset-visibility-hook,becomes a binding slot instead of poisoning cacheability
+strictness mode,strictness-mode,strict targets raise on unproven row identity; keys publish after binding
+`Meta.filterset_class`,metafilterset_class,applied exactly once per sidecar batch
+`Meta.orderset_class`,metaorderset_class,applied exactly once per sidecar batch
+joint version cut,joint-version-cut,the explain card (064) lands last and owns the 0.1.6 release state

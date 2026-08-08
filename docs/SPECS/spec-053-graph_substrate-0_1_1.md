@@ -1191,7 +1191,8 @@ version quintet stay untouched (Decision 10).
 
 - **Structural optimization templates + nested sidecar batching + operation
   plan map + row-identity gate enforcement** — the second foundation card
-  (proposed `070`, before card 063 and the stable freeze); owns
+  (`TODO-BETA-063-0.1.6`, seated immediately ahead of the explain card;
+  [spec][spec-063]); owns
   reproductions R1, R7, R8, and R10.
 - **`FieldSet` itself** — card 054 ([spec][spec-054]), amended to consume
   `FieldDependencyPlan(columns=...)`; the expanded dependency vocabulary
@@ -1201,8 +1202,8 @@ version quintet stay untouched (Decision 10).
   `LOOKUP_PREFIXES` rejection and the permission-dispatch plan stay
   055-local (Decision 2).
 - **Aggregation child scoping** — card 057, amended to consume `EdgeScope`.
-- **Optimizer explain over an operation plan map** — card 063.
-- **Adversarial graph suite** — card 067.
+- **Optimizer explain over an operation plan map** — card 064.
+- **Adversarial graph suite** — card 068.
 - **Per-event subscription memo scope** — deferred with an explicit
   invalidation-rule requirement (Decision 3).
 - **Optional PostgreSQL repeatable-read snapshot policy** — R11;
@@ -1295,6 +1296,7 @@ version quintet stay untouched (Decision 10).
 <!-- docs/SPECS/ -->
 [spec-054]: spec-054-fieldset-0_1_1.md
 [spec-055]: spec-055-search_fields-0_1_2.md
+[spec-063]: spec-063-structural_templates-0_1_6.md
 
 <!-- docs/builder/ -->
 

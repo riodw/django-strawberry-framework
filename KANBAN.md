@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-07
+Last refreshed: 2026-08-08
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-ALPHA-052-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-068-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-ALPHA-052-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-069-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.14` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -81,12 +81,12 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**72.1% complete** toward `1.0.0` - 49 of 68 cards done (72.7% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**71.0% complete** toward `1.0.0` - 49 of 69 cards done (71.4% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
 | Alpha (pre-0.1.0) | 49/52 (94.2%) | 93.3% |
-| Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
+| Beta (pre-1.0.0) | 0/16 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
 ## Board columns
@@ -423,11 +423,11 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 
 #### Architectural posture
 
-- **Amendment obligation** — per the spec's Decision 1, TODO-BETA-054-0.1.1, TODO-BETA-055-0.1.2, TODO-BETA-057-0.1.3, TODO-BETA-063-0.1.5, and TODO-BETA-067-0.1.7 must be amended to consume the substrate rather than reimplement it, and the amendments must land on those cards before any of them starts — not at this card's Slice 5. `RowIdentityProof` ships as metadata only; the enforcement gate belongs to the sibling structural-templates / nested-sidecar-batching card (not yet created).
+- **Amendment obligation** — per the spec's Decision 1, TODO-BETA-054-0.1.1, TODO-BETA-055-0.1.2, TODO-BETA-057-0.1.3, TODO-BETA-064-0.1.6, and TODO-BETA-068-0.1.8 must be amended to consume the substrate rather than reimplement it, and the amendments must land on those cards before any of them starts — not at this card's Slice 5. `RowIdentityProof` ships as metadata only; the enforcement gate belongs to the sibling structural-templates / nested-sidecar-batching card (TODO-BETA-063-0.1.6).
 
 #### Why it matters
 
-- Five planned Layer 3 surfaces — `FieldSet` (TODO-BETA-054-0.1.1), search (TODO-BETA-055-0.1.2), aggregation (TODO-BETA-057-0.1.3), explain (TODO-BETA-063-0.1.5), and the adversarial suite (TODO-BETA-067-0.1.7) — each need path classification, row-preserving predicate composition, edge-scoped child visibility, or field-dependency vocabulary; without one substrate each ships a private twin and the divergent abstractions freeze at the `1.0.0` API surface.
+- Five planned Layer 3 surfaces — `FieldSet` (TODO-BETA-054-0.1.1), search (TODO-BETA-055-0.1.2), aggregation (TODO-BETA-057-0.1.3), explain (TODO-BETA-064-0.1.6), and the adversarial suite (TODO-BETA-068-0.1.8) — each need path classification, row-preserving predicate composition, edge-scoped child visibility, or field-dependency vocabulary; without one substrate each ships a private twin and the divergent abstractions freeze at the `1.0.0` API surface.
 - Row multiplication through to-many joins silently corrupts consumer permission filters today: a to-many hop inside an outer `Q` multiplies rows, and the audited production case hits it on every root. `PredicatePlan` makes correlated, row-preserving composition a public, refuse-on-misuse API.
 - Query growth for every shipped shape is bounded by selection, never by parent row count: `queries(1 parent) == queries(100 parents)`.
 - An operation-scoped dependency memo makes cross-root shared computation (viewer grants, audience sets) single-compute per request, with and without the optimizer extension.
@@ -446,8 +446,9 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 - Related: Amendment obligation: `FieldSet` normalizes `Meta.depends_on` into `FieldDependencyPlan` and consumes the substrate's field-dependency vocabulary instead of a private map shape. -> `TODO-BETA-054-0.1.1` - `FieldSet`
 - Related: Amendment obligation: search path planning moves onto `GraphPathPlan` / `GraphPathPlanSet` (path classification + arm grouping); `LOOKUP_PREFIXES` rejection and permission dispatch stay card-local. -> `TODO-BETA-055-0.1.2` - `Meta.search_fields` support
 - Related: Amendment obligation: related / permissioned aggregation consumes `EdgeScope` for child visibility instead of a private child-visibility hook. -> `TODO-BETA-057-0.1.3` - Aggregation subsystem
-- Related: Amendment obligation: explain reads the substrate's plan objects (and the sibling card's operation plan map) rather than reconstructing plan state. -> `TODO-BETA-063-0.1.5` - Optimizer explain mode
-- Related: Amendment obligation: the adversarial suite gains graph-substrate targets (memo isolation, predicate compilation, edge-scope fail-closed paths). -> `TODO-BETA-067-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Amendment obligation: explain reads the substrate's plan objects (and the sibling card's operation plan map) rather than reconstructing plan state. -> `TODO-BETA-064-0.1.6` - Optimizer explain mode
+- Related: Amendment obligation: the adversarial suite gains graph-substrate targets (memo isolation, predicate compilation, edge-scope fail-closed paths). -> `TODO-BETA-068-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: The sibling foundation card: owns reproductions R1, R7, R8, and R10, the row-identity enforcement gate, and the structural/bound split this card's plan objects prepare. -> `TODO-BETA-063-0.1.6` - Structural optimization templates and nested sidecar batching
 
 <a id="fieldset"></a>
 ### [TODO-BETA-054-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
@@ -971,8 +972,78 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 - Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-061-0.1.5` - Fakeshop GraphQL schema activation
 
+<a id="structural_optimization_templates_and_nested_sidecar_batching"></a>
+### [TODO-BETA-063-0.1.6 - Structural optimization templates and nested sidecar batching](KANBAN.html#structural_optimization_templates_and_nested_sidecar_batching)
+
+- Priority: High
+- Status: To Do
+- Relative size: L
+- Labels: `internal`, `optimizer`, `performance`, `query-planning`
+- Spec: [spec-063-structural_templates-0_1_6.md](docs/SPECS/spec-063-structural_templates-0_1_6.md)
+
+#### Predicted files
+
+- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
+- [`django_strawberry_framework/optimizer/`](django_strawberry_framework/optimizer/)
+- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
+- [`tests/optimizer/`](tests/optimizer/)
+
+#### Planning note
+
+The second of two graph foundation cards, sibling to the graph substrate (TODO-BETA-053-0.1.1). Where the substrate ships the shared planning vocabulary, this card ships the optimizer architecture that consumes it — four pillars: (1) the structural/bound plan split (`StructuralOptimizationTemplate` cacheable across requests, `BoundOptimizationPlan` request-local, `OptimizationPlan` produced by binding); (2) root-subtree structural cache keys replacing whole-operation AST keys; (3) nested sidecar batching — filtered/ordered/search-bearing nested connections stop executing per parent; (4) the operation plan map replacing last-wins introspection, plus `RowIdentityProof` enforcement at the window gate. Seated immediately ahead of explain (TODO-BETA-064-0.1.6), which renders the plan map and shares the `0.1.6` joint cut. No new consumer surface — every object is internal optimizer vocabulary; the observable contract is query counts, cache behavior, explain completeness, and strict-mode errors.
+
+#### Dependencies
+
+- `TODO-BETA-053-0.1.1` - Graph substrate: shared graph policy and dependency planning
+
+#### Scope
+
+- Slice 1 — template/bound core: `optimizer/templates.py` with frozen `StructuralOptimizationTemplate` (relative paths, field dependency graph, visibility binding slots, nested argument slots, row-identity proof recipe) and `BoundOptimizationPlan` (absolute paths, database alias, visibility querysets, concrete `Prefetch` objects, normalized argument values); the normalized root-subtree fingerprint builder; the binding pipeline producing today's `OptimizationPlan`; package tests proving bind-equivalence with directly-walked plans. Behavior-neutral by design.
+- Slice 2 — cache rekey, response-path rebasing, operation plan map: `DjangoOptimizerExtension._build_cache_key` moves to the subtree fingerprint (exact owning type identity, root field/return type, normalized subtree selection, only the directive/pagination slots referenced inside the subtree, strategy config); templates store relative paths and binding rebases them under the actual alias; `_publish_plan_to_context` publishes the plan map keyed by root execution identity while the legacy `DST_OPTIMIZER_PLAN` last-wins key is retained for the explain card to retire.
+- Slice 3 — nested sidecar batching: `optimizer/sidecar.py` with the eight-step normalization (edge-scoped child base -> FilterSet once -> OrderSet once -> deterministic order -> row-identity proof -> partition by parent join key -> window/lateral page -> attach per response-key `to_attr`); `_divergent_key_windows` plans argument-bearing response keys instead of abandoning them; `connection.py::_build_relation_connection_resolver` consumes the batched result attribute; the request-bound sidecar plan cache; per-alias batching.
+- Slice 4 — row-identity enforcement + live activation: `unwindowable_child_queryset_reason` composes with the `RowIdentityProof` grades; strict targets raise a targeted unproven-row-identity error, non-strict targets fall back visibly, no automatic `DISTINCT`; the live fakeshop matrix (R1 five-root cache isolation, R7 ordered nested batching, R8 gate arms, R10 plan-map completeness, the R3 filtered arm promoted from characterized to asserted-equal query counts).
+- Slice 5 — docs + card wrap: TREE / GLOSSARY / `test_query` README updates, audit the explain-card amendment is honored, flip this card. Version quintet, `CHANGELOG.md`, and release prose untouched — owned by the explain card's `0.1.6` joint cut.
+- Changed seams: `optimizer/extension.py` (`_build_cache_key`, `_publish_plan_to_context`), `optimizer/walker.py` (`_plan_prefetch_relation` — visibility becomes a binding slot, not `cacheable = False`), `optimizer/nested_planner.py` (`_divergent_key_windows`), `optimizer/nested_fetch.py` (`unwindowable_child_queryset_reason`), `connection.py` (`_build_relation_connection_resolver`). New modules consume `graph/` and are not imported by it.
+
+#### Definition of done
+
+- [ ] `StructuralOptimizationTemplate` / `BoundOptimizationPlan` ship frozen; no request value storable in any structural object; the adversarial construction test raises.
+- [ ] The plan cache keys by root-subtree fingerprint; the R1 matrix is green live (isolation, aliasing, re-embedding, full-hit repeat).
+- [ ] Visibility-bearing relation templates are cross-request cacheable; `get_queryset` binds per request; one bound child recipe per relation/argument/scope key per request.
+- [ ] Filtered/ordered/search-bearing nested connections batch with query counts independent of parent count (exact per-backend equalities, never inequalities); per-alias batching proven; the R3 filtered arm asserts equalities.
+- [ ] Strict mode refuses unproven window shapes with a targeted error; non-strict falls back visibly; no code path injects `DISTINCT`.
+- [ ] The operation plan map is complete and deterministic under reversed async completion order; the legacy key still serves existing readers.
+- [ ] Sync and async agree across every arm; the no-extension and `OptimizerHint.SKIP` arms are unchanged; 100% package coverage; live-first placement respected.
+- [ ] Version quintet and `CHANGELOG.md` untouched — the `0.1.6` release state is owned by the explain card's joint cut.
+
+#### Architectural posture
+
+- **Amendment obligations recorded at this card's creation** — explain (TODO-BETA-064-0.1.6) consumes the operation plan map and retires the legacy `DST_OPTIMIZER_PLAN` key; the adversarial suite (TODO-BETA-068-0.1.8) gains template-store, binding-boundary, and proof-gate targets. This card changes the introspection data, not its readers — the legacy key stays last-wins until explain rewires.
+- No request value — user, tenant, queryset, database alias, or argument value — is storable in any structural object (the substrate card's posture, extended verbatim); enforced structurally and tested adversarially. Pluggable nested-fetch strategies must consume the sidecar normalization and the `RowIdentityProof` gate — a strategy that self-certifies child row identity would reopen the window-safety hole in a new backend. The framework never injects `DISTINCT` to launder an unproven shape.
+
+#### Why it matters
+
+- Whole-operation cache keys churn sibling plans: five roots across 32 combinations of five binary directive/pagination choices can occupy 160 entries of a 256-cap cache that evicts a quarter when full; toggling one root's `@include` variable invalidates every sibling's plan.
+- Request-bound visibility poisons cacheability: one `get_queryset`-bearing child type marks the entire parent plan `cacheable = False`, so the most security-sensitive types are exactly the ones that replan on every request.
+- Filtered/ordered nested connections execute per parent: one hundred parents with a filtered child connection issue one hundred (or, with `totalCount`, two hundred) child statements. The substrate card pinned this arm as characterized-only and assigned closing it here.
+- Introspection is last-wins and windows are unproven: a five-root operation exposes only the last-published plan (completion-order dependent under async), and the window gate passes a consumer join that multiplies child rows — corrupting `totalCount`, page boundaries, and next-page flags.
+
+#### Dependencies
+
+- Gated on the substrate landing first: `EdgeScope` supplies the visibility-scoped child base the sidecar pipeline normalizes, `RowIdentityProof` is the vocabulary the window gate enforces, `FieldDependencyPlan` feeds the template's dependency graph, and the operation memo is the request-local tier the binding reuses.
+
+#### Note
+
+- `docs/SPECS/spec-063-structural_templates-0_1_6.md` is the card's spec of record (written; five slices planned).
+
+#### Card references
+
+- Dependency: Gated on the substrate landing first: `EdgeScope` supplies the visibility-scoped child base the sidecar pipeline normalizes, `RowIdentityProof` is the vocabulary the window gate enforces, `FieldDependencyPlan` feeds the template's dependency graph, and the operation memo is the request-local tier the binding reuses. -> `TODO-BETA-053-0.1.1` - Graph substrate: shared graph policy and dependency planning
+- Related: Amendment obligation: explain renders the operation plan map (every root exactly once, shared dependencies with hit counts, redacted scope values) and retires the legacy last-wins `DST_OPTIMIZER_PLAN` context key. -> `TODO-BETA-064-0.1.6` - Optimizer explain mode
+- Related: Amendment obligation: the adversarial suite gains structural-template targets (template-store keying/under-keying, the structural/bound binding boundary, proof-gate refusal paths, sidecar cache isolation). -> `TODO-BETA-068-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-063-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-064-0.1.6 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Status: To Do
@@ -1029,7 +1100,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 <a id="mutation_idempotency_keys"></a>
-### [TODO-BETA-064-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
+### [TODO-BETA-065-0.1.7 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
 
 - Priority: High
 - Status: To Do
@@ -1098,7 +1169,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key"></a>
-### [TODO-BETA-065-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
+### [TODO-BETA-066-0.1.7 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1162,7 +1233,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-066-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-067-0.1.8 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Status: To Do
@@ -1171,7 +1242,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Dependencies
 
-- `TODO-BETA-065-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- `TODO-BETA-066-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 #### Scope
 
@@ -1200,10 +1271,10 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Card references
 
-- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-065-0.1.6`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-065-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-066-0.1.7`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-066-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-067-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-068-0.1.8 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Status: To Do
@@ -1217,7 +1288,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Dependencies
 
-- `TODO-BETA-065-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- `TODO-BETA-066-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 #### Scope
 
@@ -1255,10 +1326,10 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Card references
 
 - Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
-- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-065-0.1.6`) must ship first so the adversarial suite exercises the released public surface before the stable gate. -> `TODO-BETA-065-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-066-0.1.7`) must ship first so the adversarial suite exercises the released public surface before the stable gate. -> `TODO-BETA-066-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-068-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-069-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Status: To Do
@@ -1276,7 +1347,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-067-0.1.7`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-068-0.1.8`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1307,8 +1378,8 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-067-0.1.7`) is in `DONE`. -> `TODO-BETA-053-0.1.1` - Graph substrate: shared graph policy and dependency planning
-- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-067-0.1.7`) is in `DONE`. -> `TODO-BETA-067-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-068-0.1.8`) is in `DONE`. -> `TODO-BETA-053-0.1.1` - Graph substrate: shared graph policy and dependency planning
+- Related: Every other Beta card (`TODO-BETA-053-0.1.1` through `TODO-BETA-068-0.1.8`) is in `DONE`. -> `TODO-BETA-068-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
 
 ## Done
 
@@ -2102,7 +2173,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [x] Migration guide (`TODO-BETA-066-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [x] Migration guide (`TODO-BETA-067-0.1.8`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -2112,7 +2183,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-066-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-067-0.1.8`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -2126,7 +2197,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Card references
 
-- Related: Migration guide (`TODO-BETA-066-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-066-0.1.7` - Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-067-0.1.8`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-067-0.1.8` - Migration and adoption guides
 
 <a id="auth_mutations_login_logout_register"></a>
 ### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)

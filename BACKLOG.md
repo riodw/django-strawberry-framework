@@ -1790,7 +1790,7 @@ Cards in this section are intentionally unscheduled — kept for design context,
 must define exactly which concrete schema hookups count and keep multi-type-per-model support
 intentional.
 
-**Source**: relocated 2026-07-20 from the migration-guides card (now `TODO-BETA-066-0.1.7`; targeting `0.1.6` at relocation time), where it was implementation scope on a docs-only card.
+**Source**: relocated 2026-07-20 from the migration-guides card (now `TODO-BETA-067-0.1.8`; targeting `0.1.6` at relocation time), where it was implementation scope on a docs-only card.
 
 **What we'd do**: Add a DSF settings knob capping the number of schema hookups per model, raising a loud error when a model exceeds the cap (original card bullet: "Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more").
 

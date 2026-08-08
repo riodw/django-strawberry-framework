@@ -1397,7 +1397,7 @@ unions correctness sentinel sets so nested plans coexist, but stores
 One five-root operation therefore exposes only the last published plan. Under asynchronous
 sibling resolution, the surviving plan can depend on completion order.
 
-Card 063's current explain design assumes this single context plan.
+Card 064's current explain design assumes this single context plan.
 
 ### Required behavior
 
@@ -1865,7 +1865,7 @@ Required coordination:
 - otherwise more queries enter the current per-parent sidecar fallback;
 - the resource estimator should account for explicit fallback cost until batching exists.
 
-#### `TODO-BETA-063` — optimizer explain mode
+#### `TODO-BETA-064` — optimizer explain mode
 
 Direct benefit:
 
@@ -1877,7 +1877,7 @@ Required amendment:
 - expose every root, cache hit/miss, visibility binding, predicate shape, edge scope,
   row-identity proof, nested strategy, and fallback reason.
 
-#### `TODO-BETA-067` — adversarial tests
+#### `TODO-BETA-068` — adversarial tests
 
 Add:
 
@@ -1919,7 +1919,7 @@ product-catalog live HTTP tests. Neither card currently ships the schedule-shape
 dashboard. That dashboard and its graph-security fixtures may use these test-placement
 patterns only through a separately scoped future slice whose dependencies are explicit.
 
-#### `TODO-BETA-066` — migration and adoption guides
+#### `TODO-BETA-067` — migration and adoption guides
 
 Document the correct DRF migration:
 
@@ -1930,7 +1930,7 @@ Document the correct DRF migration:
 - give each model a scope adapter;
 - declare nested edge visibility independently from root visibility.
 
-#### `TODO-STABLE-068` — stable release
+#### `TODO-STABLE-069` — stable release
 
 Release verification only. The graph foundations must land before its public API freeze.
 
@@ -1941,8 +1941,8 @@ Release verification only. The graph foundations must land before its public API
 - `TODO-ALPHA-050` — debug package extraction.
 - `TODO-ALPHA-052` — beta release.
 - `TODO-BETA-060` — enum naming.
-- `TODO-BETA-064` — mutation idempotency.
-- `TODO-BETA-065` — configurable filter key names.
+- `TODO-BETA-065` — mutation idempotency.
+- `TODO-BETA-066` — configurable filter key names.
 
 These cards may be important to the project but do not close schedule graph planning.
 
@@ -2062,7 +2062,7 @@ Consumers:
 
 ### New optimizer card: structural templates and nested sidecar batching
 
-Land before card 063 and before stable.
+Land before card 064 and before stable.
 
 Scope:
 
@@ -2087,11 +2087,11 @@ graph policy and dependency foundation
 056 full-text on shared annotation shaping
 057 aggregation on shared edge scope
 058/059 Layer 3 binding and redaction
-structural templates and nested sidecar batching
-063 explain over operation plan map
-067 adversarial graph suite
-066 migration guide update
-068 stable audit
+063 structural templates and nested sidecar batching
+064 explain over operation plan map
+068 adversarial graph suite
+067 migration guide update
+069 stable audit
 ```
 
 Cards without dependencies on this work can continue independently. The order above is about
@@ -2752,7 +2752,7 @@ strategies only to proven row-identity shapes.
 
 ### Phase 8: explain and adversarial coverage
 
-Amend cards 063 and 067 to expose and attack every new abstraction.
+Amend cards 064 and 068 to expose and attack every new abstraction.
 
 ### Phase 9: Medtrics recreation
 

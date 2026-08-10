@@ -880,6 +880,84 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
 
 
 @pytest.mark.django_db
+def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts():
+    """An id-only forward FK stays one query as the elided rows multiply.
+
+    The load-bearing property of FK-id elision is that it removes a query,
+    not that it produces a particular wire result: the elided stub and a
+    per-row lazy load return the SAME JSON, so a data-only assertion cannot
+    tell them apart. Two source cardinalities can - a batched plan holds at
+    one query while a per-row fallback scales with the number of rows
+    carrying a non-null FK.
+
+    The elision only stays batched while the FK column is actually
+    projected: ``optimizer/walker.py::_record_relation_access`` appends the
+    FK ``attname`` to ``plan.only_fields``, and
+    ``types/resolvers.py::_build_fk_id_stub`` reads exactly that column off
+    the source row. A plan that elides the JOIN without projecting the
+    column leaves the ``attname`` deferred, the stub builder returns its
+    elision-unsafe sentinel, and every non-null row falls back to a lazy
+    load - identical JSON, N+1 queries. The two counts below are absolute
+    and measured, so that degradation shows up as 3 and 7 rather than 1
+    and 1.
+    """
+    root = _seed_specimen(label="root")
+    for index in range(2):
+        _seed_specimen(label=f"small_{index}", parent=root)
+
+    document = """
+        query {
+          allScalarSpecimens {
+            label
+            parent { id }
+          }
+        }
+        """
+
+    with CaptureQueriesContext(connection) as small_captured:
+        small_response = _post_graphql(document)
+
+    assert small_response.status_code == 200
+    small_body = small_response.json()
+    assert "errors" not in small_body, small_body
+    small_rows = small_body["data"]["allScalarSpecimens"]
+    assert len(small_rows) == 3
+    assert [row["parent"] for row in small_rows if row["label"] != "root"] == [
+        {"id": root.id},
+        {"id": root.id},
+    ]
+
+    # Four more elided rows: a per-row fallback would cost four more queries.
+    for index in range(4):
+        _seed_specimen(label=f"large_{index}", parent=root)
+
+    with CaptureQueriesContext(connection) as large_captured:
+        large_response = _post_graphql(document)
+
+    assert large_response.status_code == 200
+    large_body = large_response.json()
+    assert "errors" not in large_body, large_body
+    large_rows = large_body["data"]["allScalarSpecimens"]
+    assert len(large_rows) == 7
+    assert [row["parent"] for row in large_rows if row["label"] != "root"] == [
+        {"id": root.id},
+    ] * 6
+
+    # Absolute counts, taken from a real run: ONE SELECT at both
+    # cardinalities. Equality alone would also hold for two equally-bad
+    # plans, so both the absolute value and the flatness are pinned.
+    assert len(small_captured) == 1, [q["sql"] for q in small_captured]
+    assert len(large_captured) == 1, [q["sql"] for q in large_captured]
+    assert len(large_captured) == len(small_captured)
+    # The single query carries the FK column and no JOIN - the projected
+    # column is what keeps the stub builder off the lazy-load path.
+    for captured in (small_captured, large_captured):
+        sql = captured[0]["sql"]
+        assert "parent_id" in sql, sql
+        assert "JOIN" not in sql.upper(), sql
+
+
+@pytest.mark.django_db
 def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_query():
     """Selecting any target scalar beyond ``id`` forces the normal JOIN path.
 

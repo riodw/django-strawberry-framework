@@ -39,7 +39,7 @@ DEFAULT_MARKERS = (
     "OptimizationPlan",
     "OptimizerHint",
     "dst_optimizer_plan",
-    "_optimizer_field_map",
+    "field_map",
 )
 CONTROL_FLOW_NODES = (
     ast.If,

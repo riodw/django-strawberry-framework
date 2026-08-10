@@ -387,7 +387,7 @@ The optimizer recognizes synthesized `<field>Connection` selections inside a par
 
 The generated connection class then serves `edges`, cursors, `pageInfo`, and `totalCount` from the prefetched window's row-number annotations plus its conditional count/keyset-seek annotations or count-free n+1 probe — one batched query per relation window, zero per-parent queries on the fast path. Retained marker rows directly serve `first: 0`, overshot offset `after:`, and corresponding forward keyset empty pages: a physically empty planned window proves the parent has no rows, while a marker-only window carries the true count and page flags. Genuine fallbacks stay distinct. A sidecar or unsupported backward window normally leaves only that response key unplanned (and the resolver refuses a stale sidecar window defensively); `last: 0` is likewise unplanned so Strawberry's serve-all quirk runs per-parent; conflicting argument payloads for one response key leave that connection fully unplanned; and a handed-off wrapper missing a required count or seek annotation recovers through its defensive per-parent callable. Argument-driven non-planning emits a debug log naming the response key and reason. Whole-relation fallbacks remain visible to [Strictness mode](#strictness-mode): [`OptimizerHint`](#optimizerhint)`.SKIP, an unwindowable relation or child queryset (including `.distinct()`), and a relation shape recognized only on a secondary [`DjangoType`](#djangotype). The `.distinct()` fallback is a correctness guard: SQL evaluates window functions before `DISTINCT`, so a `Count(1) OVER` over a distinct child would over-count — the relation is conservatively left per-parent instead. The mechanism needs a window-capable backend (the package floor `Django>=5.2` with SQLite ≥ 3.25 covers every supported configuration); an exotic backend without window support raises its own `NotSupportedError`, and the recourse is `relation_shapes = {"<field>": "list"}` or running without the optimizer.
 
-The nested fetch strategy is fixed per [`DjangoOptimizerExtension`](#djangooptimizerextension) instance: `"windowed"` is the default, `"lateral"` plans a Postgres-capable `CROSS JOIN LATERAL` queryset, and `"auto"` keeps one cache-stable lateral-capable window plan whose fetch-time decision follows the nested queryset's effective DB alias (including `.using(...)` and router choices). PostgreSQL uses lateral SQL when the query shape is supported; every non-Postgres alias and every unrecognized lateral shape executes the same already-windowed ORM body, so fallback changes performance rather than pagination correctness.
+The nested fetch strategy defaults per [`DjangoOptimizerExtension`](#djangooptimizerextension) instance — [`OptimizerHint`](#optimizerhint)`.strategy(...)` overrides it for one connection field: `"windowed"` is the default, `"lateral"` plans a Postgres-capable `CROSS JOIN LATERAL` queryset, and `"auto"` keeps one cache-stable lateral-capable window plan whose fetch-time decision follows the nested queryset's effective DB alias (including `.using(...)` and router choices). PostgreSQL uses lateral SQL when the query shape is supported; every non-Postgres alias and every unrecognized lateral shape executes the same already-windowed ORM body, so fallback changes performance rather than pagination correctness.
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Plan cache](#plan-cache) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
@@ -742,7 +742,7 @@ Shipped behavior:
 
 What the optimizer will not touch: a queryset the consumer already evaluated (G1), and column projection on non-`QUERY` operations (G2).
 
-Constructor accepts a `strictness` argument — see [Strictness mode](#strictness-mode). Classmethod [`check_schema`](#schema-audit) audits schema-reachable `DjangoType`s.
+Constructor accepts a `strictness` argument — see [Strictness mode](#strictness-mode). Static method [`check_schema`](#schema-audit) audits schema-reachable `DjangoType`s.
 
 **See also:** [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation).
 
@@ -1399,16 +1399,18 @@ Supported modes:
 - `OptimizerHint.select_related()` — force `select_related`.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`.
 - `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation.
+- `OptimizerHint.strategy(...)` — select the nested-connection fetch backend for one Relay connection field; the backends and their selection rules are documented under "Nested connection indexing" in `docs/README.md`.
 
 Validation: ``OptimizerHint(...)`` rejects conflicting flag combinations at
 construction time and raises [`ConfigurationError`](#configurationerror).
 The factories (`SKIP`, `select_related()`, `prefetch_related()`,
-`prefetch(Prefetch(...))`) are the documented consumer API; direct
-construction is supported but the same four shapes are the only ones the
-walker dispatches, and any other combination — `skip=True` with any of the
+`prefetch(Prefetch(...))`, `strategy(...)`) are the documented consumer API;
+direct construction is supported but the first four shapes are the only ones
+the walker dispatches, and any other combination — `skip=True` with any of the
 three other flags, `force_select=True` with `force_prefetch=True`,
-`prefetch_obj=` set with `force_select=True` or `force_prefetch=True`, or a
-`prefetch_obj=` value that is not a `django.db.models.Prefetch` instance —
+`prefetch_obj=` set with `force_select=True` or `force_prefetch=True`, a
+`prefetch_obj=` value that is not a `django.db.models.Prefetch` instance, or
+`nested_strategy=` set with `skip=True`, `prefetch_obj=`, or `force_select=True` —
 is rejected before the hint can reach `Meta.optimizer_hints`.
 
 **See also:** [`Meta.optimizer_hints`](#metaoptimizer_hints) · [`DjangoOptimizerExtension`](#djangooptimizerextension).

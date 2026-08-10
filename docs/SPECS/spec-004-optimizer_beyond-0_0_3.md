@@ -1,298 +1,174 @@
 # Spec: Optimizer — Beyond strawberry-graphql-django
 
+Deliberation for this spec lives in its companion [rationale file][spec-004-rationale]: the per-slice `**The win.**` arguments, the eight fenced implementation proposals and where the shipped code departed from each, the whole recommended-build-sequence argument the former `## Priority and ordering` section carried, the 2026-04-30 extension-lifecycle spike and the consumer recommendation it reached, the shapes each decision rejected and why each lost, and every claim the spec once made and may no longer make. Read the spec for what holds; read that file for why it holds. Why the optimizer became a family of documents at all is `docs/SPECS/spec-002-optimizer-0_0_2.md`'s own deliberation, recorded in its rationale file and not restated here.
+
 ## Problem statement
 
 `spec-002-optimizer-0_0_2.md` O1–O6 rebuild the N+1 optimizer on the same architecture strawberry-graphql-django pioneered: root-gated resolve hook, selection-tree walker, cardinality-based `select_related`/`prefetch_related` dispatch, `Prefetch` downgrade for visibility-aware target types. That foundation is correct and battle-tested. But strawberry-graphql-django stopped there — every request re-walks the tree, every forward FK emits a JOIN even when the parent row already carries the answer, and the optimizer's behavior is invisible to consumers outside of raw SQL logs.
 
-This spec covers eight improvements that the existing libraries do not ship. They can land in any order after O3 (the root-gated hook) is effective, subject to the cross-dependencies noted in each slice's "Depends on" section and the recommended sequence in "Priority and ordering". The numbering is priority order, not dependency order.
+This spec covers eight improvements that the existing libraries do not ship. Each rests on O3 (the root-gated hook) plus the cross-dependencies its own `**Depends on.**` paragraph names. The numbering is priority order, not dependency order; the recommended build sequence and the reasoning behind it are in the [rationale file][spec-004-rationale].
 
 ## Current state
 
-O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O4 (nested prefetch chains), O5 ([`only()`][glossary-only-projection] projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for nested relation queries, including B2 forward-[FK-id elision][glossary-fk-id-elision] for `id`-only target selections and B3 strictness keys that remain branch-sensitive under aliases.
+O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O4 (nested prefetch chains), O5 ([`only()`][glossary-only-projection] projection), and O6 (`Prefetch` downgrade) are the foundation the eight improvements extend; `docs/SPECS/spec-002-optimizer-0_0_2.md` and `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md` own them. On top of that foundation the optimizer is effective end-to-end for nested relation queries, including B2 forward-[FK-id elision][glossary-fk-id-elision] for `id`-only target selections and B3 strictness keys that remain branch-sensitive under aliases.
 
-## Proposed improvements
+## The eight improvements
 
 ### B1 — AST-cached plans
 
-**The win.** strawberry-graphql-django walks the selection tree on every request. For a production endpoint serving the same query 10,000 times/second, that is 10,000 identical tree walks producing the identical `OptimizationPlan`. An LRU cache keyed on `(document_hash, directive_vars, target_model)` turns 99% of repeated queries into a dictionary lookup. Production apps live on a handful of hot queries — this is the single biggest performance improvement on the table.
+**Mechanism.** The plan is a function of the GraphQL document AST (which determines the selection tree structure), the variable values that affect which branches the walker includes, and the target Django model (which determines which fields exist and their cardinalities). Everything else — the registry, the field metadata — is static for the lifetime of the schema. The cache value is the `OptimizationPlan`; the cache key carries five components:
 
-**Mechanism.** The plan is a function of three inputs: the GraphQL document AST (which determines the selection tree structure), the variable values that affect `@skip`/`@include` evaluation (which determine which branches the walker includes), and the target Django model (which determines which fields exist and their cardinalities). Everything else — the registry, the field metadata — is static for the lifetime of the schema. So the cache key is `(hash(document), frozenset(skip_include_vars), target_model)` and the cache value is the `OptimizationPlan`. The `target_model` component is essential: `_optimize` runs once per root resolver, and a single operation can have multiple root fields returning different models (e.g., `{ categories { ... } items { ... } }`). Without the model in the key, a cache hit from one root field would return the wrong plan for another.
+- The **printed** AST of the selected operation, with the printed definitions of every named fragment reachable from it appended. The printed string is stored rather than a hash of it: a hash admits a collision, and a collision here serves one document's plan to a structurally different document, silently and with no failure mode a test can catch. Printing the selected operation rather than the raw source body is also what keeps a multi-operation document (`query A {...} query B {...}`) from collapsing to one key.
+- The frozenset of variable `(name, value)` pairs that affect the selection tree (see `**Directive-variable extraction.**`).
+- The target Django model. This component is essential: `_optimize` runs once per root resolver, and a single operation can have multiple root fields returning different models (e.g., `{ categories { ... } items { ... } }`). Without the model in the key, a cache hit from one root field would return the wrong plan for another.
+- The root response path, so two root fields returning the *same* model do not share a plan — the collision the model component closes, one level further in.
+- The resolver's origin Strawberry type, so a primary-return and a secondary-return resolver over one model do not share a plan. Several `DjangoType`s over one model is `docs/SPECS/spec-018-meta_primary-0_0_6.md`'s surface.
 
-**Directive-variable extraction.** `frozenset(skip_include_vars)` requires knowing *which* variables affect `@skip`/`@include` directives. Including all operation variables would cause cardinality explosion (a query with 10 filter variables would produce 2^10 cache entries even though none of them affect the selection tree). The correct approach: pre-walk the document AST once during cache-key construction to collect only the variable names referenced inside `@skip`/`@include` directive arguments, then extract just those values from `info.variable_values`. For queries with no conditional directives (the common production case), the directive-var set is empty and the cache collapses to `(document_hash, frozenset(), target_model)` — one entry per document per model.
+Converted selections reach the cache behind a zero-arg callable rather than as a list, so a cache hit never pays for the AST-to-selection conversion; the callable is invoked at most once, and only on the build path.
 
-**Cache lifetime (spike completed 2026-04-30).** Strawberry's `Schema` has two extension accessors: `_sync_extensions` (`@cached_property` — instantiated once per schema, reused across all sync requests) and `_async_extensions` (plain `@property` — fresh instances per access so concurrent async requests don't share state). However, `get_extensions()` passes through already-instantiated objects unchanged via an `isinstance` check. So consumers passing `[DjangoOptimizerExtension][glossary-djangooptimizerextension]()` (an instance) get the same object reused in both sync and async modes; consumers passing the bare class get fresh instances in async mode (zero cache hit rate). **Decision:** use `self._plan_cache` (a dict on the instance). Document in the class docstring and README that consumers should pass an instance (`extensions=[DjangoOptimizerExtension()]`), not the bare class, to benefit from plan caching in async mode. This matches `strawberry-graphql-django`'s recommended usage pattern. Use a simple bounded-size dict (not `functools.lru_cache`, since the cache key includes a model class which is not hashable by `lru_cache`'s default).
+**Directive-variable extraction.** The variable component requires knowing *which* variables affect the selection tree. Including all operation variables would cause cardinality explosion (a query with 10 filter variables would produce 2^10 cache entries even though none of them affect the selection tree). The document AST is pre-walked once during cache-key construction to collect two families of variable name: those referenced inside `@skip`/`@include` directive arguments, and those supplying `first`/`last`/`before`/`after` on a **non-root** field node — nested pagination values bake into windowed prefetch querysets and so must key the cache, while root pagination stays out because root slicing happens after the plan is applied. The nested-connection windows those values feed belong to `docs/SPECS/spec-033-connection_optimizer-0_0_9.md`.
 
-Pseudo code:
+Collection is by variable name and deliberately over-collects: a duplicate cache entry is the cost of over-collecting, a wrong plan is the cost of under-collecting. The collected values are then read out of `info.variable_values` and normalized to a hashable form. The frozenset holds `(name, value)` **pairs**, not bare names — the name alone does not distinguish two executions of the same document that resolved the same directive variable differently — and a collected name the operation did not supply a value for is omitted rather than defaulted. For queries with no conditional directives and no nested pagination variables (the common production case), the set is empty and the cache collapses to one entry per document per model per root path per origin.
 
-```text
-# directive-var extraction (runs once per cache-key construction):
-skip_include_var_names = collect_directive_vars(info.operation)  # pre-walk AST
-relevant_vars = frozenset(
-    (k, info.variable_values[k]) for k in skip_include_var_names
-    if k in info.variable_values
-)
-cache_key = (document_hash(info), relevant_vars, target_model)
-plan = _plan_cache.get(cache_key)  # module-level or self, per lifecycle spike
-if plan is None:
-    plan = plan_optimizations(selected_fields, target_model)
-    _plan_cache[cache_key] = plan
-return plan.apply(queryset)
-```
+**Cache storage.** The cache is `self._plan_cache` — an ordered dict on the [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] instance, bounded at 256 entries, which evicts its **least-recently-used** entries when it reaches that bound and drops a quarter of them at once so the eviction cost amortises. The LRU is hand-rolled rather than reached for through `functools.lru_cache` because that decorator caches a *function* and this cache is bound to the extension instance; it also evicts one entry at a time where this cache drops a quarter in one sweep. Because the cache is bound to the instance, the supported way to install the extension is a module-level singleton wrapped in a factory; `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md` Decision 3 owns that construction contract.
 
-**Cache invalidation.** The plan is immutable once built — no invalidation needed within a schema lifetime. Schema rebuild (e.g., hot-reload in dev) creates fresh extension instances (or resets the module-level cache via `weakref` callback), which start with empty caches. Static queries (no conditional directives) collapse to a single cache entry per document per model.
+**Cache invalidation.** The plan is immutable once built, so no invalidation is needed within a schema lifetime — and the immutability is structural rather than a convention: a plan is finalized at handoff (`optimizer/plans.py::OptimizationPlan.finalize`) and a later mutation of it raises (`::_assert_under_construction`). No sibling spec states that enforcement; it and the requirement are both this slice's. Schema rebuild (e.g., hot-reload in dev) creates fresh extension instances, which start with empty caches.
 
-**Test surface.** Cache hit/miss counts via a `cache_info()` method (mirrors `lru_cache.cache_info()`; public, not underscore-prefixed — consumers will want it for benchmarks). End-to-end test: execute the same query twice, assert the walker ran once (mock or count). Edge case: same document with different `@skip` variable values produces different plans and both are cached. Edge case: query with filter variables but no `@skip`/`@include` — all executions share a single cache entry regardless of filter values.
+The plan cache is not the optimizer's only memo. Two per-execution memos are established and reset inside `on_execute` — one for built plans the cross-request cache refuses (a plan a nested fallback rebuilds once per parent row is not cacheable), one for the operation-constant cache-key parts — and a cross-request memo holds the printed-document key so a hot query does not re-print its AST. The nested-connection fallback that makes the per-execution memos load-bearing belongs to `docs/SPECS/spec-033-connection_optimizer-0_0_9.md`.
+
+**Test surface.** `cache_info()` is public API, not underscore-prefixed, because consumers want it for benchmarks; it returns a named tuple of `hits`, `misses`, and `size`. The counters are best-effort — they are incremented without a lock, and an execution-memo hit touches neither — so `misses` counts actual walker builds rather than key misses. End-to-end test: execute the same query twice, assert the walker ran once (mock or count). Edge case: same document with different `@skip` variable values produces different plans and both are cached. Edge case: query with filter variables but no `@skip`/`@include` — all executions share a single cache entry regardless of filter values.
+
+The competitive argument for this slice, the extension-lifecycle spike behind the cache-storage decision together with the consumer recommendation it reached, and the key-construction shape this section proposed are in the [rationale file][spec-004-rationale].
 
 **Depends on.** O3 (shipped). Independent of O4–O6.
 
 ### B2 — Forward-FK-id elision
 
-**The win.** `{ items { name category { id } } }` does not need a JOIN. The `category_id` column is already on the `Item` row — Django stores FK values as `<field>_id` on the source model. strawberry-graphql-django emits `select_related("category")` anyway, pulling the entire `Category` row across a JOIN for nothing. We can detect "the only fields selected on the FK target are columns the source model already has" and skip the JOIN entirely.
+**Mechanism.** In the walker's relation dispatch (`optimizer/walker.py::_plan_select_relation`), before emitting a `select_related` entry for a forward FK: inspect the child selections on the FK target. If the only selected scalar on the target is the target model's concrete primary-key field, and the FK points at that primary key, elide the `select_related` and instead ensure the `<fk_name>_id` column reaches the `only()` set (O5). The resolver for the FK field then serves the selection from that column without loading the related row.
 
-**Mechanism.** In the walker's relation dispatch (currently in `_walk_selections`), before emitting a `select_related` entry for a forward FK: inspect the child selections on the FK target. If the only selected scalar on the target is the target model's concrete primary-key field, and the FK points at that primary key, elide the `select_related` and instead ensure the `<fk_name>_id` column is in the `only()` set (O5). The resolver for the FK field can then return a loaded-state stub object or resolve from the cached `_id` value.
+The column append is the shared first step of both the select and the prefetch branch, and it is gated by the operation-wide projection gate that suppresses `.only(...)` outside `QUERY` operations — `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md` owns that gate. It must run **ahead** of the elision short-circuit; `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md` states that ordering invariant and what reversing it costs. The order is pinned by assertion, not by statement position alone — see the query-count row in **Test surface** below.
 
 The common case is `{ category { id } }` — consumers select the FK target's primary key to pass to the frontend as a reference. The parent row's `category_id` is the same value when the FK targets the related model's primary key. No JOIN needed.
 
-Pseudo code:
+**Applicability.** The elision applies to both forward `ForeignKey` (`many_to_one`) and forward `OneToOneField` (non-auto-created `one_to_one`) when the relation targets the related model's primary key. Both store the target primary-key value on the source row. Reverse OneToOne (`auto_created=True`) does not have an `_id` column on the source and is excluded. Foreign keys using `to_field` against a non-PK target are also excluded because the source column stores the target field value, not the related instance's primary key. A target with a composite primary key is excluded too — one source column cannot carry a composite key.
 
-```text
-if (field.many_to_one or field.one_to_one) and selected_child_scalars == {target_pk_name}:
-    if field.target_field != field.related_model._meta.pk:
-        return select_related
-    if target_type.has_custom_id_resolver(target_pk_name):
-        return select_related
-    plan.only_fields.add(field.attname)  # "category_id"
-    mark_fk_id_elided(field.name)
-    return
-plan.select_related.add(field.name)
-```
+**Resolver change required.** When the JOIN is elided, a plain forward resolver (`getattr(root, field_name)`) would trigger a lazy load because Django has no cached related object. The resolver instead returns a lightweight stub — `target_model(pk=getattr(root, field.attname))` — marked as a loaded row (`_state.adding = False`) rather than a new unsaved instance, with the stub's database alias set from the read router for the target model so it is routed like any other loaded instance (`docs/SPECS/spec-023-multi_db-0_0_7.md` owns multi-database routing). The elision flag is keyed by the **branch-sensitive resolver key** (parent type, field name, and GraphQL runtime response path) to avoid leaking elision state between aliases, sibling branches, or root fields in the same query. A query like `{ a: allItems { category { id } } b: allItems { category { id name } } }` elides in branch `a` and not in branch `b`; a flat `field_name`-keyed flag would incorrectly apply to both. A selection reachable under more than one response key therefore records one identity per key rather than one identity for the merged node — `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md` owns that fan-out rule, and `docs/SPECS/spec-033-connection_optimizer-0_0_9.md` multiplies it over nested-connection runtime prefixes. The flag is stashed on `info.context` (via B5's mechanism) and the resolver consults the same resolver-key identity the optimizer used when planning.
 
-**Applicability.** The elision applies to both forward `ForeignKey` (`many_to_one`) and forward `OneToOneField` (non-auto-created `one_to_one`) when the relation targets the related model's primary key. Both store the target primary-key value on the source row. Reverse OneToOne (`auto_created=True`) does not have an `_id` column on the source and is excluded. Foreign keys using `to_field` against a non-PK target are also excluded because the source column stores the target field value, not the related instance's primary key.
+The stub cannot be built when a consumer projection has deferred the FK column on the parent row. That case does not fall back to a silent per-row lazy load: the resolver falls back **loudly**, so B3 strictness sees the access. `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md` owns that fallback.
 
-**Resolver change required.** When the JOIN is elided, the existing forward resolver (`getattr(root, field_name)`) would trigger a lazy load because Django has no cached related object. The resolver must be swapped to return a lightweight stub — e.g., `target_model(pk=getattr(root, field.attname))` — and mark it as a loaded row (`_state.adding = False`) rather than a new unsaved instance. The elision flag must be keyed by the **branch-sensitive resolver key** (parent type, field name, and GraphQL runtime response path) to avoid leaking elision state between aliases, sibling branches, or root fields in the same query. A query like `{ a: allItems { category { id } } b: allItems { category { id name } } }` must elide in branch `a` but not in branch `b`; a flat `field_name`-keyed flag would incorrectly apply to both. The flag is stashed on `info.context` (via B5's mechanism) and the resolver consults the same resolver-key identity the optimizer used when planning.
+**Edge cases.** If the selection includes any scalar beyond the target primary key (e.g., `{ category { id name } }`), the JOIN is required — fall through to the existing `select_related` path. If the target type has a custom `get_queryset` (O6), the elision cannot fire because the visibility filter needs the JOIN. If the target type customizes resolution of the selected id/PK field, elision must also fall back to the JOIN because the custom resolver may depend on non-stubbed columns. Every fallback is explicit: a JOIN where the selection needs one, a strictness-visible relation access where the source row cannot serve the id. None of them degrades silently.
 
-**Edge cases.** If the selection includes any scalar beyond the target primary key (e.g., `{ category { id name } }`), the JOIN is required — fall through to the existing `select_related` path. If the target type has a custom `get_queryset` (O6), the elision cannot fire because the visibility filter needs the JOIN. If the target type customizes resolution of the selected id/PK field, elision must also fall back to the JOIN because the custom resolver may depend on non-stubbed columns. This is a pure performance optimization with a clean fallback.
+**Test surface.** Query-count assertion: `{ items { category { id } } }` issues 1 query (no JOIN) vs. 2 without elision. Negative case: `{ items { category { id name } } }` still JOINs. Edge case: nullable FK with `category { id }` returns `None` when the FK is null. Ordering invariant: the same document run at two parent cardinalities issues an equal, absolute query count — the assertion that fails if the FK-column append is ever moved behind the elision short-circuit, since the wire result is identical either way and only the count distinguishes an elided read from a per-row lazy load.
 
-**Test surface.** Query-count assertion: `{ items { category { id } } }` issues 1 query (no JOIN) vs. 2 without elision. Negative case: `{ items { category { id name } } }` still JOINs. Edge case: nullable FK with `category { id }` returns `None` when the FK is null.
+The competitive argument for this slice and the elision predicate this section proposed are in the [rationale file][spec-004-rationale].
 
-**Depends on.** O5 (`only()` projection) for the `<fk_name>_id` inclusion in the column set. O6 (visibility downgrade) for the `has_custom_get_queryset` guard. B5 (plan introspection via context) for the elision-flag stashing mechanism — the resolver reads the elision flag from `info.context` at call time, which is B5's stashing pattern. Can be spec'd now, implemented after O5+O6+B5.
+**Depends on.** O5 (`only()` projection) for the `<fk_name>_id` inclusion in the column set. O6 (visibility downgrade) for the `has_custom_get_queryset` guard. B5 (plan introspection via context) for the elision-flag stashing mechanism — the resolver reads the elision flag from `info.context` at call time, which is B5's stashing pattern.
 
 ### B3 — N+1 detection in dev mode
 
-**The win.** A `DjangoOptimizerExtension(strictness="warn")` flag that emits a loud warning every time a resolver accesses a relation that was not covered by the optimization plan. strawberry-graphql-django assumes consumers will notice N+1 via SQL logs or django-debug-toolbar. We hand them a smoke alarm instead of a smoke detector.
-
-**Mechanism.** When `strictness != "off"`, after applying the plan to the root queryset, attach a sentinel to `info.context` listing the planned resolver keys (uses B5's context-stashing mechanism). The O1 relation resolvers (in `types/resolvers.py`) check the sentinel: if a relation is accessed that is not in the plan, log a warning naming the field, the parent type, and the query path. In dev mode this surfaces immediately in the console; in production it is a standard Python `logging.warning` that monitoring can alert on.
+**Mechanism.** A `DjangoOptimizerExtension(strictness="warn")` flag emits a loud warning every time a resolver accesses a relation that was not covered by the optimization plan. When `strictness != "off"`, after applying the plan to the root queryset, a sentinel listing the planned resolver keys is attached to `info.context` under the key `dst_optimizer_planned` (uses B5's context-stashing mechanism). The O1 relation resolvers (in `types/resolvers.py`) check the sentinel: a relation accessed that is not in the plan is reported naming the field, plus an optional reason the calling site supplies for an access it can characterise further. In dev mode this surfaces immediately in the console; in production it is a standard Python `logging.warning` that monitoring can alert on.
 
 The sentinel is a `set[str]` of planned resolver keys, e.g. `ItemType.category@allItems.category` or `ItemType.category@allItems.cat`. The resolver key combines the parent type, the underlying field name (`info.field_name`, snake_cased), and the GraphQL runtime response path (`info.path` with list indexes stripped). This keeps aliases branch-sensitive without accepting bare field-name fallbacks that could leak across branches. Before warning or raising, the resolver also checks whether the access would actually lazy-load (via Django's `__dict__` cache for forward FK and `_prefetched_objects_cache` for many-side relations) — already-loaded relations are silently skipped even if not in the plan.
 
-**Prerequisite: resolver signature change.** The current O1 resolvers (`_make_relation_resolver` in `types/resolvers.py`) take only `root`. To read the sentinel from `info.context`, they need `info` as a parameter. Strawberry supports `info` in resolver signatures via type detection (`strawberry.types.Info`), so this is a backward-compatible addition — existing resolvers gain the parameter, Strawberry injects it automatically. The signature change ships as part of B3, not before.
+**Prerequisite: resolver signature change.** The O1 resolvers (`_make_relation_resolver` in `types/resolvers.py`) take `info` alongside `root` so they can read the sentinel from `info.context`. Strawberry supports `info` in resolver signatures via type detection (`strawberry.types.Info`), so it is a backward-compatible parameter — Strawberry injects it automatically. The signature belongs to B3.
 
-**Prerequisite: nested relation path construction.** A nested resolver for `entries` on an `Item` instance needs to know it is at path `items__entries`, not just `entries`. The resolver does not inherently know its depth in the tree. Two viable approaches: (a) reconstruct the dotted path from `info.path` (graphql-core's `Path` linked list — walk `.prev` to build the full path, then `snake_case` each segment), or (b) have the extension stash a mapping of `(parent_type, field_name) → full_path` on `info.context` alongside the sentinel so the resolver can look up its path in O(1). Approach (a) is simpler and requires no extra bookkeeping; approach (b) is faster for deep trees. The implementation should start with (a) and optimize to (b) only if profiling shows `info.path` traversal is measurable.
+**Prerequisite: nested relation path construction.** A nested resolver for `entries` on an `Item` instance needs to know it is at path `items__entries`, not just `entries`. The resolver does not inherently know its depth in the tree, so it reconstructs the path from `info.path` — graphql-core's `Path` linked list, walked back through `.prev` and snake-cased segment by segment. The walk is depth-bounded rather than unbounded, so a pathological `info.path` chain raises instead of looping.
 
-Pseudo code:
+**One further probe, and one override.** A nested connection served by a windowed prefetch is probed on its `to_attr` — a present attribute means the window already served the page, so the access is not a lazy load; that shape belongs to `docs/SPECS/spec-033-connection_optimizer-0_0_9.md`. And the loud fallback B2 takes when a consumer projection defers an elided FK column bypasses the "key is planned, therefore silent" short-circuit, so a planned key cannot mask a genuine lazy load (`docs/SPECS/spec-035-optimizer_hardening-0_0_10.md`).
 
-```text
-# strictness: Literal["off", "warn", "raise"] = "off"
-info.context.dst_optimizer_planned = planned_relation_paths(plan)
+**Strictness API.** The constructor parameter is `strictness` with three named levels — `"off"`, `"warn"`, `"raise"` — validated at construction, so an unrecognised value raises at the call site rather than at query time. `"off"` is the silent default. `"warn"` logs via `logger.warning`. `"raise"` raises `OptimizerError` to fail-fast in tests.
 
-# In the relation resolver (B3 adds `info` parameter):
-relation_path = build_dotted_path(info.path)  # walk info.path.prev chain
-if relation_path not in info.context.dst_optimizer_planned:
-    if will_lazy_load(root, field_name):
-        if strictness == "raise":
-            raise OptimizerError(f"Unplanned N+1: {relation_path}")
-        logger.warning("Potential N+1 on %s", relation_path)
-```
+The competitive argument for this slice, the second path-construction approach this section considered, the kwarg shape it rejected, and the detection loop it proposed are in the [rationale file][spec-004-rationale].
 
-**Strictness API.** The constructor parameter is `strictness: Literal["off", "warn", "raise"] = "off"` — a single keyword with three named levels. `"off"` is the current silent behavior. `"warn"` logs via `logger.warning`. `"raise"` raises `OptimizerError` to fail-fast in tests. Mixing a boolean (`strict=True`) with a future string (`strict="raise"`) in the same kwarg was rejected to avoid a deprecation cycle when the third level lands.
-
-**Test surface.** End-to-end: schema with `strictness="warn"`, query that accesses an unplanned relation, assert warning logged with the field path. `strictness="raise"` raises `OptimizerError`. Negative: planned relation does not warn. Alias: `{ cat: category { name } }` does not warn when `category` is planned. Already-loaded: consumer `select_related` pre-loads the relation → no warning even if absent from the plan. Unit: sentinel is populated correctly from the plan.
+**Test surface.** End-to-end: schema with `strictness="warn"`, query that accesses an unplanned relation, assert the warning is logged naming the field. `strictness="raise"` raises `OptimizerError`. Negative: planned relation does not warn. Alias: `{ cat: category { name } }` does not warn when `category` is planned. Already-loaded: consumer `select_related` pre-loads the relation → no warning even if absent from the plan. Unit: sentinel is populated correctly from the plan.
 
 **Depends on.** O3 (shipped). B5 (context stashing mechanism). Independent of O4–O6.
 
 ### B4 — [`Meta.optimizer_hints`][glossary-metaoptimizer-hints]
 
-**The win.** strawberry-graphql-django's optimization hints live on per-field decorators (`@strawberry_django.field(select_related="...")`) — fine for their decorator API, awkward for ours. Meta-class hints are a free win because we already have the surface. DRF teams will reach for this without asking.
+**Mechanism.** [`DjangoType`][glossary-djangotype] accepts an optional `Meta.optimizer_hints` dict. Keys are field names; values are [`OptimizerHint`][glossary-optimizerhint] instances that override the walker's automatic dispatch for that field.
 
-**Mechanism.** Add an optional `Meta.optimizer_hints` dict to [`DjangoType`][glossary-djangotype]. Keys are field names; values are [`OptimizerHint`][glossary-optimizerhint] instances that override the walker's automatic dispatch for that field.
-
-**`OptimizerHint` typed wrapper.** Mixing raw strings (`"skip"`), `Prefetch` objects, and dicts (`{"select_related": True}`) in the same field-value position works but reads awkwardly and makes `_validate_meta` validation ad-hoc. Instead, a small typed class provides uniform shape and clean validation:
+**`OptimizerHint` typed wrapper.** A small typed class gives every hint a uniform shape and one validation path:
 
 - `OptimizerHint.SKIP` — exclude this relation from the plan entirely (consumer manages it manually).
 - `OptimizerHint.select_related()` — force `select_related` regardless of cardinality.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related` regardless of cardinality.
 - `OptimizerHint.prefetch(Prefetch(...))` — use this specific `Prefetch` object instead of the auto-generated one.
+- `OptimizerHint.strategy(...)` — select the fetch backend for one nested Relay connection. The backends and their selection rules belong to the nested-connection fetch seam, documented under "Nested connection indexing" in `docs/README.md`; this slice owns only the hint that carries the override.
 
-`OptimizerHint` is a small class (or `enum` + factory methods) living in the optimizer subpackage and re-exported from the top-level `__init__.py` when B4 ships. The API surface is one import: `from django_strawberry_framework import OptimizerHint`.
+`OptimizerHint` is a frozen dataclass in the optimizer subpackage (`optimizer/hints.py`), re-exported from the top-level `__init__.py`. The API surface is one import: `from django_strawberry_framework import OptimizerHint`.
 
-The walker consults `optimizer_hints` before its default cardinality dispatch. If a hint exists for the current field, it takes precedence. This is the DRF-shaped analog of strawberry-graphql-django's `disable_optimization=True` per-field marker, but richer because it allows positive overrides (force a specific `Prefetch`), not just opt-out.
+The walker consults `optimizer_hints` before its default cardinality dispatch. If a hint exists for the current field, it takes precedence.
 
-**Walker needs registry lookup.** The walker currently receives `model` (a Django model class), not the registered `DjangoType`. To read `_optimizer_hints`, it must look up the type class via `registry.get(model)`. The registry already exposes this method. When no `DjangoType` is registered for the model (e.g., an unregistered intermediate model), the walker skips the hints check and falls through to default cardinality dispatch. This same lookup is shared with B7 (`_optimizer_field_map`).
+**Walker needs registry lookup.** The walker receives `model` (a Django model class), not the registered `DjangoType`. It resolves the model's registered type definition and reads `optimizer_hints` from it — `optimizer/walker.py::_resolve_field_map` performs the lookup, `::_resolve_optimizer_hints` reads the hints. When no `DjangoType` is registered for the model (e.g., an unregistered intermediate model), the walker skips the hints check and falls through to default cardinality dispatch. The same lookup serves B7's field map.
 
-Pseudo code:
+**Validation.** `Meta.optimizer_hints` is shape-checked while the rest of `Meta` is validated (`types/base.py::_validate_meta`), and its contents by the sibling `types/base.py::_validate_optimizer_hints`, called from the same `__init_subclass__`. A key naming no field on the model is rejected the way an unknown `fields`/`exclude` entry is. A key naming a field the type does not expose as a relation — excluded by `Meta.fields`/`Meta.exclude`, or selected but scalar — is rejected too: the walker only reads hints after entering the relation branch, so such a hint would silently drop the consumer's intent. Hint values must be `OptimizerHint` instances. Every rejection raises [`ConfigurationError`][glossary-configurationerror] at schema-build time so typos and shape errors surface early, and `OptimizerHint` itself rejects incompatible flag combinations at construction, so no hint can carry two directives at once.
 
-```text
-type_cls = registry.get(model)
-hint = getattr(type_cls, "_optimizer_hints", {}).get(field_name)
-if hint is OptimizerHint.SKIP:
-    return
-if hint and hint.prefetch_obj is not None:
-    plan.prefetch_related.add(hint.prefetch_obj)
-    return
-if hint and hint.force_select:
-    plan.select_related.add(field_name)
-    return
-if hint and hint.force_prefetch:
-    plan.prefetch_related.add(field_name)
-    return
-```
+**Test surface.** `SKIP` suppresses a relation from the plan. `.prefetch(Prefetch(...))` appears in the plan instead of a plain string. `.select_related()` forces select_related on a many-side relation. Unknown field name raises `ConfigurationError`; so does a hint on an excluded or scalar field. Non-`OptimizerHint` value raises `ConfigurationError`.
 
-**Validation.** `_validate_meta` rejects unknown field names in `optimizer_hints` (same as `fields`/`exclude` validation). Hint values must be `OptimizerHint` instances — anything else raises [`ConfigurationError`][glossary-configurationerror] at schema-build time so typos and shape errors surface early.
-
-**Test surface.** `SKIP` suppresses a relation from the plan. `.prefetch(Prefetch(...))` appears in the plan instead of a plain string. `.select_related()` forces select_related on a many-side relation. Unknown field name raises `ConfigurationError`. Non-`OptimizerHint` value raises `ConfigurationError`.
+The competitive argument for this slice, the untyped hint-value shapes the typed wrapper was chosen over, and the hint-dispatch order this section proposed are in the [rationale file][spec-004-rationale].
 
 **Depends on.** O3 (shipped). The `SKIP` hint is independent of O4–O6. The `.prefetch(Prefetch(...))` hint composes naturally with O4 (nested chains) and O6 (downgrade rule).
 
 ### B5 — Plan introspection via context
 
-**The win.** Stash the computed `OptimizationPlan` on `info.context` so consumers can write tests like `assert plan.select_related == ["category"]` instead of grepping `connection.queries`. Makes the optimizer's behavior observable instead of magic.
+**Mechanism.** After `plan_optimizations` returns in `_optimize`, the plan is stashed on `info.context`. The stash is shape-defensive, because consumers pass different context shapes: a `dict` (or `dict` subclass) is written through the mapping path so it round-trips to the same read, and any other context — Strawberry's default context is an object, not a dict — is written with `setattr` first and `__setitem__` as the fallback. A context that refuses assignment (a frozen mapping, a locked `QueryDict`) is skipped rather than aborting the resolver chain. That shape-agnostic read/write dispatch is a shared utility rather than optimizer-private; `docs/SPECS/spec-047-resource_policy-0_0_14.md` is its other consumer. Consumers and test code read the key directly. The plan is a frozen snapshot — mutating it after the fact has no effect on the already-applied queryset.
 
-**Mechanism.** After `plan_optimizations` returns in `_optimize`, stash the plan on `info.context`. Strawberry's default context is an object (not a dict), so `setattr` is the primary approach. Consumers sometimes pass a plain dict as context, so the stash is defensive: try `setattr` first, fall back to `__setitem__`. Consumers and test code access it directly. The plan is a frozen snapshot — mutating it after the fact has no effect on the already-applied queryset.
+The key name is `dst_optimizer_plan` (short for django-strawberry-framework) to avoid collision with consumer keys. B3 and B2 ride on this same stashing mechanism for their sentinel and elision flags respectively, so the optimizer's context keys are a family rather than one key. The whole family is cleared at the start of each execution, so a reused `context_value` cannot leak one operation's elisions or planned keys into the next. The set-valued keys accumulate across stashes rather than clobbering — `dst_optimizer_plan` alone stays last-wins — because a nested-connection fallback stashes a second batch for the same execution; that fallback belongs to `docs/SPECS/spec-033-connection_optimizer-0_0_9.md`.
 
-The key name is `dst_optimizer_plan` (short for django-strawberry-framework) to avoid collision with consumer keys. B3 and B2 ride on this same stashing mechanism for their sentinel and elision flags respectively — B5 should land first so the context-stash pattern is proven before dependents ship.
+The opening argument for this slice, the ordering argument for landing it before its dependents, and the stash sequence it proposed are in the [rationale file][spec-004-rationale].
 
-Pseudo code:
+**Test surface.** End-to-end: execute a query, assert `info.context.dst_optimizer_plan` carries the plan with the expected `select_related` / `prefetch_related` entries. Unit: `_optimize` sets the context key. Dict-context variant: pass a plain dict as context, assert the plan is stashed through the mapping path and read back from it.
 
-```text
-plan = plan_optimizations(selected_fields, target_model)
-try:
-    setattr(info.context, "dst_optimizer_plan", plan)
-except AttributeError:
-    info.context["dst_optimizer_plan"] = plan
-return plan.apply(queryset)
-```
-
-**Test surface.** End-to-end: execute a query, assert `info.context.dst_optimizer_plan` carries the plan with the expected `select_related` / `prefetch_related` entries. Unit: `_optimize` sets the context key. Dict-context variant: pass a plain dict as context, assert the plan is stashed via `__setitem__` fallback.
-
-**Depends on.** O3 (shipped). Independent of everything else. This is an afternoon project.
+**Depends on.** O3 (shipped). Independent of everything else.
 
 ### B6 — Schema-build-time optimization audit
 
-**The win.** A `DjangoOptimizerExtension.check_schema(schema)` classmethod that walks every schema-reachable `DjangoType`, inspects its relation fields, and surfaces any relation with no optimization story — relations that will silently N+1 in production because the optimizer cannot reach them (e.g., custom resolvers that return unoptimized querysets, or types not registered in the registry). Fail-fast at startup instead of N+1-fast in production. None of the existing libraries ship this.
+**Public API.** `DjangoOptimizerExtension.check_schema(schema)` is a static method that walks every schema-reachable `DjangoType`, inspects its exposed relation fields, and surfaces every relation the optimizer cannot reach — a relation whose target model has no registered `DjangoType`, and which therefore lazy-loads on every access.
 
-**Mechanism.** At schema build time (callable from `ready()` or a management command), walk only the types reachable from the schema's root types — not the entire registry. Walking all registered types would produce false positives for types that are registered but not exposed in the schema (e.g., types used only in tests or internal helpers). The `schema` argument provides the root; the audit traverses the type graph from there.
+**Mechanism.** At schema build time (callable from `ready()` or a management command), walk only the types reachable from the schema's root types — not the entire registry. Walking all registered types would produce false positives for types that are registered but not exposed in the schema (e.g., types used only in tests or internal helpers). The `schema` argument provides the root; the audit traverses the type graph from there, descending into object fields, union members, and the concrete implementations of every interface it meets. The interface arm is load-bearing rather than incidental: a `DjangoType` reachable only through an interface-typed root field would otherwise be skipped silently, which is exactly the failure the audit exists to prevent. The Relay interface surface it must not skip is `docs/SPECS/spec-015-relay_interfaces-0_0_5.md`'s foundation, which `docs/SPECS/spec-032-full_relay-0_0_9.md` later extended.
 
-For each reachable registered model, walk only the relation fields **exposed by the `DjangoType`** (i.e., those that passed [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude] filtering and are present in `cls._optimizer_field_map`), not the full set from `model._meta.get_fields()`. Relations hidden by Meta-level filtering, or opted out via `OptimizerHint.SKIP` (B4), are intentionally invisible to the optimizer and must not be flagged. For each exposed relation field, check:
-- The target model has a corresponding `DjangoType` registered in the registry.
-- The relation is not hidden behind a custom resolver that bypasses the optimizer.
-- Forward FKs to unregistered types are flagged as "will lazy-load on every access."
+For each reachable registered type, walk only the relation fields **exposed by the `DjangoType`** — those that passed [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude] filtering and are present in its registered definition's field map — not the full set from `model._meta.get_fields()`. Relations hidden by Meta-level filtering, or opted out via `OptimizerHint.SKIP` (B4), are intentionally invisible to the optimizer and are not flagged. Every remaining relation field whose target model has no registered `DjangoType` produces one warning.
 
-Output is a list of warnings, one per unoptimized relation, with the field path and a suggested fix. `check_schema` always returns warnings — it does not raise. The caller (e.g., `AppConfig.ready()` or management command) decides whether to raise based on the extension's `strictness` setting. When `strictness == "raise"`, the caller converts warnings to `OptimizerError`.
+Warnings are deduped by `(model, field name)`. One model can carry several registered types, and without the dedupe a relation exposed by two of them warns twice for one defect; the walk still visits every reachable type, because a secondary type may expose a relation the primary hides. Several types over one model is `docs/SPECS/spec-018-meta_primary-0_0_6.md`'s surface.
 
-**`registry.iter_types()` public method.** B6 (and B7's walker) should not reach into `registry._types` directly. Add a `registry.iter_types() -> Iterator[tuple[type[Model], type]]` public method that yields `(model, type_cls)` pairs. This keeps the registry's internal dict shape private and gives a clean extension point for future filtering (e.g., schema-scoped registries).
+Output is a list of warnings, one per unoptimized relation, naming the type, the model, and the field. `check_schema` always returns warnings — it does not raise. The caller (e.g., `AppConfig.ready()` or management command) decides whether to raise based on the extension's `strictness` setting. When `strictness == "raise"`, the caller converts warnings to `OptimizerError`.
 
-Pseudo code:
+**`registry.iter_types()` public method.** B6 and B7's walker do not reach into `registry._types` directly: `registry.iter_types() -> Iterator[tuple[type[Model], type]]` yields `(model, type_cls)` pairs, once per registered type, so a model with several registered types appears once per type and a per-model action dedupes by model. This keeps the registry's internal dict shape private and gives a clean extension point for future filtering (e.g., schema-scoped registries).
 
-```text
-def check_schema(cls, schema):
-    reachable = _collect_reachable_types(schema)  # walk schema root types
-    warnings = []
-    for model, type_cls in registry.iter_types():
-        if type_cls not in reachable:
-            continue
-        for field in model._meta.get_fields():
-            if not field.is_relation:
-                continue
-            if registry.get(field.related_model) is None:
-                warnings.append(
-                    f"{model.__name__}.{field.name} "
-                    "has no registered target type")
-    return warnings
-```
+The competitive argument for this slice and the audit loop it proposed are in the [rationale file][spec-004-rationale].
 
-**Test surface.** Schema with an unregistered FK target triggers a warning. Schema with all relations covered produces no warnings. Orphan types not reachable from root fields are ignored. SKIP-hinted and Meta-hidden relations are not flagged. The `check_optimizer` management command and custom-resolver detection are future follow-up work within B6.
+**Test surface.** Schema with an unregistered FK target triggers a warning. Schema with all relations covered produces no warnings. Orphan types not reachable from root fields are ignored. SKIP-hinted and Meta-hidden relations are not flagged. A relation exposed by two registered types over one model warns once.
 
 **Depends on.** O3 (shipped) + the type registry. Independent of O4–O6. The audit is static analysis — it runs at build time, not request time.
 
-## Priority and ordering
-
-**Recommended sequence:** B5 → B1 → B7 → B3 → B4 → B2 → B6 → B8.
-
-**B5 first** because B3's sentinel-on-context and B2's elision-flag-on-context both ride on B5's stashing mechanism. Landing B5 first proves the pattern and gives the other two a tested foundation to build on. It is also the smallest slice — an afternoon project.
-
-**B1 next** because it is the single biggest performance win and depends only on O3 (shipped). The cache-lifetime spike (see B1 "Cache lifetime") should precede implementation.
-
-**B7 after B1** because together they eliminate all per-request introspection: B1 caches plan output, B7 caches field-metadata input. On cache miss the hot path is still fast; on cache hit it is a dict lookup.
-
-**B3 after B5** because it consumes B5's context-stashing pattern for the sentinel. The `strictness` API should be designed before implementation so the kwarg shape is stable from day one.
-
-**B4 after B3** because the `OptimizerHint` type and `_validate_meta` integration are API-surface work that benefits from the walker being well-exercised by B1/B7/B3 first.
-
-**B2 landed after the surrounding optimizer foundations** because it is subtle — resolver-stub trickery, `only()` column interaction, `has_custom_get_queryset` guard, field-metadata accuracy, strictness integration, optimizer hints, and GlobalID/custom-id interaction all needed the neighboring slices to settle first.
-
-**B6 late** because the schema-build-time audit is ambitious and independent — it does not block any other slice and benefits from B4's `optimizer_hints` being available (hints affect which relations are flagged as unoptimized).
-
-**B8 last** because [queryset diffing][glossary-queryset-diffing] is a pure polish item. Django handles duplicates gracefully, so B8 is about debug-log clarity and principle rather than correctness.
-
 ### B7 — Precomputed optimizer field metadata
 
-**The win.** The O2 walker rebuilds `{f.name: f for f in model._meta.get_fields()}` on every walk, then checks `is_relation`, `many_to_many`, `one_to_many` per field per request. Since `DjangoType.__init_subclass__` already knows the model and its fields at class-creation time, we can precompute a `{snake_name: FieldMeta(is_relation, cardinality, target_model)}` mapping once and stash it on the class. The walker reads the cached map instead of rebuilding it.
+**Mechanism.** In `DjangoType.__init_subclass__`, after `_select_fields(...)` computes the field list, a `dict[str, FieldMeta]` is built **keyed by the snake-cased field name** — the vocabulary the walker resolves a selection against — where `FieldMeta` (`optimizer/field_meta.py::FieldMeta`) is a frozen dataclass snapshot of a Django field's optimizer-relevant attributes: `is_relation`, the cardinality flags, `related_model`, and `attname` (the FK column name for forward FKs), plus the further slots the later relation work needed. The map is stored on the type's registered `DjangoTypeDefinition` as `field_map` — one canonical store, no class-attribute mirror of it anywhere — and the walker reads it from there instead of calling `model._meta.get_fields()`.
 
-This is complementary to B1: B1 caches the *plan output* (the finished `OptimizationPlan`), this caches the *field metadata input* (the Django field introspection the walker consumes). Both together mean the hot path is: dict lookup for cached plan → cache hit → return. On cache miss: dict lookup for cached field metadata → run walker → cache plan → return. No `_meta.get_fields()` call ever appears in the request path.
+**Walker needs registry lookup.** Same as B4: the walker receives `model`, not `type_cls`, so it resolves the registered definition and reads its `field_map` (`optimizer/walker.py::_resolve_field_map`). When no type is registered (unregistered model), the walker falls back to a fresh `model._meta.get_fields()` walk. The two paths are a **dual contract**: the registered path yields `FieldMeta` values, the fallback yields raw Django field objects. Every downstream read of a map value therefore goes through `getattr(..., default)`, and no `FieldMeta`-only attribute is read without one.
 
-**Mechanism.** In `DjangoType.__init_subclass__`, after `_select_fields(meta)` computes the field list, build a `dict[str, FieldMeta]` where `FieldMeta` is a lightweight namedtuple or dataclass holding `is_relation`, `many_to_many`, `one_to_many`, `one_to_one`, `related_model`, and `attname` (the FK column name for forward FKs). Stash it as `cls._optimizer_field_map`. The walker reads `target_type._optimizer_field_map` instead of calling `model._meta.get_fields()`.
+The opening argument for this slice, its relationship to B1's plan cache, and the map construction and lookup it proposed are in the [rationale file][spec-004-rationale].
 
-**Walker needs registry lookup.** Same as B4: the walker receives `model`, not `type_cls`. It must call `registry.get(model)` to obtain the `DjangoType` and read `_optimizer_field_map`. When no type is registered (unregistered model), the walker falls back to `model._meta.get_fields()` — the current behavior.
-
-Pseudo code:
-
-```text
-cls._optimizer_field_map = {
-    snake_case(field.name): FieldMeta.from_django_field(field)
-    for field in selected_fields
-}
-
-# In the walker:
-type_cls = registry.get(model)
-cached_map = getattr(type_cls, "_optimizer_field_map", None)
-field_map = cached_map or {f.name: f for f in model._meta.get_fields()}
-
-field_meta = type_cls._optimizer_field_map.get(selection_name)
-if field_meta and field_meta.is_relation:
-    dispatch(field_meta)
-```
-
-**Test surface.** Assert `_optimizer_field_map` is populated after `DjangoType` subclass creation. Assert the walker produces the same plan whether it reads the cached map or rebuilds from `_meta`. Benchmark (optional): measure walk time with and without the cached map on a model with 20+ fields.
+**Test surface.** Assert the definition's `field_map` is populated after `DjangoType` subclass creation. Assert the walker produces the same plan whether it reads the cached map or rebuilds from `_meta`. Benchmark (optional): measure walk time with and without the cached map on a model with 20+ fields.
 
 **Depends on.** O2 (shipped). Independent of O4–O6 and B1.
 
-### B8 — Queryset optimization diffing
+### B8 — [Queryset optimization diffing][glossary-queryset-diffing]
 
-**The win.** When a consumer's `get_queryset` or root resolver already calls `.select_related("category")`, the optimizer blindly stacks another `.select_related("category")` on top. Django handles the duplicate gracefully (it is a dict merge internally), but it is wasted work, makes debug logging harder to read, and masks the consumer's intentional optimization under the framework's automatic one.
+A consumer's `get_queryset` or root resolver may already have called `.select_related("category")`. Stacking the optimizer's own `.select_related("category")` on top of it is wasted work: Django handles the duplicate gracefully (it is a dict merge internally), but the duplicate makes debug logging harder to read and masks the consumer's intentional optimization under the framework's automatic one. B8 reconciles the plan against what the queryset already carries before applying it.
 
 **Mechanism.** Before applying the plan in `_optimize`, inspect the queryset's existing optimization state:
 - `queryset.query.select_related` — three possible states: `False` (the Django default, no `select_related` called), `True` (wildcard `select_related()` with no arguments — all forward relations selected), or a nested `dict` mapping field names to sub-dicts (specific fields selected). When the value is `True`, treat all `select_related` entries in the plan as already satisfied and skip the select-related delta entirely. When `False`, treat as empty. When a `dict`, flatten its keys for the set subtraction.
 - `queryset._prefetch_related_lookups` — a tuple of strings and `Prefetch` objects. If a lookup is already present, skip it.
 
-The diff is a simple set subtraction: `plan.select_related - already_selected`, `plan.prefetch_related - already_prefetched`. Apply only the delta.
+Reconciliation starts as a set subtraction over lookup paths — `plan.select_related - already_selected`, `plan.prefetch_related - already_prefetched` — and only the delta is applied. It returns two things rather than one: the delta plan **and** the queryset to apply it against. The queryset is part of the return because reconciliation can also **upgrade** a consumer's plain string lookup to the optimizer's `Prefetch` object, which rewrites the queryset side; a one-sided `apply()` cannot express that.
 
-**Cache-safety: do not mutate the cached plan.** With B1's cache, the same `OptimizationPlan` object is reused across requests. B8 must not modify `plan.select_related` or `plan.prefetch_related` in place — doing so would corrupt the cache for all subsequent requests. Instead, build a new plan (or a shallow copy) with only the delta entries and apply that.
+A companion step drops planned `select_related` paths the queryset cannot traverse — a consumer projection that defers a column on the path makes Django refuse the join — and the dropped paths stay visible to strictness through the plan's per-path resolver-key ledgers, so a de-planned subtree is never silently treated as covered. Consumer-wins precedence is a deliberate permission-boundary stance rather than an oversight; `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md` records that stance. The ancestry-aware absorption a nested chain's prefetches ride is this slice's own.
 
-Pseudo code:
+**Cache-safety: the cached plan is never mutated.** With B1's cache, the same `OptimizationPlan` object is reused across requests, so modifying `plan.select_related` or `plan.prefetch_related` in place would corrupt the cache for every subsequent request. The reconciliation copies rather than mutates. The requirement is enforced structurally rather than left to discipline — a plan is finalized at handoff, its directive lists become tuples so a later append raises, and a merge onto a finalized plan is rejected outright (`optimizer/plans.py::OptimizationPlan.finalize` and `::_assert_under_construction`). No sibling spec states that enforcement; it and the requirement are both this slice's.
 
-```text
-sr = queryset.query.select_related
-already_selected = flatten_select_related(sr) if sr is not False else set()
-already_prefetched = normalize_prefetches(queryset._prefetch_related_lookups)
-
-# Build a delta plan — do NOT mutate the original (may be cached by B1).
-delta = OptimizationPlan(
-    select_related=[p for p in plan.select_related if p not in already_selected],
-    prefetch_related=[p for p in plan.prefetch_related
-                      if (getattr(p, "prefetch_to", p) not in already_prefetched)],
-)
-return delta.apply(queryset)
-```
+The ordering argument that put this slice last, and the delta construction it proposed, are in the [rationale file][spec-004-rationale].
 
 **Edge cases.** `Prefetch` objects are compared by `prefetch_to` attribute (the lookup path), not by identity. A consumer's `Prefetch("items", queryset=custom_qs)` should suppress the optimizer's plain `"items"` string — the consumer's version is more specific.
 
@@ -308,14 +184,14 @@ This spec does not revisit the O2 walker's core algorithm, the O3 hook architect
 
 strawberry-graphql-django optimizer source: `strawberry_django/optimizer.py` — the baseline we improve on.
 
-Django's `select_related` / `prefetch_related` internals: `django/db/models/query.py` — understanding the `query.select_related` dict merge and `_prefetch_related_lookups` dedup behavior is load-bearing for B1's cache correctness and B2's elision safety.
+Django's `select_related` / `prefetch_related` internals: `django/db/models/query.py` — understanding the `query.select_related` dict merge and `_prefetch_related_lookups` dedup behavior is load-bearing for B8's reconciliation and B2's elision safety.
 
-graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineFragmentNode`, `FragmentSpreadNode` carry the same information as Strawberry's wrapper dataclasses, relevant for the "skip Strawberry conversion" optimization noted in B1's implementation.
+graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineFragmentNode`, `FragmentSpreadNode` carry the same information as Strawberry's wrapper dataclasses, which is what lets B1 key its cache on the printed operation AST and defer the conversion into Strawberry's wrappers behind a callable a cache hit never invokes.
 
 ## Implementation checklist
 
 - [x] `registry.iter_types()` public method (prerequisite for B6/B7)
-- [x] B1 cache-lifetime spike (10-min investigation, precedes B1 implementation)
+- [x] B1 cache-lifetime spike
 - [x] `OptimizerHint` class skeleton in `optimizer/` (prerequisite for B4)
 - [x] B5 — Plan introspection via context
 - [x] B1 — AST-cached plans
@@ -343,6 +219,7 @@ graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineF
 [glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
 
 <!-- docs/SPECS/ -->
+[spec-004-rationale]: appx/spec-004-optimizer_beyond-0_0_3-rationale.md
 
 <!-- docs/builder/ -->
 

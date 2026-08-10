@@ -319,7 +319,7 @@ def test_is_many_side_pins_every_relation_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_optimizer_field_map_populated():
+def test_definition_field_map_populated():
     """B7: definition.field_map is populated after DjangoType subclass creation."""
 
     class CategoryType(DjangoType):
@@ -336,7 +336,7 @@ def test_optimizer_field_map_populated():
     assert isinstance(field_map["id"], FieldMeta)
 
 
-def test_optimizer_field_map_contains_relations():
+def test_definition_field_map_contains_relations():
     """B7: relation fields appear in the map with correct metadata."""
 
     class CategoryType(DjangoType):
@@ -359,7 +359,7 @@ def test_optimizer_field_map_contains_relations():
     assert cat_meta.related_model is Category
 
 
-def test_optimizer_field_map_respects_fields_filter():
+def test_definition_field_map_respects_fields_filter():
     """B7: only Meta.fields-selected fields appear in the map."""
 
     class CategoryType(DjangoType):

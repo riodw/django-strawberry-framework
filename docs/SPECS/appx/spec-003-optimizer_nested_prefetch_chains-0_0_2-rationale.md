@@ -250,7 +250,8 @@ each nested level onto its parent under the lookup separator. Two things were ad
 short-circuit on a precomputed frozenset once the plan is finalized, and a single named reader for
 the Django-private `_prefetch_related_lookups` attribute, so exactly one call site in the package
 depends on that contract instead of one per consumer. Both are later hardening
-([`spec-035-optimizer_hardening-0_0_10.md`][spec-035]), not a reversal of this design.
+(`optimizer/plans.py::OptimizationPlan.finalize` and `::_consumer_prefetch_lookups`; no sibling
+spec states either discipline), not a reversal of this design.
 
 *Changed — where the helper sits in the file.* The design section said "Locate it on `plans.py`
 next to `OptimizationPlan`"; the insertion-point section said "End of file". They contradicted
@@ -518,8 +519,8 @@ currently true by applying a sequence of corrections is reading a changelog, not
 
 **The scope line held, and it was the hard part.** This spec is a child document whose subject
 matter four later specs extended: [`spec-033`][spec-033] (nested connections and the
-runtime-prefix fan-out), [`spec-035`][spec-035] (plan immutability, the projection gate, the
-private-attribute reader), [`spec-045`][spec-045] (the sealed visibility boundary), and
+runtime-prefix fan-out), [`spec-035`][spec-035] (the projection gate), [`spec-045`][spec-045]
+(the sealed visibility boundary), and
 [`spec-018`][spec-018] (the resolver's own return type driving the root field map). Reconciling
 against HEAD pulls hard toward absorbing all four, because every one of them is visible in the
 code this spec designed. Each was resolved the same way: **a pointer to the owning spec, never a
@@ -594,14 +595,16 @@ a heading to say what kind of thing is below it.
 
 *Changed — the plan field inventory was five entries; the dataclass carries eleven.* The spec now
 lists the **six** bags O4 owns (the original five plus `planned_resolver_keys`, which is O4's own
-and which the old `## Current state` could not list because O4 had not added it yet) and points at
-[`spec-033`][spec-033] / [`spec-035`][spec-035] for the rest.
+and which the old `## Current state` could not list because O4 had not added it yet), points at
+[`spec-033`][spec-033] for the resolver-key ledgers, and names the finalize-frozen membership sets
+by their enforcing symbol with no spec owner.
 
 *Alternative rejected — enumerate all eleven fields.* This is the strongest pull in the whole
 reconciliation, and it loses for two reasons. The five it would add are not O4's contract: the
 per-path resolver-key ledgers exist so a B8 consumer-wins drop can de-plan a subtree, and the
-frozen membership sets exist because the plan is finalized at handoff — decisions belonging to
-[`spec-033`][spec-033] and [`spec-035`][spec-035], each already stated once in its own document.
+frozen membership sets exist because the plan is finalized at handoff — the ledgers belong to
+[`spec-033`][spec-033], already stated once in its own document, and the finalize discipline
+belongs to no sibling spec (`optimizer/plans.py::OptimizationPlan.finalize` is the enforcement).
 Restating them here creates two copies of one contract, and a fact told twice goes stale in one of
 them. The second reason is structural: an inventory of a dataclass is a symbol map, and this
 document has already recorded (under the former `## Implementation insertion points (O4)`) why a
@@ -851,12 +854,13 @@ able to falsify a spec with.
 
 *Changed — the helper "should recurse through nested `Prefetch.queryset._prefetch_related_lookups`
 directly".* At HEAD the recursion goes through a single named reader of that Django-private
-attribute. The spec now states the requirement without the mechanism, and the single-reader
-discipline is [`spec-035`][spec-035]'s to state.
+attribute. The spec now states the requirement without the mechanism; the single-reader
+discipline belongs to no sibling spec — `optimizer/plans.py::_consumer_prefetch_lookups` is the
+one reader.
 
 *Alternative rejected — state the single-reader rule here.* It is a good rule and it is not this
-spec's; it was added by a later hardening slice for reasons that have nothing to do with nested
-chains, and it is stated once already.
+spec's; it was added by a later hardening pass for reasons that have nothing to do with nested
+chains, and the reader symbol names it once already.
 
 *Claims the spec no longer makes.* That the flattening helper reads the private lookups attribute
 itself, or that it sits beside `OptimizationPlan`.
@@ -949,7 +953,8 @@ format rather than by a dedicated row.
 
 *Changed — the two assertion shapes that named list equality.* `select_related == ["item",
 "item__category"]` is a tuple at HEAD, because the plan is finalized before handoff
-([`spec-035`][spec-035]). The rows now state coverage rather than container type, which is what
+(`optimizer/plans.py::OptimizationPlan.finalize`; no sibling spec states that enforcement). The
+rows now state coverage rather than container type, which is what
 they were pinning anyway and which does not re-break the next time the plan's storage changes.
 
 *Changed — "Update the existing B2 stub/null tests …".* A build instruction, discharged; restated

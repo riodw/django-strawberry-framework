@@ -4940,7 +4940,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Scope
 
-- B1: plan cache keyed by selected operation AST, directive variables, model, and root runtime path
+- B1: plan cache keyed by selected operation AST, directive variables, model, root runtime path, and the resolver's origin Strawberry type
 - B2: forward-FK-id elision
 - B3: strictness mode (`off`, `warn`, `raise`)
 - B4: `Meta.optimizer_hints` with `OptimizerHint`

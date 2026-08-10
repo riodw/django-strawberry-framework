@@ -14,7 +14,8 @@ The second of two graph foundation cards, sibling to the graph substrate
 `FieldDependencyPlan`, `RowIdentityProof`, the operation-scoped dependency
 memo), this card ships the optimizer *architecture* that consumes it — four
 pillars, each closing a measured production gap from the five-root
-schedule-calendar audit that drove both cards:
+schedule-calendar audit that drove both cards (the failing shape and its
+fakeshop recreation: [`docs/multi-root-graph-recreation.md`][recreation]):
 
 1. **The structural/bound plan split.** An immutable, cross-request-cacheable
    `StructuralOptimizationTemplate` (relative paths, field dependency graph,
@@ -566,6 +567,7 @@ unchanged.
 [glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
 [glossary-plan-cache]: ../GLOSSARY.md#plan-cache
 [glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[recreation]: ../multi-root-graph-recreation.md
 
 <!-- docs/SPECS/ -->
 [spec-053]: spec-053-graph_substrate-0_1_1.md

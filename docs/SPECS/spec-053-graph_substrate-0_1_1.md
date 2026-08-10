@@ -29,7 +29,8 @@ never a parallel imperative registration API. The plan objects themselves are
 internal vocabulary, not shipped API.
 
 Status: **PLANNED — no slice built yet; card created
-(`TODO-BETA-053-0.1.1`); the consumer-card amendments are still to land.**
+(`TODO-BETA-053-0.1.1`) and the consumer-card amendments recorded on cards
+054 / 055 / 057 / 064 / 068.**
 Five slices: Slice 1 (**`graph/` package + operation dependency memo**),
 Slice 2 (**`GraphPathPlan` + path/lookup splitter + `RowIdentityProof`
 vocabulary**), Slice 3 (**`PredicatePlan` compiler** — sequential-fold
@@ -237,9 +238,10 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   regeneration); add glossary DB entries for `GraphPathPlan`,
   `PredicatePlan`, `EdgeScope`, `FieldDependencyPlan`, `RowIdentityProof`,
   and the operation dependency memo, then regenerate `docs/GLOSSARY.md`;
-  update `examples/fakeshop/test_query/README.md` suite descriptions; record
-  the card-054/055/057/063/067 amendment obligations on those cards in the
-  kanban DB and regenerate the board; flip card 053. Leave README / GOAL /
+  update `examples/fakeshop/test_query/README.md` suite descriptions; audit
+  that the card-054/055/057/064/068 amendment obligations are still recorded
+  on those cards (they landed at card creation per Decision 1, not here);
+  flip card 053. Leave README / GOAL /
   TODAY release prose, `CHANGELOG.md`, and the version quintet untouched —
   all owned by the card-054 joint cut.
 
@@ -249,7 +251,9 @@ A consumer building a graph-shaped, multi-model dashboard — the audited
 production case is a five-root schedule calendar; the general case is any
 operation selecting several model-backed connections that share one request
 scope and one permission audience — must today hand-build the machinery the
-package should generate:
+package should generate. The failing shape, its fakeshop recreation, and the
+query-count matrix are recorded in
+[`docs/multi-root-graph-recreation.md`][recreation]:
 
 - operation-scoped audience caching (no framework memo exists; five root
   visibility hooks recompute a ~dozen-query audience five times);
@@ -405,8 +409,9 @@ All claims below verified against source at authoring time.
 - **An operation transaction / snapshot policy.** Explicitly optional and
   non-gating (R11); untracked by this card.
 - **The `IntervalOverlap` compound filter primitive.** A FilterSet-layer
-  feature, independent of the substrate; belongs in [`BACKLOG.md`][backlog]
-  if promoted.
+  feature, independent of the substrate; carded in
+  [`BACKLOG.md`][backlog-interval-overlap] as
+  `interval_overlap_filter_primitive`.
 - **All consumer-repository work.** The originating consumer application's
   permission-widening defect, its dependency-floor decision, and its
   calendar recreation are owned and tracked by that repository (R12).
@@ -493,11 +498,13 @@ The root-cause fix for the divergences catalogued above is a shared substrate, n
 per-subsystem implementations. The card was created 2026-08-07 as
 `TODO-BETA-053-0.1.1` — sequenced after `TODO-ALPHA-052-0.1.0` and before
 `TODO-BETA-054-0.1.1`, shifting the former cards 053-068 up by one; this
-spec's filename follows the card. Cards 054, 055, 057, 063, and 067 must be
+spec's filename follows the card. Cards 054, 055, 057, 064, and 068 must be
 amended to consume it. **The amendment obligations must land on those cards
 at this card's creation, not at its Slice 5** — if card 055 starts first,
 the private path-plan twin this substrate exists to prevent gets built
-anyway. **Rejected:** letting each Layer 3
+anyway; they were recorded on all five cards on 2026-08-08, each as a
+`Scope` item plus a `related` reference edge back to this card (and, on 064
+and 068, to the sibling card `TODO-BETA-063-0.1.6`). **Rejected:** letting each Layer 3
 card ship private path/visibility/identity machinery (the divergence this
 spec catalogues); deferring the substrate past the `1.0.0` API freeze
 (incompatible public concepts become un-unifiable).
@@ -944,7 +951,7 @@ shipped precedent's error timing for checks available at type creation).
 | 2 | `graph/paths.py` (plan, plan set, path/lookup splitter), `graph/proofs.py` over `utils/relations.py` | `tests/graph/test_paths.py` + window-gate characterization |
 | 3 | `graph/predicates.py` over `optimizer/predicates.py` | `tests/graph/test_predicates.py` (SQL-shape: alias count, inner alias sharing, `NOT EXISTS`, no compiler `DISTINCT`; raise paths) |
 | 4 | `graph/edges.py`, `graph/dependencies.py`; `Meta.edge_scopes` in `types/base.py` (+ `types/finalizer.py` residue, `types/definition.py` slot); owner threading + edge composition in `optimizer/walker.py::_build_child_queryset` and `optimizer/nested_planner.py` (injected-callable signature); second application in `connection.py::_build_relation_connection_resolver`; visibility + scope on the list-resolver cache-miss branch in `types/resolvers.py`; `examples/fakeshop/apps/library/models.py` (`Loan.confidential`) + migration file; library schema fixtures (LoanType hook + `primary = True`, BookType hook rewrite + `edge_scopes`, R9 secondary Loan type + connection under `FAKESHOP_TEST_LOAN_CONNECTION`) | `tests/graph/test_edges.py`, `tests/graph/test_dependencies.py`; live `examples/fakeshop/test_query/` (R3 incl. `filter:` fallback, R4/R5/R9 result semantics, 1-vs-100 parents); re-baselined `test_library_api.py` / `test_optimizer_auto_api.py`; schema-module tuple sweep |
-| 5 | `docs/TREE.md` + tracked-path constants regenerate, glossary DB + regenerate, `test_query/README.md`, kanban card amendments + wrap | render-clean checks |
+| 5 | `docs/TREE.md` + tracked-path constants regenerate, glossary DB + regenerate, `test_query/README.md`, card-amendment audit + wrap | render-clean checks |
 
 Slices are sequential; each later slice consumes the earlier's surface, so no
 ownership partition applies.
@@ -1090,12 +1097,12 @@ raise paths, and interleavings a real query cannot produce.
   equalities, never inequalities); the `filter:` fallback arm is
   *correctness-gated only* here — the current resolver executes filtered
   connections per parent by design, and parent-count-independent filtered
-  batching is the sibling sidecar card's acceptance surface (recorded in
-  its Slice 5 amendment obligations), so its per-parent counts are
+  batching is the sibling sidecar card's acceptance surface
+  (`TODO-BETA-063-0.1.6`, [spec][spec-063]), so its per-parent counts are
   characterized, not required equal. The other R3 arms — hidden children
   not qualifying search, not contributing to counts/aggregates — are
-  deferred to cards 055/057 and recorded in their Slice 5 amendment
-  obligations.
+  deferred to cards 055/057 and recorded in those cards'
+  consume-the-substrate amendments.
 - **R4 — same-related-row (package SQL-shape, Slice 3; live result
   semantics, Slice 4):** the split-`.filter()` false positive demonstrated
   as baseline; the same-row plan does not qualify the root; the **inner**
@@ -1134,20 +1141,25 @@ Slice 5 owns: `docs/TREE.md` regenerate (new `graph/` package + new
 `extensions/graph.py`), the kanban tracked-path constants regenerate (the
 pre-commit hook otherwise rolls back commits that add tracked files),
 `docs/GLOSSARY.md` via glossary DB entries for the five plan objects and the
-memo, `examples/fakeshop/test_query/README.md`, and the kanban card
-amendments (054, 055, 057, 063, 067 gain explicit consume-the-substrate
-scope lines; 055/057 additionally record the deferred R3 arms) with board
-regeneration. `README.md`, `GOAL.md`, `TODAY.md`, `CHANGELOG.md`, and the
+memo, `examples/fakeshop/test_query/README.md`. The kanban card
+amendments (054, 055, 057, 064, 068 gained explicit consume-the-substrate
+scope lines; 055/057 additionally record the deferred R3 arms) landed
+2026-08-08 at card creation per Decision 1, so Slice 5 only audits them.
+`README.md`, `GOAL.md`, `TODAY.md`, `CHANGELOG.md`, and the
 version quintet stay untouched (Decision 10).
 
 ## Risks and open questions
 
-- **The consumer-card amendments are not yet recorded.** The card was
-  created 2026-08-07 as `TODO-BETA-053-0.1.1` (the spec's preferred number
-  and sequencing; the former cards 053-068 shifted up by one), but the
-  054/055/057/063/067 consume-the-substrate amendments are maintainer
-  actions still to land — and per Decision 1 they must land now, at card
-  creation, not at this card's Slice 5.
+- **The consumer-card amendments are recorded** (2026-08-08), discharging
+  Decision 1's at-creation obligation. The card was created 2026-08-07 as
+  `TODO-BETA-053-0.1.1` (the spec's preferred number and sequencing; the
+  former cards 053-068 shifted up by one), and cards
+  054 / 055 / 057 / 064 / 068 now each carry a consume-the-substrate `Scope`
+  item; 055 and 057 additionally record their deferred R3 arms (search
+  qualification and count/aggregate contribution). What remains open is
+  ordinary execution risk: the amendments are prose obligations, so a card
+  that starts without re-reading its own scope can still build a private
+  twin.
 - **Consumer row-identity assertion.** Should a consumer be able to assert a
   validated row-identity contract for a custom queryset (unlocking windows
   over shapes the framework didn't build)? Preferred for `0.1.1`: no —
@@ -1208,7 +1220,8 @@ version quintet stay untouched (Decision 10).
   invalidation-rule requirement (Decision 3).
 - **Optional PostgreSQL repeatable-read snapshot policy** — R11;
   non-gating, unscheduled.
-- **`IntervalOverlap`** — FilterSet-layer primitive; BACKLOG candidate.
+- **`IntervalOverlap`** — FilterSet-layer primitive; carded in
+  [`BACKLOG.md`][backlog-interval-overlap].
 - **All originating-consumer work** — the permission-widening defect and
   its R12 matrix, the dependency-floor decision, and the calendar
   recreation; owned and tracked by that repository.
@@ -1257,7 +1270,7 @@ version quintet stay untouched (Decision 10).
 
 <!-- Root -->
 [agents]: ../../AGENTS.md
-[backlog]: ../../BACKLOG.md
+[backlog-interval-overlap]: ../../BACKLOG.md#interval_overlap_filter_primitive
 [goal]: ../../GOAL.md
 [kanban]: ../../KANBAN.md
 
@@ -1291,6 +1304,7 @@ version quintet stay untouched (Decision 10).
 [glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
 [glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
 [glossary-visibility-boundary]: ../GLOSSARY.md#visibility-boundary
+[recreation]: ../multi-root-graph-recreation.md
 [row-preserving-pg]: ../row-preserving-predicates-part1-pg-explain.md
 
 <!-- docs/SPECS/ -->

@@ -120,6 +120,11 @@ existing per-parent fallback.
 **Composes with**: the shipped windowed nested-fetch strategy, the PostgreSQL lateral strategy,
 and optimizer strictness diagnostics.
 
+**Sequencing**: if the [structural templates][card-structural-templates] card has landed, this
+strategy must consume its sidecar normalization and its `RowIdentityProof` gate rather than
+certify child row identity for itself. A strategy that self-certifies reopens the window-safety
+hole in a new backend — the exact failure the gate exists to prevent.
+
 ### `backward_nested_keyset_pagination`
 
 **Realistic**: 8/10 — Root keyset pagination already proves the cursor algebra; the remaining work
@@ -152,6 +157,11 @@ every parent.
 
 **Composes with**: shipped root keyset pagination, nested windowed fetching, PostgreSQL lateral
 fetching, and the count-free probe policy.
+
+**Sequencing**: like every extension of the pluggable nested-fetch strategy boundary, this card
+must consume the [structural templates][card-structural-templates] card's sidecar normalization
+and `RowIdentityProof` gate instead of self-certifying child row identity. Backward cursors also
+inherit the rule that a cursor minted under one viewer must not decode into rows under another.
 
 ### `mti_aware_lateral_nested_fetch`
 
@@ -186,6 +196,12 @@ semantics.
 **Composes with**: the shipped PostgreSQL lateral nested-fetch strategy, projection extension,
 visibility-scope recognition, and composite-index advisory.
 
+**Sequencing**: another extension of the pluggable nested-fetch strategy boundary, so the same
+rule applies — consume the [structural templates][card-structural-templates] card's sidecar
+normalization and `RowIdentityProof` gate; never self-certify child row identity. MTI parent/child
+joins are precisely the shape where an unexplained multiplying join hides, so the proof matters
+more here, not less.
+
 ### `selection_aware_annotations`
 
 **Realistic**: 9/10 — The walker already does selection-tree injection for `only()`/`Prefetch`; annotations follow the same pattern.
@@ -219,6 +235,8 @@ class ItemType(DjangoType):
 - **Static expressions are cacheable; `Info`-receiving callables are not — the differentiator.** Plain ORM expressions in `Meta.annotations` (`Count("reviews")`) bake into the cached plan at zero per-request cost. To reach parity with upstream's per-request `field(annotate=lambda info: …)`, also accept an `Info`-receiving callable form; any plan that resolves such a callable is marked **non-cacheable** (`plan.cacheable = False`), reusing the exact mechanism plans with a custom `get_queryset` already use. This wins both axes at once: upstream cannot cache plans *at all* partly **because** its annotate callables take `Info`, so isolating the dynamism to the callable arm keeps our plan-cache advantage for the common static case while still matching upstream's dynamic capability. The static and dynamic forms coexist in one `Meta.annotations` dict; only the presence of a resolved callable flips cacheability.
 
 **Composes with**: shipped filter/order subsystems, `matrix_dimensions_and_measures` (shares the fan-out contract), the shipped Plan cache and `get_queryset` visibility hook (shares the non-cacheable-plan path).
+
+**Sequencing**: this card supplies the annotation arm of the selection-aware queryset-shaping stage, including the injection triggers (selected field, active filter, active `orderBy`). Its cacheability split — static ORM expressions bake into the cached plan while `Info`-receiving callables mark the plan non-cacheable — **is** the structural-template versus request-binding boundary of the [structural templates][card-structural-templates] card. Under that split the callable arm becomes a binding slot; it must stop piggybacking on the whole-plan `cacheable = False` path it uses today.
 
 ### `query_time_optimizer_disable`
 
@@ -293,6 +311,8 @@ DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 
 **Out of scope here**: optimizer-dependency hints (`computed_field_optimizer_hints`).
 
+**Sequencing**: with `computed_field_optimizer_hints`, this pair is the precursor of the [graph substrate][card-graph-substrate] card's `FieldDependencyPlan`. Whatever declaration shape this card settles on must normalize into that plan rather than stand beside it — the substrate ships the narrow column form and the expanded kinds (relations, annotations, contextual prefetches, batch assemblers) arrive with their first consumer.
+
 ### `computed_field_optimizer_hints`
 
 **Realistic**: 8/10 — Hint syntax mirrors shipped `OptimizerHint`; the `only()` extension is incremental walker work.
@@ -324,6 +344,8 @@ class ItemType(DjangoType):
 
 **Composes with**: `computed_fields_binding` (prerequisite), shipped strictness mode, `anti_n1_ci_audit`.
 
+**Sequencing**: this card is the precursor of the [graph substrate][card-graph-substrate] card's `FieldDependencyPlan`, which already absorbs its two-halves rule (relation traversals extend `select_related` / `prefetch_related` **and** column reads extend the `only()` projection) and its strictness contract (report the property name plus the hint that would fix it). The hint dict should normalize **into** `FieldDependencyPlan` rather than freeze a second dependency vocabulary beside `Meta.depends_on`.
+
 ### `soft_delete_cooperation`
 
 **Realistic**: 8/10 — Integration patterns for the soft-delete packages are well-trodden; the explicit flag removes detection fragility.
@@ -343,6 +365,8 @@ class ItemType(DjangoType):
 - Joins (`select_related` across a soft-deleting relation) document the contract: the row appears with the relation nulled vs. excluded, configurable per type.
 
 **Composes with**: `cascade_permission_prefetch_enforcement`.
+
+**Sequencing**: the visibility-combinator seam this card shares with `cascade_permission_prefetch_enforcement` is the same abstraction as the [graph substrate][card-graph-substrate] card's `EdgeScope`. Soft-delete filtering should compose through the edge scope as a third consumer rather than declaring a private child-filtering path.
 
 ### `anti_n1_ci_audit`
 
@@ -372,6 +396,8 @@ uv run python manage.py audit_n1 --depth 5 --include-mutations --seed fakeshop
 
 **Composes with**: `query_time_optimizer_disable` (run both ways, assert divergence), `schema_diff_cli` (detect "new relation field, no hint" on PRs).
 
+**Sequencing**: the natural acceptance vehicle for the graph cards' query-growth invariant — `queries(1 parent) == queries(100 parents)`, asserted as exact per-backend equalities rather than inequalities. This card's seeding rule (at least two rows on every many side, with the command refusing to certify a thin seed) is the same fixture discipline those cards' reproductions need, so the audit should adopt their matrices instead of inventing a second one.
+
 ### `otel_span_integration`
 
 **Realistic**: 9/10 — OTel Python SDK is mature; plan metadata already sits in `info.context`.
@@ -391,6 +417,53 @@ uv run python manage.py audit_n1 --depth 5 --include-mutations --seed fakeshop
 - OTel SDK is a soft dependency; lazy import, no-op when absent.
 
 **Composes with**: `field_usage_and_deprecation_telemetry` (separate concerns: spans are per-request traces; telemetry is aggregates).
+
+---
+
+## Filtering
+
+### `interval_overlap_filter_primitive`
+
+**Realistic**: 8/10 — A compound filter over two declared model-field paths, compiled to one `Q` tree; the declaration/validation seam already exists for every other `FilterSet` member.
+
+**Impact**: 5/10 — Narrow in surface but high in drift cost: every consumer with time-bounded rows hand-rolls this, and each hand-roll is a chance to get the null and endpoint semantics wrong differently.
+
+**Difficulty**: 3/10 — No new compilation strategy; path validation at finalization plus one predicate builder. Row identity is preserved because it never crosses a to-many hop.
+
+**Source**: the five-root schedule-graph audit (2026-08-06), Finding 12. Deferred out of the graph substrate as a FilterSet-layer concern — see `docs/SPECS/spec-053-graph_substrate-0_1_1.md` (Non-goals and Out-of-scope both name this entry as the promotion target).
+
+**What we'd do**: ship a declarative compound filter for interval overlap, so a consumer declares the two bounding fields and the null rule once instead of rebuilding the predicate per model.
+
+The recurring predicate, written out:
+
+```text
+row.start <= scope.end
+AND (row.end >= scope.start OR row.end IS NULL when the model permits it)
+```
+
+Declaration shape:
+
+```python
+IntervalOverlap(
+    start_field="start_datetime",
+    end_field="end_datetime",
+    nullable_end=True,
+)
+```
+
+**Spec**:
+
+- Validate both field paths at finalization, not at query time.
+- Accept one normalized input object rather than two loose bounds.
+- Bind values at execution time; the declaration stays request-independent.
+- Preserve row identity — the primitive never introduces a multiplying join.
+- Produce one `Q` tree, composable with the rest of the `FilterSet` by intersection.
+- Share sync and async behavior: the predicate itself is colorless.
+- Define inclusive endpoints explicitly, in the declaration and in the docs.
+
+The four drift failure modes this exists to prevent, each observed in the audited consumer's hand-rolled copies: an inclusive endpoint silently becoming exclusive; an end-is-null rule dropped on one model; two models normalizing timezones differently; and one model filtering start-within-range instead of true interval overlap.
+
+**Sequencing**: a FilterSet-layer feature, not optimizer core. It does not depend on the graph substrate, but the model-independent scope adapters the substrate enables should be able to consume it — so if both are live, the adapter passes its normalized interval to this primitive rather than composing bounds itself.
 
 ---
 
@@ -878,6 +951,8 @@ class UpdateOrder(DjangoMutation):
 
 **Composes with**: shipped optimizer B1 AST plan cache (builds on it), `request_lifecycle_cancellation_and_reuse` (*prerequisite* — cluster sequencing), `live_search_over_websocket` (WS operations must hit this same cache — one cache, not two), `persisted_query_allowlist` (sibling posture, shared hash infrastructure), `http_cache_headers_and_etag` (operation hash is its cache key source).
 
+**Sequencing**: complementary to the [structural templates][card-structural-templates] card, not a substitute for it. This card's document cache accelerates byte-identical repeats; root-subtree structural templates fix sibling invalidation *inside* one changing document. Both layers must agree on schema-epoch keying, and the structural template is what a document-level entry should bind against — otherwise the two caches disagree about what a hit means.
+
 ---
 
 ## Mutations
@@ -1073,6 +1148,8 @@ class ItemType(DjangoType):
 
 **Composes with**: shipped `DjangoConnectionField`, `permission_aware_cursor_decoding`.
 
+**Sequencing**: this card hardens the cursor semantics the [structural templates][card-structural-templates] card's batched nested connections assert (per-parent windows, per-parent `totalCount`, cursors that replay). Batched sidecar pages and stable cursors must agree on the deterministic ordering appended after the declared `OrderSet`, or a cursor minted under one strategy stops replaying under another.
+
 ### `permission_aware_cursor_decoding`
 
 **Realistic**: 9/10 — Apply the decode filter to `get_queryset` output instead of the raw table; small change.
@@ -1090,6 +1167,8 @@ class ItemType(DjangoType):
 - Documented residual: position-based information (how many rows precede the cursor) is inherently visibility-relative and recomputed per viewer; combined with `stable_cursor_field`'s opaque payloads, neither values nor positions disclose hidden rows.
 
 **Composes with**: `stable_cursor_field`, `declarative_row_and_field_permissions`, shipped `get_queryset` hook.
+
+**Sequencing**: cursor decode re-applying `get_queryset` visibility is the pagination-time form of the [graph substrate][card-graph-substrate] card's edge-scope rule — a value minted under one viewer must not leak rows under another. State the rule once and consume it in both places rather than deriving a private cursor-side visibility path.
 
 ### `globalid_alias_map`
 
@@ -1311,6 +1390,8 @@ class ItemType(DjangoType):
 
 **Composes with**: `declarative_row_and_field_permissions` (prerequisite), `soft_delete_cooperation` (shared combinator seam), the promoted [Optimizer explain mode][card-optimizer-explain-mode] card (plans show permission filters and downgrade reasons), `permission_aware_cursor_decoding`.
 
+**Sequencing**: this card's "visibility combinator seam" and the [graph substrate][card-graph-substrate] card's `EdgeScope` are **one abstraction**, not two — the closest sibling relationship in this file. Whichever lands first defines the seam; this card must not ship a permission-private child-scoping mechanism parallel to the contextual edge scope. `soft_delete_cooperation` composes through the same seam as a third consumer.
+
 ### `role_scoped_schema_variants`
 
 **Realistic**: 7/10 — The registry/finalizer architecture supports a scope argument; the LRU bound contains the runtime cost.
@@ -1447,6 +1528,8 @@ class OrderMatrix(DjangoMatrix):
 - Errors: `validation.matrix.unknown_dimension` / `unknown_measure` with the available names in `params`.
 
 **Composes with**: `cost_limit_extension`, `tabular_export_of_list_fields` (export of matrix rows), `selection_aware_annotations` (shared fan-out contract), the planned aggregation subsystem (`AggregateSet` ships the single-row surface first; the matrix generalizes it to group-by — the same `measures` dict can drive both).
+
+**Sequencing**: this card independently arrived at the [graph substrate][card-graph-substrate] card's cardinality stance — aggregate fan-out across a many-join is a planner error by default, never a silently multiplied result. That fan-out contract should be stated **once** by the substrate and consumed by matrices, the aggregation subsystem, and generated predicates alike; three copies of the rule will drift, and the failure mode is wrong numbers rather than an error.
 
 ### `matrix_pivot_mode`
 
@@ -1639,6 +1722,8 @@ class OrderMatrix(DjangoMatrix):
 - Distinct from admission control: the DoS stack (`rate_limit_extension`, `circuit_breaker_extension`, `dos_policy_stack_framework`) rejects work *before* it starts; this card manages work *already admitted*. Complementary, never merged.
 
 **Composes with**: `operation_document_and_plan_cache` (cluster sibling, lands second), `live_search_over_websocket` (this card is its cancellation seam), `opt_in_async_resolvers` (shared ASGI deployment story), `dos_policy_stack_framework` (complementary layer, explicit non-overlap).
+
+**Sequencing**: this card's opt-in short-TTL auth/visibility context is the **cross-request** sibling of the [graph substrate][card-graph-substrate] card's operation-scoped dependency memo. The memo is the safe default tier; the TTL cache is an explicit escalation with a documented revocation window. Both must share one keying discipline — viewer, tenant, database alias, registry epoch — so opting into reuse never widens a scope the memo kept isolated. This card's cancellation half also feeds the memo's requirement that a cancelled factory leave no in-progress future behind.
 
 ### `live_search_over_websocket`
 
@@ -1851,10 +1936,12 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 [card-connection-aware-optimizer-planning]: KANBAN.md#connection_aware_optimizer_planning
 [card-django-model-based-globalid-encoding]: KANBAN.md#django_model_based_globalid_encoding
 [card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
+[card-graph-substrate]: KANBAN.md#graph_substrate_shared_graph_policy_and_dependency_planning
 [card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract
 [card-multiple-djangotypes-per-model-with-metaprimary]: KANBAN.md#multiple_djangotypes_per_model_with_metaprimary
 [card-mutation-idempotency-keys]: KANBAN.md#mutation_idempotency_keys
 [card-optimizer-explain-mode]: KANBAN.md#optimizer_explain_mode
+[card-structural-templates]: KANBAN.md#structural_optimization_templates_and_nested_sidecar_batching
 [kanban]: KANBAN.md
 
 <!-- docs/ -->

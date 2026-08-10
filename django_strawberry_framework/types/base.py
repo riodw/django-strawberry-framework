@@ -883,10 +883,14 @@ def _format_unknown_fields_error(
 ) -> str:
     """Return the standard "unknown fields ... Available: ..." error message.
 
-    Used by every validator that points at a typo in ``Meta.fields``,
-    ``Meta.exclude``, or ``Meta.optimizer_hints``.  Centralizing the
-    format keeps the consumer-visible error shape consistent across
-    typo-guard sites.
+    Used by every validator that points at a typo in a ``Meta`` key naming
+    model fields: ``Meta.fields`` and ``Meta.exclude`` (from
+    ``_select_fields``), ``Meta.optimizer_hints`` (from
+    ``_validate_optimizer_hints``), and ``Meta.nullable_overrides``,
+    ``Meta.required_overrides``, ``Meta.filesystem_path_fields`` and
+    ``Meta.relation_shapes`` (from ``_selected_meta_targets``, which each of
+    their validators calls).  Centralizing the format keeps the
+    consumer-visible error shape consistent across typo-guard sites.
     """
     return f"{model.__name__}.Meta.{attr} names unknown fields: {unknown}. Available: {sorted(available)}."
 

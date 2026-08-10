@@ -137,9 +137,15 @@ class ConfigurationError(DjangoStrawberryFrameworkError):
         - Missing ``Meta.model``.
         - ``fields`` and ``exclude`` declared together.
         - A deferred-surface key (``aggregate_class``, ``fields_class``,
-          ``search_fields``) declared before the spec that owns it has
+          ``search_fields``) declared before the feature that owns it has
           shipped.
-        - Two ``DjangoType`` subclasses registering against the same model.
+        - A second ``DjangoType`` claiming ``Meta.primary`` for a model that
+          already has one, or a ``primary`` flag flipped on re-register.
+          Registering several types against one model is supported; only the
+          ambiguity raises.
+        - Several ``DjangoType`` subclasses for one model with none declared
+          primary, which ``types/finalizer.py`` detects at finalization
+          rather than at registration.
         - A non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK`` settings value.
 
     ``SyncMisuseError`` (defined in ``utils/querysets.py``, re-exported at

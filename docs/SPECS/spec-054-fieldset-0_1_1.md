@@ -939,8 +939,8 @@ cannot reach.
 [spec-030]: spec-030-connection_field-0_0_9.md
 [spec-034]: spec-034-permissions-0_0_10.md
 [spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-050]: spec-050-debug_extraction-0_0_19.md
-[spec-051]: spec-051-boundary_dry_squeeze-0_0_20.md
+[spec-050]: spec-050-debug_extraction-0_0_15.md
+[spec-051]: spec-051-boundary_dry_squeeze-0_0_15.md
 [spec-052]: spec-052-beta_release-0_1_0.md
 [spec-054]: spec-055-search_fields-0_1_2.md
 

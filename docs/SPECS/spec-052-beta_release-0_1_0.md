@@ -4,9 +4,9 @@ Planned for `0.1.0` (card `TODO-ALPHA-052-0.1.0`); **this card is the only
 card at `0.1.0` and owns the version bump**
 ([Decision 3](#decision-3--lone-card-at-010--the-release-slice-owns-the-version-cut)).
 Number conventions in this spec: bare three-digit numbers (`050` / `051` /
-`052` / `067`) are **kanban card numbers**, dotted numbers (`0.0.19` /
-`0.0.20` / `0.1.0` / `1.0.0`) are **package versions** — card `052` is the
-card that cuts version `0.1.0`.
+`052` / `067`) are **kanban card numbers**, dotted numbers (`0.0.15` /
+`0.1.0` / `1.0.0`) are **package versions** — card `052` is the card that
+cuts version `0.1.0`.
 This card is a **release / verification card**: it ships no new subsystem and
 no new consumer-facing symbol
 ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
@@ -20,8 +20,8 @@ sequence:
    this card's release slice may run — including the two cards the card
    body's stale `DONE-013`–`DONE-044` range predates
    ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)):
-   `TODO-ALPHA-050-0.0.19` ([`spec-050`][spec-050]) and
-   `TODO-ALPHA-051-0.0.20` ([`spec-051`][spec-051]).
+   `TODO-ALPHA-050-0.0.15` ([`spec-050`][spec-050]) and
+   `TODO-ALPHA-051-0.0.15` ([`spec-051`][spec-051]).
 2. **Run the parity audit.** Build a source-complete inventory against pinned
    ⚛️ (`graphene-django`) and 🍓 (`strawberry-graphql-django`) revisions,
    then disposition every finding as `DONE`, explicitly deferred, or
@@ -136,8 +136,8 @@ is a distinct gate.
   - [ ] Verify every other Alpha card is `DONE`: the card body's
         `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and
         the later 0.0.14-line `DONE-045-0.0.14` sealed-visibility-boundary card)
-        AND the later-added `TODO-ALPHA-050-0.0.19` /
-        `TODO-ALPHA-051-0.0.20` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
+        AND the later-added `TODO-ALPHA-050-0.0.15` /
+        `TODO-ALPHA-051-0.0.15` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
         If either is not `DONE`, this card stops here.
   - [ ] Run the parity-disposition audit
         ([Decision 6](#decision-6--the-parity-audit-starts-from-a-source-complete-pinned-inventory)):
@@ -229,11 +229,14 @@ to happen once, in order, with evidence.
 ## Current state
 
 - The package sits at `0.0.14` (the four-card joint alpha cut). Two Alpha
-  cards remain ahead of this one: `TODO-ALPHA-050-0.0.19` (the
+  cards remain ahead of this one: `TODO-ALPHA-050-0.0.15` (the
   [`DjangoDebugExtension`][glossary-djangodebugextension] extraction,
-  [`spec-050`][spec-050]) and `TODO-ALPHA-051-0.0.20` (boundary hardening +
-  DRY squeeze, [`spec-051`][spec-051]). Both are sequenced before this card
-  and both are lone-card cuts that own their own patch versions.
+  [`spec-050`][spec-050]) and `TODO-ALPHA-051-0.0.15` (boundary hardening +
+  DRY squeeze, [`spec-051`][spec-051]). Both are sequenced before this card,
+  they share the `0.0.15` line as a
+  [joint version cut][glossary-joint-version-cut], and card 051 lands last
+  and owns that bump — so exactly one alpha patch stands between `0.0.14`
+  and this card's `0.1.0`.
 - The card body's Definition-of-done range ("every other Alpha card
   `DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`")
   predates the addition of cards 050 / 051 to the alpha queue — a genuine
@@ -335,7 +338,7 @@ None. The consumer-visible changes are exactly:
   documentation set.
 
 Every import path, symbol, wire format, and error contract is byte-identical
-to the last shipped alpha patch (the 051 cut, planned `0.0.20`).
+to the last shipped alpha patch (the 051 cut, planned `0.0.15`).
 
 ## Architectural decisions
 
@@ -360,7 +363,7 @@ was not actually done.
 ### Decision 2 — The gating set is the whole Alpha queue, not the card's stale `DONE` range
 
 **Decision**: the Slice 1 gate is "**every other non-Done Alpha card is
-`DONE`**" — concretely `TODO-ALPHA-050-0.0.19` and `TODO-ALPHA-051-0.0.20`
+`DONE`**" — concretely `TODO-ALPHA-050-0.0.15` and `TODO-ALPHA-051-0.0.15`
 at authoring time — in addition to the card body's enumerated
 `DONE-013-0.0.4` … `DONE-044-0.0.14` (plus `DONE-024-0.0.7`) range — and the
 later 0.0.14-line `DONE-045-0.0.14`, which shipped after the card body was
@@ -372,8 +375,8 @@ written — all verified as already satisfied.
 cleanup card (now `TODO-ALPHA-052-0.1.0` after the renumbers)"). The board
 column's own framing — "The final card in this column is the `0.1.0` release
 itself" — is the intent; a literal reading of the stale range would let this
-card cut `0.1.0` while `0.0.19` / `0.0.20` sit unshipped, which would strand
-two lone-card cuts behind a minor version that already passed them. Per the
+card cut `0.1.0` while `0.0.15` sits unshipped, which would strand that
+patch cut behind a minor version that already passed it. Per the
 authoring flow's conflict rule the card text is preferred where it decides
 scope, but here the card text and the board column conflict with each other;
 this Decision resolves toward the column and the conflict is recorded in
@@ -389,9 +392,9 @@ boundary card, both before beta).
 ### Decision 3 — Lone card at `0.1.0` — the release slice owns the version cut
 
 Per the Step 3 scan, this card is the **only** non-Done card at `0.1.0`: its
-alpha-queue neighbors are `0.0.19` (the lone extraction card 050 owns that
-cut) and `0.0.20` (the lone boundary card 051 owns that cut), and the next
-column starts the `0.1.x` beta line. So this spec mirrors the lone-card
+alpha-queue neighbor is `0.0.15` (cards 050 and 051 share that line, and the
+boundary card 051 lands last and owns that cut), and the next column starts
+the `0.1.x` beta line. So this spec mirrors the lone-card
 shape ([`spec-051`][spec-051] Decision 11, spec-038 Decision 14): Slice 5
 carries the version quintet — `pyproject.toml` `[project].version`,
 `django_strawberry_framework/__init__.py::__version__`,
@@ -497,8 +500,8 @@ existing patch entries (the repo keeps no `[Unreleased]` block), carrying
 package's positioning sentence plus the parity statement — and (b)
 cumulative `Added` / `Changed` / `Fixed` / `Removed` sections covering the
 shipped alpha line **from `0.0.6` through the last alpha patch actually
-shipped** (at authoring time that is expected to be `0.0.20`, after cards
-050 / 051 land). The card text says "covering `0.0.6` through `0.0.14`"
+shipped** (at authoring time that is expected to be `0.0.15`, after cards
+050 / 051 land on that shared line). The card text says "covering `0.0.6` through `0.0.14`"
 because it predates the 050 / 051 queue additions — the same staleness
 Decision 2 resolves; the extended range is the card's evident intent (the
 cumulative history of the line being released). One 0.0.14-line change never
@@ -551,7 +554,7 @@ delta is the quintet):
 
 Sequencing constraints: Slice 1 gates everything (Decision 2). Slice 2 runs
 against the tree after the last alpha patch lands (the 051 cut, planned
-`0.0.20`), not before. Slices 3 and 4 may interleave
+`0.0.15`), not before. Slices 3 and 4 may interleave
 (both are doc passes) but Slice 4's CHANGELOG entry lands last among the
 doc edits so the release date is real. Slice 5 moves the quintet only after
 Slices 1–4 are green — the version string is the last thing to change, so an
@@ -703,7 +706,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 - [ ] Every other Alpha card is `DONE` — the card body's
       `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and the
       later 0.0.14-line `DONE-045-0.0.14`)
-      verified, AND `TODO-ALPHA-050-0.0.19` / `TODO-ALPHA-051-0.0.20`
+      verified, AND `TODO-ALPHA-050-0.0.15` / `TODO-ALPHA-051-0.0.15`
       shipped (Decision 2).
 - [ ] The parity artifact pins both upstream revisions and assigns a stable
       ID to every source finding; the one-to-one disposition ledger marks
@@ -797,8 +800,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 
 <!-- docs/SPECS/ -->
 [spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-050]: spec-050-debug_extraction-0_0_19.md
-[spec-051]: spec-051-boundary_dry_squeeze-0_0_20.md
+[spec-050]: spec-050-debug_extraction-0_0_15.md
+[spec-051]: spec-051-boundary_dry_squeeze-0_0_15.md
 
 <!-- docs/builder/ -->
 

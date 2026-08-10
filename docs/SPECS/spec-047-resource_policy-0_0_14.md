@@ -652,7 +652,7 @@ authoring-time board scan could not have known better, is in the [rationale][rat
 
 **Decision.** The six boundaries below are not oversights and must not be re-derived. Three are
 transport-adjacent bounds this walker is the wrong layer to carry, and they are carried as scope
-on card `TODO-ALPHA-051-0.0.20`; three are audited exclusions that a later pass must not "fix".
+on card `TODO-ALPHA-051-0.0.15`; three are audited exclusions that a later pass must not "fix".
 Each is a boundary of the shipped contract rather than a gap in it.
 
 **Not this layer — a package-owned subscription rejection envelope.** Enforcement is not the gap;

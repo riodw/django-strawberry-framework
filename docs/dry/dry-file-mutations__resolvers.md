@@ -66,7 +66,7 @@ Searches: `run_write_pipeline_sync`, `_run_plain_form_pipeline_sync`,
 `run_pipeline_async`, `run_in_one_sync_boundary`, `authorize_or_raise`,
 `pipeline_alias_guard`, `authorization_phase`, `open_write_pipeline`,
 `tail_step`, `spec-051` C1/C2 / Decision 6 across package + tests +
-`docs/spec-051-boundary_dry_squeeze-0_0_20.md`.
+`docs/SPECS/spec-051-boundary_dry_squeeze-0_0_15.md`.
 
 Compared contracts:
 
@@ -240,7 +240,7 @@ No production edits. Plan item checked.
 
 <!-- docs/ -->
 
-[spec-051]: ../SPECS/spec-051-boundary_dry_squeeze-0_0_20.md
+[spec-051]: ../SPECS/spec-051-boundary_dry_squeeze-0_0_15.md
 
 <!-- docs/SPECS/ -->
 

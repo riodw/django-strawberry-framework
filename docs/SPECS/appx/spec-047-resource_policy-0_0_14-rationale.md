@@ -132,7 +132,7 @@ Those boxes are gone, and the decision no longer calls the three bounds owed. A 
 `Status:` line says shipped cannot also hold unticked work: the boxes were a promise the card
 had already stopped being able to keep, and every one of the three is a transport-adjacent bound
 this walker is the wrong layer to carry — none could be discharged by editing this spec. They are
-scope on card `TODO-ALPHA-051-0.0.20` instead, which is where the request-body cap's layer and
+scope on card `TODO-ALPHA-051-0.0.15` instead, which is where the request-body cap's layer and
 the boundary-hardening work already live. Decision 13 keeps the full technical statement of each,
 because *where the bound does not reach* is contract a consumer needs; what it no longer claims is
 that this card still owes it.

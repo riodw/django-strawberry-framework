@@ -16,6 +16,6 @@ PEP 562 lazy export,pep-562-lazy-export,shape of the rewritten extensions/__init
 Probe URLconf,probe-urlconf,live-tier scaffold slimmed to one seam proof (Decision 5)
 `TestClient`,testclient,drives the remaining live-tier seam test
 Graphene debug migration,graphene-debug-migration,parity story now routed through the extra
-Joint version cut,joint-version-cut,card 044 owns 0.0.14; this card is lone at 0.0.19
+Joint version cut,joint-version-cut,cards 050 and 051 share 0.0.15; card 051 lands last and owns the bump
 Live-first coverage mandate,live-first-coverage-mandate,retire-the-stand-in discipline for the moved suite
 `DjangoOptimizerExtension`,djangooptimizerextension,composability partner in the remaining live test

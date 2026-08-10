@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-08
+Last refreshed: 2026-08-10
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -151,16 +151,16 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 ## To Do - Alpha (0.1.0)
 
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Cards target `0.0.x` patches on the road to **0.1.0**; cards 050 and 051 share the `0.0.15` line as a joint cut. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package"></a>
-### [TODO-ALPHA-050-0.0.19 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
+### [TODO-ALPHA-050-0.0.15 - Extract DjangoDebugExtension into the standalone django-strawberry-debug package](KANBAN.html#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package)
 
 - Priority: Medium
 - Status: To Do
 - Relative size: M
 - Labels: `internal`
-- Spec: [spec-050-debug_extraction-0_0_19.md](docs/SPECS/spec-050-debug_extraction-0_0_19.md)
+- Spec: [spec-050-debug_extraction-0_0_15.md](docs/SPECS/spec-050-debug_extraction-0_0_15.md)
 
 #### Dependencies
 
@@ -170,7 +170,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 - Slice 1 - the new package: brand-new standalone repo riodw/django-strawberry-debug; pyproject (deps Django>=5.2 + strawberry-graphql>=0.316.0, NO dependency on django-strawberry-framework), src layout, MIT, README ported from spec-044's user-facing API (posture, wire contract, graphene narrowing table, async boundary); debug.py moved VERBATIM except the single logger swap (logging.getLogger("django_strawberry_debug")); the 1,019-line suite moved onto a self-contained harness; CI matrix green; 0.1.0 published to PyPI.
 - Slice 2 - the framework seam: delete extensions/debug.py + tests/extensions/test_debug.py; rewrite extensions/__init__.py as the require_optional_module-guarded PEP 562 lazy re-export; add [project.optional-dependencies] debug = ["django-strawberry-debug>=0.1.0"] (+ dev-group pin); absence test on the None-sentinel shape; ONE live-tier re-export + optimizer-composability proof; the probe scaffold slims to that seam test; fail_under = 100 re-verified.
-- Slice 3 - docs fold-in (GLOSSARY via DB, README, TREE regen, dry-file doc retired), the 0.0.19 version-quintet cut (lone card owns it), CHANGELOG entry, card wrap.
+- Slice 3 - docs fold-in (GLOSSARY via DB, README, TREE regen, dry-file doc retired) and card wrap; the 0.0.15 version-quintet cut and CHANGELOG entry belong to card 051, which shares this patch line and lands last.
 
 #### Definition of done
 
@@ -178,7 +178,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - [ ] This repo: extensions/debug.py and its package-tier suite deleted; extensions/__init__.py is the guarded lazy re-export; [debug] extra added; absence sentinel test + one live seam/composability test in place; probe scaffold slimmed.
 - [ ] pip install django-strawberry-framework[debug] resolves in an isolated venv and `from django_strawberry_framework.extensions import DjangoDebugExtension` works; with the extra absent, import-innocence + the install-hint error hold.
 - [ ] Full suite green under fail_under = 100 after the deletion.
-- [ ] Version quintet at 0.0.19, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, import_spec_terms green.
+- [ ] Docs fold-in, card flipped Done, KANBAN regenerated, import_spec_terms green - no version quintet, GLOSSARY status flip or CHANGELOG entry, all of which ride card 051's joint 0.0.15 cut.
 
 #### Files likely touched
 
@@ -208,18 +208,18 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
 
 <a id="boundary_hardening_and_system_wide_dry_squeeze"></a>
-### [TODO-ALPHA-051-0.0.20 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
+### [TODO-ALPHA-051-0.0.15 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
 
 - Priority: High
 - Status: To Do
 - Relative size: XL
 - Labels: `internal`
-- Spec: [spec-051-boundary_dry_squeeze-0_0_20.md](docs/SPECS/spec-051-boundary_dry_squeeze-0_0_20.md)
+- Spec: [spec-051-boundary_dry_squeeze-0_0_15.md](docs/SPECS/spec-051-boundary_dry_squeeze-0_0_15.md)
 
 #### Dependencies
 
 - `DONE-044-0.0.14` - Response-extensions debug middleware
-- `TODO-ALPHA-050-0.0.19` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
+- `TODO-ALPHA-050-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 #### Scope
 
@@ -227,7 +227,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - WP-B mechanical DRY batch (~450-550 lines): query-side delegate absorption into `sets_mixins.py`, write-side `PermissionClassesMixin` + metaclass merge, inputs micro-hoists, resolvers micro batch, root/optimizer/types small batch.
 - WP-C structural DRY batch (~500-600 lines): fold `_run_delete` and the plain-form pipeline onto the shared write skeleton, filter converter/normalizer dispatch table, `install_input_namespace()`, bind-drain merge, connection dispatch tails, `slot_child_selections()`, `iter_relation_path()`, budgeted-walk primitive, column-backed conversion sharing (mutations+forms only), finalizer error formatters, underscore alias deletion, `editable_input_fields` onto `resolve_effective_fields`.
 - WP-D contract-level DRY (~150 lines + doc debt): single-window planner scheme through `_divergent_key_windows`, walker `_resolve_field_map` dual-contract retirement (FieldMeta fallback), model relation decoder over the shared spine.
-- Slice 5: docs fold-in, the `0.0.20` version cut (lone card at this patch version owns the quintet), CHANGELOG entry, card wrap.
+- Slice 5: docs fold-in, the joint `0.0.15` version cut (shared with card 050; this card lands last so it owns the quintet), CHANGELOG entry, card wrap.
 - Widen `views.py::_canonicalizes_to_utf8` to catch `ValueError` and `UnicodeEncodeError` alongside `LookupError`. Pre-existing, fail-loud and not reachable from the wire, which is why it was left; a codec whose name canonicalizes but whose lookup raises escapes as an unrelated 500.
 - A shared "is this one of our views?" recognizer with `middleware/debug_toolbar.py` is now a decidable question: the constraint that forced `middleware/request_body.py` to recognize by marker attribute (it must not import `views.py`) was removed when the ordering marks moved to `_boundary_ordering.py`. `debug_toolbar` recognizes a package view by class through an *upstream* `BaseView` import, so a narrower shared recognition needs no `views.py` import either. Revisit only when a third middleware needs the same recognition, or when two need to agree about one callback - not as a DRY sweep for its own sake.
 - `middleware/request_body.py::_package_view_instance`'s docstring still says `process_view` is "a hook whose every other outcome is a controlled response" while the same docstring records that a boundary the recognition *accepted* which raises anything but `HTTPException` leaves the hook uncaught. Scope the absolute to the outcomes the recognition decides. The behaviour must not change: a guard there would sit across the body cap's own errors.
@@ -254,7 +254,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - [ ] Every WP-B/C/D candidate landed or recorded rejected-with-reason in the spec; the deliberate-duplication ledger preserved.
 - [ ] Plain-form mutations run inside `pipeline_alias_guard` + `authorization_phase` with live coverage (approved behavior change); `editable_input_fields` strictness tightening covered (approved behavior change).
 - [ ] Full suite green under `fail_under = 100`; zero error-string assertion edits outside the two approved behavior changes; optimizer bench deltas at noise level.
-- [ ] Version quintet at `0.0.20`, GLOSSARY flips, CHANGELOG entry, card flipped Done, KANBAN regenerated, `import_spec_terms` green.
+- [ ] Version quintet at `0.0.15`, GLOSSARY flips for both cards on the line, CHANGELOG entry, card flipped Done, KANBAN regenerated, `import_spec_terms` green.
 
 #### Files likely touched
 
@@ -278,7 +278,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 #### Dependencies
 
 - Sequenced behind DONE-044-0.0.14: card 044 owns the `0.0.14` joint cut and its TODO anchors sit on the version-quintet sites; this card's Slice 5 (and its quintet anchors) wait until that cut lands.
-- Also sequenced behind TODO-ALPHA-050-0.0.19: the debug extraction ships `0.0.19` first and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
+- Also sequenced behind TODO-ALPHA-050-0.0.15: the debug extraction lands first on this card's own `0.0.15` line and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
 
 #### Open question
 
@@ -294,7 +294,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
-- Dependency: `TODO-ALPHA-050-0.0.19` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
+- Dependency: `TODO-ALPHA-050-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
 ### [TODO-ALPHA-052-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
@@ -409,7 +409,7 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 
 #### Dependencies
 
-- `TODO-ALPHA-051-0.0.20` - Boundary hardening and system-wide DRY squeeze
+- `TODO-ALPHA-051-0.0.15` - Boundary hardening and system-wide DRY squeeze
 
 #### Scope
 
@@ -452,7 +452,7 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 
 #### Card references
 
-- Dependency: The boundary/DRY squeeze freezes optimizer subsystem boundaries; the `graph/` package must sit below them, and Slice 3's predicate relocation composes with the post-squeeze tree. -> `TODO-ALPHA-051-0.0.20` - Boundary hardening and system-wide DRY squeeze
+- Dependency: The boundary/DRY squeeze freezes optimizer subsystem boundaries; the `graph/` package must sit below them, and Slice 3's predicate relocation composes with the post-squeeze tree. -> `TODO-ALPHA-051-0.0.15` - Boundary hardening and system-wide DRY squeeze
 - Related: Amendment obligation: `FieldSet` normalizes `Meta.depends_on` into `FieldDependencyPlan` and consumes the substrate's field-dependency vocabulary instead of a private map shape. -> `TODO-BETA-054-0.1.1` - `FieldSet`
 - Related: Amendment obligation: search path planning moves onto `GraphPathPlan` / `GraphPathPlanSet` (path classification + arm grouping); `LOOKUP_PREFIXES` rejection and permission dispatch stay card-local. -> `TODO-BETA-055-0.1.2` - `Meta.search_fields` support
 - Related: Amendment obligation: related / permissioned aggregation consumes `EdgeScope` for child visibility instead of a private child-visibility hook. -> `TODO-BETA-057-0.1.3` - Aggregation subsystem

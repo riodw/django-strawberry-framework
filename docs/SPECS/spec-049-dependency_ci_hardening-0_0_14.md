@@ -807,7 +807,7 @@ never by hand.
 - The execution resource policy (S3, S4) — shipped in [`spec-047`][spec-047].
 - Transport security (S1, S2, S9, S11) — shipped in [`spec-046`][spec-046].
 - Extracting the debug extension into its own distribution —
-  [`TODO-ALPHA-050-0.0.19`][kanban], which removes `extensions/debug.py` and will change
+  [`TODO-ALPHA-050-0.0.15`][kanban], which removes `extensions/debug.py` and will change
   the dependency surface this card's audit reads.
 - Artifact signing, provenance attestation, and SLSA build levels — not carded. A publish
   workflow is the natural home and none exists yet.

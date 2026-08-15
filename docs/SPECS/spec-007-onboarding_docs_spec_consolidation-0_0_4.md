@@ -4,53 +4,45 @@ Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-007-0.0.4`).
 Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
 Owner: package maintainer.
 
-This file is intentionally lightweight. It preserves the card scope from the Kanban database so the card has a durable `SpecDoc` FK target and a stable repository file. Before implementation work starts from this file, expand it into the full builder-format spec described by `docs/SPECS/NEXT.md` and `docs/builder/BUILD.md`.
+Deliberation and this spec's change record live in its companion [rationale file][spec-007-rationale]: why a card snapshot is the right shape for this card, the fold-in-by-deletion policy this card's scope described and the repository reversed, and every claim about the `0.0.4` documentation set that this spec once made and may no longer make.
 
 ## Card snapshot
 
-- Card: `DONE-007-0.0.4`
-- Status: `done` / Done
-- Milestone: `alpha` / Alpha (pre-0.1.0)
-- Priority: Medium
-- Relative size: S
-- Labels: `docs`, `release`
-
-## Planning note
-
-shipped
+- Card: `DONE-007-0.0.4`, status `done`, milestone `alpha` (pre-`0.1.0`).
+- The card's other board fields — labels, priority, relative size, and its item rows — belong to the Kanban database and are rendered into [KANBAN.md][kanban]. This section identifies the card; it does not restate them.
 
 ## Scope
 
-- Root `README.md` is the canonical documentation map and operational entry point.
-- `docs/README.md` is code-first: quickstart, three-minute path, [optimizer behavior][glossary-djangooptimizerextension], and status.
-- `docs/GLOSSARY.md` is the capability catalog with value-led optimizer language and comparison table.
-- `docs/TREE.md` is the detailed layout/test-tree reference.
-- `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
-- Completed design-doc content is folded into durable docs, while remaining specs preserve design history and follow-up work.
+The onboarding documentation is divided by the question each file answers, so that no two files answer the same one.
 
-## Other
-
-- internal docs cleanup / spec consolidation — no upstream-parity surface.
-- onboarding-doc consolidation across README / docs / CHANGELOG; completed spec content folded into durable docs.
-- `README.md`
-- `docs/README.md`
-- `docs/GLOSSARY.md`
-- `docs/TREE.md`
-- `CHANGELOG.md`
-- Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
+- Root [`README.md`][root-readme] is the canonical documentation map: positioning, status, and the pointer set into the rest of this set.
+- [`docs/README.md`][readme] is the entry point for *using* the package — installation, quick start, running the example project — and the place a consumer reads runtime behavior, [optimizer behavior][glossary-djangooptimizerextension] included.
+- [`CONTRIBUTING.md`][contributing] is the entry point for *working on* the package: development setup, test suite, formatting, versioning, build, and publish.
+- [`docs/GLOSSARY.md`][glossary] is the capability catalog — every catalogued capability gets one entry, and every entry a stable anchor, so the rest of the documentation links to it rather than re-explaining it.
+- [`docs/TREE.md`][tree] is the detailed layout and test-tree reference.
+- [`CHANGELOG.md`][changelog] is the release record.
+- Completed design-doc content folds into the durable docs, and the spec files themselves are retained as the design-history record. The lifecycle around them — filename pattern, fold-in targets, and archival — is owned by `AGENTS.md` rule 26 and [`docs/builder/BUILD.md`][build] `## Spec and build-plan filename pattern`.
+- The card shipped documentation only: no package surface and no upstream-parity change.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
 [kanban]: ../../KANBAN.md
+[root-readme]: ../../README.md
 
 <!-- docs/ -->
+[glossary]: ../GLOSSARY.md
 [glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[readme]: ../README.md
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
+[spec-007-rationale]: appx/spec-007-onboarding_docs_spec_consolidation-0_0_4-rationale.md
 
 <!-- docs/builder/ -->
+[build]: ../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->
 

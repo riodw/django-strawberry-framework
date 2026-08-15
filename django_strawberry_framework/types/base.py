@@ -1770,7 +1770,7 @@ def _build_annotations(
             # The earlier eager-bind branch froze the relation against
             # whichever type was already registered at ``__init_subclass__``
             # time, which mis-bound when a secondary was registered before
-            # the primary (the import-order trap closed by spec-014).
+            # the primary (the import-order trap closed by spec-018).
             pending.append(
                 PendingRelation(
                     source_type=cls,

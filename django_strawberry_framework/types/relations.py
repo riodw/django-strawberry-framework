@@ -1,10 +1,12 @@
 """Pending relation records for definition-order-independent ``DjangoType`` finalization.
 
-This module owns the two scaffolding objects that close the import-order trap
-addressed by spec-014: ``PendingRelation`` (a frozen dataclass capturing a
-relation field whose target ``DjangoType`` was not yet registered at collection
-time) and ``PendingRelationAnnotation`` (the sentinel installed in
-``cls.__annotations__`` until the target type registers). The producer is
+This module owns the two scaffolding objects that carry a relation from
+collection to finalization (spec-010): ``PendingRelation`` (a frozen dataclass
+capturing a relation field whose target ``DjangoType`` was not yet registered
+at collection time) and ``PendingRelationAnnotation`` (the sentinel installed
+in ``cls.__annotations__`` until the target type registers). Routing every
+auto-synthesized relation through them unconditionally is what closes the
+import-order trap (spec-018). The producer is
 ``_build_annotations`` (``types/base.py::_build_annotations``), which records a
 ``PendingRelation`` and installs the sentinel for every auto-synthesized
 relation. The consumer is ``finalize_django_types``

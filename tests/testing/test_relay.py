@@ -183,6 +183,7 @@ def test_global_id_for_unfinalized_raises():
     message = str(excinfo.value)
     assert "CategoryNode" in message
     assert "finalize_django_types()" in message
+    assert "first (directly, or by importing a schema module that calls it)" in message
 
 
 def test_global_id_for_non_node_raises():

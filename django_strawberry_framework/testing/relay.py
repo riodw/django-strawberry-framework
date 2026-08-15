@@ -70,8 +70,9 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
         # the helper's "finalized Relay-Node-shaped type" contract.
         raise ConfigurationError(
             f"global_id_for: {definition.graphql_type_name} is not finalized; "
-            "call finalize_django_types() (or build the schema) first - the "
-            "GlobalID strategy is stamped at finalization.",
+            "call finalize_django_types() first (directly, or by importing a "
+            "schema module that calls it) - the GlobalID strategy is stamped "
+            "at finalization.",
         )
     strategy = definition.effective_globalid_strategy
     if strategy is None:

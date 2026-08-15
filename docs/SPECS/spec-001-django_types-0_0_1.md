@@ -63,7 +63,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 
 ## `DjangoType`
 
-`DjangoType` is a base class with an `__init_subclass__` pipeline that reads a nested `Meta` class, synthesizes Strawberry annotations from the Django model, and registers the resulting type for later relation lookup. Collection is separate from finalization: subclass creation collects, and a later `finalize_django_types()` pass resolves the recorded relation targets and applies `strawberry.type` to every collected class. `spec-008-definition_order_independence-0_0_4.md` owns that pass; this spec owns what subclass creation collects.
+`DjangoType` is a base class with an `__init_subclass__` pipeline that reads a nested `Meta` class, synthesizes Strawberry annotations from the Django model, and registers the resulting type for later relation lookup. Collection is separate from finalization: subclass creation collects, and a later `finalize_django_types()` pass resolves the recorded relation targets and applies `strawberry.type` to every collected class. `spec-010-foundation-0_0_4.md` owns that pass; this spec owns what subclass creation collects.
 
 The consumer surface is intentionally DRF-like:
 

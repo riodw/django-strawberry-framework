@@ -24,6 +24,8 @@ Current package version: `0.0.14`. Alpha-quality — suitable for internal tools
 Symbols re-exported from `django_strawberry_framework`:
 
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
+- [`DEFAULT_ERROR_POLICY`](#errorpolicy) — the all-defaults `ErrorPolicy` instance; what error-policy resolution returns when a deployment configures nothing.
+- [`DEFAULT_RESOURCE_POLICY`](#resourcepolicy) — the all-defaults `ResourcePolicy` instance; what resource-policy resolution returns when a deployment configures nothing.
 - [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
 - [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
 - [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) — response-side enforcement of the [production error policy](#production-error-policy); prepended to a `DjangoSchema`'s extensions list so it masks after every other teardown.
@@ -36,12 +38,14 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoModelFormMutation`](#djangomodelformmutation) — `ModelForm` mutation base subclassing `DjangoMutation`; returns the post-save object in the uniform `node` / `result` slot.
 - [`DjangoModelPermission`](#djangomodelpermission) — default write-authorization class (Django `add` / `change` / `delete` model perms) for `Meta.permission_classes`.
 - [`DjangoMutation`](#djangomutation) — model-driven create / update / delete mutation base configured through a nested `class Meta`.
+- `DjangoMutationExecutionContext` — the graphql-core `ExecutionContext` subclass `DjangoSchema` installs by default, which holds each top-level generated mutation's transaction open until graphql-core has finished completing that field's value. The write pipeline it wraps is [`DjangoMutation`](#djangomutation).
 - [`DjangoMutationField`](#djangomutationfield) — write-side field factory exposing a `DjangoMutation` on the schema's `Mutation` type.
 - [`DjangoNodeField`](#djangonodefield) — root Relay `node(id:)` refetch field factory (bare interface and typed forms).
 - [`DjangoNodesField`](#djangonodesfield) — root Relay `nodes(ids:)` batch refetch field factory.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) — schema extension that spends the [execution resource policy](#execution-resource-policy); appended by `DjangoSchema` as a CLASS so each request gets its own charge counters.
+- `DjangoSchema` — the `strawberry.Schema` subclass required for any schema exposing generated mutations: it resolves the [production error policy](#production-error-policy) and the [execution resource policy](#execution-resource-policy) once at construction, installs their extensions, and runs generated mutations through `DjangoMutationExecutionContext`.
 - [`ErrorPolicy`](#errorpolicy) — frozen production error policy (`enabled` / `message` / `correlation_extension_key`), resolved once at schema construction; exported alongside `DEFAULT_ERROR_POLICY`.
 - [`FieldError`](#fielderror-envelope) — public typed validation-error type (`field` + `messages`) in the shared mutation-payload envelope.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
@@ -56,7 +60,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - [`strawberry_config`](#strawberry_config) — factory returning a `StrawberryConfig` pre-populated with the package's `scalar_map`.
 - [`auto`](#auto-typed-annotations) — re-export from Strawberry for `auto`-typed field annotations (the declare-but-infer marker).
-- `__version__` — package version string.
+- [`__version__`](#joint-version-cut) — package version string; part of the version quintet moved only by the joint version cut.
 
 Symbols available from the `django_strawberry_framework.extensions` subpackage (opt-in schema extensions):
 

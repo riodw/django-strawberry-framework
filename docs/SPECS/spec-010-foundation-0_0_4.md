@@ -1,5 +1,7 @@
 # Foundation slice: [definition-order independence][glossary-definition-order-independence]
 
+Deliberation, rejected alternatives, and this spec's change record live in the companion file [`spec-010-foundation-0_0_4-rationale.md`][spec-010-rationale]: why the source-line-reference convention was retired rather than refreshed, why the surviving third-party line citations are not debt, and why two citations naming since-retired symbols were kept as history instead of repointed.
+
 ## Purpose
 This document is the implementation contract for the 0.0.4 foundation slice. It is the single source of truth for what ships in this release. It is intentionally narrower than the broader design specs:
 - [`docs/SPECS/spec-008-definition_order_independence-0_0_4.md`](spec-008-definition_order_independence-0_0_4.md) discusses the relation-resolution problem space and prior art at length. This spec narrows that into one shippable slice and resolves the open design questions raised there.
@@ -18,7 +20,7 @@ The foundation slice ships six things and only six things:
 ## What does not ship in this slice
 The foundation slice deliberately skips:
 - Custom Strawberry field class (`DjangoModelField`). Rich-schema spec layer 4. We keep today's `_attach_relation_resolvers` pattern.
-- `DjangoSchema`, [`DjangoConnectionField`][glossary-djangoconnectionfield], [`DjangoNodeField`][glossary-djangonodefield]. Rich-schema spec layer 5+. The foundation only exposes the explicit `finalize_django_types()` entry point; helpers wrap it in later releases.
+- `DjangoSchema`, [`DjangoConnectionField`][glossary-djangoconnectionfield], [`DjangoNodeField`][glossary-djangonodefield]. Rich-schema spec layer 5+. The foundation only exposes the explicit `finalize_django_types()` entry point; no shipped helper wraps it — the explicit consumer call remains the only trigger.
 - Filters, orders, aggregates, fieldsets, permissions, sentinel redaction, field-level optimizer stores. Rich-schema spec layers 6–11.
 - Strawberry-Django's decorator API surface and `DjangoModelType` generic relation fallback.
 - [`Meta.primary`][glossary-metaprimary] for multiple [`DjangoType`][glossary-djangotype]s per model. The current registry hard-fails on duplicate models, and that stays.
@@ -45,7 +47,7 @@ Pass criteria (all five must succeed):
 5. **Boundary test (reverse path)**: declare several `DjangoType`s without finalizing, decorate the `Query` class **before** `finalize_django_types()`, then call `finalize_django_types()`, then construct and execute. Document whether this raises, works, or stores enough lazy-annotation state to recover. Whichever it does becomes the canonical "earliest safe call point" written into `README.md`.
 ### Spike B: post-`__strawberry_definition__` patching
 Goal: prove (or disprove) that calling `strawberry.type(cls)` at class creation with placeholder annotations and patching `__strawberry_definition__.fields` at finalization is safe.
-Pass criteria: a passing or failing assertion. If Spike A passes cleanly, Spike B is documented as "not required" and Option B from `spec-008-definition_order_independence-0_0_4.md (400-414)` is closed out as rejected.
+Pass criteria: a passing or failing assertion. If Spike A passes cleanly, Spike B is documented as "not required" and Option B from `spec-008-definition_order_independence-0_0_4.md` #"### The finalization trigger" is closed out as rejected.
 ### Spike C: same-module forward references
 Goal: confirm that `Annotated[T, strawberry.lazy("module.path")]` cannot be used as the default mechanism for cyclic relations in the same module (it requires a real importable path and breaks single-file examples).
 Pass criteria: documented confirmation that `strawberry.lazy(...)` stays only as an *optional explicit escape hatch*, never as the default.
@@ -60,9 +62,9 @@ Phase 0 confirmed the following strategy.
 - `DjangoType.__init_subclass__` collects metadata only. It does **not** call `strawberry.type(cls)`.
 - `finalize_django_types()` is the single point that resolves pending relations, attaches relation resolvers, and calls `strawberry.type(cls, ...)` for each registered type.
 - **Earliest safe call point**: `finalize_django_types()` must run **after every module that defines `DjangoType` classes has been imported, and before `strawberry.Schema(...)` construction**. Spike A proved both orders around `@strawberry.type Query` are viable: the recommended setup calls `finalize_django_types()` before decorating `Query`, while the later-but-still-safe setup decorates `Query` first and finalizes before schema construction. Constructing `strawberry.Schema(...)` before finalization is the wrong-order failure mode documented in `README.md`.
-- **Lifecycle window**: `finalize_django_types()` must be called **once during single-threaded import / app / schema setup, before serving requests**. It is **not** safe to call from a request thread, an async resolver, or any concurrent context. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the foundation slice's registry is intentionally lockless (see `registry.py:28-33`) and concurrent finalization can produce partial Strawberry definitions. This window is restated in `README.md`.
+- **Lifecycle window**: `finalize_django_types()` must be called **once during single-threaded import / app / schema setup, before serving requests**. It is **not** safe to call from a request thread, an async resolver, or any concurrent context. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the foundation slice's registry is intentionally lockless (see `registry.py::TypeRegistry`) and concurrent finalization can produce partial Strawberry definitions. This window is restated in `README.md`.
 - **Module discovery is the consumer's responsibility**: the foundation slice does not ship `apps.py`, autodiscovery, or any helper that imports project modules on the user's behalf. Every Python module that defines a `DjangoType` must be imported (directly or transitively) **before** `finalize_django_types()` runs. A `CategoryType` that exists in code but lives in a never-imported module will be reported as unresolved by the finalizer with the standard error format. The README setup snippet must explicitly show the import boundary (e.g., `from myapp.types import *  # noqa: F401`) immediately before the finalizer call, alongside an explicit doc note that this is the most common production failure mode in 0.0.4. Autodiscovery is a later-phase wrapper concern.
-- Auto-trigger via `DjangoSchema(...)` and `DjangoConnectionField(Type)` is a later-phase wrapper around this same entry point — see `spec-009-rich_schema_architecture-0_0_4.md (670-687)`. Any future helper that auto-triggers finalization must also enforce the single-threaded-setup window: either by being constrained to schema construction time, or by acquiring a real lock around the finalizer.
+- No shipped helper auto-triggers finalization: `DjangoSchema`, `DjangoConnectionField`, and `DjangoNodeField` do not call `finalize_django_types()`; the explicit consumer call is the only trigger. The auto-trigger direction in `spec-009-rich_schema_architecture-0_0_4.md` #"### Layer 3: Finalization trigger" was not adopted. Any future helper that auto-triggers finalization must also enforce the single-threaded-setup window: either by being constrained to schema construction time, or by acquiring a real lock around the finalizer.
 - `Annotated[..., strawberry.lazy("module.path")]` remains a documented optional override path for users who want a non-primary target type or who want to defer a relation across modules. It is not the default and not required for normal `Meta.fields = "__all__"`.
 ### Manual annotation contract for relation fields (0.0.4)
 For relation fields only, the foundation slice pins this contract:
@@ -76,7 +78,7 @@ For relation fields only, the foundation slice pins this contract:
   - `Annotated[..., strawberry.lazy("...")]` cross-module override
   - explicit `strawberry.field(resolver=...)` assignment on a relation field
   - `@strawberry.field` decorator on a relation field
-- Manual override on *scalar* fields continues to follow the existing implementation-detail caveat at `base.py:151-159` and is not pinned in this slice.
+- Manual override on *scalar* fields continues to follow the existing implementation-detail caveat carried by `types/base.py::DjangoType.__init_subclass__`'s annotation merge, and is not pinned in this slice.
 ## Architecture (canonical, with pseudocode)
 ### `DjangoTypeDefinition`
 Lives at `django_strawberry_framework/types/definition.py`. The single canonical place for per-type metadata. Replaces the current scatter of class attributes.
@@ -296,7 +298,7 @@ def __init_subclass__(cls, **kwargs):
     #     out-of-tree code reading cls._optimizer_field_map /
     #     _optimizer_hints / _is_default_get_queryset keeps working. The
     #     walker reads via getattr(type_cls, "_optimizer_field_map", None)
-    #     at walker.py:64; a class-level @property cannot return the
+    #     in optimizer/walker.py; a class-level @property cannot return the
     #     underlying dict from a `getattr(cls, ...)` call (it returns the
     #     descriptor object itself), so we mirror values directly onto
     #     the class instead. Removed in the next minor.
@@ -308,6 +310,8 @@ def __init_subclass__(cls, **kwargs):
 ```
 ### Finalization phase: `finalize_django_types()`
 Lives at `django_strawberry_framework/types/finalizer.py` (new). Public, importable from the package root.
+
+This slice's base lifecycle is the three phases below, and it is a skeleton later slices insert into rather than a closed list. Phase 1 additionally carries a primary-type ambiguity audit (`spec-018-meta_primary-0_0_6.md`), and a phase runs between resolver attachment and `strawberry.type` decoration carrying work owned by the specs that shipped it — interface application, relation-as-Connection synthesis, sidecar binding, and GlobalID wiring. Their contents belong to those specs; what this spec owns is the base lifecycle and the ordering constraint that any insertion must preserve.
 ```python path=null start=null
 def finalize_django_types() -> None:
     """Resolve pending relations, attach resolvers, and finalize types.
@@ -319,24 +323,24 @@ def finalize_django_types() -> None:
     side effects have occurred yet. Tests catch the error, register the
     missing target, and call this function again for a clean retry.
 
-    Phases 2 and 3 are NOT failure-atomic: `_attach_relation_resolvers`
+    The later phases are NOT failure-atomic: `_attach_relation_resolvers`
     sets attributes on classes, and `strawberry.type(...)` builds
     `__strawberry_definition__` per class. If a Strawberry-side failure
-    occurs in phase 2 or 3 (forward-ref error, duplicate field, bad
+    occurs after phase 1 (forward-ref error, duplicate field, bad
     annotation, etc.), the process is partially mutated:
       - some classes have relation resolvers attached, others do not
       - some types have `__strawberry_definition__` set, others do not
       - `definition.finalized` flags reflect whichever types finalized
         before the failure
       - `registry.is_finalized()` stays False because
-        `mark_finalized()` runs only after phase 3 completes.
-    Recovery from a phase 2/3 failure REQUIRES calling `registry.clear()`
-    and recreating fresh `DjangoType` classes from scratch. Re-calling
-    `finalize_django_types()` on partially mutated classes is
-    unsupported. This contract is documented in the idempotency /
-    lifecycle section below and pinned by the
-    `test_phase3_strawberry_failure_requires_full_restart` acceptance
-    test.
+        `mark_finalized()` runs only after the final phase completes.
+    A rerun is supported from that state: each phase loop skips
+    already-finalized entries through a per-entry `definition.finalized`
+    guard, so fixing the offending type in place and calling
+    `finalize_django_types()` again recovers at per-type granularity.
+    `registry.clear()` plus fresh classes is the escape hatch for a type
+    that cannot be fixed in place. This contract is documented in the
+    idempotency / lifecycle section below.
     """
     if registry.is_finalized():
         return  # idempotent
@@ -378,7 +382,8 @@ def finalize_django_types() -> None:
     # Phase 2 (attach relation resolvers). Uses definition.selected_fields
     # — the real Django field objects — not field_map (FieldMeta), because
     # _make_relation_resolver needs `attname`, `related_model.DoesNotExist`,
-    # cardinality flags, etc. (see `types/resolvers.py:111-165`). Skip
+    # cardinality flags, etc. (see types/resolvers.py::_make_relation_resolver).
+    # Skip
     # consumer-assigned Strawberry fields/resolvers so generated
     # resolvers never clobber them; annotation-only overrides still get
     # generated resolvers.
@@ -390,10 +395,11 @@ def finalize_django_types() -> None:
             definition.selected_fields,
             skip_field_names=definition.consumer_assigned_relation_fields,
         )
-    # Phase 3 (finalize each type with strawberry.type). NOT atomic; see
-    # docstring. A Strawberry-side failure here leaves the registry and
-    # class objects partially mutated and requires registry.clear() +
-    # fresh class recreation to recover.
+    # Final phase (finalize each type with strawberry.type). NOT atomic;
+    # see docstring. A Strawberry-side failure here leaves the registry
+    # and class objects partially mutated; the per-entry
+    # definition.finalized guard below is what makes a rerun recover at
+    # per-type granularity.
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
@@ -402,7 +408,7 @@ def finalize_django_types() -> None:
     registry.mark_finalized()
 ```
 ### Unresolved-target error format
-The error is the load-bearing fail-loud signal. It must name the source model, source field, and target model, exactly as required by `spec-008-definition_order_independence-0_0_4.md (397-505)` and `spec-009-rich_schema_architecture-0_0_4.md (1076-1077)`.
+The error is the load-bearing fail-loud signal. It must name the source model, source field, and target model, exactly as required by `spec-008-definition_order_independence-0_0_4.md` #"### The shape that shipped" and `spec-009-rich_schema_architecture-0_0_4.md` #"### Decision 6: fail loudly". Those citations are the **source of the requirement** and nothing more: the design constraint that all three be named is spec-008's, and this spec owns the canonical wording, the message format, and the substring-test contract that pin it. The split is deliberate and is stated in both documents.
 ```python path=null start=null
 def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
     lines = []
@@ -422,7 +428,7 @@ def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
 The message above is the canonical wording. Tests assert against substrings (`"Cannot finalize"`, `"no registered DjangoType"`, the source `Model.field` format).
 
 ## What we take from strawberry-graphql-django
-We borrow concepts and shapes, not the decorator API or the generic-fallback default. References point at the actual files we inspected for this spec.
+We borrow concepts and shapes, not the decorator API or the generic-fallback default. References point at the actual files we inspected for this spec. Line numbers here address pinned third-party snapshots, so they are exact and stay exact. That is the whole of this spec's line-addressing convention, and it holds wherever a third-party file is cited, including the few citations outside this section and the graphene-django one below: a line is addressed only when the file it addresses cannot move. Every in-repo citation is symbol-qualified instead.
 - **Definition-object pattern**: mirror `StrawberryDjangoDefinition` at `strawberry_django/type.py:425` as our `DjangoTypeDefinition`. Same idea (one canonical metadata object stashed on the class), but stored under our own attribute name.
 - **Lifecycle split**: take the *shape* of `_process_type` at `strawberry_django/type.py:73` — collect, inject auto annotations, finalize via `strawberry.type(cls, **kwargs)` (`type.py:246`), post-process `type_def.fields` (`type.py:252`). Invert the timing: we collect at class creation but only finalize when `finalize_django_types()` runs.
 - **Annotation namespace preservation**: `get_strawberry_annotations` at `strawberry_django/utils/typing.py:105` is the right helper for the day a stable consumer-override contract lands. **Out of scope for 0.0.4**; flagged here so it is not reinvented later.
@@ -442,17 +448,17 @@ We take one concept and explicitly reject everything else.
 ## Migration of current code (per the verification report)
 Every change below is mapped to a specific symbol in the current source.
 ### Must redo (not augment)
-- `django_strawberry_framework/types/converters.py:211 (convert_relation)`. Currently raises immediately on missing target. Becomes a thin "if registered, return concrete annotation; otherwise the caller has already recorded a pending relation" helper. The eager `raise ConfigurationError` is removed; the same error message format moves into `_format_unresolved_targets_error` at finalization.
-- `django_strawberry_framework/types/base.py:80 (__init_subclass__)`. Split into the collection-only pseudocode above. The trailing `strawberry.type(cls, name=name, description=description)` call at `base.py:181` is **removed**; the call moves to `finalize_django_types()`.
-- `django_strawberry_framework/types/base.py:377 (_build_annotations)`. Becomes a per-field dispatch over `convert_scalar` and a relation branch that either resolves through the registry or appends to the caller's pending list. Today's monolithic loop is replaced.
-- `django_strawberry_framework/registry.py:93 (TypeRegistry.lazy_ref)`. **Deleted.** The placeholder `raise NotImplementedError(...)` and its three-option docstring are misleading; the actual pending-relation API supersedes them.
-- `django_strawberry_framework/registry.py:154 (TypeRegistry.clear)`. Extended to also reset `_definitions`, `_pending`, and `_finalized`. Required for test isolation; without it, pending relations and finalized markers leak between tests.
+- `django_strawberry_framework/types/converters.py::convert_relation`. Currently raises immediately on missing target. Becomes a thin "if registered, return concrete annotation; otherwise the caller has already recorded a pending relation" helper. The eager `raise ConfigurationError` is removed; the same error message format moves into `_format_unresolved_targets_error` at finalization.
+- `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`. Split into the collection-only pseudocode above. Its trailing `strawberry.type(cls, name=name, description=description)` call is **removed**; the call moves to `finalize_django_types()`.
+- `django_strawberry_framework/types/base.py::_build_annotations`. Becomes a per-field dispatch over `convert_scalar` and a relation branch that either resolves through the registry or appends to the caller's pending list. Today's monolithic loop is replaced.
+- `django_strawberry_framework/registry.py::TypeRegistry.lazy_ref`. **Deleted.** The placeholder `raise NotImplementedError(...)` and its three-option docstring are misleading; the actual pending-relation API supersedes them.
+- `django_strawberry_framework/registry.py::TypeRegistry.clear`. Extended to also reset `_definitions`, `_pending`, and `_finalized`. Required for test isolation; without it, pending relations and finalized markers leak between tests.
 - `tests/types/test_converters.py` and `tests/types/test_base.py`. Any test that pins "creating a `DjangoType` whose target is not yet registered raises [`ConfigurationError`][glossary-configurationerror]" is rewritten. New behavior: class creation succeeds; `finalize_django_types()` raises with the unresolved-targets format.
 ### Should redo now (cheap to do, expensive to defer)
-- `django_strawberry_framework/types/base.py:147 (cls._optimizer_field_map)` and `:149 (cls._optimizer_hints)`. The canonical store moves to `DjangoTypeDefinition.field_map` and `.optimizer_hints`. The walker keeps reading `getattr(type_cls, "_optimizer_field_map", None)` at `walker.py:64` and `getattr(type_cls, "_optimizer_hints", {})` at `walker.py:130` for one minor version. The compat surface is **direct class-attribute mirroring** in `__init_subclass__` (see step 13 of the collection pseudocode), **not** a `@property` — a normal instance property returns the descriptor object itself when the walker does `getattr(type_cls, "_optimizer_field_map", None)` (because `type_cls` is the class, not an instance), which would silently break the walker and the [schema audit][glossary-schema-audit]. The mirrored attributes are removed in the next minor once the walker reads through `registry.get_definition(...)`.
-- `django_strawberry_framework/types/base.py:71 (_is_default_get_queryset)`. Migrated onto `DjangoTypeDefinition.has_custom_get_queryset`, but populated by an MRO-walking helper (`_detect_custom_get_queryset(cls)`), **not** by `"get_queryset" in cls.__dict__` alone. The MRO walk is required so an abstract base that overrides `get_queryset` (e.g., a tenant-scoped mixin) propagates the flag to concrete subclasses exactly as today's class-attribute sentinel does at `base.py:128-131`. The `has_custom_get_queryset()` classmethod stays as a thin lookup (`return cls.__django_strawberry_definition__.has_custom_get_queryset`) so `walker.py:42` keeps reading the same shape. The legacy `cls._is_default_get_queryset` is mirrored from the definition for one minor version (collection pseudocode step 13).
+- `django_strawberry_framework/types/base.py`'s `cls._optimizer_field_map` and `cls._optimizer_hints` class attributes. The canonical store moves to `DjangoTypeDefinition.field_map` and `.optimizer_hints`. The walker keeps reading `getattr(type_cls, "_optimizer_field_map", None)` and `getattr(type_cls, "_optimizer_hints", {})` for one minor version. The compat surface is **direct class-attribute mirroring** in `__init_subclass__` (see step 13 of the collection pseudocode), **not** a `@property` — a normal instance property returns the descriptor object itself when the walker does `getattr(type_cls, "_optimizer_field_map", None)` (because `type_cls` is the class, not an instance), which would silently break the walker and the [schema audit][glossary-schema-audit]. The mirrored attributes are removed in the next minor once the walker reads through `registry.get_definition(...)`.
+- `django_strawberry_framework/types/base.py`'s `_is_default_get_queryset` class attribute. Migrated onto `DjangoTypeDefinition.has_custom_get_queryset`, but populated by an MRO-walking helper (`_detect_custom_get_queryset(cls)`), **not** by `"get_queryset" in cls.__dict__` alone. The MRO walk is required so an abstract base that overrides `get_queryset` (e.g., a tenant-scoped mixin) propagates the flag to concrete subclasses exactly as today's class-attribute sentinel does inside `types/base.py::DjangoType.__init_subclass__`. The `has_custom_get_queryset()` classmethod stays as a thin lookup (`return cls.__django_strawberry_definition__.has_custom_get_queryset`) so `optimizer/walker.py::_target_has_custom_get_queryset` keeps reading the same shape. The legacy `cls._is_default_get_queryset` is mirrored from the definition for one minor version (collection pseudocode step 13).
 - `django_strawberry_framework/types/base.py (_build_annotations)` callers and `_attach_relation_resolvers` callers now consume `DjangoTypeDefinition.selected_fields` — the real Django field objects — rather than receiving them as a separate argument. This is required because resolver attachment runs in `finalize_django_types()` and no longer has the original `_select_fields` return value at hand; the definition object is the only source of truth at that point. `FieldMeta` is **not** sufficient for resolver bodies because they need `attname`, `related_model.DoesNotExist`, and cardinality flags.
-- `django_strawberry_framework/types/resolvers.py:168 (_attach_relation_resolvers)`. The function body stays. Its call site moves from `__init_subclass__` to `finalize_django_types()` and reads `definition.selected_fields` instead of receiving a fresh field list. Today's resolvers do not look up the registry at construction time — they call `getattr(root, field_name)` — so deferring attachment is purely a timing change.
+- `django_strawberry_framework/types/resolvers.py::_attach_relation_resolvers`. The function body stays. Its call site moves from `__init_subclass__` to `finalize_django_types()` and reads `definition.selected_fields` instead of receiving a fresh field list. Today's resolvers do not look up the registry at construction time — they call `getattr(root, field_name)` — so deferring attachment is purely a timing change.
 ### Stays unchanged (additive only)
 - `TypeRegistry.register / get / model_for_type / iter_types`. Augment with calls to `register_definition`; no signature change.
 - `TypeRegistry.register_enum / get_enum`. Orthogonal to relations.
@@ -462,14 +468,15 @@ Every change below is mapped to a specific symbol in the current source.
 - `utils/relations.py`, `utils/strings.py`, `utils/typing.py`, `exceptions.py`, `conf.py`.
 - `_make_relation_resolver` bodies. Only their attach-time changes.
 ### Stays deferred (do not touch in this slice)
-- `DEFERRED_META_KEYS` at `types/base.py:38-53` keeps rejecting `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`. The `DjangoTypeDefinition` slots for them are declared but unused; consumers cannot set them yet because `_validate_meta` still raises.
+- `types/base.py::DEFERRED_META_KEYS` keeps rejecting `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`. The `DjangoTypeDefinition` slots for them are declared but unused; consumers cannot set them yet because `_validate_meta` still raises.
 - The `cls.__annotations__ = {**synthesized, **existing}` merge stays as today, with the existing implementation-detail caveat. Manual-override semantics are not pinned in this slice.
 - Multi-`DjangoType`-per-model support. Today's `register` hard-fails on duplicates; that behavior survives the slice.
 ## Idempotency and lifecycle contract
 - `finalize_django_types()` is **idempotent**. The first call resolves pending relations, attaches resolvers, calls `strawberry.type(cls, ...)` on every unfinalized type, and sets `registry._finalized = True`. Subsequent calls return immediately.
-- **Failure-atomicity is bounded to phase 1.** A phase 1 failure (unresolved targets) leaves `registry.is_finalized() == False`, no `definition.finalized` flipped to True, and no class mutation — the consumer can register the missing target and call `finalize_django_types()` again for a clean retry. **Phase 2 and phase 3 are not failure-atomic**: `_attach_relation_resolvers` and `strawberry.type(...)` mutate class objects in-place. A Strawberry-side failure during those phases (forward-ref error, duplicate field, bad consumer annotation, etc.) leaves the process partially mutated and the only supported recovery is `registry.clear()` followed by recreating the affected `DjangoType` classes from scratch. Re-calling `finalize_django_types()` after a phase 2/3 failure on the same classes is unsupported and may produce inconsistent Strawberry definitions.
-- **Single-threaded setup window.** `finalize_django_types()` must be called once during single-threaded import / app / schema construction, before any request handling begins. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the registry is intentionally lockless (see `registry.py:28-33`) and concurrent finalization can produce partial Strawberry definitions. Calling the finalizer from a request thread, async resolver, or any other concurrent context is **not supported**. Future helpers that auto-trigger finalization must be constrained to schema construction time or must acquire a real lock around the finalizer.
-- A `DjangoType` declared **after** `finalize_django_types()` returns raises `ConfigurationError` from `__init_subclass__` with the message "`finalize_django_types()` already ran; cannot register `<TypeName>` after finalization. Call `registry.clear()` first if this is a test." This is the contract that makes test isolation predictable: tests use the autouse fixture pattern at `tests/types/test_base.py:46-51` (`registry.clear(); yield; registry.clear()`) and never see a stale pending-relation set.
+- **Failure-atomicity is bounded to phase 1.** A phase 1 failure (unresolved targets) leaves `registry.is_finalized() == False`, no `definition.finalized` flipped to True, and no class mutation — the consumer can register the missing target and call `finalize_django_types()` again for a clean retry. **The later phases are not failure-atomic**: `_attach_relation_resolvers` and `strawberry.type(...)` mutate class objects in-place, so a Strawberry-side failure (forward-ref error, duplicate field, bad consumer annotation, etc.) leaves the process partially mutated, with some classes carrying attached resolvers or `__strawberry_definition__` and others not.
+- **A rerun after a later-phase failure is supported, and is the recommended recovery.** The registry's finalized flag flips only after every type's final phase returns, so a raise inside any phase after phase 1 leaves it False. Each phase loop re-entered on the rerun skips already-decorated types through a per-entry `definition.finalized` guard, giving a fine-grained partial recovery: fix the offending type in place and call `finalize_django_types()` again. `registry.clear()` plus recreating the affected classes from scratch remains the escape hatch for the case where the offending type cannot be fixed in place — it is no longer the only supported route.
+- **Single-threaded setup window.** `finalize_django_types()` must be called once during single-threaded import / app / schema construction, before any request handling begins. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the registry is intentionally lockless (see `registry.py::TypeRegistry`) and concurrent finalization can produce partial Strawberry definitions. Calling the finalizer from a request thread, async resolver, or any other concurrent context is **not supported**. Future helpers that auto-trigger finalization must be constrained to schema construction time or must acquire a real lock around the finalizer.
+- A `DjangoType` declared **after** `finalize_django_types()` returns raises `ConfigurationError` from `__init_subclass__` with the message "`finalize_django_types()` already ran; cannot register `<TypeName>` after finalization. Call `registry.clear()` first if this is a test." This is the contract that makes test isolation predictable: tests use the autouse fixture pattern of `tests/types/test_base.py::_isolate_registry` (`registry.clear(); yield; registry.clear()`) and never see a stale pending-relation set.
 - **`registry.clear()` resets registry state for fresh type classes; it does not roll back class mutation.** `clear()` resets `_types`, `_models`, `_enums`, `_definitions`, `_pending`, and `_finalized`, so the next test's `__init_subclass__` and `finalize_django_types()` calls behave like a fresh process *for newly created classes*. It cannot remove `__strawberry_definition__` from already-finalized classes, cannot remove relation resolver attributes from mutated classes, and cannot remove `__django_strawberry_definition__` or rewritten `__annotations__`. Tests must not reuse finalized `DjangoType` classes after `clear()`; the autouse fixture pattern naturally avoids this because each test redefines its types inside the test function or fixture.
 - **Pending records are dropped after a successful resolution.** The finalizer calls `registry.discard_pending(resolved_pending)` once phase 1 has matched every pending entry to either a target type or the consumer-authored escape hatch. Post-finalization, `registry.iter_pending_relations()` returns an empty iterator. This keeps schema-audit and diagnostic code from seeing historical records that are no longer pending.
 ## Test fixtures and acceptance criteria
@@ -547,8 +554,6 @@ The `__django_strawberry_definition__` attribute is *not* part of the public API
 - If Spike A fails (deferred `strawberry.type(cls)` proves unsafe), the slice pauses. The fallback is Strategy 2 (post-`__strawberry_definition__` patching). Rollback cost: rewrite the finalizer; collection phase and registry extensions are reusable.
 - If Spike B exposes a Strawberry behavior we cannot work around, the foundation slice degrades to a documented "two-pass" requirement: users call `finalize_django_types()` *before* schema construction. This is already the foundation strategy; the failure simply delays the future auto-trigger work.
 - If a reviewer can demonstrate that any of the seven invariants in "Invariants this slice must protect" is violated by the proposed design, the slice is re-planned before code lands. The maintainer's current incoming review document forms the live review checklist until each item is resolved; the count and wording of items is expected to evolve until the slice ships.
-## Note on source line references
-This spec includes line numbers for some current source files (e.g., `walker.py:64`, `base.py:147`). Those are accurate at the time of writing but the optimizer subsystem and `__init_subclass__` are still moving, so reviewers should treat in-repo line references as soft hints and verify against the symbol names (`_optimizer_field_map`, `_attach_relation_resolvers`, `plan_relation`, etc.). Exact line references are reliable for **external** prior-art snapshots (`strawberry_django/...`, `graphene_django/...`, `graphene/...`) because those repos are pinned. Before implementation begins, the assigned author should refresh the in-repo lines in this spec's "Migration of current code" section against `main` so the contributor's edit targets are not stale.
 ## Cross-references
 - Definition-order problem space, prior art, decision options: [`docs/SPECS/spec-008-definition_order_independence-0_0_4.md`](spec-008-definition_order_independence-0_0_4.md).
 - Long-term architecture, layered subsystems, prior-art line references: [`docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md`](spec-009-rich_schema_architecture-0_0_4.md).
@@ -576,6 +581,7 @@ This spec includes line numbers for some current source files (e.g., `walker.py:
 [glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
+[spec-010-rationale]: appx/spec-010-foundation-0_0_4-rationale.md
 
 <!-- docs/builder/ -->
 

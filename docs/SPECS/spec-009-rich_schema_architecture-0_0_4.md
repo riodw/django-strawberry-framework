@@ -1,5 +1,7 @@
 # Rich schema architecture
 
+Deliberation, rejected alternatives, and this spec's change record live in the companion file [`spec-009-rich_schema_architecture-0_0_4-rationale.md`][spec-009-rationale]: why the auto-triggering finalization direction was rejected and what replaced it, the three sites that direction was stated at, the open questions shipped work has since settled, and the reasoning behind anchoring the package baseline and the migration path to `0.0.4` rather than rewriting them to the present.
+
 ## Purpose
 This spec defines the long-term architecture for building a Strawberry-based package that can expose the same practical schema shape as the feature-complete Graphene reference implementation in `django-graphene-filters`, while avoiding the parts of Graphene-Django that are old, unmaintained, and less aligned with Strawberry's execution model.
 
@@ -69,8 +71,8 @@ The exact class names may change, but the architectural goal is the same:
 - bidirectional model graphs work naturally
 - the optimizer stays first-class
 
-## Current local package baseline
-Current package source:
+## The 0.0.4 local package baseline
+This section is the starting-state snapshot this architecture was designed against: the package as it stood when the spec was authored, before the 0.0.4 foundation slice landed. It is deliberately historical and is not a claim about the package today. Package source at that point:
 
 - `django_strawberry_framework/types/base.py`
 - `django_strawberry_framework/types/converters.py`
@@ -79,20 +81,20 @@ Current package source:
 - `django_strawberry_framework/optimizer/extension.py`
 - `django_strawberry_framework/optimizer/walker.py`
 
-Important current functions:
+The functions this architecture builds on, as they stood at that baseline:
 
-- `DjangoType.__init_subclass__`: `django_strawberry_framework/types/base.py:80`
-- `_validate_meta`: `django_strawberry_framework/types/base.py:238`
-- `_select_fields`: `django_strawberry_framework/types/base.py:314`
-- `_build_annotations`: `django_strawberry_framework/types/base.py:377`
-- `convert_relation`: `django_strawberry_framework/types/converters.py:211`
-- `_make_relation_resolver`: `django_strawberry_framework/types/resolvers.py:111`
-- `_attach_relation_resolvers`: `django_strawberry_framework/types/resolvers.py:168`
-- `TypeRegistry.lazy_ref`: `django_strawberry_framework/registry.py:93`
-- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]: `django_strawberry_framework/optimizer/extension.py:254`
-- `DjangoOptimizerExtension.check_schema`: `django_strawberry_framework/optimizer/extension.py:442`
-- `walker.plan_relation`: `django_strawberry_framework/optimizer/walker.py:36`
-- `walker._plan_prefetch_relation`: `django_strawberry_framework/optimizer/walker.py:216`
+- `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`
+- `django_strawberry_framework/types/base.py::_validate_meta`
+- `django_strawberry_framework/types/base.py::_select_fields`
+- `django_strawberry_framework/types/base.py::_build_annotations`
+- `django_strawberry_framework/types/converters.py::convert_relation` — **retired since.** Relation annotations now resolve through `types/converters.py::resolved_relation_annotation`; the name survives here because the baseline is what the layers below were designed against.
+- `django_strawberry_framework/types/resolvers.py::_make_relation_resolver`
+- `django_strawberry_framework/types/resolvers.py::_attach_relation_resolvers`
+- `django_strawberry_framework/registry.py::TypeRegistry.lazy_ref` — **retired since.** It was a placeholder raising `NotImplementedError`, and the pending-relation API superseded it in the 0.0.4 slice, exactly as `spec-010-foundation-0_0_4.md` #"### Must redo (not augment)" prescribed.
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]: `django_strawberry_framework/optimizer/extension.py`
+- `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.check_schema`
+- `django_strawberry_framework/optimizer/walker.py::plan_relation`
+- `django_strawberry_framework/optimizer/walker.py::_plan_prefetch_relation`
 
 Current behavior is simple and useful, but too eager:
 
@@ -670,21 +672,15 @@ This preserves the Graphene benefit without Graphene internals.
 ### Layer 3: Finalization trigger
 The package needs an explicit, Strawberry-safe finalization point.
 
-Preferred triggers:
+**The trigger is the explicit consumer call, and nothing else.** `[finalize_django_types][glossary-finalize-django-types]()` is public, and calling it is the only thing that finalizes. No shipped helper auto-triggers it: `DjangoConnectionField`, `DjangoNodeField` and `DjangoSchema` do not call the finalizer, and constructing any of them does not finalize the registry. The canonical window is after every module defining `DjangoType` classes has been imported and before `strawberry.Schema(...)` construction; `spec-010-foundation-0_0_4.md` #"## Strawberry finalization strategy" owns that contract and its wording.
 
-1. `DjangoConnectionField(Type)` calls `[finalize_django_types][glossary-finalize-django-types]()` before it returns a field.
-2. `DjangoNodeField(Type)` calls `finalize_django_types()` before it returns a field.
-3. `DjangoSchema(...)` calls `finalize_django_types()` before constructing `strawberry.Schema`.
-4. `finalize_django_types()` remains public for advanced users.
+The requirement the trigger has to satisfy:
 
-Why this combination:
+- finalization happens before Strawberry schema conversion, so no post-schema patching is needed
+- a schema extension cannot be the trigger, because extensions run after the schema is already built
+- an unusual import layout, a test, or a cookbook-shaped schema all reach the same single entry point rather than depending on which package object they happened to construct first
 
-- cookbook-style schemas define node types first and root fields after, so `DjangoConnectionField` can finalize naturally
-- direct manual schemas can use `DjangoSchema`
-- advanced users can call the finalizer explicitly in tests or unusual import layouts
-- finalization happens before Strawberry schema conversion, avoiding fragile post-schema patching
-
-Avoid relying only on a schema extension. Extensions run too late; the schema is already built.
+An earlier direction had `DjangoConnectionField`, `DjangoNodeField` and `DjangoSchema` each finalize on construction, with the explicit call kept only for advanced users. That combination was **rejected** before the foundation slice shipped: it makes finalization timing a function of construction order, which is the very import-order coupling this architecture exists to remove, and it would put a process-global mutation behind three separate constructors while the registry is deliberately lockless. Any future helper that auto-triggers finalization must therefore also enforce the single-threaded setup window, either by being constrained to schema-construction time or by acquiring a real lock around the finalizer.
 
 ### Layer 4: Strawberry-native field class
 Create `DjangoModelField`, based on Strawberry-Django's `StrawberryDjangoField`.
@@ -922,10 +918,10 @@ If `Item.category` becomes `DjangoModelType`, users cannot naturally query:
 
 That is the core value of the package. The default must be concrete related types.
 
-### Status: deferred design idea, no card yet
-A `Meta.unresolved_relations` opt-in (with values such as `"generic"` or `"error"`) is **not** part of any accepted card and **not** part of the foundation slice. The 0.0.4 contract from `docs/SPECS/spec-010-foundation-0_0_4.md` is **error-only**: every exposed relation field must resolve to a concrete registered `DjangoType` at finalization or `finalize_django_types()` raises with the unresolved-targets format.
+### The unresolved-relation contract is error-only
+A `Meta.unresolved_relations` opt-in (with values such as `"generic"` or `"error"`) is **not** part of the architecture. The contract is **error-only**: every exposed relation field must resolve to a concrete registered `DjangoType` at finalization, or `finalize_django_types()` raises with the unresolved-targets format. `spec-010-foundation-0_0_4.md` #"### Unresolved-target error format" owns the wording.
 
-If a real project surfaces a use case where error-only is too strict, this becomes a future card under `KANBAN.md` with its own design doc — not an assumption baked into Layer 3 work. Readers should not design Layer 3 subsystems against `Meta.unresolved_relations` until that card is accepted.
+If a real project surfaces a use case where error-only is too strict, relaxing it is a design change that earns its own card and design doc — not an assumption baked into Layer 3 work. No subsystem in this architecture may be designed against `Meta.unresolved_relations`.
 
 ## Proposed module layout
 Future modules. Layer 3 subsystems use the **package** layout from `KANBAN.md` and `docs/TREE.md` (e.g., `filters/` not `filters.py`); the package layout is canonical because it determines import paths, public-surface promotion, and test-tree mirroring. The flat-module names in older drafts of this spec have been migrated to packages below.
@@ -954,7 +950,9 @@ Existing modules to evolve:
 - `registry.py`: type definitions, finalization state, pending relations, generated type registries
 - `optimizer/*`: keep current root optimizer, add field stores and connection awareness
 
-## Migration path from current package
+## Migration path from the 0.0.4 baseline
+The phases below are the sequencing plan drawn from the baseline snapshot above, in the order the layers depend on one another. They are a dependency order, not a schedule, and this spec does not track which of them have since shipped — the board and each phase's own spec carry that.
+
 ### Phase 1: Foundation (== 0.0.4 foundation slice)
 This phase is the foundation slice defined in [`docs/SPECS/spec-010-foundation-0_0_4.md`](spec-010-foundation-0_0_4.md). It ships:
 
@@ -1054,7 +1052,7 @@ Expand optimizer to understand:
 Use concrete registered `DjangoType`s for relations. Do not default to generic `DjangoModelType`.
 
 ### Decision 2: explicit package finalizer
-Add `finalize_django_types()` and call it from package-owned schema/field helpers.
+Add `finalize_django_types()` and make the consumer's explicit call the only thing that triggers it. Package-owned schema and field helpers do not call it; see `### Layer 3: Finalization trigger`.
 
 ### Decision 3: custom Strawberry field class
 Move generated fields to `DjangoModelField` so field behavior is composable.
@@ -1070,10 +1068,10 @@ Never silently skip exposed fields whose target type is missing. Raise at finali
 
 ## Open questions
 ### Should plain `strawberry.Schema` remain fully supported?
-Best answer: yes for simple schemas, but rich schemas should use `DjangoSchema` or package-owned fields that finalize before schema construction.
+**Settled: yes, fully, for every schema.** Plain `strawberry.Schema` is supported without qualification, because the finalization trigger does not live in any schema or field object — the consumer calls `finalize_django_types()` before schema construction and every shape of schema then works identically. Using `DjangoSchema` or package-owned fields is a richness choice, never a finalization requirement; see `### Layer 3: Finalization trigger` above for why the auto-triggering alternative was rejected.
 
 ### Should multiple `DjangoType`s per model be allowed?
-The Graphene package currently assumes one primary node per model. This package's docs mention a future [`Meta.primary`][glossary-metaprimary]. Rich relation auto-resolution needs one primary target per model. Multiple types can exist later, but relation auto-resolution should require exactly one primary type.
+**Settled: yes, with exactly one primary per model.** [`Meta.primary`][glossary-metaprimary] shipped in `0.0.6`; multiple `DjangoType`s may register against the same model, and relation auto-resolution binds to the primary. Ambiguity is refused rather than guessed: duplicate-primary and flipped-primary-on-re-register are rejected at registration, and ambiguity-by-omission is caught at finalization. `spec-018-meta_primary-0_0_6.md` owns the contract and the error wording.
 
 ### Should generic fallback exist?
 Not for 1.0 by default. Consider an explicit opt-in after concrete relation finalization ships.
@@ -1082,7 +1080,7 @@ Not for 1.0 by default. Consider an explicit opt-in after concrete relation fina
 No. It should be available for Relay node types, but cascade filtering should remain the recommended privacy-first path.
 
 ### Should filters/orders/aggregates copy Graphene names exactly?
-Mostly yes, because migration from the working package matters. If Strawberry idioms require a naming change, document it as a deliberate migration break.
+**Settled for filters and orders, still open for aggregates.** Both shipped in `0.0.8` following the rule stated here — keep the Graphene name unless a Strawberry idiom forces a change, and document any change as a deliberate migration break. `spec-027-filters-0_0_8.md` and `spec-028-orders-0_0_8.md` own their naming decisions. Aggregates have not shipped, so the rule stands for them as guidance rather than record.
 
 ## Success criteria
 The architecture is successful when the fakeshop and cookbook-shaped examples can express:
@@ -1139,6 +1137,7 @@ The end state should feel like the Graphene package to users and like a Strawber
 [glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
+[spec-009-rationale]: appx/spec-009-rich_schema_architecture-0_0_4-rationale.md
 
 <!-- docs/builder/ -->
 

@@ -258,8 +258,12 @@ to the first it happens to give the right result, which is why the weaker test i
 
 ### The removed `## Current state` — a standing-promise heading that was also a duplicate
 
-Spec: [Shipped slices][spec-002-shipped] and [Visibility status][spec-002-visibility], which
-together absorbed everything it carried. The `## Current state` heading no longer exists.
+Spec: [Shipped slices][spec-002-shipped], which absorbed the O1-O6 roster, the context stash, and
+O2's module path. The one fact that went elsewhere — the extension's public-surface status, merged
+into `## Visibility status` — is no longer in this spec at all: the `spec-006` cycle retired that
+section as a cross-spec duplicate, and `## The discharged deferral — Visibility status retired by
+the spec-006 cycle` at the end of this file records why. The `## Current state` heading no longer
+exists.
 
 *Changed — the section was removed rather than retitled.* It listed O1-O6 as one-liners and then
 made three statements about the extension. Read against the rest of the document, most of it was
@@ -496,6 +500,57 @@ document this short, five would make the pointer the loudest recurring element i
 sections and would crowd out the contract it is annotating. Three was chosen for that reason; do not
 "complete" the set.
 
+## The discharged deferral — Visibility status retired by the spec-006 cycle
+
+Appended by the `spec-006` residual cycle, which owns the citing file and therefore owned the fix.
+The closing note of the removed-`## Current state` entry above deferred one heading — "*Not rejected,
+and not this cycle's to change — `## Visibility status`*" — on the rule that you do not rename a heading
+another file cites; you fix it in the citing file instead, in the cycle that owns that file. That
+cycle has now run, and this entry is the other half of that deferral. The deferral was correctly
+reasoned and is left standing above: it recorded a constraint that held while spec-006 was
+read-only, and the constraint is what routed the work to the right cycle rather than blocking it.
+
+*The section is removed, not retitled.* Both of its sentences state facts this spec already carries
+or does not own. That O1 through O6 have shipped is already the six sub-headings of
+`## Shipped slices` and the six ticked boxes of `## Implementation checklist` — the heading made it a
+third copy of one roster. That the optimizer is public via the extension, exported from the package
+root, is a claim about the **package's public surface**, which is
+`spec-006-public_surface-0_0_3.md`'s to make; its
+`#### Decision for 0.0.3` states the rule, the two supported import forms, and where the exported
+roster is pinned, so it is a strict superset of the sentence removed here. Under the single-ownership
+rule a concrete claim lives in one spec only, and provenance settles which copy is the surplus one:
+this section existed **because spec-006 asked for a copy**, in a coordination bullet whose exact
+wording, and the reasoning that made it the requester rather than the owner, are recorded in
+spec-006's own rationale companion. That bullet is gone, so the copy has no requester.
+
+*The merged `__init__` export path, which is the one thing a deletion could silently lose.* This
+file's own record of the `## Current state` removal states that the export path "was merged into that
+section's existing public-surface sentence" as "the one precision `## Visibility status` lacked".
+Retiring the section retires that precision from this spec. That is a deliberate loss, not an
+oversight: the precision is a public-surface fact, and it is stated at higher resolution in the spec
+that owns the surface.
+
+*Alternative rejected — keep one sentence in `## Shipped slices` naming the extension's import path,
+stated as contract rather than as status.* It was the smaller residue and it was on the table. It
+loses because a smaller duplicate is still a duplicate: the retirement exists to remove a second
+place the same fact can go stale, and a one-sentence copy inside the roster section reintroduces
+exactly that at a location no cross-reference points at, which makes the next drift harder to find
+rather than easier. Standing alone does not require this spec to restate the surface — its subject is
+the optimizer's behavior, every slice below names its own symbols and module paths, and a reader who
+needs the import form has two places that own it (`docs/GLOSSARY.md` `## Public exports` and
+spec-006's decision).
+
+*Alternative rejected — retitle rather than delete, following the `spec-001` `## Current state` →
+`## Prior art` precedent this file weighs above.* It loses for the same reason it lost there and one
+more: a retitle preserves the duplication the retirement exists to remove, and here the heading was
+never the defect — the second copy was.
+
+**Claims this spec no longer makes.** That O1 through O6 have shipped, as a statement under its own
+heading; the fact survives as `## Shipped slices`' structure and the checklist's ticked boxes. That
+the optimizer is public via the extension, or that the extension is exported from
+`django_strawberry_framework.__init__` — both are now made only where the public surface is owned.
+No slice's behavior claim changed, and nothing else in the spec was touched by this cycle.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
@@ -512,7 +567,6 @@ sections and would crowd out the contract it is annotating. Three was chosen for
 [spec-002-purpose]: ../spec-002-optimizer-0_0_2.md#purpose
 [spec-002-references]: ../spec-002-optimizer-0_0_2.md#references
 [spec-002-shipped]: ../spec-002-optimizer-0_0_2.md#shipped-slices
-[spec-002-visibility]: ../spec-002-optimizer-0_0_2.md#visibility-status
 [spec-004]: ../spec-004-optimizer_beyond-0_0_3.md
 [spec-006]: ../spec-006-public_surface-0_0_3.md
 [spec-019]: ../spec-019-consumer_overrides_scalar-0_0_6.md

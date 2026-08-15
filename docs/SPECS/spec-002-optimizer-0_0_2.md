@@ -54,9 +54,6 @@ The `_is_default_get_queryset` sentinel and `has_custom_get_queryset` introspect
 
 The `TypeRegistry` model/type reverse lookup remains shared by both halves.
 
-## Visibility status
-O1 through O6 have shipped. The optimizer is public via [`DjangoOptimizerExtension`][glossary-djangooptimizerextension], exported from `django_strawberry_framework.__init__`.
-
 ## References
 graphene-django relation resolver wrap: the three relation converters registered on `graphene_django/converter.py::convert_django_field` - `::convert_onetoone_field_to_djangomodel`, `::convert_field_to_list_or_connection`, and `::convert_field_to_djangomodel`.
 

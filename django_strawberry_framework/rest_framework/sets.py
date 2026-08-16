@@ -86,8 +86,8 @@ from ..utils.inputs import normalize_field_name_sequence
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
-    _serializer_shape_build_cache,
     build_serializer_input_class,
+    dedupe_serializer_input_shape,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
     raise_writable_source_ownership_errors,
@@ -190,11 +190,9 @@ def _serializer_input_shape_for(
         # Opt-in nested serializer inputs, built recursively during the walk.
         nested_configs=meta.nested_fields,
     )
-    cached = _serializer_shape_build_cache.get(shape.cache_key)
-    if cached is not None:
-        return cached
-    _serializer_shape_build_cache[shape.cache_key] = (input_cls, shape)
-    return input_cls, shape
+    # Post-build dedupe via the inputs-owned cache protocol (nested builds use the
+    # same helper; sets must not poke ``_serializer_shape_build_cache`` directly).
+    return dedupe_serializer_input_shape(input_cls, shape)
 
 
 # ``operation`` -> the DRF serializer write method whose OVERRIDE ``Meta.nested_fields`` requires
@@ -674,10 +672,12 @@ class SerializerMutation(DjangoMutation):
         DESCRIPTOR - only knowable AFTER the build's pure walk produces it. Forcing this
         path through ``cached_build_input`` would mean building the shape TWICE (once to
         derive the key, once inside ``build_fn`` on a miss), the exact waste P1.7 names; so
-        the descriptor-keyed dedupe stays an inline lookup-or-store, keyed on the post-build
-        descriptor, while the guard-before-dedupe ordering is preserved here directly. The
-        per-declaration guard discipline ``cached_build_input`` single-sites is upheld below
-        (the create-required guard runs in ``_build`` per declaration, before the dedupe).
+        the descriptor-keyed dedupe routes through
+        ``inputs.dedupe_serializer_input_shape`` after the build (shared with nested
+        opt-in builds), while the guard-before-dedupe ordering is preserved here
+        directly. The per-declaration guard discipline ``cached_build_input``
+        single-sites is upheld below (the create-required guard runs in ``_build``
+        per declaration, before the dedupe).
 
         The create-required-narrowing guard (``guard_create_required_serializer_fields``)
         runs PER declaration, BEFORE descriptor dedupe. ``Meta.injected_fields`` is its only

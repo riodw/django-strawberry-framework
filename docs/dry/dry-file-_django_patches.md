@@ -59,7 +59,9 @@ source, 6.0's stable source, and the installed 6.0.5 body all use the exact clas
 `connection.features.disallowed_simple_test_case_connection_methods` but retains the same
 unguarded unwrap. The source pin therefore correctly accepts the advertised released 5.2/6.0
 shapes and deliberately forces re-audit before a future changed shape can be patched. Django Trac
-#37064 is currently closed `invalid`; no upstream fix removes the package's current behavior.
+#37064's Trac field is `invalid`; that is Django kicking the `isinstance` guard downstream, not a
+finding that the crash is not a bug. Package comments keep `wontfix`. No upstream fix removes the
+package's current behavior.
 
 An isolated configured-Django subprocess temporarily restored the captured upstream descriptor and
 placed a plain function at `connections["default"].cursor`; upstream raised
@@ -126,8 +128,9 @@ The declared support floor is Django 5.2 and the classifiers name 5.2/6.0. Curre
 `stable/5.2.x`, `stable/6.0.x`, and installed 6.0.5 retain the exact pinned class-level-method-list
 body. Django `main` has moved the list to connection features while retaining the unguarded unwrap,
 so rejection by the source pin is the correct future-version re-audit boundary rather than silent
-installation of a stale reimplementation. Trac #37064 is currently closed `invalid`; that status
-does not alter the reproduced failure or the package-local defensive contract.
+installation of a stale reimplementation. Trac #37064's Trac field is `invalid` (Django kicked the
+guard downstream); package comments keep `wontfix`. That status does not alter the reproduced
+failure or the package-local defensive contract.
 
 All rejected candidates remain rejected after challenge:
 

@@ -3,7 +3,7 @@
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:
 
-- ``types.finalizer.resolved_relation_annotation`` for relation
+- ``types.converters.resolved_relation_annotation`` for relation
   resolution once target types are registered (called from the
   per-entry finalize loop via ``iter_pending_relations`` /
   ``discard_pending``).

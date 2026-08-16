@@ -13,6 +13,11 @@ The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
   shares (the cookbook uses it for filterset, orderset, AND aggregateset).
 - ``LazyRelatedClassMixin`` -- string / callable class-reference resolution
   used by ``RelatedFilter`` / ``RelatedOrder``.
+- ``ActiveInputPermissionMixin`` -- the Decision-8 permission facade
+  (``_request_from_info`` / ``_run_permission_checks`` / active-field
+  walkers) parameterized by ``ActiveInputPermissionAttrs``. Mechanics live
+  in ``utils/permissions.py``; this mixin is the one wrapper layer both
+  families used to copy.
 
 Plus the set-family DECLARATION-LIFECYCLE substrate single-sited here, so a
 future set family does not copy the related-declaration +
@@ -37,13 +42,23 @@ sets.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from django.utils.module_loading import import_string
 
 from .exceptions import ConfigurationError
+from .utils.input_values import is_inactive_value
+from .utils.permissions import (
+    active_permission_targets,
+    active_related_branches,
+    extract_branch_value,
+    invoke_permission_method,
+    request_from_info,
+    run_active_input_permission_checks,
+    verbatim_path,
+)
 from .utils.strings import pascal_case_or_raise
 
 
@@ -381,7 +396,204 @@ class SetLifecycleAttrs:
         )
 
 
+@dataclass(frozen=True)
+class ActiveInputPermissionAttrs:
+    """Per-family configuration for ``ActiveInputPermissionMixin``.
+
+    The permission *mechanics* are single-sited in ``utils/permissions.py``.
+    What used to be re-spelled on ``FilterSet`` and ``OrderSet`` as twin
+    thin wrappers is the family shape: which related collection to walk,
+    which child-set attribute to recurse through, which field-spec map
+    supplies ``django_source_path``, whether the input is a top-level list
+    (order) or a struct with ``UNSET`` defaults (filter), and the GraphQL
+    family label ``request_from_info`` puts in ``ConfigurationError``.
+    """
+
+    family_label: str
+    related_attr: str
+    target_attr: str
+    field_specs: Mapping[Any, Any]
+    logic_keys: frozenset[str] = frozenset()
+    unset_sentinel: Any = None
+    handle_top_level_list: bool = False
+
+
+class ActiveInputPermissionMixin:
+    """Decision-8 permission facade shared by ``FilterSet`` and ``OrderSet``.
+
+    Subclasses declare one ``_permission: ActiveInputPermissionAttrs`` and
+    inherit the request / branch / active-field / invoke / run surface that
+    ``run_active_input_permission_checks`` re-enters. Family-only work stays
+    on overridable hooks:
+
+    - ``_permission_fallback_path`` -- filter remaps lookup attrs to form
+      keys; order uses the python attr verbatim.
+    - ``_check_permission_depth`` -- filter caps logical-branch nesting;
+      order has no operator bag, so the default is a no-op (related
+      recursion is already capped inside ``run_active_input_permission_checks``).
+    - ``_run_logic_permission_checks`` -- filter recurses ``and`` / ``or`` /
+      ``not``; order has none.
+
+    Apply pipelines stay family-owned: filters still derive related
+    visibility and validate a django-filter form; orders still flatten to
+    ``OrderBy``. Those contracts do not share a driver.
+    """
+
+    _permission: ClassVar[ActiveInputPermissionAttrs]
+
+    @classmethod
+    def _request_from_info(cls, info: Any) -> Any:
+        """Resolve the Django request from ``info.context``.
+
+        Thin delegate to ``utils/permissions.py::request_from_info``.
+        """
+        return request_from_info(info, family_label=cls._permission.family_label)
+
+    @classmethod
+    def _extract_branch_value(cls, input_value: Any, field_name: str) -> Any:
+        """Return the value at ``field_name`` on a dataclass-or-dict input.
+
+        Thin delegate to ``utils/permissions.py::extract_branch_value`` with
+        this family's ``unset_sentinel``.
+        """
+        return extract_branch_value(
+            input_value,
+            field_name,
+            unset_sentinel=cls._permission.unset_sentinel,
+        )
+
+    @classmethod
+    def _iter_active_related_branches(cls, input_value: Any) -> list[tuple[str, Any, Any]]:
+        """List ``(field_name, related_obj, child_input)`` for present branches.
+
+        Thin delegate to ``utils/permissions.py::active_related_branches``.
+        """
+        cfg = cls._permission
+        return active_related_branches(
+            cls,
+            input_value,
+            related_attr=cfg.related_attr,
+            unset_sentinel=cfg.unset_sentinel,
+            handle_top_level_list=cfg.handle_top_level_list,
+        )
+
+    @staticmethod
+    def _invoke_permission_method(
+        bare_instance: Any,
+        field_path: str,
+        request: Any,
+        *,
+        fired: set[str] | None = None,
+    ) -> None:
+        """Call ``check_<field_path>_permission(request)`` if defined.
+
+        Thin delegate to ``utils/permissions.py::invoke_permission_method``.
+        """
+        invoke_permission_method(bare_instance, field_path, request, fired=fired)
+
+    @staticmethod
+    def _permission_fallback_path(python_attr: str) -> str:
+        """Map a python attr to its permission source path when no field-spec exists.
+
+        Default: the attr IS the path (order side). ``FilterSet`` remaps
+        lookup attrs onto django-filter form keys.
+        """
+        return verbatim_path(python_attr)
+
+    @classmethod
+    def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
+        """Return the base Django source path for each active top-level leaf.
+
+        Thin delegate to ``_active_permission_targets``'s ``LEAF`` half.
+        """
+        return cls._active_permission_targets(input_value)[0]
+
+    @classmethod
+    def _active_permission_targets(
+        cls,
+        input_value: Any,
+    ) -> tuple[list[str], list[tuple[str, Any, Any]]]:
+        """Single-pass ``(leaf source paths, active related branches)`` for one level.
+
+        Thin delegate to ``utils/permissions.py::active_permission_targets``.
+        """
+        cfg = cls._permission
+        return active_permission_targets(
+            cls,
+            input_value,
+            field_specs=cfg.field_specs,
+            related_attr=cfg.related_attr,
+            logic_keys=cfg.logic_keys,
+            fallback_path=cls._permission_fallback_path,
+            unset_sentinel=cfg.unset_sentinel,
+            handle_top_level_list=cfg.handle_top_level_list,
+        )
+
+    @classmethod
+    def _check_permission_depth(cls, _depth: int) -> None:
+        """Cap family-specific nesting. Default no-op; ``FilterSet`` overrides."""
+        return
+
+    @classmethod
+    def _run_logic_permission_checks(
+        cls,
+        _input_value: Any,
+        _request: Any,
+        *,
+        _fired: dict[type, set[str]],
+        _bare: Any,
+        _depth: int,
+    ) -> None:
+        """Recurse into family-specific logical containers. Default no-op."""
+        return
+
+    @classmethod
+    def _run_permission_checks(
+        cls,
+        input_value: Any,
+        request: Any,
+        *,
+        _fired: dict[type, set[str]] | None = None,
+        _bare: Any = None,
+        _depth: int = 0,
+    ) -> None:
+        """Fire ``check_<field>_permission(request)`` for fields in the input.
+
+        Active-input-only: a declared ``check_*`` gate that is not exercised
+        by this call leaves the queryset untouched. Recurses into each
+        active related branch so the cookbook's nested-permission contract
+        holds. Filter-only logical ``and`` / ``or`` / ``not`` recursion is
+        the ``_run_logic_permission_checks`` hook.
+        """
+        if is_inactive_value(input_value, unset_sentinel=cls._permission.unset_sentinel):
+            return
+        cls._check_permission_depth(_depth)
+        if _fired is None:
+            _fired = {}
+        bare = _bare if _bare is not None else object.__new__(cls)
+        cfg = cls._permission
+        run_active_input_permission_checks(
+            cls,
+            input_value,
+            request,
+            fired=_fired,
+            bare=bare,
+            target_attr=cfg.target_attr,
+            related_attr=cfg.related_attr,
+            depth=_depth,
+        )
+        cls._run_logic_permission_checks(
+            input_value,
+            request,
+            _fired=_fired,
+            _bare=bare,
+            _depth=_depth,
+        )
+
+
 __all__ = (
+    "ActiveInputPermissionAttrs",
+    "ActiveInputPermissionMixin",
     "ClassBasedTypeNameMixin",
     "LazyRelatedClassMixin",
     "RelatedSetTargetMixin",

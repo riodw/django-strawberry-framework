@@ -21,10 +21,8 @@ from . import logger
 from . import nested_planner as _nested_planner
 from .field_meta import FieldMeta
 from .hints import OptimizerHint, hint_is_skip
-from .nested_planner import (
-    _coerce_pagination_int,
-    _connector_only_field,
-)
+from .join_taxonomy import classify_relation_join
+from .nested_planner import _coerce_pagination_int
 from .nested_planner import (
     plan_connection_relation as _plan_nested_connection_relation,
 )
@@ -1220,6 +1218,12 @@ def _ensure_connector_only_fields(
 ) -> None:
     """Inject columns Django needs to attach prefetched rows to parents.
 
+    Uses ``RelationJoinDescriptor.prefetch_attach_columns`` so a
+    ``GenericRelation`` list prefetch (and every nested-connection child plan
+    that shares this writer) loads both the ``object_id`` connector and the
+    ``content_type_id`` morph half of Django's attach key - the same completeness
+    ``_project_scalar_only_window`` already applied for scalar-only windows.
+
     The G2 gate (spec-035 Decision 4) short-circuits before the
     empty-``only_fields`` guard: under a non-``QUERY`` operation the child
     plan appended nothing to ``only_fields``, so the connector append must
@@ -1232,14 +1236,16 @@ def _ensure_connector_only_fields(
         return
     if not plan.only_fields:
         return
-    attname = _connector_only_field(parent_field)
-    if attname is not None:
-        append_unique(plan.only_fields, attname)
+    columns = classify_relation_join(parent_field).prefetch_attach_columns
+    if not columns:
+        logger.debug(
+            "Optimizer: could not resolve connector column for Prefetch %s; "
+            "only() may be less precise.",
+            getattr(parent_field, "name", parent_field),
+        )
         return
-    logger.debug(
-        "Optimizer: could not resolve connector column for Prefetch %s; only() may be less precise.",
-        getattr(parent_field, "name", parent_field),
-    )
+    for attname in columns:
+        append_unique(plan.only_fields, attname)
 
 
 def _merge_aliased_selections(selections: list[Any]) -> list[Any]:

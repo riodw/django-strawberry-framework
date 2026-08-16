@@ -7,13 +7,14 @@ branches, and fire both child gates and parent branch gates. A divergence
 between the two copies is a real authorization-bug class -- a fix to one side is
 easy to miss on the other -- so the neutral mechanics are single-sited here.
 
-This module owns mechanics only; the family-specific shape stays at the call
-sites as configuration:
+This module owns mechanics only; the family-specific shape lives on
+``sets_mixins.ActiveInputPermissionAttrs`` (one instance per set class):
 
 * the filter side passes ``unset_sentinel=strawberry.UNSET`` (its inputs default
   unsupplied fields to ``UNSET``); the order side leaves it ``None``;
 * the filter side's logical ``and`` / ``or`` / ``not`` recursion and depth cap
-  stay in ``FilterSet._run_permission_checks`` (wrapped around
+  stay in ``FilterSet._run_logic_permission_checks`` /
+  ``FilterSet._check_permission_depth`` (hooks around
   ``run_active_input_permission_checks``); the order side handles a top-level
   list of order-input dataclasses via ``handle_top_level_list=True``.
 

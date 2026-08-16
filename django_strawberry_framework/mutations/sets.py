@@ -191,22 +191,31 @@ def cached_build_input(
 ) -> tuple[type, Any]:
     """Run the per-declaration guard, THEN the per-shape cache lookup.
 
-    The promoted guard-before-cache-lookup core the form + serializer ``build_input``
-    seams share. The load-bearing ordering (spec-038 Decision 7 P2 / spec-039
-    Decision 7): the create-required-narrowing ``guard`` runs PER declaration,
-    BEFORE the per-shape cache lookup, so a waiving mutation (guard a no-op, having
-    overridden the construction hook) that materializes a narrowed shape FIRST cannot
-    suppress the guard for a later non-waiving mutation reusing the cached shape -
-    the cache key (``shape_key``) excludes the waiver, so the guard is tied to the
-    declaration, not the built shape.
+    The promoted guard-before-cache-lookup core for flavors whose cache key is
+    known BEFORE the build (today: the form ``build_input`` seam). The
+    load-bearing ordering (spec-038 Decision 7 P2 / spec-039 Decision 7): the
+    create-required-narrowing ``guard`` runs PER declaration, BEFORE the
+    per-shape cache lookup, so a waiving mutation (guard a no-op, having
+    overridden the construction hook) that materializes a narrowed shape FIRST
+    cannot suppress the guard for a later non-waiving mutation reusing the
+    cached shape - the cache key (``shape_key``) excludes the waiver, so the
+    guard is tied to the declaration, not the built shape.
 
-    On a cache miss ``build_fn()`` returns ``(input_cls, payload)`` where ``payload``
-    is the per-flavor stash value (the form's ``field_specs`` list, the serializer's
-    ``SerializerInputShape`` descriptor); the pair is cached under ``shape_key`` so
-    identical shapes reuse one class object and the materialize ledger dedupes
-    idempotently. ``cache`` is the FLAVOR's own per-pass ``make_shape_build_cache()``
-    dict (passed in, not owned here) so the mutation / form / serializer caches stay
-    disjoint - each is registered + cleared separately.
+    The serializer flavor deliberately does NOT call this helper: its cache
+    key is the post-build ``SerializerInputShape`` descriptor, so
+    ``rest_framework/sets.py`` preserves the same guard-before-dedupe
+    discipline inline and routes dedupe through
+    ``inputs.dedupe_serializer_input_shape`` (see that seam's P1.7 note). The
+    materialize-then-stash tail both flavors still share is
+    ``build_and_stash_input``.
+
+    On a cache miss ``build_fn()`` returns ``(input_cls, payload)`` where
+    ``payload`` is the per-flavor stash value (the form's ``field_specs``
+    list); the pair is cached under ``shape_key`` so identical shapes reuse
+    one class object and the materialize ledger dedupes idempotently.
+    ``cache`` is the FLAVOR's own per-pass ``make_shape_build_cache()`` dict
+    (passed in, not owned here) so the mutation / form caches stay disjoint -
+    each is registered + cleared separately.
     """
     guard()
     cached = cache.get(shape_key)

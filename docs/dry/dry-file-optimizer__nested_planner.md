@@ -5,6 +5,187 @@ Status: verified
 ## System trace
 
 The target is the **transactional planner for one recognized nested Relay
+connection**. The walker normalizes selections and resolves model/type
+metadata, then delegates one connection selection to
+`plan_connection_relation`. That entry point owns pagination normalization
+(plan-time int coercion + shared window-bounds adapters), Decision-6 fallback
+classification, child-queryset construction (via walker-injected builders),
+fetch-strategy dispatch (`NestedConnectionRequest` + active/hinted strategy),
+acceptance bookkeeping (`NestedConnectionPlanResult` / `accepted_response_keys`),
+the scalar-only `.only()` projection, keyset cursor-column projection extension,
+and the composite-index advisory. It builds a private plan and returns it only
+after orchestration completes, so refusal or exception cannot leak partial
+directives into the walker's parent plan.
+
+Ownership already delegated out (re-confirmed on present-day source):
+
+- Window bounds / `FetchMode` / sidecar detection → `utils/connections.py`
+- Order-entry name/direction parse + explicit-NULLS predicate → `plans.py`
+- Relation connector + GenericRelation morph column → `join_taxonomy.classify_relation_join`
+- `edges { node }` unwrap + count/`hasNextPage` observers → `selections.py`
+- Schema config dig → `utils/typing.schema_config_from_info`
+- Strategy registry / unwindowable child QS gate → `nested_fetch.py`
+- `_dst_<field>_connection` / per-key `$` namespace → this file (consumed by
+  `connection.py` resolve probe)
+- Plan-time `_coerce_pagination_int` → this file (walker re-exports for
+  argument-comparison; resolve path receives already-coerced Strawberry args)
+
+Connected surfaces re-traced: `walker.py` (sole caller + underscore rebinds),
+`nested_fetch.py` / `lateral_fetch.py` / `single_parent_fetch.py` / `plans.py`,
+`connection.py` / `utils/connections.py` / `keyset.py`, `join_taxonomy.py`,
+`selections.py`, `field_meta.py`. Folder integration `optimizer/` stays out of
+scope.
+
+## Verification
+
+- Item baseline `ad9c7d382f04f31fcbc04f4343b3495592f8441b`: target file was
+  byte-identical at pass start; present-day ~1548 lines re-read end to end.
+- Grepped package-wide for window bounds, `FetchMode`, sidecar kwargs,
+  `to_attr` / `_dst_`, nulls placement, connector / content_type columns,
+  `unwindowable_child_queryset_reason`, strategy resolve, `last: 0`,
+  `relay_max_results`, coerce-pagination, `deferred_loading_of` /
+  `_extend_only_projection`, concrete-order helpers, index advisory.
+- Compared plan-time adapters (`_connection_window_slice*` /
+  `_keyset_window_slice_from_arguments`) to resolve-time
+  `connection.py` / `derive_*_window_bounds` consumers: shared bounds owners;
+  plan-only coercion and `None`-vs-propagate error locality remain intentional.
+- Disproved merging `_concrete_order_columns` with `_concrete_order_terms`
+  (skip vs fail-soft `None`), offset with keyset adapters (fork before
+  `SliceMetadata`), divergent vs single-window `last: 0` gates (parallel scheme
+  arms), and deleting walker rebinds (test/historical seams, not second bodies).
+- Accepted two ownership gaps revealed by the fresh pass (below).
+
+## Opportunities
+
+### 1. Explicit-NULLS order-entry predicate on `plans` (accepted)
+
+- **Repeated responsibility:** decide whether an order entry carries explicit
+  `nulls_first` / `nulls_last` (non-`None`), as part of the shared
+  `deterministic_order` entry vocabulary.
+- **Sites:** `nested_planner._has_explicit_nulls_placement` (index-advisory
+  UNKNOWN); `connection._keyset_order_ref` (reject for value cursors).
+- **Evidence:** both ask the same factual question about an `OrderBy` entry;
+  prior sites used `is not None` vs truthy and could drift if the vocabulary
+  definition of "explicit" changes. Consequences differ by caller (advisory
+  silence vs keyset reject) — same pattern as `order_entry_name_and_direction`.
+- **Owner:** `plans.py::order_entry_has_explicit_nulls` beside
+  `order_entry_name_and_direction`.
+- **Consolidation:** move the predicate; nested planner and keyset order-ref
+  both call it (`is not None` contract).
+- **Proof:** `tests/optimizer/test_plans.py::TestOrderEntryHasExplicitNulls`;
+  existing nulls-UNKNOWN pins in `test_nested_index_advisory.py` and
+  `_keyset_order_ref` nulls reject in `test_keyset_connection.py` remain the
+  integration tier (deferred pytest).
+- **Risks / non-goals:** do not fold `_reverse_order_by`'s nulls *swap* into
+  this predicate (mutation vs detection). Do not unify advisory UNKNOWN with
+  keyset reject policies.
+
+### 2. Scalar-only GenericRelation morph column via join taxonomy (accepted)
+
+- **Repeated responsibility:** resolve the child `content_type_id` attname a
+  `GenericRelation` prefetch attach needs alongside the object-id connector.
+- **Sites:** `join_taxonomy._generic_content_type_attname` /
+  `RelationJoinDescriptor.content_type_column` (owner);
+  `_project_scalar_only_window` re-spelled `content_type_field_name` +
+  `get_field(...).attname`.
+- **Evidence:** identical derivation; advisory path already consumed
+  `join.content_type_column`; scalar-only projection must stay lockstep or a
+  rename of the morph field updates one site only.
+- **Owner:** `classify_relation_join` / `content_type_column`.
+- **Consolidation:** `_project_scalar_only_window` classifies once and takes
+  `parent_join_column` + `content_type_column` (drops the local re-derivation;
+  `_connector_only_field` remains the walker list-prefetch shim).
+- **Proof:** `tests/optimizer/test_walker.py::test_scalar_only_generic_window_projects_content_type_column`
+  (deferred pytest).
+- **Risks / non-goals:** do not move list-prefetch
+  `_ensure_connector_only_fields` content_type policy here — that is walker /
+  folder scope (see deferred).
+
+## Judgment
+
+Present-day `nested_planner.py` remains a clean orchestrator over shared window,
+join, order, selection, and strategy owners. The fresh pass found two real
+vocabulary/ownership gaps (explicit NULLS; GenericRelation morph attname) and
+closed them at `plans.py` and `join_taxonomy` respectively. Remaining
+similarities are intentional forks, named shims, or walker rebinds — not
+competing implementations. Folder-level list-prefetch connector completeness
+for GenericRelation is deferred.
+
+## Implementation (Worker 1)
+
+**Owner chosen:**
+
+1. `plans.py::order_entry_has_explicit_nulls` for the shared explicit-NULLS
+   order-entry vocabulary gate.
+2. `join_taxonomy.classify_relation_join` / `content_type_column` for the
+   scalar-only GenericRelation morph column (consumed in
+   `_project_scalar_only_window`).
+
+**Migrated:**
+
+- `optimizer/plans.py` — added `order_entry_has_explicit_nulls`.
+- `optimizer/nested_planner.py` — dropped `_has_explicit_nulls_placement`;
+  `_concrete_order_terms` calls the plans predicate; `_project_scalar_only_window`
+  classifies once for connector + content_type; `_connector_only_field`
+  docstring updated (walker-only shim).
+- `connection.py` — `_keyset_order_ref` uses `order_entry_has_explicit_nulls`.
+- `utils/connections.py` — module docstring corrects coerce ownership to
+  `nested_planner` (walker re-export noted).
+- `tests/optimizer/test_plans.py` — `TestOrderEntryHasExplicitNulls`.
+- `tests/optimizer/test_walker.py` —
+  `test_scalar_only_generic_window_projects_content_type_column`.
+
+**Kept separate:** offset vs keyset window adapters; planner `None` vs resolver
+`100`; `_concrete_order_columns` vs `_concrete_order_terms`; walker underscore
+rebinds; `_ensure_connector_only_fields` list-prefetch path; composite-index
+advisory body (true owner of that advisory remains this file).
+
+**Validation:** `uv run ruff format .` and `uv run ruff check --fix .`. No
+pytest (deferred). Changelog: no (internal ownership; no consumer API change).
+
+**Item-scoped diff statement (from ITEM_BASELINE `ad9c7d38`):**
+
+```text
+git diff ad9c7d382f04f31fcbc04f4343b3495592f8441b -- \
+  django_strawberry_framework/optimizer/nested_planner.py \
+  django_strawberry_framework/optimizer/plans.py \
+  django_strawberry_framework/connection.py \
+  django_strawberry_framework/utils/connections.py \
+  tests/optimizer/test_plans.py \
+  tests/optimizer/test_walker.py \
+  docs/dry/dry-file-optimizer__nested_planner.md
+```
+
+(~99 insertions / 33 deletions across those paths at handoff.)
+
+**Deferred findings:**
+
+1. `_ensure_connector_only_fields` (walker) still appends only
+   `parent_join_column`, not `content_type_column`, for GenericRelation list
+   prefetches — folder / walker item.
+2. Deferred pytest for the new permanent tests above.
+
+**Strongest rejected candidates:** merge concrete-order siblings; unify
+offset/keyset adapters; delete walker rebinds; fold reverse-order nulls *swap*
+into the new predicate; absorb folder splits into this file.
+
+**Ready for W2:** yes.
+
+## Iterations
+
+### Fresh pass note
+
+Plan checkbox was still OPEN while Status said `verified`. This Worker 1 pass
+re-reviewed present-day source without seeding findings from the prior body.
+Live Status / System trace / Verification / Opportunities / Judgment /
+Implementation above supersede the prior top-level prose. Prior reasoning is
+preserved below as audit trail only.
+
+### Prior verified pass (schema dig + edges/node)
+
+## System trace
+
+The target is the **transactional planner for one recognized nested Relay
 connection**. The general walker normalizes selections and resolves
 model/type metadata, then delegates a single connection selection to
 `plan_connection_relation`, which owns pagination normalization, Decision-6
@@ -306,6 +487,71 @@ intentional.
 
 **Disposition:** verified. Full change set covered; the plan checkbox for this
 item closes with the Commit 10 selection slice that lands the second hunk.
+
+## Independent verification (Worker 2)
+
+Re-traced `nested_planner.py` as the transactional nested-connection planner
+against present-day source and the item-scoped diff from baseline
+`ad9c7d382f04f31fcbc04f4343b3495592f8441b`. No production edits by Worker 2.
+Scoped paths match W1's claim exactly (nested_planner / plans / connection /
+utils/connections / two permanent tests / this artifact) — no unrelated
+concurrent cleanup absorbed.
+
+### Challenge 1 — explicit-NULLS vocabulary on `plans`
+
+**Upheld.** Baseline had two predicates with the same factual question and
+divergent definitions: nested_planner `_has_explicit_nulls_placement` used
+`is not None`; `connection._keyset_order_ref` used truthy `or`. Present-day:
+`_has_explicit_nulls_placement` is gone; both call sites import
+`plans.order_entry_has_explicit_nulls` (`is not None`). `rg` finds no leftover
+private duplicate. Owner sits beside `order_entry_name_and_direction` — same
+`deterministic_order` entry vocabulary, one reason to change. Callers keep
+distinct consequences (advisory UNKNOWN via `_concrete_order_terms` → `None`
+vs keyset reject → `None` from `_keyset_order_ref`).
+
+### Challenge 2 — scalar-only GenericRelation morph via join taxonomy
+
+**Upheld.** Baseline `_project_scalar_only_window` re-derived the morph column
+via `content_type_field_name` + `get_field(...).attname` while the composite-
+index advisory already consumed `join.content_type_column`. Present-day: one
+`classify_relation_join`; connector and morph both come from the descriptor.
+Package `content_type_field_name` + `get_field` derivation for this attname
+lives only in `join_taxonomy._generic_content_type_attname`. `_connector_only_field`
+correctly remains the walker list-prefetch shim (parent_join only).
+
+### Challenge 3 — rejected / deferred kept separate
+
+**Upheld.**
+
+1. `_concrete_order_columns` vs `_concrete_order_terms` — skip vs fail-soft
+   `None`; different contracts.
+2. Offset vs keyset window adapters — fork before `SliceMetadata`.
+3. Walker underscore rebinds — rebinds, not second bodies.
+4. `_reverse_order_by` nulls *swap* — mutation (`if nulls_first or nulls_last`
+   then swap), not the detection predicate; folding would blur detection vs
+   reverse semantics.
+5. `_ensure_connector_only_fields` still appends only
+   `_connector_only_field` / `parent_join_column` — deferred to walker /
+   folder as claimed (read present-day walker body).
+6. `utils/connections.py` docstring — corrects coerce ownership to
+   `nested_planner` (walker re-export); item-scoped doc fix, not drive-by.
+
+### Proof / deferred
+
+Permanent pins present: `TestOrderEntryHasExplicitNulls`;
+`test_scalar_only_generic_window_projects_content_type_column`. Integration
+pins remain in `test_nested_index_advisory.py` / `test_keyset_connection.py`.
+Pytest deferred per cycle rules. Optional strengthening (not a blocker): pin
+`nulls_first=False` so the `is not None` vs truthy axis cannot regress while
+still passing the `True`-only unit cases.
+
+### Missed opportunities
+
+None material for this target. No leftover private NULLS predicate; no
+re-spelled GenericRelation morph attname outside `join_taxonomy`.
+
+**Disposition:** verified. Plan checkbox marked `[x]`.
+
 
 <!-- LINK DEFINITIONS -->
 <!-- Root -->

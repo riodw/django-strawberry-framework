@@ -156,6 +156,7 @@ from ..utils.querysets import (
     sync_pipeline_recourse,
     visible_related_objects,
 )
+from ..utils.relations import is_forward_many_to_many
 from ..utils.write_transaction import (
     assert_no_target_drift,
     base_locked_queryset,
@@ -1731,7 +1732,7 @@ def _attestable_m2m_fields(mutation_cls: type, model: type) -> list[tuple[Any, A
             model_field = model._meta.get_field(source)
         except FieldDoesNotExist:
             continue  # A serializer-only relation: nothing on the row to attest.
-        if not getattr(model_field, "many_to_many", False) or model_field.auto_created:
+        if not is_forward_many_to_many(model_field):
             continue
         entries.append((spec, model_field, source))
     return entries

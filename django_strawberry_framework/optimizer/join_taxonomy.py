@@ -102,12 +102,16 @@ class RelationJoinDescriptor:
     doubles - the classifier never raises).
 
     ``content_type_column`` is the child ``content_type_id`` attname a
-    ``GenericRelation`` window constrains by equality alongside the
-    ``object_id`` connector (every generic query carries a constant morph
-    predicate, so ``(content_type_id, object_id, ...)`` is the useful
-    composite-index prefix, not ``object_id`` alone). ``None`` for every
+    ``GenericRelation`` needs alongside the ``object_id`` connector: Django's
+    prefetch attach key is ``(object_id, content_type_id)``, and the composite-
+    index advisory recommends ``(content_type_id, object_id, ...)`` because
+    every generic query also carries a constant morph WHERE. ``None`` for every
     non-generic shape and for a synthetic generic double that cannot resolve
     it - the classifier never raises.
+
+    ``prefetch_attach_columns`` is the derived attach-complete set projection
+    writers must ``.only()`` (connector, plus morph when present) so attach
+    never deferred-refetches either half of the key.
     """
 
     kind: RelationKind
@@ -119,6 +123,24 @@ class RelationJoinDescriptor:
     parent_link_field: Any = None
     through_child_field: Any = None
     content_type_column: str | None = None
+
+    @property
+    def prefetch_attach_columns(self) -> tuple[str, ...]:
+        """Child columns Django's prefetch attach reads on each related row.
+
+        Always ``parent_join_column`` when resolved; for a ``GenericRelation``
+        also ``content_type_column`` - ``GenericRelatedObjectManager.
+        get_prefetch_querysets`` builds ``rel_obj_attr`` as
+        ``(object_id, content_type_id)``. Empty when neither resolves (callers
+        log and degrade). Order matches the attach key, not the index-advisory
+        equality prefix (morph-first there).
+        """
+        columns: list[str] = []
+        if self.parent_join_column is not None:
+            columns.append(self.parent_join_column)
+        if self.content_type_column is not None:
+            columns.append(self.content_type_column)
+        return tuple(columns)
 
 
 def _partition_expr(field: Any) -> str | None:

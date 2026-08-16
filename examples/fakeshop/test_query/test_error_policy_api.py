@@ -583,6 +583,19 @@ def test_debug_true_restores_the_original_message_end_to_end():
 
 
 @pytest.mark.django_db
+def test_a_malformed_truthy_debug_setting_keeps_production_masking_end_to_end():
+    """A stringified ``DEBUG=False`` must not disable the fail-closed policy."""
+    with _override_settings(
+        DEBUG="False",
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+    ):
+        _, payload = _post("/ep/", "{ boom }")
+    error = _masked_error(payload)
+    assert _SENSITIVE not in json.dumps(payload)
+    assert error["path"] == ["boom"]
+
+
+@pytest.mark.django_db
 def test_the_explicit_opt_out_returns_the_original_message_under_debug_false():
     """``error_policy={"enabled": False}`` is the recorded decision to own your own masking.
 

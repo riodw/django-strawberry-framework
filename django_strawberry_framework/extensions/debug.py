@@ -599,8 +599,10 @@ class DjangoDebugExtension(SchemaExtension):
         ``settings.DEBUG`` is read per operation rather than cached on the
         instance: the instance IS per operation, and a test or management
         context may legitimately flip the setting between two of them.
+        Only the exact boolean ``True`` opens the development disclosure path;
+        malformed truthy values fail closed.
         """
-        return self.allow_unsafe_production or bool(settings.DEBUG)
+        return self.allow_unsafe_production or settings.DEBUG is True
 
     def on_operation(self) -> Any:  # type: ignore[override]
         """Bracket the operation with the debug cursor; assemble the payload at teardown.

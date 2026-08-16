@@ -4,7 +4,8 @@
 guards wrap (``routers.py::require_channels()`` / ``rest_framework::require_drf()``);
 ``import_attr_if_importable`` is the best-effort variant callers use when a missing
 optional module should degrade to ``None`` rather than raise (``types/converters.py``'s
-postgres fields, ``registry.py``'s subsystem co-clears). These tests stay generic:
+postgres fields, ``optimizer/nested_planner.py``'s ``BTreeIndex``, ``registry.py``'s
+subsystem co-clears). These tests stay generic:
 router-specific hint wording and channels-absence behavior live in
 ``tests/test_routers.py`` so the utility owner remains portable for future
 soft dependencies.

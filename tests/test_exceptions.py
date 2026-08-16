@@ -9,7 +9,9 @@ import strawberry
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
     DjangoStrawberryFrameworkError,
+    LookupValidationError,
     OptimizerError,
+    PathResolutionError,
 )
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
@@ -76,6 +78,15 @@ class _Stateful:
         return "fine-for-now"
 
     __repr__ = __str__
+
+
+class _HostileMetadata:
+    """Metadata-bearing input whose label lookup raises during error construction."""
+
+    def __getattribute__(self, name: str):
+        if name in {"_meta", "name"}:
+            raise RuntimeError(f"{name} unavailable")
+        return super().__getattribute__(name)
 
 
 def _execute_raising(exc_factory):
@@ -209,3 +220,33 @@ def test_syncmisuse_error_renders_safely_and_keeps_identity():
     assert str(err) == "<unprintable _Unprintable>"
     assert err.args == (bad,)
     assert isinstance(err, (ConfigurationError, RuntimeError))
+
+
+def test_path_resolution_error_constructor_survives_hostile_metadata_and_values():
+    """Typed path errors remain constructible when diagnostic inputs are hostile."""
+    model = _HostileMetadata()
+    path = _Unprintable()
+    segment = _Unprintable()
+
+    err = PathResolutionError(model, path, segment)
+
+    assert err.model is model
+    assert err.field_path is path
+    assert err.segment is segment
+    assert "Cannot classify path <unprintable _Unprintable>" in str(err)
+    assert "model _HostileMetadata" in str(err)
+
+
+def test_lookup_validation_error_constructor_survives_hostile_metadata_and_values():
+    """Typed lookup errors remain constructible when diagnostic inputs are hostile."""
+    terminal = _HostileMetadata()
+    lookup_expr = _Unprintable()
+    part = _Unprintable()
+
+    err = LookupValidationError(terminal, lookup_expr, part)
+
+    assert err.terminal is terminal
+    assert err.lookup_expr is lookup_expr
+    assert err.part is part
+    assert "Invalid lookup expression <unprintable _Unprintable>" in str(err)
+    assert "terminal _HostileMetadata" in str(err)

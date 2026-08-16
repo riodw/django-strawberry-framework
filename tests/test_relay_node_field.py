@@ -219,6 +219,67 @@ def test_bare_nodes_field_multi_type_model_typenames_follow_gids():
     ]
 
 
+@pytest.mark.django_db
+def test_node_type_hint_does_not_poison_reused_model_instance():
+    """A refetch hint is isolated when a consumer reuses one ORM instance.
+
+    The bare node field must route a secondary GlobalID to its named concrete
+    type without mutating the model object a consumer may return from another
+    field in the same operation. Before ``_stamp_node_type`` copied model
+    instances, the later concrete ``PrimaryNode`` field rejected that reused
+    object because its stale ``SecondaryNode`` hint made ``is_type_of`` return
+    false.
+    """
+    services.seed_data(1)
+    row = Category.objects.order_by("pk").first()
+
+    class PrimaryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            globalid_strategy = "type"
+
+    class SecondaryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+        @classmethod
+        def resolve_node(
+            cls,
+            node_id,
+            *,
+            info,
+            required=False,
+        ):
+            del cls, node_id, info, required
+            return row
+
+    class Query:
+        node: relay.Node | None = DjangoNodeField()
+        primary: PrimaryNode = strawberry.field(resolver=lambda: row)
+
+    Query = strawberry.type(Query)
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(),
+        types=[PrimaryNode, SecondaryNode],
+    )
+    gid = _gid("SecondaryNode", row.pk)
+    result = schema.execute_sync(
+        "query($id: ID!) { node(id: $id) { __typename } primary { name } }",
+        variable_values={"id": gid},
+    )
+    assert result.errors is None, result.errors
+    assert result.data == {"node": {"__typename": "SecondaryNode"}, "primary": {"name": row.name}}
+    assert not hasattr(row, "_dsf_node_type_hint")
+
+
 def test_stamp_node_type_passes_through_none_and_unstampable_objects():
     """``None`` rides through; an attribute-rejecting return stays unstamped.
 

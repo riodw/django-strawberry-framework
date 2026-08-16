@@ -699,6 +699,43 @@ def test_require_write_pipeline_outside_the_pipeline_is_a_wiring_error():
         assert require_write_pipeline().alias == "default"
 
 
+def test_open_write_pipeline_nests_atomic_on_managed_alias():
+    """``open_write_pipeline`` opens ``transaction.atomic(using=<managed alias>)``."""
+    from unittest.mock import MagicMock, patch
+
+    from django_strawberry_framework.utils.write_transaction import (
+        managed_write_transaction,
+        open_write_pipeline,
+    )
+
+    captured: dict = {}
+
+    class _Atomic:
+        def __init__(self, using=None, **_kwargs):
+            captured["using"] = using
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    mutation_cls = MagicMock()
+    mutation_cls._mutation_meta.select_for_update = False
+
+    with (
+        patch(
+            "django_strawberry_framework.utils.write_transaction.transaction.atomic",
+            side_effect=_Atomic,
+        ),
+        managed_write_transaction("shard_b"),
+    ):
+        with open_write_pipeline(mutation_cls) as using:
+            assert using == "shard_b"
+
+    assert captured["using"] == "shard_b"
+
+
 class _FakeBarrierCursor:
     def __init__(self, connection: _FakeBarrierConnection) -> None:
         self._connection = connection
@@ -1079,6 +1116,29 @@ def test_pks_match_canonicalizes_through_the_pk_field():
     int_model = SimpleNamespace(_meta=SimpleNamespace(pk=django_models.IntegerField()))
     assert pks_match(int_model, 5, "5")
     assert canonical_pk(int_model, "7") == 7
+
+
+def test_reject_substituted_row_is_silent_when_pks_match():
+    from types import SimpleNamespace
+
+    from django.db import models as django_models
+
+    from django_strawberry_framework.utils.write_transaction import reject_substituted_row
+
+    model = SimpleNamespace(_meta=SimpleNamespace(pk=django_models.IntegerField()))
+    reject_substituted_row(model, 5, "5", message="unused")
+
+
+def test_reject_substituted_row_raises_the_caller_message():
+    from types import SimpleNamespace
+
+    from django.db import models as django_models
+
+    from django_strawberry_framework.utils.write_transaction import reject_substituted_row
+
+    model = SimpleNamespace(_meta=SimpleNamespace(pk=django_models.IntegerField()))
+    with pytest.raises(ConfigurationError, match="never a substituted one"):
+        reject_substituted_row(model, 1, 2, message="never a substituted one")
 
 
 @pytest.mark.django_db

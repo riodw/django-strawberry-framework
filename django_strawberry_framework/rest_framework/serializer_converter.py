@@ -64,15 +64,18 @@ import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rest_framework import serializers
-from strawberry import relay
 
-from ..exceptions import ConfigurationError
-from ..mutations.inputs import relation_input_annotation
+from ..exceptions import ConfigurationError, _safe_type_name
+from ..mutations.inputs import relation_id_annotation, relation_input_annotation
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
-from ..types.relay import implements_relay_node
-from ..utils.converters import convert_with_mro
+from ..utils.converters import (
+    convert_with_mro,
+    finish_field_conversion,
+    make_kind_converter,
+    make_scalar_converter,
+)
 
 # The decode kinds the reverse-map record carries. The four base kinds are
 # single-sourced in ``utils/inputs.py`` (one conceptual enum,
@@ -120,20 +123,14 @@ SerializerFieldConverter = Callable[[serializers.Field], SerializerFieldConversi
 def _scalar_converter(annotation: Any) -> SerializerFieldConverter:
     """Return a converter emitting a ``SCALAR``-kind conversion for a fixed annotation.
 
-    The built-in scalar entries are CONVERTERS (not bare annotations) so the ONE
-    registry the MRO walk consults holds a uniform ``field -> SerializerFieldConversion``
-    shape for both built-in and consumer-registered fields. ``required`` is read from the
-    bound field at conversion time.
+    Thin flavor wrapper around ``make_scalar_converter``: requiredness is
+    ``field.required`` (the serializer default). The form table passes
+    ``required_of=form_field_required`` instead (NullBoolean). The built-in
+    scalar entries are CONVERTERS (not bare annotations) so the ONE registry
+    the MRO walk consults holds a uniform ``field -> SerializerFieldConversion``
+    shape for both built-in and consumer-registered fields.
     """
-
-    def _convert(field: serializers.Field) -> SerializerFieldConversion:
-        return SerializerFieldConversion(
-            annotation=annotation,
-            kind=SCALAR,
-            required=field.required,
-        )
-
-    return _convert
+    return make_scalar_converter(SerializerFieldConversion, annotation)
 
 
 def _model_field_converter(field: serializers.Field) -> SerializerFieldConversion:
@@ -195,6 +192,16 @@ _BUILTIN_SCALAR_CONVERTERS: dict[type[serializers.Field], SerializerFieldConvert
 # reset by ``registry.clear()``.
 _SERIALIZER_FIELD_CONVERTERS: dict[type, SerializerFieldConverter] = dict(
     _BUILTIN_SCALAR_CONVERTERS,
+)
+
+
+_CONVERT_RELATION_MULTI = make_kind_converter(SerializerFieldConversion, RELATION_MULTI)
+_CONVERT_RELATION_SINGLE = make_kind_converter(SerializerFieldConversion, RELATION_SINGLE)
+_CONVERT_FILE = make_kind_converter(SerializerFieldConversion, FILE)
+_CONVERT_MULTIPLE_CHOICE = make_kind_converter(
+    SerializerFieldConversion,
+    SCALAR,
+    annotation=list[str],
 )
 
 
@@ -420,28 +427,21 @@ def convert_serializer_field(
     ``allow_blank`` is not encoded.
     """
     del is_input  # graphene-parity, accepted-and-ignored.
-    required = field.required
 
     def _relation_multi(field_: serializers.Field) -> SerializerFieldConversion:
         # H5: only PrimaryKeyRelatedField(many=True) (a ManyRelatedField of a PK
         # child) is a supported relation input; a non-PK child raises here.
         _reject_unsupported_relation_field(field_)
-        return SerializerFieldConversion(annotation=None, kind=RELATION_MULTI, required=required)
+        return _CONVERT_RELATION_MULTI(field_)
 
     def _relation_single(field_: serializers.Field) -> SerializerFieldConversion:
         # H5: only PrimaryKeyRelatedField is a supported single relation input; a
         # SlugRelatedField / HyperlinkedRelatedField / custom RelatedField raises.
         _reject_unsupported_relation_field(field_)
-        return SerializerFieldConversion(annotation=None, kind=RELATION_SINGLE, required=required)
-
-    def _file(_field: serializers.Field) -> SerializerFieldConversion:
-        return SerializerFieldConversion(annotation=None, kind=FILE, required=required)
+        return _CONVERT_RELATION_SINGLE(field_)
 
     def _list(field_: serializers.ListField) -> SerializerFieldConversion:
         return _list_child_conversion(field_)
-
-    def _multiple_choice(_field: serializers.Field) -> SerializerFieldConversion:
-        return SerializerFieldConversion(annotation=list[str], kind=SCALAR, required=required)
 
     def _nested(field_: serializers.Field) -> SerializerFieldConversion:
         # A nested ``Serializer`` / ``ListSerializer`` always raises; the handler
@@ -459,22 +459,14 @@ def convert_serializer_field(
             ((serializers.BaseSerializer, serializers.ListSerializer), _nested),
             (serializers.ManyRelatedField, _relation_multi),
             (serializers.RelatedField, _relation_single),
-            (serializers.FileField, _file),
+            (serializers.FileField, _CONVERT_FILE),
             (serializers.ListField, _list),
-            (serializers.MultipleChoiceField, _multiple_choice),
+            (serializers.MultipleChoiceField, _CONVERT_MULTIPLE_CHOICE),
         ],
         scalar_registry=_SERIALIZER_FIELD_CONVERTERS,
         fallthrough_error_factory=_unsupported_serializer_field,
     )
-    if isinstance(result, SerializerFieldConversion):
-        return result
-    # The MRO walk returned a CONVERTER callable from the registry (a built-in scalar,
-    # an expanded row, or a consumer-registered converter); call it with the
-    # field to produce the conversion. Every registry entry is a converter (never a bare
-    # annotation), so this one ``result(field)`` handles all three uniformly -
-    # ``EmailField`` / ``SlugField`` / ``URLField`` / ``RegexField`` / ``IPAddressField``
-    # resolve under ``CharField``, ``HStoreField`` under ``DictField``.
-    return result(field)
+    return finish_field_conversion(result, field)
 
 
 def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationError:
@@ -488,7 +480,7 @@ def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationErro
     coerce to ``String`` - lives in this wording.
     """
     return ConfigurationError(
-        f"Unsupported serializer field type {type(field).__name__!r} on serializer "
+        f"Unsupported serializer field type {_safe_type_name(field)!r} on serializer "
         f"field {field.field_name!r}. convert_serializer_field has no mapping for it "
         "and no supported ancestor; register a supported base class, or drop it via "
         "Meta.fields / Meta.exclude.",
@@ -654,9 +646,8 @@ def serializer_only_relation_annotation(
     whose ``source`` names no concrete column) resolves its related model from
     ``field.queryset.model`` (the single ``PrimaryKeyRelatedField``) or
     ``field.child_relation.queryset.model`` (a ``ManyRelatedField``). The id type
-    follows the SAME Relay-``GlobalID``-vs-raw-pk rule as the model-backed path -
-    ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
-    Relay-Node-shaped, else the related model's raw pk scalar.
+    rides ``relation_id_annotation`` after ``_require_relation_primary`` (M3:
+    a missing primary is a class-creation error, not a raw-pk fallback).
 
     A relation with neither a backing column NOR a concrete ``queryset.model``
     (a ``read_only=True`` relation has no queryset, but read-only fields are
@@ -676,14 +667,10 @@ def serializer_only_relation_annotation(
             "(e.g. PrimaryKeyRelatedField(queryset=Model.objects.all())).",
         )
     primary = _require_relation_primary(field.field_name, related_model)
-    if implements_relay_node(primary):
-        id_scalar: Any = relay.GlobalID
-    else:
-        id_scalar = scalar_for_field(related_model._meta.pk)
+    many = kind == RELATION_MULTI
+    annotation = relation_id_annotation(related_model, primary, many=many)
     input_attr, _ = serializer_field_graphql_name(field.field_name, kind)
-    if kind == RELATION_MULTI:
-        return input_attr, list[id_scalar], related_model
-    return input_attr, id_scalar, related_model
+    return input_attr, annotation, related_model
 
 
 def _is_consumer_declared(field: serializers.Field) -> bool:

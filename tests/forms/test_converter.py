@@ -199,3 +199,14 @@ def test_unknown_custom_field_subclass_raises():
 
     with pytest.raises(ConfigurationError, match="Unsupported form field type 'CustomField'"):
         convert_form_field(CustomField())
+
+
+def test_unknown_field_with_hostile_repr_still_raises_configuration_error():
+    """Formatting the unsupported-field diagnostic cannot replace its typed error."""
+
+    class HostileField(forms.Field):
+        def __repr__(self):
+            raise KeyboardInterrupt("repr trap")
+
+    with pytest.raises(ConfigurationError, match="unprintable HostileField"):
+        convert_form_field(HostileField())

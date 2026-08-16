@@ -50,8 +50,13 @@ from typing import Any
 import strawberry
 from django import forms
 
-from ..exceptions import ConfigurationError
-from ..utils.converters import convert_with_mro
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..utils.converters import (
+    convert_with_mro,
+    finish_field_conversion,
+    make_kind_converter,
+    make_scalar_converter,
+)
 
 # The four decode kinds the reverse-map record carries. Single-sourced in
 # ``utils/inputs.py`` (one conceptual enum, not a per-flavor
@@ -83,44 +88,6 @@ class FormFieldConversion(FieldConversionBase):
     __slots__ = ()
 
 
-# Each supported ``forms.Field`` class -> the scalar annotation it maps to.
-# Registered individually (not via a base-``Field`` catch-all) so subclasses map
-# through the MRO walk in ``convert_form_field`` - ``EmailField`` / ``SlugField``
-# / ``URLField`` / ``RegexField`` resolve under ``CharField``, the parity
-# behavior. ``ChoiceField`` -> ``str`` is the model-less default; a ``ChoiceField``
-# over a ModelForm model's ``choices`` is routed through the read-side enum at the
-# build site instead. ``ModelChoiceField`` / ``ModelMultipleChoiceField`` /
-# ``MultipleChoiceField`` / ``FileField`` / ``ImageField`` are deliberately NOT in
-# this scalar table - they resolve by ``kind`` in ``convert_form_field`` before the
-# walk reaches it.
-#
-# Resolution is a ``type(field).__mro__`` walk against this dict (the same idiom
-# ``types/converters.py::scalar_for_field`` uses on the read side), so the
-# MOST-specific registered class wins regardless of dict insertion order:
-# ``FloatField`` / ``DecimalField`` both subclass ``IntegerField`` and
-# ``UUIDField`` / ``JSONField`` subclass ``CharField``, so a linear "first
-# ``isinstance`` wins" walk would mis-map them to the parent's scalar. The MRO
-# walk visits the field's own class first, so each resolves to its own entry.
-# ``JSONField`` must stay an explicit row (``strawberry.scalars.JSON``) - without
-# it the CharField parent would silently type JSON payloads as ``String``,
-# rejecting object / array literals that Django's form field (and the serializer
-# / model scalar tables) accept as structured JSON.
-_SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
-    forms.CharField: str,
-    forms.ChoiceField: str,
-    forms.IntegerField: int,
-    forms.FloatField: float,
-    forms.DecimalField: decimal.Decimal,
-    forms.NullBooleanField: bool | None,
-    forms.BooleanField: bool,
-    forms.UUIDField: uuid.UUID,
-    forms.JSONField: strawberry.scalars.JSON,
-    forms.DateTimeField: datetime.datetime,
-    forms.DateField: datetime.date,
-    forms.TimeField: datetime.time,
-}
-
-
 def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
     """The effective GraphQL-input requiredness of any form field (the one rule).
 
@@ -150,18 +117,105 @@ def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
     return False
 
 
+def _scalar_converter(annotation: Any) -> Any:
+    """Return a form scalar-table converter (``form_field_required`` for requiredness)."""
+    return make_scalar_converter(
+        FormFieldConversion,
+        annotation,
+        required_of=form_field_required,
+    )
+
+
+def _kind_converter(kind: str, annotation: Any = None) -> Any:
+    """Return a form kind-precheck converter (``form_field_required`` for requiredness)."""
+    return make_kind_converter(
+        FormFieldConversion,
+        kind,
+        annotation=annotation,
+        required_of=form_field_required,
+    )
+
+
+# Each supported ``forms.Field`` class -> a ``make_scalar_converter`` callable.
+# Registered individually (not via a base-``Field`` catch-all) so subclasses map
+# through the MRO walk in ``convert_form_field`` - ``EmailField`` / ``SlugField``
+# / ``URLField`` / ``RegexField`` resolve under ``CharField``, the parity
+# behavior. ``ChoiceField`` -> ``str`` is the model-less default; a ``ChoiceField``
+# over a ModelForm model's ``choices`` is routed through the read-side enum at the
+# build site instead. ``ModelChoiceField`` / ``ModelMultipleChoiceField`` /
+# ``MultipleChoiceField`` / ``FileField`` / ``ImageField`` are deliberately NOT in
+# this scalar table - they resolve by ``kind`` in ``convert_form_field`` before the
+# walk reaches it.
+#
+# Resolution is a ``type(field).__mro__`` walk against this dict (the same idiom
+# ``types/converters.py::scalar_for_field`` uses on the read side), so the
+# MOST-specific registered class wins regardless of dict insertion order:
+# ``FloatField`` / ``DecimalField`` both subclass ``IntegerField`` and
+# ``UUIDField`` / ``JSONField`` subclass ``CharField``, so a linear "first
+# ``isinstance`` wins" walk would mis-map them to the parent's scalar. The MRO
+# walk visits the field's own class first, so each resolves to its own entry.
+# ``JSONField`` must stay an explicit row (``strawberry.scalars.JSON``) - without
+# it the CharField parent would silently type JSON payloads as ``String``,
+# rejecting object / array literals that Django's form field (and the serializer
+# / model scalar tables) accept as structured JSON.
+_SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
+    forms.CharField: _scalar_converter(str),
+    forms.ChoiceField: _scalar_converter(str),
+    forms.IntegerField: _scalar_converter(int),
+    forms.FloatField: _scalar_converter(float),
+    forms.DecimalField: _scalar_converter(decimal.Decimal),
+    forms.NullBooleanField: _scalar_converter(bool | None),
+    forms.BooleanField: _scalar_converter(bool),
+    forms.UUIDField: _scalar_converter(uuid.UUID),
+    forms.JSONField: _scalar_converter(strawberry.scalars.JSON),
+    forms.DateTimeField: _scalar_converter(datetime.datetime),
+    forms.DateField: _scalar_converter(datetime.date),
+    forms.TimeField: _scalar_converter(datetime.time),
+}
+
+
+def _bare_form_field(field: forms.Field) -> FormFieldConversion | None:
+    """Exact-type ``forms.Field`` -> ``str``; any subclass continues the MRO walk.
+
+    NOT a catch-all: an ``isinstance`` match that always returned a conversion
+    would shadow the raising fallthrough. Returning ``None`` lets
+    ``convert_with_mro`` continue. Ordered LAST in the precheck list so a
+    supported subclass has already been offered to the scalar registry.
+    """
+    if type(field) is forms.Field:
+        return FormFieldConversion(
+            annotation=str,
+            kind=SCALAR,
+            required=form_field_required(field),
+        )
+    return None
+
+
+# Kind prechecks that must win BEFORE the scalar walk reaches a parent class
+# (``ModelChoiceField`` subclasses ``ChoiceField`` -> ``str``, etc.). Relation /
+# file annotations are finalized at the build site (``annotation=None``).
+_CONVERT_RELATION_MULTI = _kind_converter(RELATION_MULTI)
+_CONVERT_RELATION_SINGLE = _kind_converter(RELATION_SINGLE)
+_CONVERT_FILE = _kind_converter(FILE)
+_CONVERT_MULTIPLE_CHOICE = _kind_converter(SCALAR, list[str])
+
+
 def convert_form_field(field: forms.Field) -> FormFieldConversion:
     """Map a model-less ``forms.Field`` to its Strawberry annotation + decode kind.
 
     Returns a ``FormFieldConversion`` carrying the resolved scalar
     ``annotation`` (``None`` for the relation / file kinds, finalized at the
-    build site), the decode ``kind``, and ``required`` from ``field.required``
-    (forced ``False`` for ``NullBooleanField`` - see ``FormFieldConversion``).
+    build site), the decode ``kind``, and ``required`` from
+    ``form_field_required`` (forced ``False`` for ``NullBooleanField`` - see
+    ``FormFieldConversion``).
 
-    Dispatch is a ``type(field).__mro__`` walk over an individually-registered
-    registry with a **raising fallthrough**, NOT a ``functools.singledispatch``
-    with a ``forms.Field`` -> ``str`` catch-all (which would shadow the raise so
-    every custom field silently became ``String`` - spec-038 Decision 7 P2):
+    Dispatch rides the shared ``utils/converters.py::convert_with_mro``
+    skeleton (ordered prechecks, then the scalar registry MRO walk, then a
+    raising fallthrough) with ``finish_field_conversion`` invoking a
+    ``make_scalar_converter`` registry hit. It is NOT a
+    ``functools.singledispatch`` with a ``forms.Field`` -> ``str`` catch-all
+    (which would shadow the raise so every custom field silently became
+    ``String`` - spec-038 Decision 7 P2):
 
     - relation / file kinds are matched first by ``isinstance`` (``ModelChoiceField``
       subclasses ``ChoiceField``, so it MUST win before the scalar walk reaches
@@ -183,73 +237,19 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
     all subclass ``ChoiceField`` (which the scalar table maps to ``str``), so the
     more-specific kind must win.
     """
-    # The one requiredness rule (NullBooleanField forced optional) lives in
-    # ``form_field_required`` so this annotation path and the build site cannot
-    # drift - see that helper and ``FormFieldConversion``.
-    required = form_field_required(field)
-
-    # Delegate the ordered-precheck -> MRO-walk -> raise control flow to the
-    # shared ``utils/converters.py::convert_with_mro`` skeleton so
-    # the no-silent-catch-all contract is single-sited with the serializer
-    # converter. The prechecks below are the relation / file / multi-choice /
-    # bare-``Field`` cases that must win BEFORE the scalar registry walk reaches a
-    # parent class (``ModelChoiceField`` subclasses ``ChoiceField`` -> ``str``,
-    # etc.). Each precheck returns the finished ``FormFieldConversion``; the scalar
-    # registry returns a bare annotation the wrap below turns into a
-    # ``SCALAR``-kind conversion. Behavior is byte-identical to the prior inline
-    # walk: same precheck order, same registry, same fail-loud raise.
-
-    def _relation_multi(_field: forms.Field) -> FormFieldConversion:
-        # ``ModelMultipleChoiceField`` subclasses ``ModelChoiceField``; the relation
-        # annotation is finalized at the build site, so ``annotation=None`` here.
-        return FormFieldConversion(annotation=None, kind=RELATION_MULTI, required=required)
-
-    def _relation_single(_field: forms.Field) -> FormFieldConversion:
-        return FormFieldConversion(annotation=None, kind=RELATION_SINGLE, required=required)
-
-    def _file(_field: forms.Field) -> FormFieldConversion:
-        # File kinds -> the ``Upload`` scalar, finalized at the build site
-        # (``ImageField`` subclasses ``FileField``).
-        return FormFieldConversion(annotation=None, kind=FILE, required=required)
-
-    def _multiple_choice(_field: forms.Field) -> FormFieldConversion:
-        # ``MultipleChoiceField`` (non-model) -> ``list[str]``; subclasses
-        # ``ChoiceField`` so it must precede the scalar ``ChoiceField`` -> ``str``.
-        return FormFieldConversion(annotation=list[str], kind=SCALAR, required=required)
-
-    def _bare_field(field_: forms.Field) -> FormFieldConversion | None:
-        # The base ``forms.Field`` is an explicit EXACT-type special case ->
-        # ``str``, NOT a catch-all: an ``isinstance`` precheck would match every
-        # subclass and shadow the raise. Returning ``None`` for a non-exact match
-        # lets the skeleton continue to the scalar walk / fallthrough raise. This
-        # precheck is ordered LAST so the scalar registry has already been
-        # consulted for supported subclasses before the exact-type test - matching
-        # the prior inline "walk, then exact-type ``forms.Field``" order.
-        if type(field_) is forms.Field:
-            return FormFieldConversion(annotation=str, kind=SCALAR, required=required)
-        return None
-
     result = convert_with_mro(
         field,
         isinstance_prechecks=[
-            (forms.ModelMultipleChoiceField, _relation_multi),
-            (forms.ModelChoiceField, _relation_single),
-            (forms.FileField, _file),
-            (forms.MultipleChoiceField, _multiple_choice),
-            (forms.Field, _bare_field),
+            (forms.ModelMultipleChoiceField, _CONVERT_RELATION_MULTI),
+            (forms.ModelChoiceField, _CONVERT_RELATION_SINGLE),
+            (forms.FileField, _CONVERT_FILE),
+            (forms.MultipleChoiceField, _CONVERT_MULTIPLE_CHOICE),
+            (forms.Field, _bare_form_field),
         ],
         scalar_registry=_SCALAR_FORM_FIELDS,
         fallthrough_error_factory=_unsupported_form_field,
     )
-    if isinstance(result, FormFieldConversion):
-        return result
-    # The scalar registry MRO walk returned a bare annotation (``EmailField`` /
-    # ``SlugField`` / ``URLField`` / ``RegexField`` under ``CharField``;
-    # ``NullBooleanField`` -> ``bool | None`` before ``BooleanField``; ``JSONField``
-    # -> ``JSON`` before ``CharField``; ``FloatField`` / ``DecimalField`` /
-    # ``UUIDField`` before the ``IntegerField`` / ``CharField`` they subclass) -
-    # wrap it as a ``SCALAR``-kind conversion.
-    return FormFieldConversion(annotation=result, kind=SCALAR, required=required)
+    return finish_field_conversion(result, field)
 
 
 def _unsupported_form_field(field: forms.Field) -> ConfigurationError:
@@ -261,10 +261,12 @@ def _unsupported_form_field(field: forms.Field) -> ConfigurationError:
     ``ImproperlyConfigured`` parity, raised as the package's own
     ``ConfigurationError``). Spelt as a factory so the no-catch-all contract -
     raise, never silently coerce to ``str`` - stays in this module's wording.
+    Hostile ``__name__`` / ``__repr__`` ride the shared
+    ``exceptions._safe_type_name`` / ``_safe_arg_repr`` guards.
     """
     return ConfigurationError(
-        f"Unsupported form field type {type(field).__name__!r} on form field "
-        f"{field!r}. convert_form_field has no mapping for it and no supported "
-        "ancestor; register a supported base class, or supply a custom input_class "
-        "field for it.",
+        f"Unsupported form field type {_safe_type_name(field)!r} on form "
+        f"field {_safe_arg_repr(field)}. convert_form_field has no mapping "
+        "for it and no supported ancestor; register a supported base class, or "
+        "supply a custom input_class field for it.",
     )

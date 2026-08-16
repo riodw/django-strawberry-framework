@@ -56,6 +56,8 @@ from django_strawberry_framework.mutations.inputs import (
     materialize_mutation_input_class,
     mutation_input_type_name,
     payload_object_slot,
+    relation_id_annotation,
+    relation_id_scalar,
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import Upload
@@ -249,6 +251,30 @@ def test_partial_input_name_is_canonical_model_partial_input():
     """The full editable shape takes the stable ``<Model>PartialInput`` name."""
     cls = build_mutation_input(product_models.Item, operation_kind=PARTIAL, primary_type=ItemType)
     assert cls.__name__ == "ItemPartialInput"
+
+
+# ---------------------------------------------------------------------------
+# relation_id_scalar / relation_id_annotation (write-flavor id-type owner)
+# ---------------------------------------------------------------------------
+
+
+def test_relation_id_scalar_is_globalid_iff_primary_is_relay():
+    """Relay primary -> GlobalID; non-Relay or missing primary -> raw pk scalar."""
+    relay_model, relay_type = _make_relay_target()
+    assert relation_id_scalar(relay_model, relay_type) is relay.GlobalID
+    plain_model, plain_type = _make_non_relay_target()
+    assert relation_id_scalar(plain_model, plain_type) is int
+    assert relation_id_scalar(plain_model, None) is int
+
+
+def test_relation_id_annotation_wraps_multi_as_list_of_the_same_scalar():
+    """Cardinality wrap is the only extra axis on top of ``relation_id_scalar``."""
+    relay_model, relay_type = _make_relay_target()
+    assert relation_id_annotation(relay_model, relay_type, many=False) is relay.GlobalID
+    assert relation_id_annotation(relay_model, relay_type, many=True) == list[relay.GlobalID]
+    plain_model, _plain_type = _make_non_relay_target()
+    assert relation_id_annotation(plain_model, None, many=False) is int
+    assert relation_id_annotation(plain_model, None, many=True) == list[int]
 
 
 # ---------------------------------------------------------------------------

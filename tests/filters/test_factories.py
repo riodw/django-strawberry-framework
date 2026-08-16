@@ -405,8 +405,8 @@ def test_make_hashable_dict_branch_supports_mixed_key_types():
 
     The dict branch sorts by ``key=repr`` symmetrically with the
     ``set`` / ``frozenset`` branch, so mixed key types (e.g. ``str`` + ``int``)
-    no longer trip Python's default tuple comparison. The docstring at
-    ``factories.py::_make_hashable`` advertises the mixed-type defence as a
+    no longer trip Python's default tuple comparison.     The docstring at
+    ``utils/inputs.py::make_hashable_meta_value`` advertises the mixed-type defence as a
     property of the function, not just of the unordered-container branch.
     """
     # Default tuple-sort would raise ``TypeError: '<' not supported between
@@ -494,6 +494,24 @@ def test_dynamic_filterset_cache_collapses_equivalent_metas_to_one_class():
     cls_list = get_filterset_class(None, model=Category, fields={"name": ["exact", "icontains"]})
     cls_tuple = get_filterset_class(None, model=Category, fields={"name": ("exact", "icontains")})
     assert cls_list is cls_tuple
+
+
+def test_dynamic_filterset_cache_collapses_exclude_order():
+    """Equivalent exclusion sets must not split the generated-class cache."""
+    first = get_filterset_class(
+        None,
+        model=Category,
+        fields="__all__",
+        exclude=["name", "id"],
+    )
+    second = get_filterset_class(
+        None,
+        model=Category,
+        fields="__all__",
+        exclude={"id", "name"},
+    )
+    assert first is second
+    assert FilterArgumentsFactory(first).arguments is FilterArgumentsFactory(second).arguments
 
 
 @pytest.mark.django_db
@@ -609,6 +627,12 @@ def test_get_filterset_class_requires_model_when_dynamic():
         get_filterset_class(None, fields={"name": ["exact"]})
 
 
+def test_get_filterset_class_rejects_non_model_when_dynamic():
+    """A dynamic factory must reject a non-Django model before django-filter does."""
+    with pytest.raises(ConfigurationError, match="Django model class"):
+        get_filterset_class(None, model=object, fields={"name": ["exact"]})
+
+
 @pytest.mark.django_db
 def test_get_filterset_class_supports_unhashable_meta_values():
     """`get_filterset_class` should support unhashable types (like lists, dicts, sets) in Meta options without raising TypeError."""
@@ -635,6 +659,38 @@ def test_get_filterset_class_supports_unhashable_meta_values():
         },
     )
     assert cls_c is cls_d
+
+
+def test_get_filterset_class_keys_opaque_unhashable_meta_values_by_identity():
+    """Opaque extension Meta values must not leak a cache-key TypeError.
+
+    ``django-filter`` accepts arbitrary extra ``Meta`` attributes, so an
+    integration may pass an unhashable policy object through the dynamic
+    factory. There is no generic structural normalization for that object;
+    the cache must still build and only reuse the class when the same object
+    identity is supplied.
+    """
+
+    class Policy:
+        __hash__ = None
+
+    policy = Policy()
+    first = get_filterset_class(None, model=Category, fields="__all__", policy=policy)
+    second = get_filterset_class(None, model=Category, fields="__all__", policy=policy)
+    assert first is second
+
+    other = get_filterset_class(None, model=Category, fields="__all__", policy=Policy())
+    assert other is not first
+
+
+def test_make_cache_key_normalizes_opaque_unhashable_raw_fields():
+    """The scalar ``fields`` cache-key branch must use the shared normalizer."""
+
+    class OpaqueFields:
+        __hash__ = None
+
+    key = _make_cache_key({"model": Category, "fields": OpaqueFields()})
+    hash(key)
 
 
 def test_filter_arguments_factory_rejects_subclassing():

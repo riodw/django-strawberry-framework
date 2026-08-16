@@ -1,8 +1,10 @@
 """Acceptance tests for definition-order-independent DjangoType relation finalization."""
 
+import importlib
 import sys
 import types
 import uuid
+from typing import Annotated, get_args
 
 import pytest
 import strawberry
@@ -10,11 +12,18 @@ from apps.library.models import Book, Genre, MembershipCard, Patron, Shelf
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
+from strawberry.types.lazy_type import StrawberryLazyReference
 
 from django_strawberry_framework import DjangoType, auto, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import _build_annotations
+
+# Dotted path of the module holding the ``strawberry.lazy`` relation-override
+# target. Bound once for the ``sys.modules`` eviction and the assertions; the
+# ``strawberry.lazy("...")`` calls in the tests keep the literal, because a
+# consumer writes a literal there and that literal is what is under test.
+_LAZY_TARGET_MODULE = "tests.types.fixtures.lazy_relation_target_module"
 
 
 class _FakeUnsupportedField(models.Field):
@@ -273,6 +282,213 @@ def test_assigned_relation_field_override_keeps_consumer_resolver():
     items_field = _strawberry_field(CategoryType, "items")
     assert items_field.base_resolver is not None
     assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
+
+
+def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver():
+    """An ``= strawberry.field(resolver=...)`` relation assignment keeps its resolver.
+
+    Spec-010's third listed manual-annotation shape, distinct from the
+    ``@strawberry.field`` decorator form above: the annotated assignment puts
+    the name in both relation sets, and finalization neither rewrites the
+    annotation nor attaches a generated resolver over the assigned field.
+    """
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    def category_items(root) -> list[ItemType]:
+        return []
+
+    class CategoryType(DjangoType):
+        items: list[ItemType] = strawberry.field(resolver=category_items)
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_authored_fields == frozenset({"items"})
+    # The annotated assignment is the one shape that lands in BOTH relation
+    # sets; each line pins one of them and neither substitutes for the other.
+    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
+    assert definition.consumer_assigned_relation_fields == frozenset({"items"})
+    assert definition.consumer_assigned_scalar_fields == frozenset()
+
+    # The consumer's annotation survives collection unrewritten: a rewrite
+    # would leave ``PendingRelationAnnotation`` or a synthesized class here.
+    assert CategoryType.__annotations__["items"] == list[ItemType]
+
+    # No pending relation was recorded. Read before finalization, which
+    # discards resolved records - afterwards "never recorded" and "recorded
+    # and resolved" are indistinguishable.
+    assert [
+        pending
+        for pending in registry.iter_pending_relations()
+        if pending.source_type is CategoryType
+    ] == []
+
+    finalize_django_types()
+
+    items_field = _strawberry_field(CategoryType, "items")
+    assert items_field.base_resolver is not None
+    # The pin for the consumer-assigned relation skip that
+    # ``types/finalizer.py::finalize_django_types`` hands to
+    # ``types/resolvers.py::_attach_relation_resolvers``: identity with the
+    # consumer's own function, which flips to the generated relation resolver
+    # the moment that skip stops holding. The SDL below is byte-identical
+    # either way, so it corroborates the shape and never pins it.
+    assert items_field.base_resolver.wrapped_func is category_items
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    assert "items: [ItemType!]!" in schema.as_str()
+
+
+def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_class():
+    """A hand-written ``Annotated[..., strawberry.lazy(...)]`` relation override wins.
+
+    The fourth shape of spec-010's manual annotation contract: the consumer's
+    annotation reaches the class unrewritten, no pending relation is recorded
+    for the field, the generated many-side resolver is still attached, and a
+    real schema builds with the field typed as the class the lazy reference
+    names - resolved through the module path, never through this module's
+    namespace.
+    """
+    # Drop any previously-imported fixture module object so the import below
+    # re-executes (and re-registers) under the cleared registry, as
+    # ``test_filterset_class_resolves_across_module_boundary`` explains.
+    # ``importlib.import_module`` rather than ``from ... import ...``: the
+    # latter is satisfied by the still-set parent-package attribute and would
+    # hand back the stale module without repopulating ``sys.modules``, leaving
+    # the fresh execution to happen inside the schema build below - after
+    # finalization, where registration is refused.
+    sys.modules.pop(_LAZY_TARGET_MODULE, None)
+    lazy_relation_target_module = importlib.import_module(_LAZY_TARGET_MODULE)
+
+    class CategoryType(DjangoType):
+        # ``LazyItemType`` is deliberately not imported into this module: the
+        # reference resolves through the lazy module path, which is the whole
+        # point of the escape hatch.
+        items: list[
+            Annotated[
+                "LazyItemType",  # noqa: F821
+                strawberry.lazy("tests.types.fixtures.lazy_relation_target_module"),
+            ]
+        ]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
+    assert definition.consumer_assigned_relation_fields == frozenset()
+
+    # The consumer's annotation object survives collection: a rewrite would
+    # leave ``PendingRelationAnnotation`` or a concrete class here instead.
+    lazy_reference = get_args(CategoryType.__annotations__["items"])[0].__metadata__[0]
+    assert isinstance(lazy_reference, StrawberryLazyReference)
+    assert lazy_reference.module == _LAZY_TARGET_MODULE
+
+    # No pending relation was recorded. Read before finalization, which
+    # discards resolved records - afterwards "never recorded" and "recorded
+    # and resolved" are indistinguishable.
+    assert [
+        pending
+        for pending in registry.iter_pending_relations()
+        if pending.source_type is CategoryType
+    ] == []
+
+    finalize_django_types()
+
+    items_field = _strawberry_field(CategoryType, "items")
+    assert items_field.base_resolver is not None
+    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    assert (
+        schema.get_type_by_name("LazyItemType").origin is lazy_relation_target_module.LazyItemType
+    )
+    assert "items: [LazyItemType!]!" in schema.as_str()
+
+
+def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_type():
+    """The lazily referenced type wins even when another type is the model's primary.
+
+    Discriminates the override from the auto-synthesis path: with a
+    ``Meta.primary = True`` type registered for the same Django model,
+    synthesis and the consumer's annotation name different classes, so a
+    regression that dropped the override would type the field as the primary.
+    """
+    sys.modules.pop(_LAZY_TARGET_MODULE, None)
+    lazy_relation_target_module = importlib.import_module(_LAZY_TARGET_MODULE)
+
+    class PrimaryItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class CategoryType(DjangoType):
+        # ``LazyItemType`` is deliberately not imported into this module: the
+        # reference resolves through the lazy module path, which is the whole
+        # point of the escape hatch.
+        items: list[
+            Annotated[
+                "LazyItemType",  # noqa: F821
+                strawberry.lazy("tests.types.fixtures.lazy_relation_target_module"),
+            ]
+        ]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
+    assert definition.consumer_assigned_relation_fields == frozenset()
+
+    lazy_reference = get_args(CategoryType.__annotations__["items"])[0].__metadata__[0]
+    assert isinstance(lazy_reference, StrawberryLazyReference)
+    assert lazy_reference.module == _LAZY_TARGET_MODULE
+
+    assert [
+        pending
+        for pending in registry.iter_pending_relations()
+        if pending.source_type is CategoryType
+    ] == []
+
+    finalize_django_types()
+
+    items_field = _strawberry_field(CategoryType, "items")
+    assert items_field.base_resolver is not None
+    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    assert (
+        schema.get_type_by_name("LazyItemType").origin is lazy_relation_target_module.LazyItemType
+    )
+    assert "items: [LazyItemType!]!" in schema.as_str()
+    assert "PrimaryItemType" not in schema.as_str()
 
 
 def test_relation_field_class_attribute_shadowing_raises():

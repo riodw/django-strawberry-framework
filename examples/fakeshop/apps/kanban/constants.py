@@ -271,6 +271,7 @@ TRACKED_FILE_PATHS = (
     "tests/types/__init__.py",
     "tests/types/fixtures/__init__.py",
     "tests/types/fixtures/branch_module.py",
+    "tests/types/fixtures/lazy_relation_target_module.py",
     "tests/types/fixtures/shelf_module.py",
     "tests/types/test_base.py",
     "tests/types/test_converters.py",

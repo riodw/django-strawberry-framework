@@ -926,12 +926,11 @@ def finalize_django_types() -> None:
     # ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``
     # resolves them - surface-keyed, each artifact only when its surface was
     # declared (an empty auth ledger makes the call a no-op). Guarded via the
-    # already-loaded-only ``loaded_attr`` (the opt-in-preserving
-    # lookup ``registry.py::_clear_if_loaded`` routes this same module through),
-    # never a plain local import, so a consumer who never imported the auth
-    # subsystem never pays its import (the opt-in contract): a declared auth
-    # surface implies the module is already loaded, so the guard can only skip a
-    # genuinely auth-free process.
+    # already-loaded-only ``loaded_attr`` (the opt-in-preserving lookup
+    # owned by ``utils/imports.py``), never a plain local import, so a consumer
+    # who never imported the auth subsystem never pays its import (the opt-in
+    # contract): a declared auth surface implies the module is already loaded,
+    # so the guard can only skip a genuinely auth-free process.
     bind_auth = loaded_attr("django_strawberry_framework.auth.mutations", "bind_auth_mutations")
     if bind_auth is not None:
         bind_auth()

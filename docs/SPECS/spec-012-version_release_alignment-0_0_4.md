@@ -4,52 +4,49 @@ Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-012-0.0.4`).
 Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
 Owner: package maintainer.
 
-This file is intentionally lightweight. It preserves the card scope from the Kanban database so the card has a durable `SpecDoc` FK target and a stable repository file. Before implementation work starts from this file, expand it into the full builder-format spec described by `docs/SPECS/NEXT.md` and `docs/builder/BUILD.md`.
+Deliberation and this spec's change record live in its companion [rationale file][spec-012-rationale]: what the release commit actually touched, why four of the five version surfaces were already aligned before it ran, and every claim this spec once made and may no longer make.
 
 ## Card snapshot
 
-- Card: `DONE-012-0.0.4`
-- Status: `done` / Done
-- Milestone: `alpha` / Alpha (pre-0.1.0)
-- Priority: Low
-- Relative size: XS
-- Labels: `release`, `versioning`
-
-## Planning note
-
-shipped
+- Card: `DONE-012-0.0.4`, status `done`, milestone `alpha` (pre-`0.1.0`).
+- The card's other board fields — labels, priority, relative size, and its item rows — belong to the Kanban database and are rendered into [KANBAN.md][kanban]. This section identifies the card; it does not restate them.
 
 ## Scope
 
-- Package metadata for the [`DjangoType`][glossary-djangotype] release line, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
-- The changelog entry is condensed for the alpha release and covers the actual commit range through 2026-05-08.
+A release cut of this package aligns **five** surfaces on one version string. The `0.0.4` cut carries `0.0.4` on every one of them:
 
-## Other
+- [`pyproject.toml`][pyproject] `#"version = "` — the distribution version.
+- [`django_strawberry_framework/__init__.py`][init] `#"__version__ = "` — the runtime version the [`DjangoType`][glossary-djangotype] surface ships under.
+- [`uv.lock`][uv-lock], on its `django-strawberry-framework` root entry.
+- [`tests/base/test_init.py`][test-init] `::test_version`, which pins the runtime version as a literal string.
+- [`CHANGELOG.md`][changelog], whose `## [0.0.4]` entry is dated 2026-05-08 and covers the commit range through that date.
 
-- release housekeeping (version alignment).
-- align package metadata / runtime version / lockfile / tests / changelog on `0.0.4`.
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
-- `tests/base/test_init.py`
-- `uv.lock`
-- `CHANGELOG.md`
+Alignment is a **per-release obligation, not a standing property of these five files**: every later release moves all five together, so at any commit the five agree on whatever version the package is then at — never on `0.0.4` in perpetuity. `AGENTS.md` rule 31 carries the `pyproject.toml` / `__init__.py` half of that pairing as standing **prose** policy; `::test_version` pins the runtime literal alone and no test compares the two files.
+
+The `0.0.4` changelog entry is the condensed alpha-release form — five `### Added` bullets, six `### Changed`, four `### Fixed`, one `### Removed` — and it is the entry of record for the release: no later commit rewrites it.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
 [kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[uv-lock]: ../../uv.lock
 
 <!-- docs/ -->
 [glossary-djangotype]: ../GLOSSARY.md#djangotype
 
 <!-- docs/SPECS/ -->
+[spec-012-rationale]: appx/spec-012-version_release_alignment-0_0_4-rationale.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[init]: ../../django_strawberry_framework/__init__.py
 
 <!-- tests/ -->
+[test-init]: ../../tests/base/test_init.py
 
 <!-- examples/ -->
 

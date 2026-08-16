@@ -47,18 +47,17 @@ from typing import Any
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import (
     CREATE,
     PARTIAL,
+    relation_id_annotation,
     relation_input_annotation,
 )
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
-from ..types.converters import convert_scalar, scalar_for_field
-from ..types.relay import implements_relay_node
+from ..types.converters import convert_scalar
 from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
@@ -311,11 +310,11 @@ def _model_less_relation_annotation(
     A plain ``Form`` ``ModelChoiceField`` / ``ModelMultipleChoiceField`` has no
     backing model column, so it cannot reach ``relation_input_annotation`` (which
     is ``models.Field``-keyed). Its related model is its ``queryset.model``; the
-    id type follows the SAME Relay-``GlobalID``-vs-raw-pk rule as the model-backed
-    path - ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
-    Relay-Node-shaped, else the related model's raw pk scalar. The ``<name>_id``
-    (single) / ``list[<id>]`` (multi) ``036`` scheme is reused so the wire
-    contract is uniform across the model-backed and model-less relation paths.
+    id type rides ``relation_id_annotation`` (the same Relay-``GlobalID``-vs-raw-pk
+    rule as the model-backed path). The ``<name>_id`` (single) / ``list[<id>]``
+    (multi) ``036`` scheme is reused so the wire contract is uniform across the
+    model-backed and model-less relation paths. A missing primary still falls
+    back to the raw pk scalar (unlike serializer M3, which raises).
 
     A ``ModelChoiceField`` whose ``queryset`` is assigned in ``__init__`` (a valid
     Django idiom) has ``queryset is None`` in the uninstantiated ``base_fields``
@@ -335,14 +334,15 @@ def _model_less_relation_annotation(
             "the generated input via Meta.fields / Meta.exclude.",
         )
     related_model = related_qs.model
-    primary = registry.get(related_model)
-    if primary is not None and implements_relay_node(primary):
-        id_scalar: Any = relay.GlobalID
-    else:
-        id_scalar = scalar_for_field(related_model._meta.pk)
-    if isinstance(field, forms.ModelMultipleChoiceField):
-        return name, list[id_scalar]
-    return f"{name}_id", id_scalar
+    many = isinstance(field, forms.ModelMultipleChoiceField)
+    annotation = relation_id_annotation(
+        related_model,
+        registry.get(related_model),
+        many=many,
+    )
+    if many:
+        return name, annotation
+    return f"{name}_id", annotation
 
 
 def _simple_triple(name: str, annotation: Any, kind: str) -> tuple[str, str, Any, str]:

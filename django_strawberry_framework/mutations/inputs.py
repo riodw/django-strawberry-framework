@@ -296,6 +296,39 @@ def _is_relation(field: models.Field) -> bool:
     return bool(getattr(field, "is_relation", False))
 
 
+def relation_id_scalar(related_model: type, related_primary_type: type | None) -> Any:
+    """Return the GraphQL id scalar for a write-input relation to ``related_model``.
+
+    ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
+    Relay-Node-shaped; otherwise the related model's raw pk scalar via
+    ``scalar_for_field``. This is the id-type rule the three write flavors
+    used to re-spell: model-backed ``relation_input_annotation``, form
+    ``_model_less_relation_annotation``, serializer
+    ``serializer_only_relation_annotation``. Primary-required vs raw-pk
+    fallback stays at those call sites (serializer M3 raises before calling
+    this; form / model pass ``registry.get``, which may be ``None``).
+    """
+    if related_primary_type is not None and implements_relay_node(related_primary_type):
+        return relay.GlobalID
+    return scalar_for_field(related_model._meta.pk)
+
+
+def relation_id_annotation(
+    related_model: type,
+    related_primary_type: type | None,
+    *,
+    many: bool,
+) -> Any:
+    """Return ``list[id]`` or ``id`` for a write-input relation.
+
+    Cardinality wrap around ``relation_id_scalar``: a multi relation is a
+    list of the same id scalar a single relation uses. Naming (``<name>_id``
+    vs declared name vs id-like-suffix dedupe) stays at each flavor.
+    """
+    id_scalar = relation_id_scalar(related_model, related_primary_type)
+    return list[id_scalar] if many else id_scalar
+
+
 def relation_input_annotation(
     field: models.Field,
     *,
@@ -304,10 +337,8 @@ def relation_input_annotation(
     """Map a relation field to its ``(python_attr, graphql_name, annotation)`` triple.
 
     Forward FK / OneToOne become a single ``<field>_id`` input; M2M becomes
-    ``list[<id>]`` (spec-036 Decision 6). The id type is ``relay.GlobalID`` when
-    the related model's primary ``DjangoType`` is Relay-Node-shaped (the same
-    wire-input the filter side uses for a GlobalID-shaped field), else the
-    related model's raw pk scalar via ``scalar_for_field``.
+    ``list[<id>]`` (spec-036 Decision 6). The id type rides
+    ``relation_id_annotation`` (Relay ``GlobalID`` vs raw pk scalar).
 
     The python attr is ``<field.name>_id`` for FK / OneToOne so the
     resolver maps it back to the column with no per-field declaration (and a
@@ -320,18 +351,13 @@ def relation_input_annotation(
     registry is fully populated); ``None`` means no primary is registered, in
     which case the raw pk scalar is used.
     """
-    related_model = field.related_model
-    if related_primary_type is not None and implements_relay_node(related_primary_type):
-        id_scalar: Any = relay.GlobalID
-    else:
-        id_scalar = scalar_for_field(related_model._meta.pk)
-
-    if getattr(field, "many_to_many", False):
-        python_attr = field.name
-        annotation: Any = list[id_scalar]
-    else:
-        python_attr = f"{field.name}_id"
-        annotation = id_scalar
+    many = bool(getattr(field, "many_to_many", False))
+    annotation = relation_id_annotation(
+        field.related_model,
+        related_primary_type,
+        many=many,
+    )
+    python_attr = field.name if many else f"{field.name}_id"
     graphql_name = graphql_camel_name(python_attr)
     return python_attr, graphql_name, annotation
 

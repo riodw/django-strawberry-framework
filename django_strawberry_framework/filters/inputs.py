@@ -39,11 +39,11 @@ from ..utils.input_values import is_inactive_value
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
-    clear_generated_input_namespace,
     emit_set_input_field_triples,
     iter_set_subclasses,
-    materialize_generated_input_class,
+    make_set_input_namespace,
     optional_field_kwargs,
+    set_input_type_name,
 )
 from ..utils.strings import graphql_camel_name, pascal_case_or_raise
 from .base import (
@@ -63,6 +63,7 @@ FieldSpec = GeneratedInputFieldSpec
 build_input_class = build_strawberry_input_class
 _camel_case = graphql_camel_name
 _iter_filterset_subclasses = iter_set_subclasses
+_input_type_name_for = set_input_type_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition
@@ -142,18 +143,31 @@ _LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("no
 # modules WITHOUT routing through ``registry.clear()`` retains stale entries
 # from the prior build; the filter test files' ``_isolate_registry`` autouse
 # fixture clears this map explicitly for exactly that reason.
-_field_specs: dict[tuple[type[FilterSet], str], FieldSpec] = {}
-
-
-# Ledger of materialized input class names per spec-027 Decision 9.
-# ``materialize_input_class`` writes a ``name -> input_class`` entry;
-# ``clear_filter_input_namespace`` clears this ledger (forcing re-emit on
-# the next finalize) but intentionally leaves the class objects parked in
-# ``filters.inputs.__dict__`` -- ``setattr`` on the next materialize
-# replaces them in place. Stripping via ``delattr`` would break
-# ``strawberry.lazy(...)`` holders whose autouse reload did not also
-# reload the consumer module (see ``clear_filter_input_namespace``).
-_materialized_names: dict[str, type] = {}
+#
+# Decision-9 namespace lifecycle. Mechanics live in
+# ``utils/inputs.py::make_set_input_namespace`` (heavy clear: ledger +
+# field_specs + factory caches + ``_lifecycle`` binding). This module keeps
+# the spec-named public wrappers and the disjoint per-subsystem ledgers.
+# ``clear_filter_input_namespace`` leaves class objects parked in
+# ``filters.inputs.__dict__`` -- ``setattr`` on the next materialize replaces
+# them in place. Stripping via ``delattr`` would break ``strawberry.lazy(...)``
+# holders whose autouse reload did not also reload the consumer module.
+_materialized_names: dict[str, type]
+_field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
+(
+    _materialized_names,
+    _field_specs,
+    _materialize_input,
+    _clear_input_namespace,
+) = make_set_input_namespace(
+    INPUTS_MODULE_PATH,
+    "FilterSet",
+    factory_module="django_strawberry_framework.filters.factories",
+    factory_class_name="FilterArgumentsFactory",
+    collision_registry_attr="_type_filterset_registry",
+    set_module="django_strawberry_framework.filters.sets",
+    set_class_name="FilterSet",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -188,21 +202,6 @@ def _pascal_case(name: str) -> str:
             "name has at least one alphanumeric token.",
         ),
     )
-
-
-def _input_type_name_for(filterset_class: type[FilterSet]) -> str:
-    """Return the canonical Strawberry input-class name for ``filterset_class``.
-
-    Thin delegate to ``FilterSet.type_name_for()`` (the shared
-    ``ClassBasedTypeNameMixin``): every ``FilterSet`` subclass ``Foo``
-    produces a Strawberry input class named ``FooInputType``. Kept as a
-    helper so its callers -- ``filter_input_type`` (``__init__.py``),
-    ``FilterArgumentsFactory`` (``factories.py``), and ``_build_input_fields``
-    (this module) -- stay pinned to one derivation site even though the
-    spec-027 Decision 9 (lines 1023-1030) naming rule now lives on the mixin
-    (shared with the future order / aggregate sets).
-    """
-    return filterset_class.type_name_for()
 
 
 def _scalar_from_form_field(form_field: Any) -> type:
@@ -855,77 +854,27 @@ def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:
 def materialize_input_class(name: str, cls: type) -> None:
     """Set ``cls`` as a real module global of ``filters.inputs`` under ``name``.
 
-    Thin family wrapper over
-    ``utils/inputs.py::materialize_generated_input_class`` pinning the
-    filter-side module path, family label, and ledger. See that helper for the
+    Thin family wrapper over the ``make_set_input_namespace`` materializer.
+    See ``utils/inputs.py::materialize_generated_input_class`` for the
     Strawberry ``LazyType.resolve_type`` contract, the ``(name, cls)``
     idempotency clause, and the distinct-class collision raise (spec-027
     Decision 9).
     """
-    materialize_generated_input_class(
-        name,
-        cls,
-        module_path=INPUTS_MODULE_PATH,
-        family_label="FilterSet",
-        ledger=_materialized_names,
-    )
+    _materialize_input(name, cls)
 
 
 def clear_filter_input_namespace() -> None:
     """Reset the filter-input ledger and per-filterset binding state for a fresh build.
 
-    Clears the bookkeeping that prevents stale-state leakage across
-    consumer-side autouse-reload fixtures: ``_materialized_names``
-    (forces ``materialize_input_class`` to re-emit on the next
-    finalize), ``_field_specs`` (per-(filterset, field) provenance for
-    the normalizer), the ``FilterArgumentsFactory`` class-level caches
-    (``input_object_types`` / ``_type_filterset_registry``), and every
-    ``FilterSet`` subclass's phase-2.5 binding state
-    (``_owner_definition`` / ``_expanded_filters`` /
-    ``_is_expanding_filters``). After the clear, a follow-up
-    ``finalize_django_types()`` call rebuilds every input class from
-    scratch against the freshly-cleared registry, so a new build's
-    converter emits fresh enums without colliding with prior-build
-    enums under the same GraphQL type name.
-
-    **Materialized class objects are intentionally left parked in
-    ``filters.inputs.__dict__``.** ``materialize_input_class`` already
-    overwrites the module global via ``setattr`` on the next finalize
-    pass, so the parked class is replaced in place once the rebuild
-    runs. Stripping the class via ``delattr`` here would break any
-    ``strawberry.lazy(...)`` LazyType held by a consumer module whose
-    autouse-reload fixture did NOT also reload the holder
-    (e.g., ``test_scalars_api.py``'s per-app fixture, by README
-    contract, reloads only its own app's schema - ``apps.library.schema``
-    keeps its cached ``filter_input_type(filters.BranchFilter)`` LazyType
-    references, which would resolve to ``AttributeError`` if the
-    matching module global had been deleted). Leaving the class object
-    parked lets the LazyType resolve to the prior class until the next
-    finalize replaces it, and the ledger reset still drives the rebuild.
-
-    The helper short-circuits cleanly when the module is not in
-    ``sys.modules`` (e.g., a process that imported ``registry`` alone
-    and never reached ``filters.inputs``) - the ledger and the
-    per-filterset map still get reset so a subsequent import / build
-    starts from a clean slate. The factory / FilterSet clears use
-    cycle-safe imports so a partial-load environment (factories / sets
-    not yet imported) tolerates the call without raising.
-
-    Delegates the lifecycle to
-    ``utils/inputs.py::clear_generated_input_namespace``, which reads the
-    per-filterset binding attrs from ``FilterSet._lifecycle`` (the
-    ``SetLifecycleAttrs`` descriptor: ``_owner_definition`` / ``_expanded_filters``
-    / ``_is_expanding_filters``) rather than a re-spelled tuple.
+    Thin family wrapper over the ``make_set_input_namespace`` heavy clear
+    (ledger, ``_field_specs``, ``FilterArgumentsFactory`` caches, every
+    ``FilterSet`` subclass's ``_lifecycle`` binding attrs). Materialized
+    class objects stay parked in ``filters.inputs.__dict__`` so held
+    ``strawberry.lazy(...)`` LazyTypes keep resolving across autouse reloads
+    that do not also reload the holder (e.g. ``test_scalars_api.py`` reloads
+    only its own app's schema).
     """
-    clear_generated_input_namespace(
-        materialized_names=_materialized_names,
-        field_specs=_field_specs,
-        factory_module="django_strawberry_framework.filters.factories",
-        factory_class_name="FilterArgumentsFactory",
-        collision_registry_attr="_type_filterset_registry",
-        set_module="django_strawberry_framework.filters.sets",
-        set_class_name="FilterSet",
-    )
+    _clear_input_namespace()
 
 
 register_subsystem_clear(

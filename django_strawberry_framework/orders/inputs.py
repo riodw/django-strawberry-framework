@@ -34,10 +34,10 @@ from ..utils.input_values import RELATED, SetInputTraversal, iter_active_fields
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
-    clear_generated_input_namespace,
     emit_set_input_field_triples,
     iter_set_subclasses,
-    materialize_generated_input_class,
+    make_set_input_namespace,
+    set_input_type_name,
 )
 from ..utils.strings import graphql_camel_name
 
@@ -53,6 +53,7 @@ FieldSpec = GeneratedInputFieldSpec
 build_input_class = build_strawberry_input_class
 _camel_case = graphql_camel_name
 _iter_orderset_subclasses = iter_set_subclasses
+_input_type_name_for = set_input_type_name
 
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
@@ -129,38 +130,28 @@ class Ordering(enum.Enum):
 # ``OrderSet._active_permission_field_paths``). Keyed by
 # ``(OrderSet subclass, python_attr)``; emptied by
 # ``clear_order_input_namespace``.
-_field_specs: dict[tuple[type[OrderSet], str], FieldSpec] = {}
-
-
-# Ledger of materialized input class names per spec-028 Decision 9.
-# ``materialize_input_class`` writes a ``name -> input_class`` entry
-# (value is the materialized input class, NOT the source ``OrderSet``, so
-# collision checks and tests can identity-compare without a second lookup);
-# ``clear_order_input_namespace`` clears this ledger (forcing re-emit on
-# the next finalize) but intentionally leaves the class objects parked in
-# ``orders.inputs.__dict__`` -- ``setattr`` on the next materialize
-# replaces them in place. Stripping via ``delattr`` would break
-# ``strawberry.lazy(...)`` holders whose autouse reload did not also
-# reload the consumer module (see ``clear_order_input_namespace``).
-# Mirrors ``filters/inputs.py::_materialized_names`` but lives in a
-# disjoint per-subsystem namespace per spec-028 Decision 9.
-_materialized_names: dict[str, type] = {}
-
-
-def _input_type_name_for(orderset_class: type) -> str:
-    """Return the canonical Strawberry input-class name for ``orderset_class``.
-
-    Thin delegate to ``OrderSet.type_name_for()`` (the shared
-    ``ClassBasedTypeNameMixin``): every ``OrderSet`` subclass ``Foo``
-    produces a Strawberry input class named ``FooInputType``. Kept as a
-    helper so its callers -- ``OrderArgumentsFactory`` and
-    ``order_input_type`` -- stay pinned to one derivation site.
-
-    Annotated as ``type`` rather than ``type[OrderSet]`` to avoid the
-    circular import here (the mixin guarantees ``type_name_for`` is in
-    the MRO at runtime).
-    """
-    return orderset_class.type_name_for()
+#
+# Decision-9 namespace lifecycle. Mechanics live in
+# ``utils/inputs.py::make_set_input_namespace`` (heavy clear). This module
+# keeps the spec-named public wrappers and a ledger disjoint from
+# ``filters.inputs`` per spec-028 Decision 9. ``clear_order_input_namespace``
+# leaves class objects parked in ``orders.inputs.__dict__``.
+_materialized_names: dict[str, type]
+_field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
+(
+    _materialized_names,
+    _field_specs,
+    _materialize_input,
+    _clear_input_namespace,
+) = make_set_input_namespace(
+    INPUTS_MODULE_PATH,
+    "OrderSet",
+    factory_module="django_strawberry_framework.orders.factories",
+    factory_class_name="OrderArgumentsFactory",
+    collision_registry_attr="_type_orderset_registry",
+    set_module="django_strawberry_framework.orders.sets",
+    set_class_name="OrderSet",
+)
 
 
 def _get_concrete_field_names_for_order(model: Any) -> list[str]:
@@ -335,73 +326,26 @@ def normalize_input_value(
 def materialize_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``orders.inputs`` under ``name``.
 
-    Thin family wrapper over
-    ``utils/inputs.py::materialize_generated_input_class`` pinning the
-    order-side module path, family label, and ledger. See that helper for the
+    Thin family wrapper over the ``make_set_input_namespace`` materializer.
+    See ``utils/inputs.py::materialize_generated_input_class`` for the
     Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
     idempotency clause, and the distinct-class collision raise (spec-028
     Decision 9).
     """
-    materialize_generated_input_class(
-        name,
-        input_cls,
-        module_path=INPUTS_MODULE_PATH,
-        family_label="OrderSet",
-        ledger=_materialized_names,
-    )
+    _materialize_input(name, input_cls)
 
 
 def clear_order_input_namespace() -> None:
     """Reset the order-input ledger and per-orderset binding state for a fresh build.
 
-    Clears the bookkeeping that prevents stale-state leakage across
-    consumer-side autouse-reload fixtures: ``_materialized_names``
-    (forces ``materialize_input_class`` to re-emit on the next
-    finalize), ``_field_specs`` (per-(orderset, field) provenance for
-    the normalizer), the ``OrderArgumentsFactory`` class-level caches
-    (``input_object_types`` / ``_type_orderset_registry``), and every
-    ``OrderSet`` subclass's phase-2.5 binding state
-    (``_owner_definition`` / ``_expanded_fields`` /
-    ``_is_expanding_fields``). After the clear, a follow-up
-    ``finalize_django_types()`` call rebuilds every input class from
-    scratch against the freshly-cleared registry.
-
-    **Materialized class objects are intentionally left parked in
-    ``orders.inputs.__dict__``** per spec-028.
-    ``materialize_input_class`` already overwrites the module global
-    via ``setattr`` on the next finalize pass, so the parked class is
-    replaced in place once the rebuild runs. Stripping the class via
-    ``delattr`` here would break any ``strawberry.lazy(...)`` LazyType
-    held by a consumer module whose autouse-reload fixture did NOT
-    also reload the holder.
-
-    **Does NOT touch ``_helper_referenced_ordersets``.** That ledger lives
-    in ``orders/__init__.py`` co-located with its only writer
-    (``order_input_type``) and clears through its own
-    ``register_subsystem_clear`` row (owner ``orders.helper_references``),
-    so ``registry.clear()`` replays two independent callbacks rather than
-    one combined clear (spec-028 Decision 9).
-
-    The helper short-circuits cleanly when the factory / orderset
-    modules are not in ``sys.modules`` (e.g., a partial-load
-    environment) -- the shared substrate's cycle-safe imports tolerate
-    the call without raising.
-
-    Delegates the lifecycle to
-    ``utils/inputs.py::clear_generated_input_namespace``, which reads the
-    per-orderset binding attrs from ``OrderSet._lifecycle`` (the
-    ``SetLifecycleAttrs`` descriptor: ``_owner_definition`` / ``_expanded_fields``
-    / ``_is_expanding_fields``) rather than a re-spelled tuple.
+    Thin family wrapper over the ``make_set_input_namespace`` heavy clear
+    (ledger, ``_field_specs``, ``OrderArgumentsFactory`` caches, every
+    ``OrderSet`` subclass's ``_lifecycle`` binding attrs). Does NOT touch
+    ``_helper_referenced_ordersets`` -- that ledger lives in
+    ``orders/__init__.py`` and clears through its own
+    ``register_subsystem_clear`` row (owner ``orders.helper_references``).
     """
-    clear_generated_input_namespace(
-        materialized_names=_materialized_names,
-        field_specs=_field_specs,
-        factory_module="django_strawberry_framework.orders.factories",
-        factory_class_name="OrderArgumentsFactory",
-        collision_registry_attr="_type_orderset_registry",
-        set_module="django_strawberry_framework.orders.sets",
-        set_class_name="OrderSet",
-    )
+    _clear_input_namespace()
 
 
 register_subsystem_clear(

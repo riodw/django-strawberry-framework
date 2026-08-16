@@ -52,7 +52,7 @@ from ..exceptions import ConfigurationError
 from ..mutations.inputs import (
     CREATE,
     PARTIAL,
-    relation_id_annotation,
+    annotate_queryset_relation,
     relation_input_annotation,
 )
 from ..registry import register_subsystem_clear, registry
@@ -304,13 +304,13 @@ def _model_less_relation_annotation(
     name: str,
     field: forms.Field,
     form_class: type[forms.BaseForm],
-) -> tuple[str, Any]:
-    """Map a column-LESS relation form field to its ``(python_attr, annotation)``.
+) -> tuple[str, Any, type]:
+    """Map a column-LESS relation form field to its ``(python_attr, annotation, related_model)``.
 
     A plain ``Form`` ``ModelChoiceField`` / ``ModelMultipleChoiceField`` has no
     backing model column, so it cannot reach ``relation_input_annotation`` (which
     is ``models.Field``-keyed). Its related model is its ``queryset.model``; the
-    id type rides ``relation_id_annotation`` (the same Relay-``GlobalID``-vs-raw-pk
+    id type rides ``annotate_queryset_relation`` (the same Relay-``GlobalID``-vs-raw-pk
     rule as the model-backed path). The ``<name>_id`` (single) / ``list[<id>]``
     (multi) ``036`` scheme is reused so the wire contract is uniform across the
     model-backed and model-less relation paths. A missing primary still falls
@@ -322,9 +322,13 @@ def _model_less_relation_annotation(
     is a fail-loud ``ConfigurationError`` naming the form / field rather than a bare
     ``AttributeError`` on ``None.model``, keeping the package's fail-loud contract.
     """
-    related_qs = field.queryset
-    if related_qs is None:
-        raise ConfigurationError(
+    many = isinstance(field, forms.ModelMultipleChoiceField)
+    return annotate_queryset_relation(
+        field.queryset,
+        many=many,
+        python_attr=name if many else f"{name}_id",
+        primary_of=registry.get,
+        missing=lambda: ConfigurationError(
             f"Form {form_class.__name__!r} field {name!r} is a "
             f"{type(field).__name__} whose queryset is None at class definition. "
             "Schema-time input generation reads base_fields WITHOUT instantiating the "
@@ -332,17 +336,8 @@ def _model_less_relation_annotation(
             "id type cannot be resolved. Declare the field with a concrete queryset "
             "(e.g. ModelChoiceField(queryset=Model.objects.all())), or drop it from "
             "the generated input via Meta.fields / Meta.exclude.",
-        )
-    related_model = related_qs.model
-    many = isinstance(field, forms.ModelMultipleChoiceField)
-    annotation = relation_id_annotation(
-        related_model,
-        registry.get(related_model),
-        many=many,
+        ),
     )
-    if many:
-        return name, annotation
-    return f"{name}_id", annotation
 
 
 def _simple_triple(name: str, annotation: Any, kind: str) -> tuple[str, str, Any, str]:
@@ -386,10 +381,10 @@ def _field_triple_and_spec(
     always the form's declared name, never the ``<name>_id`` relation attr,
     because a bound Django form is keyed by form-field name. A relation field
     also records ``related_model`` from the SAME basis the generated id type uses
-    (the backing column's ``related_model``, else the form field's
-    ``queryset.model``) so the decode never re-derives it from the
-    class-level ``base_fields`` field (whose ``queryset`` is ``None`` under the
-    request-scoped-choices idiom).
+    (the backing column's ``related_model``, else the model
+    ``annotate_queryset_relation`` resolved from ``queryset.model``) so the
+    decode never re-derives it from the class-level ``base_fields`` field
+    (whose ``queryset`` is ``None`` under the request-scoped-choices idiom).
     """
     related_model: Any = None
     # ONE requiredness decision for both the column-backed and column-less paths
@@ -426,13 +421,13 @@ def _field_triple_and_spec(
         if conversion.kind == FILE:
             python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
         elif conversion.kind in (RELATION_SINGLE, RELATION_MULTI):
-            python_attr, annotation = _model_less_relation_annotation(name, field, form_class)
+            python_attr, annotation, related_model = _model_less_relation_annotation(
+                name,
+                field,
+                form_class,
+            )
             graphql_name = graphql_camel_name(python_attr)
             kind = conversion.kind
-            # ``_model_less_relation_annotation`` has already fail-loud-guarded a
-            # ``None`` queryset, so ``field.queryset.model`` is the resolved target
-            # (the SAME basis it used for the id type).
-            related_model = field.queryset.model
         else:
             python_attr, graphql_name, annotation, kind = _simple_triple(
                 name,

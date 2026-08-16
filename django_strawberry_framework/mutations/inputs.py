@@ -52,9 +52,9 @@ from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
-    generated_input_type_name,
     iter_input_field_collisions,
     make_input_namespace,
+    name_set_input_type_name,
     optional_input_field,
     pascalize_token,
 )
@@ -292,11 +292,6 @@ def input_field_required(field: models.Field) -> bool:
     return not field.blank
 
 
-def _is_relation(field: models.Field) -> bool:
-    """Return whether ``field`` is a forward FK / OneToOne / M2M relation column."""
-    return bool(getattr(field, "is_relation", False))
-
-
 def relation_id_scalar(related_model: type, related_primary_type: type | None) -> Any:
     """Return the GraphQL id scalar for a write-input relation to ``related_model``.
 
@@ -422,19 +417,37 @@ def relation_input_annotation(
     return python_attr, graphql_name, annotation
 
 
-def _scalar_input_annotation(field: models.Field, type_name: str) -> Any:
-    """Return the base scalar / enum annotation for a non-relation column.
+def model_column_input_annotation(
+    field: models.Field,
+    type_name: str,
+    *,
+    primary_of: Callable[[type], type | None],
+) -> tuple[str, str, Any]:
+    """Return ``(python_attr, graphql_name, annotation)`` for a model column.
 
-    Routes through ``convert_scalar(..., force_nullable=False)`` so the column
-    resolves to the SAME scalar / choice-enum the read ``DjangoType`` synthesizes
-    (a symmetric wire contract), with ``force_nullable=False`` suppressing the
-    column's own ``field.null`` widening so the GENERATOR owns nullability via
-    the required/optional rule (spec-036 Decision 6; the documented
-    ``force_nullable`` tri-state use). A ``FileField`` / ``ImageField`` never
-    reaches this helper: the caller maps it to the ``Upload`` scalar in its own
-    branch (spec-037).
+    ``build_mutation_input`` and form ``_field_triple_and_spec`` (column arm)
+    both type a backing ``models.Field`` the same way: relation via
+    ``relation_input_annotation``, ``FileField`` / ``ImageField`` via ``Upload``
+    (spec-037; a file column is a SCALAR input so the python attr is the plain
+    field name, never ``<name>_id``). File columns then ride the same
+    override-skip / requiredness / ``| None``-widening tail as any scalar
+    (spec-037 lifted the spec-036 ``NotImplementedError`` carve-out). Else
+    ``convert_scalar(..., force_nullable=False)`` so the generator owns
+    nullability (spec-036 Decision 6). ``primary_of`` is the flavor's
+    related-primary lookup (``registry.get`` for model and form). Serializer
+    naming, source, and primary-required policy stay at
+    ``resolve_serializer_field``.
     """
-    return convert_scalar(field, type_name, force_nullable=False)
+    if getattr(field, "is_relation", False):
+        return relation_input_annotation(
+            field,
+            related_primary_type=primary_of(field.related_model),
+        )
+    python_attr = field.name
+    graphql_name = graphql_camel_name(python_attr)
+    if isinstance(field, (models.FileField, models.ImageField)):
+        return python_attr, graphql_name, Upload
+    return python_attr, graphql_name, convert_scalar(field, type_name, force_nullable=False)
 
 
 # ``_pascalize_token`` was promoted to ``utils/inputs.py::pascalize_token`` (spec-039
@@ -461,29 +474,17 @@ def mutation_input_type_name(
     materialize ledger) while a different shape produces a different name.
 
     Identity is ``(model, operation_kind, frozenset(effective_field_names))``.
-    The narrowed-shape suffix is the sorted-field-name tokens concatenated, each
-    token an injective single-leading-capital form from ``_pascalize_token``.
-    Escaped underscores and capitals preserve the exact legal field spelling,
-    while the absence of interior capitals makes the concatenation uniquely
-    decomposable at token boundaries. Thus ``("a_b", "c")`` and
-    ``("a", "b_c")``, ``("field_2",)`` and ``("field2",)``, and
-    ``("fooBar",)`` and ``("foobar",)`` all produce distinct names rather than
-    colliding at materialization. The full shape is detected by
-    comparing the effective set against ``full_field_names`` (the complete editable
-    set for the model), so a ``Meta.fields`` that happens to name every editable
-    column still resolves to the canonical name.
-
-    The ``PartialInput`` / ``Input`` suffix rule + the full-vs-narrowed branching are
-    single-sited in ``utils/inputs.py::generated_input_type_name``; this
-    flavor supplies only its own token (the sorted-name ``pascalize_token``
-    concatenation) and full-shape decision.
+    The narrowed-shape suffix, full-vs-narrowed comparison, and
+    ``PartialInput`` / ``Input`` suffix ride
+    ``utils/inputs.py::name_set_input_type_name`` (the name-set owner shared
+    with form ``form_input_type_name``). This wrapper supplies the model base
+    name and the create-vs-partial decision (``operation_kind != CREATE``).
     """
-    token = "".join(pascalize_token(name) for name in sorted(effective_field_names))
-    return generated_input_type_name(
+    return name_set_input_type_name(
         model.__name__,
         is_partial=operation_kind != CREATE,
-        is_full_shape=frozenset(effective_field_names) == frozenset(full_field_names),
-        token=token,
+        effective_field_names=effective_field_names,
+        full_field_names=full_field_names,
     )
 
 
@@ -633,29 +634,11 @@ def build_mutation_input(
     selected_names: list[_GeneratedInputFieldName] = []
     emitted_names: list[_GeneratedInputFieldName] = []
     for field in selected:
-        if _is_relation(field):
-            python_attr, graphql_name, annotation = relation_input_annotation(
-                field,
-                related_primary_type=registry.get(field.related_model),
-            )
-        elif isinstance(field, (models.FileField, models.ImageField)):
-            # A ``FileField`` / ``ImageField`` maps to Strawberry's ``Upload``
-            # scalar (spec-037), NOT the read-side ``str`` (``SCALAR_MAP``
-            # stays ``str`` for the filter-input path only). A file/image column is a
-            # SCALAR input, so the python attr is the plain field name (never
-            # ``<name>_id`` - that is the FK relation scheme). The triple falls
-            # through to the SAME override-skip / requiredness / ``| None``-widening
-            # machinery the scalar branch uses below, which lifts the spec-036
-            # carve-out (the old ``NotImplementedError`` preceded the override skip,
-            # so file columns could not participate in the ``Meta.input_class`` merge
-            # override; now they do, like any scalar).
-            python_attr = field.name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = Upload
-        else:
-            python_attr = field.name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = _scalar_input_annotation(field, type_name)
+        python_attr, graphql_name, annotation = model_column_input_annotation(
+            field,
+            type_name,
+            primary_of=registry.get,
+        )
 
         field_name = _GeneratedInputFieldName(python_attr, graphql_name, field.name)
         selected_names.append(field_name)

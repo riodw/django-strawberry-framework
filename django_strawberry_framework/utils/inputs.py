@@ -795,21 +795,48 @@ def generated_input_type_name(
     """Return a generated input-class name from its shape components.
 
     The load-bearing skeleton the three flavors' input-name derivers share
-    (``mutations/inputs.py::mutation_input_type_name`` /
-    ``forms/inputs.py::form_input_type_name`` /
-    ``rest_framework/inputs.py::serializer_input_type_name``): a
-    ``PartialInput`` / ``Input`` suffix, the canonical ``<Base><suffix>`` for the
-    full shape, and a deterministic ``<Base><token><suffix>`` for any divergent
-    shape. Single-sited so the suffix rule + the full-vs-derived branching cannot
-    drift between flavors; each flavor still computes its OWN ``token`` (a
-    ``pascalize_token`` concatenation for the model / form name-set shapes, a
-    descriptor digest for the serializer) and its OWN ``is_full_shape`` /
-    ``is_partial`` decision, so the injective-token contract stays with the caller.
+    (``name_set_input_type_name`` for model / form name-set shapes,
+    ``rest_framework/inputs.py::serializer_input_type_name`` for descriptor
+    identity): a ``PartialInput`` / ``Input`` suffix, the canonical
+    ``<Base><suffix>`` for the full shape, and a deterministic
+    ``<Base><token><suffix>`` for any divergent shape. Single-sited so the
+    suffix rule + the full-vs-derived branching cannot drift between flavors.
+    Name-set flavors compute token + full-shape via ``name_set_input_type_name``;
+    the serializer still supplies its own descriptor digest and full-shape
+    decision.
     """
     suffix = "PartialInput" if is_partial else "Input"
     if is_full_shape:
         return f"{base_name}{suffix}"
     return f"{base_name}{token}{suffix}"
+
+
+def name_set_input_type_name(
+    base_name: str,
+    *,
+    is_partial: bool,
+    effective_field_names: tuple[str, ...],
+    full_field_names: tuple[str, ...],
+) -> str:
+    """Return the generated input-class name for a name-set write-input shape.
+
+    Model ``mutation_input_type_name`` and form ``form_input_type_name`` both
+    name a shape from ``(owner, operation_kind, frozenset(effective names))``.
+    This helper owns that shared spine: sorted-name ``pascalize_token``
+    concatenation, full-vs-narrowed comparison, and ``generated_input_type_name``.
+
+    Serializer descriptor identity stays at ``serializer_input_type_name``
+    (per-field digest, not a name set). ``is_partial`` stays at each flavor
+    (model ``operation_kind != CREATE``; form ``operation_kind == PARTIAL``
+    because the plain-form ``FORM`` sentinel is create-shaped).
+    """
+    token = "".join(pascalize_token(name) for name in sorted(effective_field_names))
+    return generated_input_type_name(
+        base_name,
+        is_partial=is_partial,
+        is_full_shape=frozenset(effective_field_names) == frozenset(full_field_names),
+        token=token,
+    )
 
 
 def normalize_field_name_sequence(

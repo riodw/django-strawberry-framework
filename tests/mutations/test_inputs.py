@@ -55,6 +55,7 @@ from django_strawberry_framework.mutations.inputs import (
     editable_input_fields,
     input_field_required,
     materialize_mutation_input_class,
+    model_column_input_annotation,
     mutation_input_type_name,
     payload_object_slot,
     related_model_of_queryset,
@@ -342,6 +343,67 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation():
 
     assert form_inputs.annotate_queryset_relation is annotate_queryset_relation
     assert ser_converter.annotate_queryset_relation is annotate_queryset_relation
+
+
+def test_model_column_input_annotation_maps_relation_file_and_scalar():
+    """Column-backed 3-branch: relation id, ``Upload``, and ``convert_scalar``."""
+    from django_strawberry_framework.types.converters import convert_scalar
+
+    relay_model, relay_type = _make_relay_target()
+
+    class Probe(models.Model):
+        name = models.TextField()
+        target = models.ForeignKey(relay_model, on_delete=models.CASCADE)
+        attachment = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    python_attr, graphql_name, annotation = model_column_input_annotation(
+        Probe._meta.get_field("target"),
+        "ProbeInput",
+        primary_of=lambda _model: relay_type,
+    )
+    assert python_attr == "target_id"
+    assert graphql_name == "targetId"
+    assert annotation is relay.GlobalID
+
+    python_attr, graphql_name, annotation = model_column_input_annotation(
+        Probe._meta.get_field("attachment"),
+        "ProbeInput",
+        primary_of=lambda _model: None,
+    )
+    assert python_attr == "attachment"
+    assert graphql_name == "attachment"
+    assert annotation is Upload
+
+    name_field = Probe._meta.get_field("name")
+    python_attr, graphql_name, annotation = model_column_input_annotation(
+        name_field,
+        "ProbeInput",
+        primary_of=lambda _model: None,
+    )
+    assert python_attr == "name"
+    assert graphql_name == "name"
+    assert annotation == convert_scalar(name_field, "ProbeInput", force_nullable=False)
+
+
+def test_form_column_backed_annotation_shares_model_column_owner():
+    """Form column-backed mapping imports the same owner the model builder uses."""
+    from django_strawberry_framework.forms import inputs as form_inputs
+
+    assert form_inputs.model_column_input_annotation is model_column_input_annotation
+
+
+def test_model_and_form_name_set_shapes_share_type_name_owner():
+    """Model and form name-set type names import the same owner."""
+    from django_strawberry_framework.forms import inputs as form_inputs
+    from django_strawberry_framework.utils.inputs import name_set_input_type_name
+
+    assert form_inputs.name_set_input_type_name is name_set_input_type_name
+    from django_strawberry_framework.mutations import inputs as mutation_inputs
+
+    assert mutation_inputs.name_set_input_type_name is name_set_input_type_name
 
 
 # ---------------------------------------------------------------------------

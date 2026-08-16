@@ -1423,9 +1423,10 @@ def _validate_relation_override_types(
     **visibility-checked through the related type's ``get_queryset``** (spec-036
     Decision 10) - so a permitted writer cannot attach a row they could
     not *see*. Both guarantees ride the EXACT generated shape:
-    ``resolvers.py::_decode_relation_id_set`` only type/visibility-checks a value that
-    ``isinstance(_, relay.GlobalID)`` (the FK path unwraps a one-element list, the M2M
-    path iterates a flat list) and passes anything else through as a raw pk.
+    ``utils/write_values.py::decode_visible_relation_ids`` type-checks a
+    ``relay.GlobalID`` against the relation target (the FK path unwraps a
+    one-element list, the M2M path iterates a flat list) and coerces anything else
+    as a raw pk.
 
     The naming half (``_validate_input_class``) lets a consumer override a
     relation field's *representation* under its generated ``<field>_id`` / ``list``

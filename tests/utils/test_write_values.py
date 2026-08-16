@@ -10,6 +10,7 @@ from django_strawberry_framework.utils.write_values import (
     decode_provided_fields,
     decode_scalar_leaf,
     decode_visible_relation,
+    decode_visible_relation_ids,
 )
 
 
@@ -95,3 +96,47 @@ def test_decode_layers_preserve_omitted_null_and_provided_values():
     )
     assert error is None
     assert decoded == {"scalar": "provided", "relation": category.pk}
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_batches_visibility_and_short_circuits():
+    """The batched compose type-checks first, queries once, and maps misses to one error."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    first = Category.objects.create(name="BatchA")
+    second = Category.objects.create(name="BatchB")
+    recourse = "Use a synchronous visibility hook."
+
+    pks, error = decode_visible_relation_ids(
+        [],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert error is None
+    assert pks == []
+
+    with CaptureQueriesContext(connection) as ctx:
+        pks, error = decode_visible_relation_ids(
+            [first.pk, second.pk],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+    assert error is None
+    assert pks == [first.pk, second.pk]
+    assert len(ctx.captured_queries) == 1
+
+    pks, error = decode_visible_relation_ids(
+        [first.pk, "bad"],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert pks is None
+    assert error is not None
+    assert error.field == "categoryIds"

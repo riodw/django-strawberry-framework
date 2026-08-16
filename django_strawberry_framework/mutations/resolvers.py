@@ -76,30 +76,26 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from graphql import GraphQLError
-from strawberry import relay
 
 from ..optimizer.extension import (
     apply_connection_optimization,
     mutation_payload_child_selections,
 )
-from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..resource_policy import check_deadline
-
-# Moved to utils/errors.py; re-exported for compatibility.
-from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
+from ..utils.errors import (
+    field_error,
+    integrity_error_field_errors,
+    validation_error_to_field_errors,
+)
 from ..utils.inputs import iter_provided_input_fields
 from ..utils.permissions import auth_aliases_for_permission_classes
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
-    pks_all_present,
-    related_visibility_queryset,
     run_in_one_sync_boundary,
-    stringified_pks_present,
     sync_pipeline_recourse,
-    visibility_scoped_related_queryset,
 )
 from ..utils.relations import is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
@@ -118,19 +114,9 @@ from ..utils.write_transaction import (
     require_write_pipeline,
     snapshot_target_state,
 )
-
-# Moved to utils/write_values.py; form / serializer resolvers import
-# ``type_check_relation_id`` from there directly (no compatibility re-export).
-from ..utils.write_values import (
-    coerce_relation_pk_or_none,
-    decode_scalar_leaf,
-)
+from ..utils.write_values import decode_scalar_leaf, decode_visible_relation_ids
 from .inputs import FieldError, payload_object_slot
 from .permissions import _require_sync_bool_auth_result
-
-# Compatibility alias preserving the pre-move private name (internal call
-# sites address it; the public owner lives in utils/write_values.py).
-_coerce_relation_pk_or_none = coerce_relation_pk_or_none
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) ORM pipeline. The whole
@@ -369,20 +355,19 @@ def _decode_relations(
     Walks the input dataclass's provided fields (``UNSET`` stripped - the
     ``UNSET`` / ``null`` / value tri-state is preserved: ``UNSET`` means
     "omitted", an explicit ``None`` is kept as a provided ``None``). For each
-    forward FK / OneToOne ``<field>_id`` whose value is a ``relay.GlobalID``,
-    ``_decode_relation_id_set`` (via the shared ``decode_model_global_id``
-    primitive) resolves + **type-checks the decoded model against the relation's
-    Django target model**: a wrong-type id returns a ``FieldError``
+    forward FK / OneToOne ``<field>_id`` whose value is a ``relay.GlobalID``
+    or a raw pk, ``decode_visible_relation_ids`` type-checks the id against the
+    relation's Django target model: a wrong-type id returns a ``FieldError``
     on that relation field, never a cross-model pk lookup and never a raw
     ``DoesNotExist``. The type-checked id is then **resolved through the related
     model's primary type visibility ``get_queryset``** (spec-036 Decision 10):
     a row the caller cannot see is the same field-keyed
     ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is not
-    decoded, but is STILL visibility-checked when the related model has a registered
-    (even non-Relay) primary type with a ``get_queryset`` - the model-path
-    equivalent of the form decoder's visibility-on-every-branch contract, closing
-    the raw-pk visibility gap. With no primary registered there is no contract to
-    apply.
+    GlobalID-decoded, but is STILL visibility-checked when the related model has
+    a registered (even non-Relay) primary type with a ``get_queryset`` - the
+    model-path equivalent of the form decoder's visibility-on-every-branch
+    contract. With no primary registered there is no contract to apply, and the
+    shared helper existence-checks through the default manager.
 
     ``excluded_input_fields`` is the spec-040 D6 **exclusion seam**: a provided
     input attr named there (the register flavor's ``password``) is captured into
@@ -542,68 +527,6 @@ def _is_forward_concrete_relation(field: Any) -> bool:
     return getattr(field, "column", None) is not None and field.related_model is not None
 
 
-def _decode_relation_id_set(
-    field_name: str,
-    values: list[Any],
-    relation_field: Any,
-    info: Any,
-) -> tuple[list[Any], FieldError | None]:
-    """Decode a list of relation ids to pks: type-check + coerce each, then visibility once.
-
-    The single list-oriented relation decoder both the FK / OneToOne wrapper
-    (``_decode_single_relation_id``, a one-element list) and the M2M wrapper
-    (``_decode_relation_id_list``) delegate to, so the "type-check against the
-    relation target, coerce the pk, then visibility-check the GlobalID set in ONE
-    query" contract has a SINGLE implementation.
-
-    Each element: a ``relay.GlobalID`` is run through ``decode_model_global_id``
-    against the relation's Django target model - a decode failure, a wrong-model
-    id, or an uncoercible ``node_id`` (any non-``OK`` status) is the uniform
-    ``relation_field_error`` on ``field_name`` (a wrong-type id is never a
-    cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
-    A raw pk scalar (a non-Relay-Node target, which has no ``GlobalID`` shape)
-    passes through the decode unchanged (there is no ``GlobalID`` to decode), then
-    takes the raw-pk relation check below rather than the ``GlobalID`` visibility
-    query. The decoded ``GlobalID`` set is visibility-checked in one query (Decision
-    10): a hidden / missing member is the same ``relation_field_error``,
-    indistinguishable (no existence leak). A list is homogeneously typed (all
-    ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
-    is all-or-nothing and the whole set is checked together.
-
-    A raw-pk set is NOT exempt from the related type's visibility contract: when
-    the related model has a registered primary ``DjangoType`` - even a NON-Relay
-    one, which has no ``GlobalID`` but can still define a ``get_queryset`` - the set
-    is visibility-checked through ``_raw_pk_relation_error``, exactly as the form
-    path does (``forms/resolvers.py::_visible_related_object``), closing the
-    model-path raw-pk visibility gap. With NO primary type
-    registered there is no visibility contract to apply, so the raw-pk set is
-    existence-checked through the related model's default manager. This applies to
-    both M2M and FK / OneToOne inputs, keeping a nonexistent target in the same
-    field-keyed relation-error path before model validation or a database write.
-    """
-    expected_model = relation_field.related_model
-    pks: list[Any] = []
-    needs_visibility = False
-    for value in values:
-        if not isinstance(value, relay.GlobalID):
-            pks.append(value)
-            continue
-        result = decode_model_global_id(value, expected_model)
-        if result.status is not GlobalIDDecode.OK:
-            return [], relation_field_error(field_name)
-        pks.append(result.pk)
-        needs_visibility = True
-    if needs_visibility:
-        error = _relation_visibility_error(field_name, pks, expected_model, info)
-        if error is not None:
-            return [], error
-    elif pks:
-        error = _raw_pk_relation_error(field_name, pks, expected_model, info)
-        if error is not None:
-            return [], error
-    return pks, None
-
-
 def _decode_single_relation_id(
     field_name: str,
     value: Any,
@@ -613,9 +536,9 @@ def _decode_single_relation_id(
     """Decode one FK / OneToOne id via the shared set decoder.
 
     Wraps the single value in a one-element list, delegates to
-    ``_decode_relation_id_set`` (type-check + coerce + visibility), and unwraps the
-    single pk. A non-``GlobalID`` value (a raw pk) passes through the set decoder
-    unchanged.
+    ``decode_visible_relation_ids`` (type-check + coerce + visibility), and unwraps
+    the single pk. A non-``GlobalID`` value (a raw pk) is coerced and
+    visibility-checked by that compose, the same contract the M2M path uses.
 
     An explicit ``None`` is the clear signal for a **nullable** FK / OneToOne and
     returns ``(None, None)`` without a membership query. On a ``null=False`` relation
@@ -630,7 +553,13 @@ def _decode_single_relation_id(
         if getattr(relation_field, "null", False):
             return None, None
         return None, field_error(field_name, "This field cannot be null.", codes="null")
-    pks, error = _decode_relation_id_set(field_name, [value], relation_field, info)
+    pks, error = decode_visible_relation_ids(
+        [value],
+        graphql_name=field_name,
+        related_model=relation_field.related_model,
+        info=info,
+        async_recourse=_MUTATION_ASYNC_RECOURSE,
+    )
     if error is not None:
         return None, error
     return pks[0], None
@@ -649,12 +578,21 @@ def _decode_relation_id_list(
     ``list[<id>] | None``) is NOT a valid replace-set - it returns a ``FieldError``
     on ``field_name`` (the valid "clear" signal is an empty list ``[]``), rather
     than iterating ``None`` into a resolver exception. A non-null list
-    delegates to ``_decode_relation_id_set`` (the same type-check + coerce +
+    delegates to ``decode_visible_relation_ids`` (the same type-check + coerce +
     one-query visibility contract the FK path uses).
     """
     if value is None:
         return [], _relation_null_error(field_name)
-    return _decode_relation_id_set(field_name, value, relation_field, info)
+    pks, error = decode_visible_relation_ids(
+        value,
+        graphql_name=field_name,
+        related_model=relation_field.related_model,
+        info=info,
+        async_recourse=_MUTATION_ASYNC_RECOURSE,
+    )
+    if error is not None:
+        return [], error
+    return pks, None
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -671,183 +609,6 @@ def _relation_null_error(field_name: str) -> FieldError:
         f"Relation {field_name!r} cannot be null; send an empty list to clear it.",
         codes="null",
     )
-
-
-def _relation_membership_error(
-    field_name: str,
-    queryset: Any,
-    declared_pks: list[Any],
-    query_pks: list[Any],
-) -> FieldError | None:
-    """Return a relation ``FieldError`` unless every ``declared_pks`` member is present in ``queryset``.
-
-    The single no-existence-leak membership check the three relation guards share -
-    visibility on the model path (``_relation_visibility_error``), visibility on the
-    raw-pk path (``_raw_pk_relation_error``), and existence on the no-primary raw-pk
-    M2M path (``_relation_existence_error``). The ONLY axes that vary are folded into
-    the two arguments:
-
-    - ``queryset`` - the visibility-scoped ``get_queryset`` queryset for the two
-      visibility checks, the target's ``_default_manager`` for the existence-only
-      check.
-    - ``declared_pks`` vs ``query_pks`` - the set whose presence is ASSERTED vs. the
-      set actually sent to ``pk__in``. They coincide for the already-coerced
-      ``GlobalID`` path; for a raw-pk set ``query_pks`` is the coerced subset (an
-      uncoercible / out-of-range pk dropped so it never hits the backend), while
-      ``declared_pks`` stays the full input - so a dropped pk is absent from the
-      present set and fails the subset check, the same not-found relation error a
-      hidden / missing pk yields (no existence leak).
-
-    The query + str-coercion (``stringified_pks_present``) and the subset test
-    (``pks_all_present``) are single-sited in ``utils/querysets.py`` (spec-039 Md4),
-    shared with the serializer M2M decoder.
-    """
-    present = stringified_pks_present(queryset, query_pks)
-    if not pks_all_present(declared_pks, present):
-        return relation_field_error(field_name)
-    return None
-
-
-def _relation_visibility_error(
-    field_name: str,
-    pks: list[Any],
-    related_model: type,
-    info: Any,
-) -> FieldError | None:
-    """Confirm every relation pk is visible through the related type's ``get_queryset``.
-
-    After the type-check, a relation id must also pass the related model's
-    **primary** ``DjangoType`` visibility hook - the SAME ``get_queryset`` every
-    read surface applies (``apply_type_visibility_sync(initial_queryset(...))``) -
-    so a permitted writer cannot attach a row they could not *see* (a private
-    ``Category``, a hidden ``Genre``). The ``full_clean`` FK check that runs later
-    uses Django's default manager, NOT this visibility queryset, so the check
-    belongs here (spec-036 Decision 10).
-
-    The target is resolved via ``registry.get(related_model)`` - the relation's
-    canonical **primary** type, NOT the client-named decoded type - so naming a
-    more-permissive sibling type in the ``GlobalID`` cannot dodge the primary's
-    hook. A ``GlobalID``-typed relation input is only generated when the related
-    model HAS a primary Relay-Node type (``mutations/inputs.py``), so this path is
-    reached only with a resolvable primary. Hidden and missing are
-    indistinguishable (the uniform ``relation_field_error``, no existence leak),
-    matching the update/delete locate (``locate_instance``); FK / OneToOne pass a
-    one-element list, M2M the whole set (verified in one ``pk__in`` query). An
-    ``async def get_queryset`` met here raises ``SyncMisuseError`` (the same sync
-    discipline as the locate path).
-
-    The ``pks`` arrive **already coerced** through the resolved type's pk field by
-    ``decode_model_global_id`` (the shared primitive), so an uncoercible
-    ``node_id`` was already mapped to ``relation_field_error`` upstream and never reaches
-    the ``pk__in`` query as a raw Django ``ValueError``. This step
-    only confirms visibility.
-    """
-    related_type = registry.get(related_model)
-    queryset = visibility_scoped_related_queryset(related_type, info, _MUTATION_ASYNC_RECOURSE)
-    # ``pks`` are already coerced (the GlobalID path), so the asserted + queried sets
-    # coincide.
-    return _relation_membership_error(field_name, queryset, pks, pks)
-
-
-def _relation_existence_error(
-    field_name: str,
-    pks: list[Any],
-    related_model: type,
-) -> FieldError | None:
-    """Confirm every unregistered raw-pk relation target exists before validation / write.
-
-    The raw-pk counterpart to ``_relation_visibility_error`` when the target model
-    has no registered primary type and therefore no ``get_queryset`` visibility
-    contract. This confirms existence in one query against the target model's
-    **default manager** for both M2M and FK / OneToOne inputs. A missing member is
-    the uniform ``relation_field_error`` on ``field_name``, the same field-keyed
-    envelope the GlobalID path returns, so it fails before model validation or a
-    database write. Any existing row remains attachable by design: this check is
-    existence only, not an implicit visibility policy.
-
-    Each pk is coerced through the target pk field first (``_coerce_relation_pk_or_none``),
-    mirroring the coercion the GlobalID path applies via ``decode_model_global_id``:
-    an uncoercible / out-of-range pk is dropped from the ``pk__in`` query so it can
-    never reach the backend as a raw ``OverflowError`` / ``ValueError``. Because the
-    membership check below still compares the FULL input set against the queried
-    rows, a dropped pk is absent from ``existing`` and so fails the subset check -
-    the same not-found ``relation_field_error`` outcome as a valid-but-missing pk.
-    """
-    coerced = [
-        value
-        for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in pks)
-        if value is not None
-    ]
-    # Existence only (no visibility contract): query the default manager. The full
-    # input set is asserted against the coerced query set (a dropped pk fails it).
-    return _relation_membership_error(field_name, related_model._default_manager, pks, coerced)
-
-
-def _raw_pk_relation_error(
-    field_name: str,
-    pks: list[Any],
-    related_model: type,
-    info: Any,
-) -> FieldError | None:
-    """Visibility- or existence-check a RAW-PK relation set before it is attached.
-
-    A raw-pk relation (the related model has no Relay-Node primary, so the input is
-    the related pk scalar, not a ``GlobalID``) is NOT automatically exempt from the
-    related type's visibility contract. The original decode skipped visibility on
-    the raw-pk branch on the premise that "a raw-pk target has no type to scope" -
-    but ``registry.get(related_model)`` can return a **non-Relay** primary
-    ``DjangoType`` that still defines a ``get_queryset`` (a supported
-    configuration; the read surface scopes every list/node through it), in which
-    case a writer could otherwise attach a row that hook hides. The form path
-    already closes this on every branch (``_visible_related_object``); this is the
-    model-path equivalent, so the model and form flavors enforce the SAME relation
-    visibility invariant (spec-038 frames the form fix as closing the gap the
-    ``036`` model path leaves).
-
-    When a primary type IS registered the pks are visibility-checked through the
-    SAME ``apply_type_visibility_sync(initial_queryset(...))`` query the
-    ``GlobalID`` branch uses (a hidden / missing member is the uniform
-    ``relation_field_error``, indistinguishable - no existence leak). When NO primary is
-    registered there is no visibility contract, but every raw-pk relation still
-    gets the default-manager existence check (``_relation_existence_error``).
-    This preserves the deliberate ability to attach any existing unexposed row
-    while rejecting a nonexistent target before validation / write.
-
-    An explicit ``None`` no longer reaches this check on the single-relation path:
-    ``_decode_single_relation_id`` resolves a single FK / OneToOne ``None`` first -
-    returned as a nullable-relation clear (``(None, None)``) or, on a ``null=False``
-    relation, rejected there as a field-keyed ``null`` ``FieldError`` before any
-    membership query (so a required FK's explicit null is attributed at decode, not
-    left to surface as a NOT NULL ``IntegrityError``). An M2M never carries a ``None``
-    element (its list element type is non-null) and an explicit whole-list ``null``
-    is rejected upstream by ``_decode_relation_id_list``. The ``real_pks`` filter
-    below stays a defensive guard so a stray ``None`` can never widen the ``pk__in``
-    set.
-
-    Each remaining pk is coerced through the target pk field first
-    (``_coerce_relation_pk_or_none``), mirroring the ``GlobalID`` branch's
-    ``decode_model_global_id`` coercion: an uncoercible / out-of-range raw pk is
-    dropped from the ``pk__in`` query so it can never reach the backend as a raw
-    ``OverflowError`` / ``ValueError`` and - absent from the visible set - yields
-    the same not-found ``relation_field_error`` a genuinely missing pk does. An ``async
-    def get_queryset`` met here raises ``SyncMisuseError`` (the standing sync
-    discipline).
-    """
-    real_pks = [pk for pk in pks if pk is not None]
-    if not real_pks:
-        return None
-    # ``related_visibility_queryset`` single-sites the ``registry.get`` resolve + the
-    # visibility-scoping call (spec-039 Md3); ``None`` = no primary type (no
-    # visibility contract), whose per-surface tail stays explicit here.
-    queryset = related_visibility_queryset(related_model, info, _MUTATION_ASYNC_RECOURSE)
-    if queryset is None:
-        return _relation_existence_error(field_name, real_pks, related_model)
-    coerced = [
-        value
-        for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in real_pks)
-        if value is not None
-    ]
-    return _relation_membership_error(field_name, queryset, real_pks, coerced)
 
 
 def locate_instance(
@@ -978,28 +739,6 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
         if hasattr(field, "column") and getattr(field, "unique", False) and not field.primary_key
     )
     return groups
-
-
-def _integrity_error_field_errors() -> list[FieldError]:
-    """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope.
-
-    The normal ``UniqueConstraint`` path is caught earlier by ``full_clean()``'s
-    ``validate_constraints()`` as a ``ValidationError`` with a clean field mapping.
-    What reaches HERE is the residual: a constraint violation that beat
-    ``validate_constraints()`` - a ``UniqueConstraint`` race, but also a ``NOT
-    NULL`` / FK / ``CHECK`` ``IntegrityError`` that ``full_clean`` did not catch on
-    the normal path. The catch is ``except IntegrityError`` (broad), so the message
-    is the **honest superset** "A database constraint was violated." rather than
-    over-claiming "uniqueness" for a violation that may not be a uniqueness one
-    As a documented best-effort fallback (covered by a
-    mocked-``save()`` test, not a real race), it keys to the ``"__all__"`` sentinel
-    - the same model-level bucket ``validate_constraints()`` uses for a multi-field
-    constraint. The decoded field set is intentionally not consulted: ``save()``'s
-    ``IntegrityError`` carries no reliable cross-backend field mapping, so a
-    per-field attribution would be guesswork, so no ``model`` / ``provided_attrs``
-    params are taken.
-    """
-    return [field_error("", "A database constraint was violated.", codes="constraint")]
 
 
 def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
@@ -1238,7 +977,7 @@ def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
         with transaction.atomic(using=alias):
             target.save(force_update=True)
     except IntegrityError:
-        return _integrity_error_field_errors()
+        return integrity_error_field_errors()
     except not_updated_exceptions(type(target)) as exc:
         return forced_update_conflict_errors(target, alias, exc)
     return None
@@ -1334,7 +1073,7 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
     payload's ``FieldError`` envelope. Both exceptions are raised by Django's
     deletion collector in Python BEFORE any SQL runs, so the enclosing
     ``transaction.atomic()`` is still healthy and returning the envelope is
-    safe. The message names no models: like ``_integrity_error_field_errors``
+    safe. The message names no models: like ``integrity_error_field_errors``
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
 
@@ -1430,7 +1169,7 @@ def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
     """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None``.
 
     Wraps a zero-arg callable rather than a fixed ``instance.save()`` so ONE
-    ``IntegrityError`` -> envelope catch (the ``_integrity_error_field_errors``
+    ``IntegrityError`` -> envelope catch (the ``integrity_error_field_errors``
     message policy, single-sourced) serves every save path: the ``036`` model
     pipeline passes ``instance.save``; the form pipeline passes ``form.save`` (the
     ``ModelForm`` flavor) / a bound ``perform_mutate`` (the plain flavor, spec-038
@@ -1441,7 +1180,7 @@ def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
     try:
         save_callable()
     except IntegrityError:
-        return _integrity_error_field_errors()
+        return integrity_error_field_errors()
     return None
 
 
@@ -1553,13 +1292,11 @@ def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
     to ``sync_body``'s positional args, and an async entry running the SAME
     ``sync_body`` through the shared ``run_pipeline_async`` boundary (one
     ``sync_to_async(thread_sensitive=True)`` call). The model flavor
-    (``sync_body=_run_pipeline_sync``) and the form flavor
-    (``_run_form_pipeline_sync``) take the full pair; the serializer flavor takes
-    ONLY the async half (its sync entry is bespoke - it calls
-    ``run_write_pipeline_sync`` with decode/write lambdas directly, no
-    ``_run_*_pipeline_sync`` dispatcher), discarding the generated sync entry. Each
-    factory call produces FRESH functions, so per-flavor identity (the field
-    factory's ``resolve_sync.__func__`` comparisons) stays distinct.
+    (``sync_body=_run_pipeline_sync``), the form flavor
+    (``_run_form_pipeline_sync``), and the serializer flavor
+    (``_run_serializer_pipeline_sync``) all take the full pair. Each factory call
+    produces FRESH functions, so per-flavor identity (the field factory's
+    ``resolve_sync.__func__`` comparisons) stays distinct.
     """
 
     def resolve_sync(

@@ -31,7 +31,7 @@ The serializer-specific invariants this module owns:
 
 - **The dedicated serializer relation decoder mirrors the ``038`` form decoder**
   (serializer-field-keyed, NOT the model-attr-keyed ``036``
-  ``_decode_relation_id_set``). Each relation id - a ``relay.GlobalID`` *or* a raw
+  ``_decode_relations``). Each relation id - a ``relay.GlobalID`` *or* a raw
   pk - is type-checked against the relation's **target model**, which is recorded on
   the bind-stashed reverse map (``InputFieldSpec.related_model``, resolved once at
   build from the backing FK via the serializer field's ``source``, or
@@ -125,7 +125,6 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import Any
 
-import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files import File
@@ -137,24 +136,19 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from ..mutations.resolvers import (
-    _integrity_error_field_errors as integrity_error_field_errors,
-)
-from ..mutations.resolvers import (
     make_resolver_entries,
     run_write_pipeline_sync,
 )
 from ..utils.errors import (
     field_error,
+    integrity_error_field_errors,
     join_error_path,
-    relation_field_error,
     validation_error_to_field_errors,
 )
 from ..utils.permissions import request_from_info
 from ..utils.querysets import (
-    pks_all_present,
     related_visibility_queryset,
     sync_pipeline_recourse,
-    visible_related_objects,
 )
 from ..utils.relations import is_forward_many_to_many
 from ..utils.write_transaction import (
@@ -169,7 +163,7 @@ from ..utils.write_values import (
     decode_provided_fields,
     decode_scalar_leaf,
     decode_visible_relation,
-    type_check_relation_id,
+    decode_visible_relation_ids,
 )
 from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
@@ -251,30 +245,20 @@ def _decode_relation_multi(
 
     Type-checks + coerces every element FIRST (no per-element DB fetch, short-circuiting on the
     first structurally-bad id), then confirms the whole set's visibility in ONE ``pk__in`` query
-    via the batched ``visible_related_objects`` (instead of one visibility query per element).
-    A hidden / missing member collapses to the same field-keyed relation error (no existence
-    leak), exactly as the per-element decode did. An explicit ``None`` (the whole list) is
-    passed through so the serializer's own required-ness decides; an empty list is a valid clear.
+    via the shared ``decode_visible_relation_ids`` compose. A hidden / missing member collapses
+    to the same field-keyed relation error (no existence leak), exactly as the per-element
+    decode did. An explicit ``None`` (the whole list) is passed through so the serializer's
+    own required-ness decides; an empty list is a valid clear.
     """
     if values is None:
         return None, None
-    pks: list[Any] = []
-    for value in values:
-        pk, error = type_check_relation_id(
-            value,
-            graphql_name=graphql_name,
-            related_model=related_model,
-        )
-        if error is not None:
-            return None, error
-        pks.append(pk)
-    if not pks:
-        return [], None
-    visible = visible_related_objects(related_model, pks, info, _SERIALIZER_ASYNC_RECOURSE)
-    if not pks_all_present(pks, visible):
-        # A hidden / missing member: the uniform relation error (no existence leak).
-        return None, relation_field_error(graphql_name)
-    return pks, None
+    return decode_visible_relation_ids(
+        values,
+        graphql_name=graphql_name,
+        related_model=related_model,
+        info=info,
+        async_recourse=_SERIALIZER_ASYNC_RECOURSE,
+    )
 
 
 def _decode_serializer_data(
@@ -2240,38 +2224,6 @@ def _guarded_serializer_write(
     return saved
 
 
-def resolve_serializer_sync(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Sync serializer-pipeline entry the base's ``resolve_sync`` delegates to (spec-039 Decision 8).
-
-    The serializer-flavor parallel of ``resolve_mutation_sync`` /
-    ``resolve_form_sync``: a thin public entry that delegates to the promoted shared
-    ``run_write_pipeline_sync`` skeleton (the ``transaction.atomic()`` boundary +
-    locate preamble + authorize-before-decode ordering + optimizer re-fetch tail are
-    single-sited there), supplying only the serializer ``decode_step`` (the
-    serializer-field-keyed relation/scalar/file decode) and ``write_step``
-    (construct / ``is_valid`` / ``save``) callbacks.
-    """
-    return run_write_pipeline_sync(
-        mutation_cls,
-        info,
-        data,
-        id,
-        decode_step=lambda _instance: _serializer_decode_step(mutation_cls, data, info),
-        write_step=lambda instance, decoded: _serializer_write_step(
-            mutation_cls,
-            info,
-            instance,
-            decoded,
-        ),
-    )
-
-
 def _serializer_decode_step(
     mutation_cls: type,
     data: Any,
@@ -2299,22 +2251,31 @@ def _run_serializer_pipeline_sync(
     data: Any,
     id: Any,  # noqa: A002
 ) -> Any:
-    """The positional-arg sync body the shared ``run_pipeline_async`` boundary wraps.
+    """Run the serializer decode/write callbacks through the shared write skeleton.
 
-    ``run_pipeline_async`` calls ``sync_body(mutation_cls, info, data, id)``
-    positionally; ``resolve_serializer_sync`` takes ``data`` / ``id`` as
-    ``UNSET``-default kwargs, so this thin adapter normalizes the positional call to
-    it (the ``036`` ``_run_pipeline_sync`` / ``resolve_mutation_sync`` relationship).
+    The serializer-flavor dispatcher matching ``_run_pipeline_sync`` /
+    ``_run_form_pipeline_sync``: ``make_resolver_entries`` owns the ``UNSET``-default
+    kwargs and the async boundary; this body supplies only the serializer
+    ``decode_step`` / ``write_step``.
     """
-    return resolve_serializer_sync(mutation_cls, info, data=data, id=id)
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        data,
+        id,
+        decode_step=lambda _instance: _serializer_decode_step(mutation_cls, data, info),
+        write_step=lambda instance, decoded: _serializer_write_step(
+            mutation_cls,
+            info,
+            instance,
+            decoded,
+        ),
+    )
 
 
-# The serializer async entry, via the shared factory (spec-039 M1a). ONLY the async
-# half is taken: the serializer sync entry (``resolve_serializer_sync`` above) is
-# bespoke - it calls ``run_write_pipeline_sync`` with decode / write lambdas
-# directly, with no ``_run_*_pipeline_sync`` dispatcher to normalize - so the
-# generated sync entry is discarded. The async half runs
-# ``_run_serializer_pipeline_sync`` through the shared ``run_pipeline_async`` boundary
-# (single-sourced with the model + form flavors), so the three flavors cannot drift
-# on the boundary contract.
-_, resolve_serializer_async = make_resolver_entries(_run_serializer_pipeline_sync)
+# The serializer module entries, via the shared factory (spec-039 M1a). The
+# full pair is taken so the three write flavors cannot drift on the UNSET-kwargs
+# or async-boundary contract.
+resolve_serializer_sync, resolve_serializer_async = make_resolver_entries(
+    _run_serializer_pipeline_sync,
+)

@@ -657,8 +657,8 @@ class CreateShelf(DjangoMutation):
     """Create a ``Shelf`` via the model pipeline - the MODEL raw-pk relation path.
 
     The ``branch`` / ``alt_branches`` raw-pk inputs route through
-    ``mutations/resolvers.py::_raw_pk_relation_error`` - the model-path twin of the
-    form decoder's visibility-on-the-raw-pk-branch fix.
+    ``utils/write_values.py::decode_visible_relation_ids`` - the shared batched
+    relation-id compose the model and serializer flavors both ride.
     """
 
     class Meta:

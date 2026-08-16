@@ -11,11 +11,9 @@ mutation resolver is not the utility module for the other write flavors):
 - ``decode_scalar_leaf`` - the shared text-preflight + choice-unwrap compose;
 - ``decode_visible_relation`` - the visibility-on-every-branch single-relation
   decode spine (type-check -> visible object -> flavor projection);
+- ``decode_visible_relation_ids`` - the batched id-set compose (type-check each
+  id, then one visibility / existence ``pk__in`` query);
 - ``decode_provided_fields`` - the kind-routed walk over a bound write input.
-
-The set-level relation guards (visibility / existence / membership) stay in
-``mutations/resolvers.py`` - they carry model-pipeline contracts, not
-neutral value semantics.
 """
 
 from __future__ import annotations
@@ -27,7 +25,12 @@ from strawberry import relay
 
 from .errors import field_error, relation_field_error
 from .inputs import iter_provided_input_fields
-from .querysets import coerce_field_value_or_none, visible_related_object
+from .querysets import (
+    coerce_field_value_or_none,
+    pks_all_present,
+    visible_related_object,
+    visible_related_objects,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
@@ -124,12 +127,11 @@ def type_check_relation_id(
     top). Neither branch touches the DB - visibility is confirmed separately by the
     caller.
 
-    The model batched decoder (``_decode_relation_id_set``) deliberately does NOT use
-    this: its raw-pk half is a set-level all-or-nothing visibility / existence check
-    (``_raw_pk_relation_error``), a genuinely different contract; only its GlobalID
-    half mirrors the check here. A ``relay.GlobalID`` is decoded against the target
-    model (a non-``OK`` status is the uniform ``relation_field_error``); a raw pk is
-    coerced through the target pk field (``None`` -> the uniform error).
+    The batched set decoder (``decode_visible_relation_ids``) runs this per
+    element, then confirms the whole set in one visibility query. A
+    ``relay.GlobalID`` is decoded against the target model (a non-``OK`` status is
+    the uniform ``relation_field_error``); a raw pk is coerced through the target
+    pk field (``None`` -> the uniform error).
 
     The ``decode_model_global_id`` / ``GlobalIDDecode`` import is function-local:
     the package's ``relay`` module imports ``utils.querysets`` at module level, so
@@ -197,10 +199,9 @@ def decode_visible_relation(
     ``obj.pk``).
 
     Returns ``(projected, None)`` on success or ``(None, FieldError)``. The
-    MULTI decoders deliberately keep their query strategy at each flavor (the
-    form maps this per element - it needs the object for ``to_field_name``; the
-    serializer batches one ``pk__in`` visibility query) - only the per-id spine
-    is promoted.
+    form MULTI decoder maps this per element (it needs the object for
+    ``to_field_name``). The model and serializer MULTI decoders share
+    ``decode_visible_relation_ids`` (one ``pk__in`` visibility query) instead.
     """
     if skip(value):
         return value, None
@@ -215,6 +216,50 @@ def decode_visible_relation(
     if obj is None:
         return None, relation_field_error(graphql_name)
     return project(obj), None
+
+
+def decode_visible_relation_ids(
+    values: Any,
+    *,
+    graphql_name: str,
+    related_model: type,
+    info: Any,
+    async_recourse: str,
+) -> tuple[list[Any] | None, FieldError | None]:
+    """Type-check each relation id, then confirm the whole set in one visibility query.
+
+    The batched compose the model FK / M2M set decoder and the serializer
+    ``RELATION_MULTI`` decoder share:
+
+    (i) ``type_check_relation_id`` on every element (a non-``OK`` ``GlobalID`` /
+    uncoercible raw pk is the uniform field-keyed ``FieldError``, short-circuiting
+    before any query); (ii) an empty set returns ``[]`` without touching the DB
+    (a valid M2M clear); (iii) ``visible_related_objects`` confirms the whole set
+    in ONE ``pk__in`` query through the related primary's ``get_queryset`` (or the
+    default manager when no primary is registered); (iv) a hidden / missing
+    member is the same ``relation_field_error`` (hidden and missing
+    indistinguishable, no existence leak).
+
+    Flavor null policy stays at the caller: the model M2M path rejects a
+    whole-list ``None``; the serializer passes it through so ``is_valid()``
+    decides. Returns ``(pks, None)`` on success or ``(None, FieldError)``.
+    """
+    pks: list[Any] = []
+    for value in values:
+        pk, error = type_check_relation_id(
+            value,
+            graphql_name=graphql_name,
+            related_model=related_model,
+        )
+        if error is not None:
+            return None, error
+        pks.append(pk)
+    if not pks:
+        return [], None
+    visible = visible_related_objects(related_model, pks, info, async_recourse)
+    if not pks_all_present(pks, visible):
+        return None, relation_field_error(graphql_name)
+    return pks, None
 
 
 def decode_provided_fields(
@@ -238,8 +283,8 @@ def decode_provided_fields(
     continue. Returns the first handler ``FieldError`` or ``None``.
 
     The model flavor's ``mutations/resolvers.py::_decode_relations`` is a
-    near-parallel with a genuinely different key space (model attrs, the batched
-    id-set contract) and stays put.
+    near-parallel with a genuinely different key space (model attrs) and stays
+    put; its id-set decode rides ``decode_visible_relation_ids``.
     """
     spec_by_attr = {spec.input_attr: spec for spec in specs}
     for python_name, value, _field in iter_provided_input_fields(data):

@@ -160,10 +160,11 @@ from ..utils.write_transaction import (
     require_write_pipeline,
 )
 from ..utils.write_values import (
+    decode_field_handlers,
     decode_provided_fields,
-    decode_scalar_leaf,
     decode_visible_relation,
     decode_visible_relation_ids,
+    decoded_into,
 )
 from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
@@ -305,65 +306,33 @@ def _decode_input_object(
     A decode ``FieldError`` short-circuits (the shared skeleton maps it to a null payload).
 
     The reverse-map build + the ``UNSET``-strip walk + the kind dispatch are single-sited in
-    ``utils/write_values.py::decode_provided_fields``; the handlers below carry
-    the SERIALIZER destination policy (everything into ``data``, incl. the ``NESTED_*``
-    recursion and the full-path error keying).
+    ``utils/write_values.py::decode_provided_fields``; the SCALAR / RELATION / FILE
+    store-into-dest handlers are the shared ``decode_field_handlers`` factories
+    (FILE lands in ``data``, the deliberate DRF contrast with Django ``files=``).
+    Nested recursion stays serializer-only via ``extra_handlers``.
     """
     provided_data: dict[str, Any] = {}
 
     def _field_path(spec: Any) -> str:
         return join_error_path(path_prefix, spec.graphql_name)
 
-    def _relation(spec: Any, value: Any) -> FieldError | None:
-        decoder = (
-            _decode_relation_multi if spec.kind == RELATION_MULTI else _decode_relation_single
-        )
-        decoded, error = decoder(
-            value,
-            graphql_name=_field_path(spec),
-            related_model=spec.related_model,
-            info=info,
-        )
-        if error is not None:
-            return error
-        provided_data[spec.target_name] = decoded
-        return None
-
-    def _nested(spec: Any, value: Any) -> FieldError | None:
-        decoded, error = _decode_nested(spec, value, info, path_prefix=_field_path(spec))
-        if error is not None:
-            return error
-        provided_data[spec.target_name] = decoded
-        return None
-
-    def _file(spec: Any, value: Any) -> None:
-        # An ``Upload`` lands in ``data``, NOT a ``files=`` split: DRF serializers
-        # read files from ``data`` (the deliberate contrast with Django forms).
-        provided_data[spec.target_name] = value
-        return None
-
-    def _scalar(spec: Any, value: Any) -> FieldError | None:
-        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
-        # ``decode_scalar_leaf``), keyed to the input's (full-path) GraphQL field
-        # name so a lone surrogate never escapes the envelope as a raw
-        # ``UnicodeEncodeError`` at the serializer's ``save()`` / unique lookup.
-        decoded, text_error = decode_scalar_leaf(_field_path(spec), value)
-        if text_error is not None:
-            return text_error
-        provided_data[spec.target_name] = decoded
-        return None
-
+    nested = decoded_into(
+        provided_data,
+        lambda spec, value: _decode_nested(spec, value, info, path_prefix=_field_path(spec)),
+    )
+    handlers, scalar_handler = decode_field_handlers(
+        provided_data,
+        info=info,
+        single=_decode_relation_single,
+        multi=_decode_relation_multi,
+        field_name=_field_path,
+        extra_handlers={NESTED_SINGLE: nested, NESTED_MULTI: nested},
+    )
     error = decode_provided_fields(
         specs,
         data,
-        handlers={
-            RELATION_SINGLE: _relation,
-            RELATION_MULTI: _relation,
-            NESTED_SINGLE: _nested,
-            NESTED_MULTI: _nested,
-            FILE: _file,
-        },
-        scalar_handler=_scalar,
+        handlers=handlers,
+        scalar_handler=scalar_handler,
     )
     if error is not None:
         return {}, error

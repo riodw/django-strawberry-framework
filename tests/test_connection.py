@@ -1042,6 +1042,37 @@ def test_sync_context_async_get_queryset_raises_sync_misuse():
     assert any(isinstance(err.original_error, SyncMisuseError) for err in result.errors)
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_async_execution_default_connection_async_get_queryset_raises_sync_misuse():
+    """A default connection field refuses an async ``get_queryset`` under async execution.
+
+    ``connection.py::_build_connection_resolver`` commits to the sync or the async
+    pipeline at field construction rather than per execution: with no consumer
+    ``resolver=``, it emits a plain ``def _resolve`` driving ``_pipeline_sync``. So
+    ``await schema.execute`` reaches ``utils/querysets.py::apply_type_visibility_sync``
+    exactly as ``execute_sync`` does, and an ``async def get_queryset`` is refused by
+    ``utils/querysets.py::reject_async_in_sync_context`` instead of being awaited.
+    Driving an async hook through a connection requires an ``async def`` ``resolver=``.
+    """
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(1)
+
+    async def get_queryset(cls, qs, info):
+        return qs
+
+    node_type = _make_sidecar_node_type(
+        "AsyncVisibilityAsyncExecNode",
+        get_queryset=get_queryset,
+    )
+    schema = await sync_to_async(_field_schema)(node_type)
+    result = await schema.execute("{ items { edges { node { id } } } }")
+
+    assert result.errors is not None
+    assert any(isinstance(err.original_error, SyncMisuseError) for err in result.errors)
+    assert result.data is None  # an async pipeline would have served the seeded row
+
+
 async def test_connection_sync_resolver_returning_coroutine_raises_sync_misuse():
     """A plain ``def`` returning a coroutine cannot enter connection slicing."""
     node_type = _make_sidecar_node_type("CoroSyncConnNode")

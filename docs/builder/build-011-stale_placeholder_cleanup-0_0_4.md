@@ -106,7 +106,9 @@ Steps 1, 2, 4, 6 ran: the baseline is enumerated above and included per the main
 - `docs/builder/bld-011-r3-kanban_card_body.md` (added mid-cycle — see `### R3, added after R2`)
 - `docs/builder/bld-011-final.md`
 
-**No `bld-integration.md`.** `docs/builder/BUILD.md` `## Cross-slice integration pass` scans landed source for cross-slice duplication; this cycle lands no source at all, so there is no cross-slice DRY surface. Both of the pass's live obligations are folded into the final gate and recorded there: the staged-anchor sweep, and the read of every closed artifact. Same disposition, and the same reason, as the spec-003 and spec-010 cycles.
+All four were produced, closed `final-accepted`, and cleared once the cycle was committed; they are readable at commit `2b7e5b16`. This list is the record of what the cycle ran, not a set of live paths.
+
+**No `bld-integration.md`.** `docs/builder/BUILD.md` `## Cross-slice integration pass` scans landed source for cross-slice duplication; this cycle lands no source at all, so there is no cross-slice DRY surface. Both of the pass's live obligations were folded into the final gate and are recorded in `## Cycle outcome, recorded`: the staged-anchor sweep, and the read of every closed artifact. Same disposition, and the same reason, as the spec-003 and spec-010 cycles.
 
 ### R3, added after R2
 
@@ -116,10 +118,20 @@ Worker 0 re-partitioned on the disposition this plan's `## Dispatch record` alre
 
 ## Checklist
 
-- [x] R1: create the rationale companion and reconcile the spec against `HEAD` (F1-F8) -> `docs/builder/bld-011-r1-rationale_and_spec_reconciliation.md`
-- [x] R2: documentation completion and archive audit (F9-F11) -> `docs/builder/bld-011-r2-doc_completion_archive_audit.md`
-- [x] R3: correct the `DONE-011-0.0.4` card body in the kanban DB and regenerate -> `docs/builder/bld-011-r3-kanban_card_body.md`
-- [x] Final test-run gate -> `docs/builder/bld-011-final.md`
+- [x] R1: create the rationale companion and reconcile the spec against `HEAD` (F1-F8)
+- [x] R2: documentation completion and archive audit (F9-F11)
+- [x] R3: correct the `DONE-011-0.0.4` card body in the kanban DB and regenerate
+- [x] Final test-run gate
+
+Every item closed `final-accepted`. The four per-item artifacts were cleared at the maintainer's instruction once the cycle was committed; they are readable at commit `2b7e5b16`, and what outlives them is recorded below and in the two cards this cycle's findings were routed to.
+
+## Cycle outcome, recorded
+
+The gate ran clean apart from one row it did not own: `tests/rest_framework/test_inputs.py::test_dedupe_serializer_input_shape_is_sole_cache_protocol` failed, and does not exist at `HEAD` — it arrives with a concurrent session's uncommitted rewrite of `django_strawberry_framework/rest_framework/inputs.py`, fails identically in isolation, and no item of this cycle wrote package source or a test at all. Recorded and escalated rather than fixed or masked (`AGENTS.md` rule 34). Everything else passed: `manage.py check` and `makemigrations --check --dry-run` both clean (which is what proves R3's three ORM writes introduced no model drift), `ruff format --check` / `ruff check` / `git diff --check` green tree-wide, floor-verification scope `none` as declared, and the staged-anchor sweep found zero surviving `TODO(spec-011` / `TODO-*-011` anchors — card `DONE-011-0.0.4`'s were deleted in `118f71a1`, the commit that shipped it.
+
+**One deferred finding has no other home, so it is recorded here rather than in a card.** The board's `#### Files likely touched` for card 11 lists only the three replacement modules and never `tests/types/test_base.py` or `tests/optimizer/test_extension.py`, the two files the placeholders were removed *from*. R3 declined to back-fill it: "likely touched" is a planning-time prediction field, and filling it with post-hoc knowledge makes the board assert a prediction nobody made — the duplicate-row defect this cycle fixed, running in reverse. The reconciled spec's `## Scope` names all five files by `path::QualifiedName`, which is where the fact is checkable. **Reversal recipe, if the maintainer prefers board fidelity:** append two `append_card_item`-shaped rows at `order` 3 and 4 in section `files_touched` for card 11 through the Django ORM, then regenerate `KANBAN.md` and `KANBAN.html` — nothing else changes.
+
+The cycle's other deferred findings are live on the board: the `[spec-011]` renumber artifact is split across `TODO-ALPHA-051-0.0.15` (its six live-code sites) and `TODO-ALPHA-052-0.1.0` (its documentation half), which also carries the 71 unused link definitions and the five archived stubs still holding the boilerplate preamble.
 
 ## Corrections to this plan, recorded
 

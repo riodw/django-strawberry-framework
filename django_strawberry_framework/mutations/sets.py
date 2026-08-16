@@ -52,7 +52,7 @@ from django.db import models
 from strawberry import relay
 from strawberry.types.base import StrawberryList
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
 from ..utils.inputs import make_shape_build_cache, normalize_field_name_sequence
@@ -146,9 +146,24 @@ def non_delete_operation_error(base_label: str, name: str, got: Any) -> Configur
     """
     return ConfigurationError(
         f"{base_label} {name}.Meta.operation must be one of "
-        f"{sorted(NON_DELETE_WRITE_OPERATIONS)}; got {got!r}. (This flavor has no delete "
-        "pipeline - declare a 036 DjangoMutation with operation='delete' instead.)",
+        f"{sorted(NON_DELETE_WRITE_OPERATIONS)}; got {_safe_arg_repr(got)}. (This flavor has no "
+        "delete pipeline - declare a 036 DjangoMutation with operation='delete' instead.)",
     )
+
+
+def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
+    """Return ``Meta.operation`` if it is create/update, else raise the shared reject.
+
+    The getattr + membership check both model-backed form and serializer
+    ``_validate_meta`` share after their type-gates. The error body is
+    ``non_delete_operation_error``; this owns the lookup so a new non-delete
+    verb cannot leave one flavor still spelling the membership test. The
+    model-less plain form does NOT call this (it rejects ANY ``operation`` key).
+    """
+    operation = getattr(meta, "operation", None)
+    if operation not in NON_DELETE_WRITE_OPERATIONS:
+        raise non_delete_operation_error(base_label, name, operation)
+    return operation
 
 
 def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> None:
@@ -168,16 +183,45 @@ def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> 
         raise ConfigurationError(f"{name}.Meta has unknown keys: {unknown}.")
 
 
+def normalize_meta_field_selection(
+    meta: type,
+    *,
+    flavor: str,
+) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
+    """Return ``(fields, exclude)`` after the shared sequence-shape normalize.
+
+    Every write-flavor ``_validate_meta`` that stores the declared
+    ``Meta.fields`` / ``Meta.exclude`` on the snapshot (model + both form
+    bases) runs this pair so a new flavor cannot normalize one key and forget
+    the other. Existence / mutual-exclusion / empty-set checks stay at the
+    caller: the model flavor's delete-inapplicable rule and the form flavor's
+    ``resolve_effective_form_fields`` walk are different jobs. The serializer
+    flavor stores the RAW declarations and normalizes inside
+    ``resolve_effective_serializer_fields``, so it does not call this.
+    """
+    fields = normalize_field_name_sequence(
+        getattr(meta, "fields", None),
+        label="fields",
+        flavor=flavor,
+    )
+    exclude = normalize_field_name_sequence(
+        getattr(meta, "exclude", None),
+        label="exclude",
+        flavor=flavor,
+    )
+    return fields, exclude
+
+
 def _hook_overridden(cls: type, base: type, name: str) -> bool:
     """Return whether ``cls`` overrides the ``name`` method relative to ``base``.
 
-    The identity check generalizing ``forms/sets.py::_form_kwargs_overridden``: a
-    construction-hook waiver (the form ``get_form_kwargs`` / ``get_form``, the
-    serializer ``get_serializer_kwargs`` / ``get_serializer``) needs to know whether
-    a concrete subclass re-defined the hook. Both are plain instance methods, so
-    ``getattr(cls, name)`` resolves to the unbound function; a concrete override
-    makes it ``is not`` the base's. Single-sites the comparison so the form and
-    serializer waivers share one override-detection primitive.
+    The identity check ``forms/sets.py::_form_kwargs_overridden`` uses for the
+    form construction-hook waiver (``get_form_kwargs`` / ``get_form``). Both
+    hooks are plain instance methods, so ``getattr(cls, name)`` resolves to the
+    unbound function; a concrete override makes it ``is not`` the base's.
+    Serializer mutations do NOT ride this primitive: they waive create-required
+    only via auditable ``Meta.injected_fields``, never a constructor-hook
+    override (spec-039 Decision 7).
     """
     return getattr(cls, name) is not getattr(base, name)
 
@@ -284,9 +328,11 @@ def require_backing_class(
     offending base (``DjangoModelFormMutation`` / ``DjangoFormMutation`` /
     ``SerializerMutation``); ``expected_label`` is the base type named in the message
     (``forms.ModelForm`` / ``forms.Form`` / ``serializers.ModelSerializer``). The
-    per-flavor TYPE-gate (ModelForm-ness; the serializer's Serializer +
-    ModelSerializer pair) stays at the call site - its messages genuinely diverge -
-    so this owns only the shared presence clause.
+    per-flavor TYPE-gate is ``require_subclass`` (shared ``must be a <label>
+    subclass; got <value>`` template + ``_safe_arg_repr``); call it AFTER this
+    presence check. The serializer's second, ModelSerializer-specific gate stays
+    at that call site - its message names ``Meta.model``, not the shared
+    subclass template. This helper owns only the shared presence clause.
     """
     backing = getattr(meta, key, None)
     if backing is None:
@@ -295,6 +341,57 @@ def require_backing_class(
             f"{expected_label} subclass.",
         )
     return backing
+
+
+def require_subclass(
+    name: str,
+    value: Any,
+    *,
+    base_label: str,
+    key: str,
+    expected: type,
+    expected_label: str,
+    note: str = "",
+) -> Any:
+    """Return ``value`` if it is an ``expected`` subclass, else raise the shared type-gate.
+
+    The ``must be a <expected_label> subclass; got <value>`` clause both form
+    type-gates and the serializer ``Serializer`` gate share. Presence is
+    ``require_backing_class`` (a missing key names the flavor's *contract* class,
+    which can be narrower than this type-gate - serializer missing-key names
+    ``ModelSerializer`` while this gate first names ``Serializer``). Hostile
+    ``__repr__`` is rendered through ``_safe_arg_repr`` so a broken value cannot
+    replace the ``ConfigurationError``. ``note`` is an optional second sentence
+    (the ModelForm-vs-plain-Form redirect).
+    """
+    if isinstance(value, type) and issubclass(value, expected):
+        return value
+    message = (
+        f"{base_label} {name}.Meta.{key} must be a {expected_label} subclass; "
+        f"got {_safe_arg_repr(value)}."
+    )
+    if note:
+        message = f"{message} {note}"
+    raise ConfigurationError(message)
+
+
+def require_model_class(name: str, model: Any, *, base_label: str) -> Any:
+    """Return ``model`` if it is a Django model class, else raise.
+
+    The class-creation type-gate ``DjangoMutation._validate_meta`` runs after
+    resolving ``Meta.model``. ModelForm / serializer ``_validate_meta``
+    override the whole matrix and previously skipped this gate, so a
+    non-model ``Meta.model`` would snapshot and crash at bind. One helper
+    keeps the fail-loud on every model-backed flavor. ``base_label`` names
+    the offending base so the model flavor's pinned
+    ``DjangoMutation {name} resolved model must be a Django model class``
+    message stays byte-identical.
+    """
+    if isinstance(model, type) and issubclass(model, models.Model):
+        return model
+    raise ConfigurationError(
+        f"{base_label} {name} resolved model must be a Django model class; got {model!r}.",
+    )
 
 
 def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> Any:
@@ -771,20 +868,21 @@ def _validate_permission_classes(
     if isinstance(value, (str, bytes, type)):
         raise ConfigurationError(
             f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
-            f"permission classes (e.g. [DjangoModelPermission]); got {value!r}.",
+            f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         )
     try:
         classes = list(value)
-    except TypeError as exc:
+    except Exception as exc:
         raise ConfigurationError(
             f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
-            f"permission classes (e.g. [DjangoModelPermission]); got {value!r}.",
+            f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         ) from exc
     for entry in classes:
         if not isinstance(entry, type) or not callable(getattr(entry, "has_permission", None)):
             raise ConfigurationError(
-                f"DjangoMutation {mutation_name}.Meta.permission_classes entry {entry!r} is not a "
-                "permission class exposing has_permission; each entry must be a class with a "
+                f"DjangoMutation {mutation_name}.Meta.permission_classes entry "
+                f"{_safe_arg_repr(entry)} is not a permission class exposing has_permission; "
+                "each entry must be a class with a "
                 "has_permission(info, mutation, operation, data, instance) method.",
             )
     return classes
@@ -812,6 +910,28 @@ def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bo
             f"{select_for_update!r}.",
         )
     return select_for_update
+
+
+def model_backed_permission_and_lock(
+    name: str,
+    meta: type,
+    *,
+    flavor: str,
+) -> tuple[list[Any], bool]:
+    """Return ``(permission_classes, select_for_update)`` for a model-backed write flavor.
+
+    Every model-backed ``_validate_meta`` (model / ModelForm) pairs the
+    ``DjangoModelPermission`` default with the ``FOR UPDATE`` lock validator.
+    The model-less plain form does NOT call this (DenyAll default, no row to
+    lock, plus the extra model-permission reject). The serializer flavor
+    interleaves other Meta keys between the lock and the permission walk, so
+    it keeps calling the two primitives in that order rather than this pair.
+    """
+    permission_classes = _validate_permission_classes(
+        name,
+        getattr(meta, "permission_classes", None),
+    )
+    return permission_classes, validate_select_for_update(flavor, name, meta)
 
 
 # Model-flavor metaclass: validate ``Meta`` + register onto the model declaration
@@ -903,13 +1023,13 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
           ``@strawberry.input`` type, or field names diverging from the generated
           scheme.
 
-        ``permission_classes`` is validated + normalized by
-        ``_validate_permission_classes``: it defaults to
-        ``[DjangoModelPermission]`` when unset, must otherwise be a *sequence* of
-        classes each exposing a callable ``has_permission``, and a bad entry is
-        rejected here at class creation rather than as a request-time ``TypeError``
-        / ``AttributeError`` inside ``check_permission`` (spec-036 Decision 15 - the
-        write-auth seam; the enforcement runs in the resolver).
+        ``permission_classes`` + ``select_for_update`` are validated by
+        ``model_backed_permission_and_lock`` (the ``DjangoModelPermission``
+        default when unset, plus the ``FOR UPDATE`` lock). A bad permission
+        entry is rejected here at class creation rather than as a request-time
+        ``TypeError`` / ``AttributeError`` inside ``check_permission``
+        (spec-036 Decision 15 - the write-auth seam; the enforcement runs in
+        the resolver).
         """
         name = cls.__name__
         reject_unknown_meta_keys(f"DjangoMutation {name}", meta, _ALLOWED_MUTATION_META_KEYS)
@@ -924,11 +1044,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         # ``ConfigurationError``. Without this gate the bad value is snapshotted and
         # the phase-2.5 bind crashes with a raw ``AttributeError`` / ``TypeError``
         # (``model.__name__`` / unhashable instance) instead of a typed config error.
-        if not isinstance(model, type) or not issubclass(model, models.Model):
-            raise ConfigurationError(
-                f"DjangoMutation {name} resolved model must be a Django model class; "
-                f"got {model!r}.",
-            )
+        # Shared with ModelForm / serializer ``_validate_meta`` via
+        # ``require_model_class`` so those overrides cannot skip the gate.
+        model = require_model_class(name, model, base_label="DjangoMutation")
 
         operation = getattr(meta, "operation", None)
         if operation not in _VALID_OPERATIONS:
@@ -937,20 +1055,11 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
             )
 
-        # The model-flavor field-sequence normalization routes through the shared
-        # ``normalize_field_name_sequence`` DIRECTLY (spec-039 - no per-flavor
-        # re-binding wrapper, matching the serializer flavor's P2.7 style); the
-        # ``DjangoMutation`` flavor label keeps the messages byte-identical.
-        fields = normalize_field_name_sequence(
-            getattr(meta, "fields", None),
-            label="fields",
-            flavor="DjangoMutation",
-        )
-        exclude = normalize_field_name_sequence(
-            getattr(meta, "exclude", None),
-            label="exclude",
-            flavor="DjangoMutation",
-        )
+        # The model-flavor field-sequence pair routes through the shared
+        # ``normalize_meta_field_selection`` (spec-039 - no per-flavor
+        # re-binding wrapper); the ``DjangoMutation`` flavor label keeps the
+        # messages byte-identical.
+        fields, exclude = normalize_meta_field_selection(meta, flavor="DjangoMutation")
         if fields is not None and exclude is not None:
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta declares both `fields` and `exclude`; "
@@ -1020,9 +1129,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 exclude=exclude,
             )
 
-        permission_classes = _validate_permission_classes(
+        permission_classes, select_for_update = model_backed_permission_and_lock(
             name,
-            getattr(meta, "permission_classes", None),
+            meta,
+            flavor="DjangoMutation",
         )
 
         return _ValidatedMutationMeta(
@@ -1033,7 +1143,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             fields=fields,
             exclude=exclude,
             permission_classes=permission_classes,
-            select_for_update=validate_select_for_update("DjangoMutation", name, meta),
+            select_for_update=select_for_update,
         )
 
     # Module path the generated input class is materialized into - the
@@ -1420,6 +1530,42 @@ def _strawberry_field_shape(field: Any) -> tuple[int, Any]:
     return depth, type_
 
 
+def bind_mutation_outputs(
+    mutation_cls: type,
+    *,
+    input_cls: type | None,
+    object_type: type | None,
+) -> None:
+    """Build the payload, materialize it, and stash bind outputs on ``mutation_cls``.
+
+    The payload half of the phase-2.5 bind (the input half is the flavor's
+    ``build_input`` seam; the input twin is ``build_and_stash_input``). Both
+    declaration ledgers write the same three slots ``DjangoMutationField``
+    reads after finalize (``_primary_type`` / ``_input_class`` /
+    ``_payload_type_name``):
+
+    - model-backed (``_bind_mutation``): ``object_type`` is the resolved
+      primary ``DjangoType``; the payload carries ``payload_object_slot``;
+    - model-less (``_bind_form_mutation``): ``object_type`` is ``None`` and
+      the payload is the pinned ``{ ok errors }`` shape.
+
+    Auth's login/logout holders use a fixed payload *name* (``"Login"`` /
+    ``"Logout"``) rather than ``mutation_cls.__name__`` and do not stash
+    ``_input_class``, so they stay local. Payload classes ride the SAME
+    ``materialize_mutation_input_class`` ledger as the input classes (one
+    ledger, one collision check, one ``registry.clear()`` co-clear).
+    """
+    payload_cls = build_payload_type(
+        mutation_cls.__name__,
+        object_type=object_type,
+        object_slot=None if object_type is None else payload_object_slot(object_type),
+    )
+    materialize_mutation_input_class(payload_cls.__name__, payload_cls)
+    mutation_cls._primary_type = object_type
+    mutation_cls._input_class = input_cls
+    mutation_cls._payload_type_name = payload_cls.__name__
+
+
 def _bind_mutation(mutation_cls: type) -> None:
     """Bind one registered mutation at phase 2.5 (spec-036 Decision 12).
 
@@ -1435,23 +1581,11 @@ def _bind_mutation(mutation_cls: type) -> None:
     # Route the input materialization through the ``build_input`` seam (spec-038
     # Decision 13): the model flavor's default rebuilds the model-column input
     # exactly as before, the form flavor builds the form-derived input instead.
-    input_cls = mutation_cls.build_input(meta, primary_type)
-
-    payload_cls = build_payload_type(
-        mutation_cls.__name__,
+    bind_mutation_outputs(
+        mutation_cls,
+        input_cls=mutation_cls.build_input(meta, primary_type),
         object_type=primary_type,
-        object_slot=payload_object_slot(primary_type),
     )
-    # Payload classes are also module globals of ``mutations.inputs`` and also
-    # need the distinct-shape collision raise, so they route through the
-    # SAME ``materialize_mutation_input_class`` ledger as the input classes (one
-    # ledger, one collision check, one ``registry.clear()`` co-clear - the
-    # preferred one-ledger choice from the plan's discretion item).
-    materialize_mutation_input_class(payload_cls.__name__, payload_cls)
-
-    mutation_cls._primary_type = primary_type
-    mutation_cls._input_class = input_cls
-    mutation_cls._payload_type_name = payload_cls.__name__
 
 
 def bind_mutations() -> None:

@@ -47,31 +47,30 @@ from typing import Any
 from django import forms
 
 from ..exceptions import ConfigurationError
-from ..mutations.inputs import (
-    PARTIAL,
-    build_payload_type,
-    materialize_mutation_input_class,
-)
+from ..mutations.inputs import PARTIAL
 from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
 from ..mutations.sets import (
     NON_DELETE_OPERATION_INPUT_KIND,
-    NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
     _hook_overridden,
     _validate_permission_classes,
     _ValidatedMutationMeta,
+    bind_mutation_outputs,
     build_and_stash_input,
     cached_build_input,
     construction_kwargs,
     make_declaration_registry,
     make_meta_validating_metaclass,
-    non_delete_operation_error,
+    model_backed_permission_and_lock,
+    normalize_meta_field_selection,
     reject_unknown_meta_keys,
     require_backing_class,
+    require_model_class,
+    require_non_delete_operation,
+    require_subclass,
     resolve_backed_model_or_raise,
     resolve_meta_model,
     resolver_seams,
-    validate_select_for_update,
 )
 from ..registry import register_subsystem_clear
 from ..utils.inputs import make_shape_build_cache
@@ -253,6 +252,21 @@ def _resolve_effective_form_field_names(
     return tuple(effective)
 
 
+def _normalized_form_field_selection(meta: type, form_class: type) -> tuple[Any, Any]:
+    """Normalize + fail-loud-validate ``Meta.fields`` / ``Meta.exclude`` for both form bases.
+
+    Shape-normalize via the shared ``normalize_meta_field_selection``, then the
+    form narrowing walk (mutual exclusion / unknown-name / empty-set). The
+    snapshot stores the normalized pair; ``build_input`` re-resolves them.
+    """
+    fields, exclude = normalize_meta_field_selection(
+        meta,
+        flavor="DjangoFormMutation / DjangoModelFormMutation",
+    )
+    _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+    return fields, exclude
+
+
 def _form_kwargs_overridden(cls: type, base: type) -> bool:
     """Return whether ``cls`` overrides ``get_form_kwargs`` / ``get_form`` (the waiver detection).
 
@@ -264,9 +278,9 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
     the override supplies, so it trusts the override and waives the guard.
 
     Rides the promoted ``mutations/sets.py::_hook_overridden(cls, base, name)``
-    for each hook - the per-hook identity comparison is single-sited
-    there (the serializer ``get_serializer_kwargs`` waiver rides the same primitive),
-    so the form / serializer waivers cannot drift on how an override is detected.
+    for each hook - the per-hook identity comparison is single-sited there.
+    Serializer mutations do not ride this waiver (they subtract via
+    ``Meta.injected_fields`` only).
 
     **Caveat (deliberate trade-off, spec-038 Decision 7).** The waiver is COARSE: it
     trusts that the override supplies any required field a ``Meta.fields`` /
@@ -431,19 +445,23 @@ class DjangoModelFormMutation(DjangoMutation):
           ``input_class`` / ``partial_input_class``).
         - **missing ``form_class``** - a clean error naming the key.
         - **``form_class`` not a ``forms.ModelForm``** - type-checked BEFORE
-          ``_resolve_model``, so a wrong-type ``form_class`` is a clean error, never
-          a raw ``AttributeError`` from ``form_class._meta.model``.
+          ``_resolve_model`` via ``require_subclass``, so a wrong-type ``form_class``
+          is a clean error, never a raw ``AttributeError`` from
+          ``form_class._meta.model``.
         - **no resolvable ``_meta.model``** - a ``ModelForm`` with no model raises
-          (``_resolve_model`` returns ``None``).
+          (``_resolve_model`` returns ``None``). A non-model value is rejected by
+          ``require_model_class`` (the same class-creation gate the model flavor
+          uses, so a string / instance cannot leak to bind).
         - **bad ``operation``** - missing or not in ``{"create", "update"}``
           (``"delete"`` is rejected - the form flavor has no delete pipeline,
-          Decision 10).
+          Decision 10) via ``require_non_delete_operation``.
         - **``fields`` + ``exclude`` both supplied / bare-string / duplicate /
           unknown-name** - via ``resolve_effective_form_fields``.
 
-        ``permission_classes`` is validated + normalized by the shared
-        ``_validate_permission_classes`` (the ``DjangoModelPermission`` default
-        when unset). The snapshot carries ``form_class`` + the resolved ``model``.
+        ``permission_classes`` + ``select_for_update`` are validated by
+        ``model_backed_permission_and_lock`` (the ``DjangoModelPermission``
+        default when unset, plus the ``FOR UPDATE`` lock). The snapshot carries
+        ``form_class`` + the resolved ``model``.
         """
         name = cls.__name__
         reject_unknown_meta_keys(
@@ -452,41 +470,46 @@ class DjangoModelFormMutation(DjangoMutation):
             _ALLOWED_MODELFORM_META_KEYS,
         )
 
-        form_class = require_backing_class(
+        form_class = require_subclass(
             name,
-            meta,
-            key="form_class",
+            require_backing_class(
+                name,
+                meta,
+                key="form_class",
+                base_label="DjangoModelFormMutation",
+                expected_label="forms.ModelForm",
+            ),
             base_label="DjangoModelFormMutation",
+            key="form_class",
+            expected=forms.ModelForm,
             expected_label="forms.ModelForm",
+            note="(A plain forms.Form belongs on DjangoFormMutation.)",
         )
-        if not (isinstance(form_class, type) and issubclass(form_class, forms.ModelForm)):
-            raise ConfigurationError(
-                f"DjangoModelFormMutation {name}.Meta.form_class must be a forms.ModelForm "
-                f"subclass; got {form_class!r}. (A plain forms.Form belongs on DjangoFormMutation.)",
-            )
 
-        model = resolve_backed_model_or_raise(
-            cls,
-            meta,
+        model = require_model_class(
+            name,
+            resolve_backed_model_or_raise(
+                cls,
+                meta,
+                base_label="DjangoModelFormMutation",
+                key="form_class",
+                noun="ModelForm",
+            ),
             base_label="DjangoModelFormMutation",
-            key="form_class",
-            noun="ModelForm",
         )
 
-        operation = getattr(meta, "operation", None)
-        if operation not in NON_DELETE_WRITE_OPERATIONS:
-            raise non_delete_operation_error("DjangoModelFormMutation", name, operation)
+        operation = require_non_delete_operation("DjangoModelFormMutation", name, meta)
 
-        fields = getattr(meta, "fields", None)
-        exclude = getattr(meta, "exclude", None)
         # Validate the narrowing fail-loud via the shared machinery (mutual
         # exclusion, bare-string / duplicate / unknown-name, empty-set guard); the
-        # snapshot stores the RAW declarations (``build_input`` re-normalizes them).
-        _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+        # snapshot stores the normalized declarations (``build_input`` re-resolves
+        # them).
+        fields, exclude = _normalized_form_field_selection(meta, form_class)
 
-        permission_classes = _validate_permission_classes(
+        permission_classes, select_for_update = model_backed_permission_and_lock(
             name,
-            getattr(meta, "permission_classes", None),
+            meta,
+            flavor="DjangoModelFormMutation",
         )
 
         return _ValidatedMutationMeta(
@@ -498,11 +521,7 @@ class DjangoModelFormMutation(DjangoMutation):
             exclude=exclude,
             permission_classes=permission_classes,
             form_class=form_class,
-            select_for_update=validate_select_for_update(
-                "DjangoModelFormMutation",
-                name,
-                meta,
-            ),
+            select_for_update=select_for_update,
         )
 
     # The form-input namespace (``forms.inputs``), overriding the ``036`` model
@@ -646,7 +665,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
           ``DjangoModelPermission`` default / no optimizer re-fetch, defeating the
           two-base split - P2).
         - **``form_class`` not a ``forms.Form``** - the general type gate after the
-          targeted ``ModelForm`` reject.
+          targeted ``ModelForm`` reject, via ``require_subclass``.
         - **any ``Meta.operation``** - rejected outright (a model-less mutation has
           no model operation - Decision 10).
         - **``fields`` + ``exclude`` both supplied / bare-string / duplicate /
@@ -714,15 +733,16 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
                 "saved object + applies the DjangoModelPermission default + the optimizer "
                 "re-fetch). DjangoFormMutation is for a plain forms.Form only.",
             )
-        if not (isinstance(form_class, type) and issubclass(form_class, forms.Form)):
-            raise ConfigurationError(
-                f"DjangoFormMutation {name}.Meta.form_class must be a forms.Form subclass; "
-                f"got {form_class!r}.",
-            )
+        require_subclass(
+            name,
+            form_class,
+            base_label="DjangoFormMutation",
+            key="form_class",
+            expected=forms.Form,
+            expected_label="forms.Form",
+        )
 
-        fields = getattr(meta, "fields", None)
-        exclude = getattr(meta, "exclude", None)
-        _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+        fields, exclude = _normalized_form_field_selection(meta, form_class)
 
         # The plain flavor has no model, so it CANNOT inherit the
         # ``DjangoModelPermission`` default (that class reads the resolved model,
@@ -860,27 +880,19 @@ def _bind_form_mutation(mutation_cls: type) -> None:
     """Bind one registered plain ``DjangoFormMutation`` at phase 2.5 (spec-038 Decision 6).
 
     Materializes the form-derived input (via the ``build_input`` seam, into
-    ``forms.inputs``) + the pinned model-less ``{ ok errors }`` payload (via
-    ``build_payload_type(object_type=None)`` - the single-sourced payload builder,
-    routed through the SAME ``materialize_mutation_input_class`` ledger as the
-    model payloads so the distinct-shape collision raise + the
-    ``registry.clear()`` co-clear apply). Stashes the refs for the
-    ``DjangoMutationField`` (``_primary_type`` stays ``None`` - no object to
-    return).
+    ``forms.inputs``) + the pinned model-less ``{ ok errors }`` payload via
+    ``bind_mutation_outputs`` (the payload twin of ``build_and_stash_input``;
+    ``object_type=None`` selects the ``{ ok errors }`` shape and keeps
+    ``_primary_type`` ``None``). Payload classes still ride the SAME
+    ``materialize_mutation_input_class`` ledger as the model payloads so the
+    distinct-shape collision raise + the ``registry.clear()`` co-clear apply.
     """
     meta = mutation_cls._mutation_meta
-    input_cls = mutation_cls.build_input(meta)
-
-    payload_cls = build_payload_type(
-        mutation_cls.__name__,
+    bind_mutation_outputs(
+        mutation_cls,
+        input_cls=mutation_cls.build_input(meta),
         object_type=None,
-        object_slot=None,
     )
-    materialize_mutation_input_class(payload_cls.__name__, payload_cls)
-
-    mutation_cls._primary_type = None
-    mutation_cls._input_class = input_cls
-    mutation_cls._payload_type_name = payload_cls.__name__
 
 
 def bind_form_mutations() -> None:

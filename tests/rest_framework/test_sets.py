@@ -162,6 +162,21 @@ def test_non_serializer_value_rejected():
                 operation = "create"
 
 
+def test_serializer_hostile_class_repr_maps_to_configuration_error():
+    """An invalid serializer-class value with a broken repr still yields a typed config error."""
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
+
+        class CreateItem(SerializerMutation):
+            class Meta:
+                serializer_class = HostileRepr()
+                operation = "create"
+
+
 def test_plain_serializer_with_no_model_rejected():
     """A plain ``serializers.Serializer`` (no model) is rejected naming the ModelSerializer requirement."""
 
@@ -190,6 +205,21 @@ def test_modelserializer_with_no_meta_model_rejected():
         class CreateThing(SerializerMutation):
             class Meta:
                 serializer_class = NoModelSerializer
+                operation = "create"
+
+
+def test_modelserializer_non_model_meta_model_raises_at_class_creation():
+    """A ``ModelSerializer`` whose ``Meta.model`` is not a Django model class fails at class creation.
+
+    Rides ``require_model_class`` so a string / instance cannot leak to bind.
+    """
+    serializer_cls = _item_serializer()
+    serializer_cls.Meta.model = "Item"
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+
+        class CreateThing(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
                 operation = "create"
 
 

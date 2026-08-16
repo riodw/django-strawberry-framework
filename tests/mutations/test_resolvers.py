@@ -1459,27 +1459,20 @@ def test_create_raw_pk_m2m_existing_id_succeeds():
 def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
     """An out-of-range raw-pk M2M id is treated as not-found, never a raw ``OverflowError``.
 
-    ``_relation_existence_error`` runs ``pk__in`` on the raw pks. The default
-    ``AutoField`` / ``BigAutoField`` pk maps to a 32-bit ``Int`` input (so
-    graphql-core caps it), but a target with an explicit ``BigIntegerField`` /
-    ``PositiveBigIntegerField`` primary key maps to the arbitrary-precision
-    ``BigInt`` input - a pk past SQLite's signed 64-bit range then reaches this
-    query and overflows the parameter binding (a raw ``OverflowError`` escaping
-    as a top-level error). The pk must be range-coerced first - the coercion the
-    GlobalID path already applies via ``decode_model_global_id`` - so an
-    out-of-range pk falls out of the existing set and yields the field-keyed
-    ``FieldError`` a nonexistent pk yields.
-
-    Driven at ``_relation_existence_error`` directly: no fakeshop model has a
-    ``BigInteger`` primary key to carry the value end-to-end, and the overflow is
-    at this function's ``pk__in`` regardless of the target's pk column type.
+    ``decode_visible_relation_ids`` type-checks each id through the target pk
+    field before any ``pk__in`` query. The default ``AutoField`` / ``BigAutoField``
+    pk maps to a 32-bit ``Int`` input (so graphql-core caps it), but a target with
+    an explicit ``BigIntegerField`` / ``PositiveBigIntegerField`` primary key maps
+    to the arbitrary-precision ``BigInt`` input - a pk past SQLite's signed 64-bit
+    range would overflow the parameter binding. Coercing first makes an
+    out-of-range pk the same field-keyed ``FieldError`` a nonexistent pk yields.
     """
-    library_models.Genre.objects.create(name="Real")
-    # 2**63: one past SQLite's signed-64-bit maximum (9223372036854775807).
-    error = resolvers._relation_existence_error(
+    m2m_field = library_models.Book._meta.get_field("genres")
+    _pks, error = resolvers._decode_relation_id_list(
         "genres",
         [9223372036854775808],
-        library_models.Genre,
+        m2m_field,
+        info=None,
     )
     assert error is not None
     assert error.field == "genres"
@@ -2783,13 +2776,21 @@ def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_
         assert product_models.Item.objects.filter(pk=item.pk).exists()  # refused, not deleted
 
 
-def test_raw_pk_relation_check_skips_an_all_none_set_without_querying():
-    """An all-``None`` raw-pk set is a nullable-relation clear: no check, no query.
+def test_write_flavors_share_resolver_entry_factory():
+    """Model, form, and serializer sync entries all come from ``make_resolver_entries``."""
+    from django_strawberry_framework.forms.resolvers import resolve_form_sync
+    from django_strawberry_framework.rest_framework.resolvers import resolve_serializer_sync
 
-    ``_raw_pk_relation_error``'s explicit-``None`` contract (see its docstring):
-    a ``None`` is not a pk to verify - it decodes to a NULL assignment validated
-    by ``full_clean`` - so a set with no real pks returns clean before any
-    registry resolve or visibility query (``info`` is never touched).
-    """
-    error = resolvers._raw_pk_relation_error("branchId", [None], product_models.Category, None)
-    assert error is None
+    assert resolvers.resolve_mutation_sync.__name__ == "resolve_sync"
+    assert resolve_form_sync.__name__ == "resolve_sync"
+    assert resolve_serializer_sync.__name__ == "resolve_sync"
+
+
+def test_integrity_error_field_errors_is_the_shared_constraint_envelope():
+    """The IntegrityError leaf lives in utils so model and serializer saves cannot drift."""
+    from django_strawberry_framework.utils.errors import integrity_error_field_errors
+
+    (error,) = integrity_error_field_errors()
+    assert error.field == NON_FIELD_ERROR_KEY
+    assert error.messages == ["A database constraint was violated."]
+    assert error.codes == ["constraint"]

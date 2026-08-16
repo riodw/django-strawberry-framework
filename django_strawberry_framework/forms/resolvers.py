@@ -29,11 +29,13 @@ and the form-specific invariants this module owns:
   *or* a raw pk - is type-checked (``decode_model_global_id`` for the Relay
   branch, ``_coerce_relation_pk_or_none`` for the raw-pk branch), then **resolved
   to the visible object through the related primary ``DjangoType.get_queryset``**
-  (``apply_type_visibility_sync(initial_queryset(...))``), closing the raw-pk
-  visibility gap ``036``'s ``_decode_relation_id_set`` leaves (which skips
-  visibility on the raw-pk branch). A hidden / wrong-model / uncoercible id is a
-  field-keyed ``FieldError`` (hidden and missing indistinguishable, no existence
-  leak). The visible object is converted to the form-key value by
+  (``apply_type_visibility_sync(initial_queryset(...))``). The model flavor's
+  batched set decoder now shares ``decode_visible_relation_ids`` (visibility on
+  every branch, including raw pk); the form still maps per element because it
+  needs the related object for ``to_field_name``. A hidden / wrong-model /
+  uncoercible id is a field-keyed ``FieldError`` (hidden and missing
+  indistinguishable, no existence leak). The visible object is converted to the
+  form-key value by
   ``to_field_name`` (``obj.serializable_value(field.to_field_name)`` else
   ``obj.pk``) so the bound form validates by the same key it was built on.
 

@@ -8,6 +8,7 @@ flavors):
 - ``field_error`` - the single ``FieldError`` leaf constructor;
 - ``relation_field_error`` - the uniform relation-decode error;
 - ``validation_error_to_field_errors`` - the Django ``ValidationError`` mapper;
+- ``integrity_error_field_errors`` - the save-time ``IntegrityError`` envelope;
 - ``join_error_path`` - dotted GraphQL error-path joining for nested
   flatteners.
 
@@ -82,8 +83,8 @@ def relation_field_error(graphql_name: str) -> FieldError:
     """Build the uniform invalid / hidden / wrong-model relation ``FieldError`` (spec-039 integration).
 
     The single leaf constructor for the relation-decode error all three write
-    flavors raise - the ``036`` model path (``_decode_relation_id_set`` /
-    ``_relation_membership_error``), the ``038`` form decoder, and the ``039``
+    flavors raise - the ``036`` model path (``decode_visible_relation_ids``),
+    the ``038`` form decoder, and the ``039``
     serializer decoder all call this DIRECTLY (spec-039 folded away the former
     per-flavor ``_relation_error`` / ``_relation_field_error`` aliases). A
     wrong-model, hidden, missing, or uncoercible id all collapse to this one
@@ -121,6 +122,22 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
         return errors
     codes = [leaf.code for leaf in exc.error_list if leaf.code]
     return [field_error("", list(exc.messages), codes=codes)]
+
+
+def integrity_error_field_errors() -> list[FieldError]:
+    """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope.
+
+    The residual after ``full_clean()`` / serializer ``is_valid()``: a constraint
+    violation that beat validation (a uniqueness race, a ``NOT NULL`` / FK /
+    ``CHECK`` the flavor did not catch on the normal path). The catch is
+    ``except IntegrityError`` (broad), so the message is the honest superset
+    "A database constraint was violated." rather than over-claiming uniqueness.
+    Keys to the ``"__all__"`` sentinel - ``save()``'s ``IntegrityError`` carries
+    no reliable cross-backend field mapping. The model, form, and serializer
+    write paths all return this same leaf (via ``save_or_field_errors`` or the
+    serializer's three-``except`` save mapping).
+    """
+    return [field_error("", "A database constraint was violated.", codes="constraint")]
 
 
 def join_error_path(prefix: str, segment: str) -> str:

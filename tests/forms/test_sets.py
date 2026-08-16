@@ -228,6 +228,22 @@ def test_modelform_with_no_resolvable_model_raises():
                 operation = "create"
 
 
+def test_modelform_non_model_meta_model_raises_at_class_creation():
+    """A ``ModelForm`` whose ``_meta.model`` is not a Django model class fails at class creation.
+
+    Django's ``ModelForm`` metaclass normally rejects this earlier; a post-creation
+    swap still must not snapshot and crash at bind. Rides ``require_model_class``.
+    """
+    form_cls = _item_model_form()
+    form_cls._meta.model = "Item"
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+
+        class CreateThing(DjangoModelFormMutation):
+            class Meta:
+                form_class = form_cls
+                operation = "create"
+
+
 # ---------------------------------------------------------------------------
 # Meta validation matrix - operation rules
 # ---------------------------------------------------------------------------
@@ -436,6 +452,20 @@ def test_plain_form_fields_and_exclude_both_raises():
                 form_class = MultiForm
                 fields = ("a",)
                 exclude = ("b",)
+
+
+def test_plain_form_hostile_form_repr_maps_to_configuration_error():
+    """An invalid form-class value with a broken repr still yields a typed config error."""
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
+
+        class Submit(DjangoFormMutation):
+            class Meta:
+                form_class = HostileRepr()
 
 
 def test_modelform_unknown_field_name_routes_through_slice1_narrowing():

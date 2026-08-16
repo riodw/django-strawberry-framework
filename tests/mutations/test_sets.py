@@ -1623,3 +1623,209 @@ def test_public_metaclasses_pin_public_identity_and_pickle():
     # The two consumers are distinct class objects over disjoint ledgers, not one
     # shared function-local metaclass reused under two names.
     assert DjangoMutationMetaclass is not DjangoFormMutationMetaclass
+
+
+def test_require_subclass_accepts_expected_and_rejects_with_safe_repr():
+    """The shared Meta type-gate returns the class or raises with ``_safe_arg_repr``."""
+    from django_strawberry_framework.mutations.sets import require_subclass
+
+    class Expected:
+        pass
+
+    class Child(Expected):
+        pass
+
+    assert (
+        require_subclass(
+            "Probe",
+            Child,
+            base_label="ProbeBase",
+            key="backing",
+            expected=Expected,
+            expected_label="Expected",
+        )
+        is Child
+    )
+
+    class Hostile:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ConfigurationError, match="unprintable Hostile"):
+        require_subclass(
+            "Probe",
+            Hostile(),
+            base_label="ProbeBase",
+            key="backing",
+            expected=Expected,
+            expected_label="Expected",
+        )
+
+    with pytest.raises(ConfigurationError, match=r"belongs on OtherBase"):
+        require_subclass(
+            "Probe",
+            object,
+            base_label="ProbeBase",
+            key="backing",
+            expected=Expected,
+            expected_label="Expected",
+            note="(A plain value belongs on OtherBase.)",
+        )
+
+
+def test_require_non_delete_operation_accepts_create_update_and_rejects_delete():
+    """The shared create/update lookup is the membership test both model-backed flavors use."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import require_non_delete_operation
+
+    assert (
+        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="create"))
+        == "create"
+    )
+    assert (
+        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="update"))
+        == "update"
+    )
+    with pytest.raises(ConfigurationError, match="operation must be one of"):
+        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="delete"))
+    with pytest.raises(ConfigurationError, match="operation must be one of"):
+        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace())
+
+    class Hostile:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ConfigurationError, match="unprintable Hostile"):
+        require_non_delete_operation(
+            "ProbeBase",
+            "Probe",
+            SimpleNamespace(operation=Hostile()),
+        )
+
+
+def test_form_and_serializer_type_gates_ride_require_subclass():
+    """Form and serializer ``_validate_meta`` type-gates share ``require_subclass``."""
+    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
+    from django_strawberry_framework.rest_framework.sets import SerializerMutation
+
+    for cls in (DjangoModelFormMutation, DjangoFormMutation, SerializerMutation):
+        assert "require_subclass" in cls._validate_meta.__code__.co_names
+
+
+def test_form_and_serializer_operation_checks_ride_require_non_delete_operation():
+    """Model-backed form + serializer share the create/update lookup; plain form does not."""
+    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
+    from django_strawberry_framework.rest_framework.sets import SerializerMutation
+
+    for cls in (DjangoModelFormMutation, SerializerMutation):
+        assert "require_non_delete_operation" in cls._validate_meta.__code__.co_names
+    assert (
+        "require_non_delete_operation" not in DjangoFormMutation._validate_meta.__code__.co_names
+    )
+
+
+def test_require_model_class_accepts_model_and_rejects_string_or_instance():
+    """The shared model-class gate returns the model or raises at class-creation wording."""
+    from django_strawberry_framework.mutations.sets import require_model_class
+
+    assert (
+        require_model_class("Probe", product_models.Item, base_label="ProbeBase")
+        is product_models.Item
+    )
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+        require_model_class("Probe", "Item", base_label="ProbeBase")
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+        require_model_class("Probe", product_models.Item(), base_label="ProbeBase")
+
+
+def test_normalize_meta_field_selection_returns_normalized_pair():
+    """The shared fields/exclude pair normalizes both keys with one flavor label."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import normalize_meta_field_selection
+
+    assert normalize_meta_field_selection(
+        SimpleNamespace(fields=["name"], exclude=None),
+        flavor="DjangoMutation",
+    ) == (("name",), None)
+    with pytest.raises(ConfigurationError, match="not a bare string"):
+        normalize_meta_field_selection(
+            SimpleNamespace(fields="name", exclude=None),
+            flavor="DjangoMutation",
+        )
+
+
+def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
+    """Model-backed flavors share the DjangoModelPermission default + FOR UPDATE pair."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import model_backed_permission_and_lock
+
+    classes, lock = model_backed_permission_and_lock(
+        "Probe",
+        SimpleNamespace(),
+        flavor="DjangoMutation",
+    )
+    assert classes == [DjangoModelPermission]
+    assert lock is True
+
+    classes, lock = model_backed_permission_and_lock(
+        "Probe",
+        SimpleNamespace(select_for_update=False, permission_classes=[]),
+        flavor="DjangoMutation",
+    )
+    assert classes == []
+    assert lock is False
+
+
+def test_bind_mutation_outputs_stashes_model_less_payload_and_slots():
+    """The shared payload stash writes the three bind-output slots both ledgers fill."""
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+    from django_strawberry_framework.mutations.sets import bind_mutation_outputs
+
+    class BindOutputsProbe:
+        pass
+
+    sentinel = object()
+    bind_mutation_outputs(BindOutputsProbe, input_cls=sentinel, object_type=None)
+    assert BindOutputsProbe._primary_type is None
+    assert BindOutputsProbe._input_class is sentinel
+    assert BindOutputsProbe._payload_type_name == "BindOutputsProbePayload"
+    assert "BindOutputsProbePayload" in _materialized_names
+
+
+def test_model_and_plain_form_binds_ride_bind_mutation_outputs():
+    """Both declaration-ledger binds stash payload + slots through one helper."""
+    from django_strawberry_framework.forms.sets import _bind_form_mutation
+    from django_strawberry_framework.mutations.sets import _bind_mutation
+
+    assert "bind_mutation_outputs" in _bind_mutation.__code__.co_names
+    assert "bind_mutation_outputs" in _bind_form_mutation.__code__.co_names
+
+
+def test_model_and_form_validate_ride_shared_meta_helpers():
+    """Model + ModelForm ride the shared model-class / fields / permission-lock helpers."""
+    from django_strawberry_framework.forms.sets import DjangoFormMutation, DjangoModelFormMutation
+    from django_strawberry_framework.rest_framework.sets import SerializerMutation
+
+    model_names = DjangoMutation._validate_meta.__code__.co_names
+    assert "require_model_class" in model_names
+    assert "normalize_meta_field_selection" in model_names
+    assert "model_backed_permission_and_lock" in model_names
+
+    form_names = DjangoModelFormMutation._validate_meta.__code__.co_names
+    assert "require_model_class" in form_names
+    assert "model_backed_permission_and_lock" in form_names
+    assert "_normalized_form_field_selection" in form_names
+
+    plain_names = DjangoFormMutation._validate_meta.__code__.co_names
+    assert "_normalized_form_field_selection" in plain_names
+    assert "require_model_class" not in plain_names
+    assert "model_backed_permission_and_lock" not in plain_names
+
+    assert "require_model_class" in SerializerMutation._validate_meta.__code__.co_names
+    assert (
+        "model_backed_permission_and_lock"
+        not in SerializerMutation._validate_meta.__code__.co_names
+    )

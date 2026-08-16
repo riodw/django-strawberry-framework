@@ -62,18 +62,19 @@ from typing import Any
 
 from rest_framework import serializers
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.inputs import CREATE
 from ..mutations.sets import (
     NON_DELETE_OPERATION_INPUT_KIND,
-    NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
     _ValidatedMutationMeta,
     build_and_stash_input,
     construction_kwargs,
-    non_delete_operation_error,
     reject_unknown_meta_keys,
     require_backing_class,
+    require_model_class,
+    require_non_delete_operation,
+    require_subclass,
     resolve_backed_model_or_raise,
     resolve_meta_model,
     resolver_seams,
@@ -239,14 +240,14 @@ def _validate_serializer_nested_fields(
     if not isinstance(nested_fields, Mapping):
         raise ConfigurationError(
             f"SerializerMutation {name}.Meta.nested_fields must be a mapping of "
-            f"{{field_name: NestedSerializerConfig}}; got {nested_fields!r}.",
+            f"{{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_fields)}.",
         )
     normalized: dict[str, NestedSerializerConfig] = {}
     for field_name, config in nested_fields.items():
         if not isinstance(config, NestedSerializerConfig):
             raise ConfigurationError(
                 f"SerializerMutation {name}.Meta.nested_fields[{field_name!r}] must be a "
-                f"NestedSerializerConfig; got {config!r}.",
+                f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
             )
         field = field_map.get(field_name)
         if field is None:
@@ -399,7 +400,7 @@ class SerializerMutation(DjangoMutation):
           clean error, never a raw ``AttributeError``.
         - **bad ``operation``** - missing or not in ``NON_DELETE_WRITE_OPERATIONS``
           (``"delete"`` rejected - DRF serializers do not delete, Decision 10) via
-          the shared ``non_delete_operation_error``.
+          the shared ``require_non_delete_operation``.
         - **``fields`` + ``exclude`` both supplied / bare-string (incl.
           ``"__all__"``) / duplicate / unknown-name / empty-set** - via the
           ``resolve_effective_serializer_fields``, which calls the shared
@@ -430,23 +431,23 @@ class SerializerMutation(DjangoMutation):
         )
 
         # The presence clause is the shared ``require_backing_class``;
-        # the two serializer-specific type-gates (Serializer, then ModelSerializer)
-        # stay here - their messages genuinely diverge from the form flavor's.
-        serializer_class = require_backing_class(
+        # the Serializer type-gate is the shared ``require_subclass``; the
+        # ModelSerializer-specific second gate stays here - its message names
+        # ``Meta.model``, not the shared subclass template.
+        serializer_class = require_subclass(
             name,
-            meta,
-            key="serializer_class",
+            require_backing_class(
+                name,
+                meta,
+                key="serializer_class",
+                base_label="SerializerMutation",
+                expected_label="serializers.ModelSerializer",
+            ),
             base_label="SerializerMutation",
-            expected_label="serializers.ModelSerializer",
+            key="serializer_class",
+            expected=serializers.Serializer,
+            expected_label="DRF serializers.Serializer",
         )
-        if not (
-            isinstance(serializer_class, type)
-            and issubclass(serializer_class, serializers.Serializer)
-        ):
-            raise ConfigurationError(
-                f"SerializerMutation {name}.Meta.serializer_class must be a DRF "
-                f"serializers.Serializer subclass; got {serializer_class!r}.",
-            )
         if not issubclass(serializer_class, serializers.ModelSerializer):
             raise ConfigurationError(
                 f"SerializerMutation {name}.Meta.serializer_class {serializer_class.__name__} "
@@ -456,18 +457,22 @@ class SerializerMutation(DjangoMutation):
 
         # The "resolves no model" raise is the shared ``resolve_backed_model_or_raise``,
         # run after the type-gates so ``Meta.serializer_class`` is a
-        # real class with a ``.__name__``.
-        model = resolve_backed_model_or_raise(
-            cls,
-            meta,
+        # real class with a ``.__name__``. ``require_model_class`` then type-gates
+        # the resolved value (a string / instance ``Meta.model``) so it cannot
+        # leak to bind.
+        model = require_model_class(
+            name,
+            resolve_backed_model_or_raise(
+                cls,
+                meta,
+                base_label="SerializerMutation",
+                key="serializer_class",
+                noun="ModelSerializer",
+            ),
             base_label="SerializerMutation",
-            key="serializer_class",
-            noun="ModelSerializer",
         )
 
-        operation = getattr(meta, "operation", None)
-        if operation not in NON_DELETE_WRITE_OPERATIONS:
-            raise non_delete_operation_error("SerializerMutation", name, operation)
+        operation = require_non_delete_operation("SerializerMutation", name, meta)
 
         fields = getattr(meta, "fields", None)
         exclude = getattr(meta, "exclude", None)

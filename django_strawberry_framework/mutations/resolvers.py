@@ -78,7 +78,6 @@ from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
-from ..exceptions import ConfigurationError
 from ..optimizer.extension import (
     apply_connection_optimization,
     mutation_payload_child_selections,
@@ -111,21 +110,20 @@ from ..utils.write_transaction import (
     conflict_error,
     forced_update_conflict_errors,
     not_updated_exceptions,
+    open_write_pipeline,
     pin_write_queryset,
     pipeline_alias_guard,
     pipeline_write_phase,
-    pks_match,
-    require_managed_write,
+    reject_substituted_row,
     require_write_pipeline,
     snapshot_target_state,
-    write_pipeline,
 )
 
-# Moved to utils/write_values.py; re-exported for compatibility.
+# Moved to utils/write_values.py; form / serializer resolvers import
+# ``type_check_relation_id`` from there directly (no compatibility re-export).
 from ..utils.write_values import (
     coerce_relation_pk_or_none,
     decode_scalar_leaf,
-    type_check_relation_id,  # noqa: F401 - re-exported for the form / serializer resolvers + tests.
 )
 from .inputs import FieldError, payload_object_slot
 from .permissions import _require_sync_bool_auth_result
@@ -152,48 +150,51 @@ def run_write_pipeline_sync(
     *,
     decode_step: Any,
     write_step: Any,
+    tail_step: Any = None,
 ) -> Any:
-    """The shared model-backed create / update write orchestration.
+    """The shared write orchestration every mutation flavor rides.
 
-    The single-sited skeleton the model (``_run_create`` / ``_run_update``), the
-    ``ModelForm`` (``forms/resolvers.py::_run_modelform_pipeline_sync``), and the
-    serializer (``rest_framework/resolvers.py``) write flavors all ride, so the
+    The single-sited skeleton the model (create / update / delete), the
+    ``ModelForm``, the serializer, and the model-less plain form all ride, so the
     ``transaction.atomic()`` boundary + the **authorize-before-decode security
-    ordering** is owned in ONE place rather than hand-copied a third time. Scoped to
-    **model-backed create / update only**: the ``delete`` snapshot-before-delete
-    body (``_run_delete``) and the model-less plain-form body
-    (``_run_plain_form_pipeline_sync``) keep their own orchestration (no instance /
-    no re-fetch / no object slot).
+    ordering** is owned in ONE place. ``decode_step`` / ``write_step`` are the
+    per-flavor middle; ``tail_step`` is the delete seam (snapshot-before-delete
+    already happened in ``write_step``; the default tail is the post-write
+    ``refetch_optimized`` + object-slot payload, or ``{ ok: true }`` when there
+    is no primary type).
 
     The order is the ``036`` / ``038`` security invariant, in ONE place:
 
-    1. open one ``transaction.atomic()``;
-    2. (update) ``coerce_lookup_id`` -> ``locate_instance`` -> ``not_found_error``
-       through the target type's visibility ``get_queryset`` (a malformed id is a
-       ``FieldError`` on ``id``; a hidden / missing row is not-found - no existence
-       leak; ``create`` has no locate, ``instance is None``);
+    1. open one ``transaction.atomic()`` (via ``open_write_pipeline``);
+    2. (update / delete) ``coerce_lookup_id`` -> ``locate_instance`` ->
+       ``not_found_error`` through the target type's visibility ``get_queryset``
+       (a malformed id is a ``FieldError`` on ``id``; a hidden / missing row is
+       not-found - no existence leak; create and plain form have no locate,
+       ``instance is None``);
     3. **authorize BEFORE decode** (``authorize_or_raise(... instance=instance)``):
        the decode issues visibility-scoped relation queries, so running it pre-auth
        would let an unauthorized caller probe relation visibility by id;
     4. ``decode_step(instance) -> decoded | list[FieldError]`` - the flavor's
        relation-decode + payload build (returns a ``list[FieldError]`` on a decode
-       failure, mapped to a null-object payload here);
+       failure, mapped to the error envelope here);
     5. ``write_step(instance, decoded) -> saved | list[FieldError]`` - the flavor's
        construct / validate / ``save()`` (M2M assignment etc.), returning the saved
        object or a ``list[FieldError]`` on a validation / write failure;
-    6. ``refetch_optimized(primary_type, saved.pk, info, force_load=False)`` ->
-       ``build_payload`` - the optimizer-planned re-fetch by pk (G2) + the success
-       payload.
+    6. success tail - ``tail_step(saved)`` when supplied (delete's snapshot
+       payload); else ``{ ok: true }`` for a model-less mutation; else
+       ``refetch_optimized`` -> ``build_payload``.
 
-    ``decode_step`` / ``write_step`` are the ONLY per-flavor seams: the model passes
-    a relation-decode + ``setattr`` / construct step and a ``full_clean`` -> ``save``
-    -> M2M step; the form passes a form-decode + partial-reconstruction step and a
-    ``get_form`` -> ``is_valid`` -> ``form.save`` step; the serializer passes a
-    serializer-field-keyed decode step and a ``serializer.is_valid`` -> ``save`` step.
-    A step returning a ``list[FieldError]`` short-circuits to a null-object payload AND
-    marks the ``transaction.atomic()`` block for rollback - so a
-    ``write_step`` that made a partial write and THEN raised a validation error (a
-    custom ``serializer.save()`` that inserts a row, then raises) never commits the
+    ``decode_step`` / ``write_step`` (and delete's ``tail_step``) are the ONLY
+    per-flavor seams: the model passes a relation-decode + ``setattr`` / construct
+    step and a ``full_clean`` -> ``save`` -> M2M step; the form passes a form-decode
+    + partial-reconstruction step and a ``get_form`` -> ``is_valid`` -> persist
+    step; the serializer passes a serializer-field-keyed decode step and a
+    ``serializer.is_valid`` -> ``save`` step; delete passes a no-op decode, a
+    snapshot-then-delete write, and a snapshot ``tail_step``. A step returning a
+    ``list[FieldError]`` short-circuits to the error envelope AND marks the
+    ``transaction.atomic()`` block for rollback - so a ``write_step`` that made a
+    partial write and THEN raised a validation error (a custom
+    ``serializer.save()`` that inserts a row, then raises) never commits the
     partial write; the error envelope is the no-effect outcome.
     """
     # The cooperative deadline (spec-047) BEFORE the transaction opens: a write
@@ -203,28 +204,27 @@ def run_write_pipeline_sync(
     check_deadline(info)
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
-    slot = payload_object_slot(primary_type)
     payload_cls = payload_cls_for(mutation_cls)
-    is_update = meta.operation == "update"
+    slot = None if primary_type is None else payload_object_slot(primary_type)
+    model = None if primary_type is None else model_for(primary_type)
+    needs_locate = primary_type is not None and meta.operation in {"update", "delete"}
 
-    model = model_for(primary_type)
     # The managed-transaction gate + the pinned write alias (mutation atomicity, shipped 0.0.14): the
     # completion-spanning ``DjangoSchema`` transaction must already be open on the
     # router's ONE write alias - a plain ``strawberry.Schema`` execution fails
     # HERE, before any database work. Every query below (locate, relation
     # visibility, re-fetch) and the rollback marking are pinned to this alias via
     # the ``write_pipeline`` context the shared queryset helpers consult.
-    using = require_managed_write(mutation_cls)
-    with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
+    with open_write_pipeline(mutation_cls) as using:
         _error_payload = error_payload_builder(payload_cls, slot, using)
 
         instance = None
-        if is_update:
+        if needs_locate:
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
                 return _error_payload([id_error])
             # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
-            # base-manager ``SELECT ... FOR UPDATE`` on the update locate, constrained by the
+            # base-manager ``SELECT ... FOR UPDATE`` on the update/delete locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
                 primary_type,
@@ -292,18 +292,29 @@ def run_write_pipeline_sync(
             if isinstance(saved, list):
                 return _error_payload(saved)
 
+            if tail_step is not None:
+                return tail_step(saved)
+
+            if slot is None:
+                return payload_cls(ok=True, errors=[])
+
             # The flavor-independent backstop over the snapshot: whatever the
             # flavor's own validation concluded, an update result whose pk
             # drifted from the authorized snapshot is never re-fetched into a
             # success payload. Equality is CANONICAL through the model pk
             # field's own ``to_python`` (a UUID pk stringifies in more than one
             # spelling of the same row), never a ``str()`` comparison.
-            if is_update and not pks_match(model, saved.pk, authorized_pk):
-                raise ConfigurationError(
-                    f"{mutation_cls.__name__}: the write step returned "
-                    f"{model.__name__} pk={saved.pk!r}, but the located, authorized row is "
-                    f"pk={authorized_pk!r}; an update must write the row that was "
-                    "authorized, never a substituted one.",
+            if meta.operation == "update":
+                reject_substituted_row(
+                    model,
+                    saved.pk,
+                    authorized_pk,
+                    message=(
+                        f"{mutation_cls.__name__}: the write step returned "
+                        f"{model.__name__} pk={saved.pk!r}, but the located, authorized row is "
+                        f"pk={authorized_pk!r}; an update must write the row that was "
+                        "authorized, never a substituted one."
+                    ),
                 )
 
             obj = refetch_optimized(primary_type, saved.pk, info, alias=using, force_load=False)
@@ -316,8 +327,8 @@ def run_write_pipeline_sync(
             return build_payload(payload_cls, slot, obj, [])
 
 
-def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
-    """Build the roll-back-then-envelope closure every model-backed error path returns through.
+def error_payload_builder(payload_cls: type, slot: str | None, using: str) -> Any:
+    """Build the roll-back-then-envelope closure every write error path returns through.
 
     The single error-envelope constructor (centralized for mutation atomicity, shipped 0.0.14):
     a ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
@@ -326,16 +337,21 @@ def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
     inserts a row then raises ``serializers.ValidationError``, mapped to the
     envelope inside the pipeline's atomic block - would otherwise COMMIT on the
     normal return. ``set_rollback(True, using=...)`` runs BEFORE the payload build
-    on EVERY envelope path (create, update, and delete alike), so the partial
-    write - or a delete's visibility-hook / custom-``delete()`` side effects - is
-    discarded; ``build_payload`` runs no ORM query, so it is safe after
-    ``set_rollback``. Harmless on the read-only locate / decode failure paths
-    (nothing was written), keeping the invariant uniform: an error envelope never
-    commits.
+    on EVERY envelope path (create, update, delete, and plain form alike), so the
+    partial write - or a delete's visibility-hook / custom-``delete()`` side
+    effects - is discarded. Payload construction runs no ORM query, so it is safe
+    after ``set_rollback``. Harmless on the read-only locate / decode failure
+    paths (nothing was written), keeping the invariant uniform: an error envelope
+    never commits.
+
+    ``slot`` is the model-backed object-field name (``"node"`` / ``"result"``);
+    ``None`` selects the model-less ``{ ok: false, errors }`` envelope.
     """
 
     def _error_payload(errors: list[FieldError]) -> Any:
         transaction.set_rollback(True, using=using)
+        if slot is None:
+            return payload_cls(ok=False, errors=errors)
         return build_payload(payload_cls, slot, None, errors)
 
     return _error_payload
@@ -1074,37 +1090,17 @@ def _run_pipeline_sync(
     """Run the synchronous decode -> ... -> payload pipeline inside one ``transaction.atomic()``.
 
     The single sync body the async path wraps in ``sync_to_async(...,
-    thread_sensitive=True)``. Dispatches on ``meta.operation``: the
-    model-backed create / update branches ride the promoted shared
-    ``run_write_pipeline_sync`` skeleton (spec-039 P1.5 - the ``transaction.atomic()``
-    boundary + authorize-before-decode ordering single-sited across the model, form,
-    and serializer flavors), supplying only the model ``decode_step`` / ``write_step``
-    callbacks; the ``delete`` branch keeps its own snapshot-before-delete body (F6 -
-    no data, no decode, a snapshot re-fetch BEFORE the row is deleted, so it is
-    excluded from the create/update skeleton).
+    thread_sensitive=True)``. Dispatches on ``meta.operation``: create / update
+    ride ``run_write_pipeline_sync`` with the model decode/write callbacks;
+    delete rides the same skeleton with a snapshot-before-delete ``write_step``
+    and a snapshot ``tail_step`` (no data, no decode, the re-fetch happens
+    BEFORE the row is deleted).
     """
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
 
     if meta.operation == "delete":
-        # The delete branch's own pre-transaction deadline check; the create /
-        # update branches get theirs inside the shared skeleton
-        # (``run_write_pipeline_sync``), which the form and serializer flavors
-        # also enter, so neither flavor needs a copy.
-        check_deadline(info)
-        slot = payload_object_slot(primary_type)
-        payload_cls = payload_cls_for(mutation_cls)
-        using = require_managed_write(mutation_cls)
-        with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
-            return _run_delete(
-                mutation_cls,
-                info,
-                id,
-                primary_type,
-                slot,
-                payload_cls,
-                alias=using,
-            )
+        return _run_delete(mutation_cls, info, id)
 
     model = model_for(primary_type)
     return run_write_pipeline_sync(
@@ -1252,18 +1248,40 @@ def _run_delete(
     mutation_cls: type,
     info: Any,
     id: Any,  # noqa: A002
-    primary_type: type,
-    slot: str,
-    payload_cls: type,
-    *,
-    alias: str,
 ) -> Any:
-    """The ``delete`` branch: locate -> authorize -> snapshot-before-delete -> delete -> payload.
+    """Delete rider of ``run_write_pipeline_sync``: snapshot-before-delete via ``tail_step``.
+
+    Locate / authorize / alias-guard / rollback envelope are the shared skeleton.
+    This rider supplies a no-op decode, the snapshot-then-delete ``write_step``,
+    and a ``tail_step`` that returns the pre-delete snapshot (the row is gone, so
+    the default post-write refetch would miss it). ``data`` is ``None`` so
+    permission checks see the same value they did when delete owned its own body.
+    """
+    primary_type = mutation_cls._primary_type
+    payload_cls = payload_cls_for(mutation_cls)
+    slot = payload_object_slot(primary_type)
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        None,
+        id,
+        decode_step=lambda _instance: None,
+        write_step=lambda instance, _decoded: _delete_write_step(
+            mutation_cls,
+            info,
+            instance,
+        ),
+        tail_step=lambda snapshot: build_payload(payload_cls, slot, snapshot, []),
+    )
+
+
+def _delete_write_step(mutation_cls: type, info: Any, instance: Any) -> Any:
+    """Snapshot the authorized row, then delete it (spec-036 snapshot-before-delete).
 
     The snapshot is the optimizer-planned re-fetch fully materialized (relations
-    loaded into the instance) BEFORE the row is deleted (spec-036), so the detached in-memory
-    instance's relations survive the row's deletion. The re-fetch is by pk without the
-    visibility filter, consistent with create / update.
+    loaded into the instance) BEFORE the row is deleted, so the detached in-memory
+    instance's relations survive the row's deletion. The re-fetch is by pk without
+    the visibility filter, consistent with create / update.
 
     The deletion runs against the **located instance**, not the returned
     snapshot: Django's ``Model.delete()`` sets ``instance.pk = None`` on the
@@ -1276,67 +1294,33 @@ def _run_delete(
     ``FieldError`` envelope (with a ``None`` payload object) instead of leaking a
     raw top-level ``GraphQLError``.
     """
-    meta = mutation_cls._mutation_meta
-    _error_payload = error_payload_builder(payload_cls, slot, alias)
-    node_id, id_error = coerce_lookup_id(id, primary_type)
-    if id_error is not None:
-        return _error_payload([id_error])
-    instance = locate_instance(
-        primary_type,
-        node_id,
-        info,
-        alias=alias,
-        select_for_update=meta.select_for_update,
+    primary_type = mutation_cls._primary_type
+    pipeline_context = require_write_pipeline()
+    authorized_pk = pipeline_context.authorized_pk
+    reject_substituted_row(
+        model_for(primary_type),
+        instance.pk,
+        authorized_pk,
+        message=(
+            f"{mutation_cls.__name__}: the located instance's pk changed from "
+            f"{authorized_pk!r} to {instance.pk!r} during authorization; a delete must "
+            "remove the row that was located and authorized, never a substituted one."
+        ),
     )
-    if instance is None:
-        return _error_payload([not_found_error()])
-    check_instance_write_alias(model_for(primary_type), alias, instance)
-
-    # The immutable snapshot BEFORE the permission hook (consumer code) can
-    # touch the mutable located instance, mirroring the create/update pipeline.
-    authorized_pk = instance.pk
-    require_write_pipeline().authorized_pk = authorized_pk
-
-    # Identify the auth aliases so the authorization phase can permit their
-    # read-only queries under a divergent router. Gated exactly like
-    # create/update: ``permission_classes = []`` grants no auth-alias access.
-    auth_aliases = auth_aliases_for_permission_classes(meta.permission_classes)
-    # The alias guard spans the consumer-reachable phases (permission,
-    # snapshot re-fetch with its visibility hooks, the delete itself): any SQL
-    # statement on a non-pinned connection raises before it executes.
-    with pipeline_alias_guard(mutation_cls.__name__, alias):
-        # The authorization phase permits read-only auth-alias queries for this
-        # single call, then closes (the re-fetch + delete cannot reach it).
-        with authorization_phase(auth_aliases):
-            authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
-
-        # A permission hook that re-pointed ``instance.pk`` would make
-        # ``instance.delete()`` remove a row that was never authorized (and the
-        # payload snapshot describe it); fail closed on any drift. Canonical
-        # pk-field equality, never a ``str()`` comparison.
-        if not pks_match(model_for(primary_type), instance.pk, authorized_pk):
-            raise ConfigurationError(
-                f"{mutation_cls.__name__}: the located instance's pk changed from "
-                f"{authorized_pk!r} to {instance.pk!r} during authorization; a delete must "
-                "remove the row that was located and authorized, never a substituted one.",
-            )
-
-        snapshot = refetch_optimized(
-            primary_type,
-            authorized_pk,
-            info,
-            alias=alias,
-            force_load=True,
-        )
-        # The DELETE statements run inside the pinned-alias write phase; the
-        # snapshot re-fetch above and the permission phase stay read-only.
-        with pipeline_write_phase():
-            delete_errors = _delete_or_field_errors(instance)
-        if delete_errors is not None:
-            # The centralized envelope marks the transaction for rollback, so any
-            # visibility-hook or custom-``delete()`` side effect is discarded with it.
-            return _error_payload(delete_errors)
-        return build_payload(payload_cls, slot, snapshot, [])
+    snapshot = refetch_optimized(
+        primary_type,
+        authorized_pk,
+        info,
+        alias=pipeline_context.alias,
+        force_load=True,
+    )
+    # The DELETE statements run inside the pinned-alias write phase; the
+    # snapshot re-fetch above and the permission phase stay read-only.
+    with pipeline_write_phase():
+        delete_errors = _delete_or_field_errors(instance)
+    if delete_errors is not None:
+        return delete_errors
+    return snapshot
 
 
 def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:

@@ -1343,6 +1343,40 @@ def test_required_extra_field_omitted_on_update_is_coercion_error():
 # ---------------------------------------------------------------------------
 
 
+def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch):
+    """Plain form is a decode/write rider of ``run_write_pipeline_sync``, not a second orchestration."""
+    seen: dict = {}
+
+    def fake_pipeline(
+        mutation_cls,
+        info,
+        data,
+        id,  # noqa: A002
+        *,
+        decode_step,
+        write_step,
+        tail_step=None,
+    ):
+        seen["id"] = id
+        seen["decode_step"] = decode_step
+        seen["write_step"] = write_step
+        seen["tail_step"] = tail_step
+        return "ridden"
+
+    monkeypatch.setattr(form_resolvers, "run_write_pipeline_sync", fake_pipeline)
+    result = form_resolvers._run_plain_form_pipeline_sync(
+        mock.Mock(),
+        info=None,
+        data="data",
+        id="unset-id",
+    )
+    assert result == "ridden"
+    assert seen["id"] == "unset-id"
+    assert callable(seen["decode_step"])
+    assert callable(seen["write_step"])
+    assert seen["tail_step"] is None
+
+
 @pytest.mark.django_db
 def test_plain_form_valid_returns_ok_true():
     """A valid plain-form submit returns ``{ ok: true, errors: [] }``."""

@@ -77,9 +77,9 @@ and the form-specific invariants this module owns:
   mutation operation - it comes for free, no new optimizer code.
 
 - **One ``transaction.atomic()`` boundary; the async path runs the sync body in
-  one ``sync_to_async(thread_sensitive=True)`` call** (Decision 8) - the same
-  boundary shape ``036`` set, a deliberate same-shape sibling (the body differs,
-  so it is a structural parallel, not a call).
+  one ``sync_to_async(thread_sensitive=True)`` call** (Decision 8) - both form
+  flavors ride ``run_write_pipeline_sync`` for that boundary, the same skeleton
+  the model / serializer / delete paths use.
 
 - **``SyncMisuseError`` discipline** is inherited from
   ``apply_type_visibility_sync``: a sync form mutation meeting an ``async def
@@ -99,25 +99,15 @@ from typing import Any
 
 from django import forms
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.forms.models import model_to_dict
 
 from ..mutations.resolvers import (
-    authorize_or_raise,
     make_resolver_entries,
-    payload_cls_for,
     run_write_pipeline_sync,
     save_or_field_errors,
 )
-from ..utils.permissions import auth_aliases_for_permission_classes
 from ..utils.querysets import sync_pipeline_recourse
-from ..utils.write_transaction import (
-    authorization_phase,
-    pipeline_alias_guard,
-    pipeline_write_phase,
-    require_managed_write,
-    write_pipeline,
-)
+from ..utils.write_transaction import pipeline_write_phase
 from ..utils.write_values import (
     decode_provided_fields,
     decode_scalar_leaf,
@@ -433,15 +423,15 @@ def _modelform_decode_step(
     *,
     instance: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]] | list[Any]:
-    """The ``ModelForm`` ``decode_step``: form-decode + partial reconstruction.
+    """The form ``decode_step``: form-decode + (ModelForm update) partial reconstruction.
 
     Decodes the bound input into a FORM-field-keyed ``(provided_data,
     provided_files)`` (the ``038`` ``_decode_form_data`` contract: visibility on
     every relation branch), then - for update - reconstructs the full bound
     ``data=`` so a one-field change validates against the row's unchanged values.
-    Returns ``(form_data, provided_files)`` for the write step, or a
-    ``list[FieldError]`` on a decode failure (the shared skeleton maps it to a
-    null-object payload).
+    A plain form has no located instance, so reconstruction is skipped. Returns
+    ``(form_data, provided_files)`` for the write step, or a ``list[FieldError]``
+    on a decode failure (the shared skeleton maps it to the error envelope).
     """
     provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
     if decode_error is not None:
@@ -451,6 +441,27 @@ def _modelform_decode_step(
     else:
         form_data = provided_data
     return form_data, provided_files
+
+
+def _bound_form_or_field_errors(
+    holder: Any,
+    info: Any,
+    decoded: tuple[dict[str, Any], dict[str, Any]],
+    *,
+    instance: Any,
+) -> tuple[Any, list[Any] | None]:
+    """Construct the bound form and run ``is_valid()`` once (both form flavors).
+
+    Returns ``(form, None)`` on success or ``(None, errors)`` on a validation
+    failure. The persist hook (``form.save`` vs ``perform_mutate``) stays at the
+    caller so ModelForm can return ``form.instance`` while a plain ``Form`` has
+    no instance slot.
+    """
+    form_data, provided_files = decoded
+    form = holder.get_form(info, data=form_data, files=provided_files, instance=instance)
+    if not form.is_valid():
+        return None, _form_errors_to_field_errors(form)
+    return form, None
 
 
 def _modelform_write_step(
@@ -469,11 +480,14 @@ def _modelform_write_step(
     re-fetches it by pk under the G2 plan) or a ``list[FieldError]`` on a validation
     / write failure.
     """
-    form_data, provided_files = decoded
-    form = mutation_cls().get_form(info, data=form_data, files=provided_files, instance=instance)
-
-    if not form.is_valid():
-        return _form_errors_to_field_errors(form)
+    form, errors = _bound_form_or_field_errors(
+        mutation_cls(),
+        info,
+        decoded,
+        instance=instance,
+    )
+    if errors is not None:
+        return errors
 
     # The pinned-alias WRITE phase opens for exactly ``form.save()``: the form
     # construction + ``is_valid()`` above are database-read-only under the
@@ -483,6 +497,39 @@ def _modelform_write_step(
     if write_error is not None:
         return write_error
     return form.instance
+
+
+def _plain_form_write_step(
+    mutation_cls: type,
+    info: Any,
+    decoded: tuple[dict[str, Any], dict[str, Any]],
+) -> Any | list[Any]:
+    """The plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
+
+    Same construct/validate helper as ModelForm; the persist hook is
+    ``perform_mutate`` (default ``form.save()`` if present, else no-op). Returns
+    a non-list sentinel on success so the skeleton's model-less tail builds
+    ``{ ok: true }``.
+    """
+    holder = mutation_cls()
+    form, errors = _bound_form_or_field_errors(
+        holder,
+        info,
+        decoded,
+        instance=None,
+    )
+    if errors is not None:
+        return errors
+
+    # ``perform_mutate`` is the only write window (mirrors ``form.save`` /
+    # ``serializer.save`` / ``instance.delete`` on the other flavors).
+    with pipeline_write_phase():
+        write_error = save_or_field_errors(
+            lambda: holder.perform_mutate(form, info),
+        )
+    if write_error is not None:
+        return write_error
+    return True
 
 
 def _run_modelform_pipeline_sync(
@@ -520,109 +567,37 @@ def _run_modelform_pipeline_sync(
     )
 
 
-def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any:
-    """The plain ``DjangoFormMutation`` body: authorize -> decode -> validate -> write -> ``{ ok errors }``.
+def _run_plain_form_pipeline_sync(
+    mutation_cls: type,
+    info: Any,
+    data: Any,
+    id: Any,  # noqa: A002
+) -> Any:
+    """The plain ``DjangoFormMutation`` rider of ``run_write_pipeline_sync``.
 
-    No ``id`` (no row to locate), no object slot (no ``DjangoType`` to return), no
-    re-fetch. The payload is the pinned ``{ ok errors }`` shape, instantiated
-    directly (NOT via ``build_payload``, which keys on ``slot``). The write is
-    ``perform_mutate`` (default ``form.save()`` if present, else no-op), wrapped by
-    the same ``save_or_field_errors`` ``IntegrityError`` mapper.
-
-    Orchestration stays local (the model-backed ``run_write_pipeline_sync`` skeleton
-    owns locate / refetch / object-slot payloads and cannot absorb this flavor
-    without a model-less seam), but the 0.0.14 mutation-hardening alias / auth / write-phase
-    invariants are the SAME shared helpers the model / ``ModelForm`` / serializer /
-    delete paths call: ``pipeline_alias_guard`` spans every consumer-reachable
-    phase, ``authorization_phase`` wraps the single permission evaluation, and
-    ``pipeline_write_phase`` opens only around ``perform_mutate``.
+    No row to locate (``_primary_type is None``), no object slot, no re-fetch.
+    The skeleton owns the atomic / alias-guard / authorize-before-decode /
+    rollback-envelope orchestration and builds the ``{ ok, errors }`` payload;
+    this flavor supplies the shared form decode step and the ``perform_mutate``
+    write step.
     """
-    payload_cls = payload_cls_for(mutation_cls)
-    meta = mutation_cls._mutation_meta
-    # The managed-transaction gate + pinned alias (mutation atomicity, shipped 0.0.14): the model-less
-    # plain form routes to ``DEFAULT_DB_ALIAS`` (``resolve_write_alias(None)``);
-    # the completion-spanning ``DjangoSchema`` transaction must already be open,
-    # so a plain ``strawberry.Schema`` execution fails here, before any DB work.
-    using = require_managed_write(mutation_cls)
-
-    with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
-
-        def _error_payload(errors: list[Any]) -> Any:
-            """Roll back, then return the ``{ ok: false }`` envelope.
-
-            An ``{ ok: false }`` envelope means the mutation did NOT succeed, so
-            nothing it wrote may persist. A ``perform_mutate`` (or the plain form's
-            own ``form.save()``) that made a partial write and THEN raised an
-            ``IntegrityError`` - mapped to the envelope by ``save_or_field_errors``
-            inside this atomic block - would otherwise COMMIT on the normal return: a
-            real DB error sets the connection's ``needs_rollback`` flag so Django
-            auto-rolls-back, but a caught ``IntegrityError`` that did not itself abort
-            the connection (consumer logic, a manual conflict guard) leaves the
-            partial write committed. Mark the transaction for rollback BEFORE building
-            the payload so the partial write is discarded - the same "an error
-            envelope never commits" invariant the model / ``ModelForm`` / serializer
-            flavors enforce in the shared ``run_write_pipeline_sync`` skeleton, which
-            the plain form does NOT ride (it owns this separate atomic block + the
-            pinned ``{ ok errors }`` payload shape). Harmless on the read-only
-            authorize / decode / validation paths (nothing was written);
-            ``payload_cls(...)`` runs no ORM query, so it is safe after
-            ``set_rollback``.
-            """
-            transaction.set_rollback(True, using=using)
-            return payload_cls(ok=False, errors=errors)
-
-        # Identify auth aliases so the authorization phase can permit their
-        # read-only queries under a divergent router. Gated exactly like the
-        # model-backed skeleton: ``permission_classes = []`` grants no auth-alias
-        # access at all.
-        auth_aliases = auth_aliases_for_permission_classes(meta.permission_classes)
-        # The alias guard spans EVERY consumer-reachable phase (permission,
-        # decode, validation, write): any SQL on a non-pinned connection raises
-        # before it executes, and pinned-alias writes are rejected outside the
-        # write phase below.
-        with pipeline_alias_guard(mutation_cls.__name__, using):
-            # Authorize BEFORE decoding (see the ModelForm body): a plain form with a
-            # ``ModelChoiceField`` would otherwise let an unauthorized caller probe
-            # relation visibility pre-auth. The authorization phase permits
-            # read-only auth-alias queries for exactly this call, then closes.
-            with authorization_phase(auth_aliases):
-                authorize_or_raise(
-                    mutation_cls,
-                    info,
-                    meta.operation,
-                    data,
-                    instance=None,
-                )
-
-            provided_data, provided_files, decode_error = _decode_form_data(
-                mutation_cls,
-                data,
-                info,
-            )
-            if decode_error is not None:
-                return _error_payload([decode_error])
-
-            instance = mutation_cls()
-            form = instance.get_form(
-                info,
-                data=provided_data,
-                files=provided_files,
-                instance=None,
-            )
-
-            if not form.is_valid():
-                return _error_payload(_form_errors_to_field_errors(form))
-
-            # ``perform_mutate`` is the only write window (mirrors ``form.save`` /
-            # ``serializer.save`` / ``instance.delete`` on the other flavors).
-            with pipeline_write_phase():
-                write_error = save_or_field_errors(
-                    lambda: instance.perform_mutate(form, info),
-                )
-            if write_error is not None:
-                return _error_payload(write_error)
-
-            return payload_cls(ok=True, errors=[])
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        data,
+        id,
+        decode_step=lambda instance: _modelform_decode_step(
+            mutation_cls,
+            data,
+            info,
+            instance=instance,
+        ),
+        write_step=lambda _instance, decoded: _plain_form_write_step(
+            mutation_cls,
+            info,
+            decoded,
+        ),
+    )
 
 
 def _run_form_pipeline_sync(
@@ -631,7 +606,7 @@ def _run_form_pipeline_sync(
     data: Any,
     id: Any,  # noqa: A002
 ) -> Any:
-    """Dispatch to the ``ModelForm`` vs plain-form sync body (one ``transaction.atomic()`` each).
+    """Dispatch to the ``ModelForm`` vs plain-form sync body (both ride the shared skeleton).
 
     Branches on ``mutation_cls._primary_type is None`` (the plain
     ``DjangoFormMutation`` carries ``None``; the ``ModelForm`` flavor a real
@@ -639,7 +614,7 @@ def _run_form_pipeline_sync(
     ``sync_to_async(thread_sensitive=True)`` call.
     """
     if mutation_cls._primary_type is None:
-        return _run_plain_form_pipeline_sync(mutation_cls, info, data)
+        return _run_plain_form_pipeline_sync(mutation_cls, info, data, id)
     return _run_modelform_pipeline_sync(mutation_cls, info, data, id)
 
 

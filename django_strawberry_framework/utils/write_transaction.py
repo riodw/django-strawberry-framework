@@ -32,6 +32,11 @@ discipline instead of three drifting copies:
   any other database error propagates and rolls back. Django 6.0 raises the
   typed ``Model.NotUpdated``; Django 5.2 raises a bare ``DatabaseError``, so
   the compat catch is version-sensitive (``not_updated_exceptions``).
+- **One nested write boundary.** ``open_write_pipeline`` is the substrate every
+  write flavor (model create/update, delete, ModelForm, serializer, plain form)
+  enters: ``require_managed_write`` then ``transaction.atomic`` nested with
+  ``write_pipeline``. ``reject_substituted_row`` is the canonical pk-drift
+  backstop over ``pks_match`` (callers keep operation-specific error wording).
 """
 
 from __future__ import annotations
@@ -195,6 +200,22 @@ def write_pipeline(alias: str, *, lock: bool) -> Any:
         yield
     finally:
         _WRITE_PIPELINE.reset(token)
+
+
+@contextmanager
+def open_write_pipeline(mutation_cls: type) -> Any:
+    """Open the nested atomic + pinned write-pipeline context for one mutation.
+
+    Shared substrate for every write flavor: resolve the managed alias, then
+    nest ``transaction.atomic(using=alias)`` with ``write_pipeline`` so locate,
+    decode, write, and rollback all pin to the same alias. Yields that alias.
+    The cooperative deadline check stays at the caller (GraphQL ``info`` is not
+    this module's concern).
+    """
+    using = require_managed_write(mutation_cls)
+    lock = mutation_cls._mutation_meta.select_for_update
+    with transaction.atomic(using=using), write_pipeline(using, lock=lock):
+        yield using
 
 
 @contextmanager
@@ -586,7 +607,7 @@ def require_write_pipeline() -> WriteAliasContext:
     if context is None:
         raise ConfigurationError(
             "A mutation write step ran outside the write pipeline context; write steps are "
-            "only callable from the pipeline skeleton (run_write_pipeline_sync / _run_delete).",
+            "only callable from the pipeline skeleton (run_write_pipeline_sync).",
         )
     return context
 
@@ -662,6 +683,23 @@ def pks_match(model: type, first: Any, second: Any) -> bool:
         return canonical_pk(model, first) == canonical_pk(model, second)
     except Exception:
         return False
+
+
+def reject_substituted_row(
+    model: type,
+    actual_pk: Any,
+    authorized_pk: Any,
+    *,
+    message: str,
+) -> None:
+    """Fail closed when a write targets a different row than the one authorized.
+
+    Canonical pk equality (``pks_match``); the caller supplies the
+    operation-specific ``ConfigurationError`` message so update vs delete
+    wording stays byte-identical.
+    """
+    if not pks_match(model, actual_pk, authorized_pk):
+        raise ConfigurationError(message)
 
 
 # The mutable-in-place field-value container types the target-state snapshot must

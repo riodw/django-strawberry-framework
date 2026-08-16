@@ -14,8 +14,11 @@ What lives here is mechanics only. Domain semantics stay at the call sites:
 ``orders/inputs.py`` keeps ``convert_order_field_to_input_annotation`` /
 ``normalize_input_value`` and the ``Ordering`` enum. The two ``inputs`` modules
 re-export the helpers below under their spec-named aliases (``FieldSpec`` /
-``build_input_class`` / ``_camel_case`` / ``_iter_*set_subclasses``) so existing
-imports and the test suite keep addressing them on the family module.
+``build_input_class`` / ``_camel_case`` / ``_iter_*set_subclasses`` /
+``_input_type_name_for``) so existing imports and the test suite keep addressing
+them on the family module. Set-family Decision-9 ledgers ride
+``make_set_input_namespace`` (heavy clear); write flavors ride
+``make_input_namespace`` (light clear).
 
 This module depends on neither family package, so both can import it without a
 cycle (same contract as ``utils/connections.py``).
@@ -54,6 +57,18 @@ class GeneratedInputFieldSpec:
     python_attr: str
     graphql_name: str
     django_source_path: str
+
+
+def set_input_type_name(set_class: type) -> str:
+    """Return the canonical Strawberry input-class name for a set-family class.
+
+    Thin delegate to ``ClassBasedTypeNameMixin.type_name_for()``: every
+    ``FilterSet`` / ``OrderSet`` subclass ``Foo`` produces ``FooInputType``.
+    Both family ``inputs`` modules re-export this as ``_input_type_name_for``
+    so spec-027 / spec-028 callers stay pinned to one derivation site rather
+    than each wrapping ``type_name_for`` again.
+    """
+    return set_class.type_name_for()
 
 
 def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]:
@@ -228,7 +243,9 @@ class FieldConversionBase:
     ``kind`` defaults to ``SCALAR`` so a consumer-registered converter
     can return a conversion without importing the kind
     constant; the internal relation / file constructions pass ``kind``
-    explicitly.
+    explicitly. Flavor tables do not construct this shape by hand: they store
+    ``utils/converters.py::make_scalar_converter`` /
+    ``make_kind_converter`` callables so the VALUE shape stays one site.
     """
 
     __slots__ = ("annotation", "kind", "required")
@@ -346,6 +363,68 @@ def make_input_namespace(
         ledger.clear()
 
     return ledger, materialize_fn, clear_fn
+
+
+def make_set_input_namespace(
+    module_path: str,
+    family_label: str,
+    *,
+    factory_module: str,
+    factory_class_name: str,
+    collision_registry_attr: str,
+    set_module: str,
+    set_class_name: str,
+) -> tuple[
+    dict[str, type],
+    dict[tuple[type, str], GeneratedInputFieldSpec],
+    Callable[[str, type], None],
+    Callable[[], None],
+]:
+    """Return the set-family ``(ledger, field_specs, materialize_fn, clear_fn)`` quartet.
+
+    The heavy Decision-9 sibling of ``make_input_namespace``. Filter and order
+    ``inputs`` modules grew the same four-part shape (a ``_materialized_names``
+    ledger, a ``_field_specs`` provenance table, a ``materialize_input_class``
+    wrapper, a ``clear_*_input_namespace`` that resets factory caches +
+    ``_lifecycle`` binding). This single-sites it:
+
+    - ``ledger`` - ``name -> input_class`` dict the caller stores as
+      ``_materialized_names``.
+    - ``field_specs`` - ``(set_cls, python_attr) -> GeneratedInputFieldSpec``
+      provenance table the caller stores as ``_field_specs``.
+    - ``materialize_fn(name, cls)`` - pins ``cls`` as a real global of
+      ``module_path`` via ``materialize_generated_input_class``.
+    - ``clear_fn()`` - the HEAVY clear: both dicts plus the arguments-factory
+      caches and per-set ``_lifecycle`` binding state named by the factory /
+      set kwargs. Materialized class objects stay PARKED.
+
+    Write flavors keep using ``make_input_namespace`` (light ``ledger.clear()``
+    only): they have neither a BFS factory cache nor per-set lifecycle state.
+    """
+    ledger: dict[str, type] = {}
+    field_specs: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
+
+    def materialize_fn(name: str, cls: type) -> None:
+        materialize_generated_input_class(
+            name,
+            cls,
+            module_path=module_path,
+            family_label=family_label,
+            ledger=ledger,
+        )
+
+    def clear_fn() -> None:
+        clear_generated_input_namespace(
+            materialized_names=ledger,
+            field_specs=field_specs,
+            factory_module=factory_module,
+            factory_class_name=factory_class_name,
+            collision_registry_attr=collision_registry_attr,
+            set_module=set_module,
+            set_class_name=set_class_name,
+        )
+
+    return ledger, field_specs, materialize_fn, clear_fn
 
 
 def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
@@ -1056,7 +1135,7 @@ class GeneratedInputArgumentsFactory:
     def __init__(self, set_class: type) -> None:
         """Store the root set class and its class-derived input type name."""
         self.set_class = set_class
-        self.input_type_name = set_class.type_name_for()
+        self.input_type_name = set_input_type_name(set_class)
 
     @property
     def _collision_registry(self) -> dict[str, type]:
@@ -1089,7 +1168,7 @@ class GeneratedInputArgumentsFactory:
                 continue
             seen.add(set_cls)
 
-            target_name = set_cls.type_name_for()
+            target_name = set_input_type_name(set_cls)
             existing_owner = self._collision_registry.get(target_name)
             if existing_owner is not None and existing_owner is not set_cls:
                 # The shared A3/C3 skeleton, with the factory-label head prepended
@@ -1117,7 +1196,7 @@ class GeneratedInputArgumentsFactory:
 
     def _build_class_type(self, set_cls: type) -> None:
         """Build the root input class for ``set_cls`` and stash it in the cache."""
-        type_name = set_cls.type_name_for()
+        type_name = set_input_type_name(set_cls)
         owner_definition = getattr(set_cls, "_owner_definition", None)
         triples = self._build_input_triples(set_cls, type_name, owner_definition)
         if not triples:

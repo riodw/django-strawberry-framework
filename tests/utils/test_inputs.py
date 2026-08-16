@@ -24,9 +24,11 @@ from django_strawberry_framework.utils.inputs import (
     iter_input_field_collisions,
     iter_set_subclasses,
     make_input_namespace,
+    make_set_input_namespace,
     make_shape_build_cache,
     materialize_generated_input_class,
     pascalize_token,
+    set_input_type_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -337,6 +339,79 @@ def test_make_input_namespace_returns_ledger_materialize_clear_trio():
     # The materialized global stays PARKED (not delattr'd) per the lifecycle.
     assert module.ProbeNamespaceInputType is _ProbeInput
     delattr(module, "ProbeNamespaceInputType")
+
+
+def test_set_input_type_name_delegates_to_type_name_for():
+    """``set_input_type_name`` is the one ``<Class>InputType`` derivation site."""
+
+    class _Named:
+        @classmethod
+        def type_name_for(cls, _field_path=None):
+            return f"{cls.__name__}InputType"
+
+    assert set_input_type_name(_Named) == "_NamedInputType"
+
+
+def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_clear():
+    """Heavy quartet: materialize writes the ledger; clear empties ledger AND field_specs.
+
+    Unimportable factory / set modules are tolerated (the same cycle-safe skip
+    ``clear_generated_input_namespace`` uses). The materialized global stays
+    PARKED -- this is the heavy sibling of ``make_input_namespace``, not a
+    ``delattr`` teardown.
+    """
+    module_path = __name__
+    module = sys.modules[module_path]
+    ledger, field_specs, materialize, clear = make_set_input_namespace(
+        module_path,
+        "ProbeSet",
+        factory_module="django_strawberry_framework.not_a_real_factory_module",
+        factory_class_name="NoFactory",
+        collision_registry_attr="_type_probeset_registry",
+        set_module="django_strawberry_framework.not_a_real_set_module",
+        set_class_name="ProbeSet",
+    )
+    assert ledger == {}
+    assert field_specs == {}
+
+    class _ProbeInput:
+        pass
+
+    materialize("ProbeSetInputType", _ProbeInput)
+    assert ledger["ProbeSetInputType"] is _ProbeInput
+    assert module.ProbeSetInputType is _ProbeInput
+    field_specs[(_ProbeInput, "title")] = GeneratedInputFieldSpec(
+        python_attr="title",
+        graphql_name="title",
+        django_source_path="title",
+    )
+    materialize("ProbeSetInputType", _ProbeInput)
+
+    class _OtherProbe:
+        pass
+
+    with pytest.raises(ConfigurationError, match="two distinct ProbeSet input classes"):
+        materialize("ProbeSetInputType", _OtherProbe)
+
+    clear()
+    assert ledger == {}
+    assert field_specs == {}
+    assert module.ProbeSetInputType is _ProbeInput
+    delattr(module, "ProbeSetInputType")
+
+
+def test_filter_and_order_input_namespaces_ride_make_set_input_namespace():
+    """Both set families unpack the same factory closures and naming helper."""
+    from django_strawberry_framework.filters import inputs as filter_inputs
+    from django_strawberry_framework.orders import inputs as order_inputs
+
+    assert filter_inputs._input_type_name_for is set_input_type_name
+    assert order_inputs._input_type_name_for is set_input_type_name
+    assert filter_inputs._materialize_input.__code__ is order_inputs._materialize_input.__code__
+    assert (
+        filter_inputs._clear_input_namespace.__code__
+        is order_inputs._clear_input_namespace.__code__
+    )
 
 
 def test_make_shape_build_cache_returns_dict_and_clear():

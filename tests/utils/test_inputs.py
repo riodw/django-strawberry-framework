@@ -19,14 +19,19 @@ from django_strawberry_framework.utils.inputs import (
     GeneratedInputFieldSpec,
     InputFieldSpec,
     build_strawberry_input_class,
+    create_dynamic_set_class,
     emit_set_input_field_triples,
     graphql_camel_name,
     iter_input_field_collisions,
     iter_set_subclasses,
+    make_dynamic_set_getter,
+    make_hashable_meta_value,
     make_input_namespace,
     make_set_input_namespace,
+    make_set_meta_cache_key,
     make_shape_build_cache,
     materialize_generated_input_class,
+    normalize_set_meta_for_factory,
     pascalize_token,
     set_input_type_name,
 )
@@ -412,6 +417,183 @@ def test_filter_and_order_input_namespaces_ride_make_set_input_namespace():
         filter_inputs._clear_input_namespace.__code__
         is order_inputs._clear_input_namespace.__code__
     )
+
+
+def test_make_hashable_meta_value_sorts_mixed_dict_keys():
+    """Unordered dict keys sort by ``repr`` so mixed types cannot TypeError."""
+    result = make_hashable_meta_value({"a": 1, 0: 2})
+    assert isinstance(result, tuple)
+    assert set(result) == {("a", 1), (0, 2)}
+
+
+def test_make_hashable_meta_value_keys_opaque_unhashable_by_identity():
+    """Values that refuse ``hash()`` discriminate by type-and-object identity."""
+
+    class Policy:
+        __hash__ = None
+
+    policy = Policy()
+    first = make_hashable_meta_value(policy)
+    second = make_hashable_meta_value(policy)
+    other = make_hashable_meta_value(Policy())
+    assert first == second
+    assert first != other
+    hash(first)
+
+
+def test_meta_cache_helpers_bypass_hostile_containers_and_reprs():
+    """Cache canonicalization never trusts consumer container hooks or reprs."""
+
+    class _HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("hostile repr")
+
+    class _HostileDict(dict):
+        def items(self):
+            raise RuntimeError("hostile items")
+
+    class _HostileSet(set):
+        def __iter__(self):
+            raise RuntimeError("hostile set iterator")
+
+    class _HostileList(list):
+        def __iter__(self):
+            raise RuntimeError("hostile list iterator")
+
+    for value in (
+        {_HostileRepr()},
+        _HostileDict(name="x"),
+        _HostileSet(["b", "a"]),
+        _HostileList(["b", "a"]),
+    ):
+        canonical = make_hashable_meta_value(value)
+        hash(canonical)
+
+    normalized = normalize_set_meta_for_factory(
+        _HostileDict(
+            model=object,
+            fields=_HostileDict(name=_HostileSet(["exact", "contains"])),
+            exclude=_HostileList(["z", "a"]),
+        ),
+        reserved_keys=frozenset(),
+    )
+    assert normalized["fields"]["name"] == ["contains", "exact"]
+    assert normalized["exclude"] == ["a", "z"]
+
+
+def test_make_set_meta_cache_key_tags_fields_shape():
+    """Dict / sequence / scalar ``fields`` land on distinct tagged key branches."""
+
+    class _Model:
+        pass
+
+    dict_key = make_set_meta_cache_key({"model": _Model, "fields": {"name": ["exact"]}})
+    seq_key = make_set_meta_cache_key({"model": _Model, "fields": ["name"]})
+    raw_key = make_set_meta_cache_key({"model": _Model, "fields": "__all__"})
+    assert dict_key[0] is _Model
+    assert dict_key[1][0] == "dict"
+    assert seq_key[1] == ("seq", ("name",))
+    assert raw_key[1] == ("raw", "__all__")
+    hash(dict_key)
+    hash(seq_key)
+    hash(raw_key)
+
+
+def test_normalize_set_meta_for_factory_promotes_fields_alias_and_strips_reserved():
+    """``fields_alias`` promotes when ``fields`` is absent; reserved keys drop."""
+    normalized = normalize_set_meta_for_factory(
+        {"model": object, "filter_fields": {"b", "a"}, "filterset_base_class": object},
+        reserved_keys=frozenset({"filterset_base_class"}),
+        fields_alias="filter_fields",
+    )
+    assert "filter_fields" not in normalized
+    assert "filterset_base_class" not in normalized
+    assert normalized["fields"] == sorted(["a", "b"], key=repr)
+
+
+def test_normalize_set_meta_for_factory_prefers_fields_over_alias():
+    """When both ``fields`` and the synonym are present, ``fields`` wins."""
+    normalized = normalize_set_meta_for_factory(
+        {"fields": ["name"], "filter_fields": ["other"]},
+        reserved_keys=frozenset(),
+        fields_alias="filter_fields",
+    )
+    assert normalized["fields"] == ["name"]
+    assert "filter_fields" not in normalized
+
+
+def test_create_dynamic_set_class_requires_model():
+    """Missing ``model`` fails loud with the family getter's name in the message."""
+    with pytest.raises(ConfigurationError, match="get_probeset_class requires `model`"):
+        create_dynamic_set_class(
+            {"fields": ["name"]},
+            set_base_class=object,
+            auto_name_suffix="AutoProbe",
+            getter_name="get_probeset_class",
+            explicit_param="probeset_class",
+        )
+
+
+def test_make_dynamic_set_getter_collapses_equivalent_meta_and_passthroughs_explicit():
+    """The Layer-6 skeleton caches equivalent meta and returns an explicit class."""
+    from apps.products.models import Category
+
+    class _ProbeSet:
+        pass
+
+    cache: dict = {}
+    getter = make_dynamic_set_getter(
+        cache=cache,
+        set_base_class=_ProbeSet,
+        auto_name_suffix="AutoProbe",
+        getter_name="get_probeset_class",
+        reserved_keys=frozenset({"probeset_base_class"}),
+        explicit_param="probeset_class",
+    )
+    first = getter(None, model=Category, fields=["name"])
+    second = getter(None, model=Category, fields=("name",))
+    assert first is second
+    assert first.__name__ == "CategoryAutoProbe"
+    assert issubclass(first, _ProbeSet)
+    explicit = type("Explicit", (_ProbeSet,), {})
+    assert getter(explicit) is explicit
+    stripped = getter(None, model=Category, fields=["title"], probeset_base_class=_ProbeSet)
+    assert stripped is not first
+    assert stripped.__name__ == "CategoryAutoProbe"
+
+
+@pytest.mark.django_db
+def test_filter_and_order_dynamic_caches_ride_make_dynamic_set_getter():
+    """Both family getters share the skeleton closures and keep disjoint caches."""
+    from apps.products.models import Category
+
+    from django_strawberry_framework.filters import factories as filter_factories
+    from django_strawberry_framework.filters.sets import FilterSet
+    from django_strawberry_framework.orders import factories as order_factories
+    from django_strawberry_framework.orders.sets import OrderSet
+
+    assert filter_factories._make_hashable is make_hashable_meta_value
+    assert order_factories._make_hashable is make_hashable_meta_value
+    assert filter_factories._make_cache_key is make_set_meta_cache_key
+    assert order_factories._make_cache_key is make_set_meta_cache_key
+    assert (
+        filter_factories._get_filterset_class.__code__
+        is order_factories._get_orderset_class.__code__
+    )
+
+    filter_factories._dynamic_filterset_cache.clear()
+    order_factories._dynamic_orderset_cache.clear()
+    try:
+        filt = filter_factories.get_filterset_class(None, model=Category, fields=["name"])
+        order = order_factories.get_orderset_class(None, model=Category, fields=["name"])
+        assert filt is not order
+        assert filt.__name__ == "CategoryAutoFilter"
+        assert order.__name__ == "CategoryAutoOrder"
+        assert issubclass(filt, FilterSet)
+        assert issubclass(order, OrderSet)
+    finally:
+        filter_factories._dynamic_filterset_cache.clear()
+        order_factories._dynamic_orderset_cache.clear()
 
 
 def test_make_shape_build_cache_returns_dict_and_clear():

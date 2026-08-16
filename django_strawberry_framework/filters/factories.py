@@ -24,30 +24,42 @@ and the GraphQL input shape stay downstream of one decision site
 BFS factory's built input classes as module globals at finalize time;
 this module owns build-only. (Layer 6's dynamic FilterSet classes are
 plain ``type(...)`` products cached below, never materialized as module
-globals.)
+globals.) Hashing, Meta canonicalize, and the ``type(...)`` skeleton live
+in ``utils/inputs.py::make_dynamic_set_getter``; this module keeps the
+family cache and the ``filter_fields`` synonym.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
-from ..exceptions import ConfigurationError
-from ..utils.inputs import GeneratedInputArgumentsFactory
+from ..utils.inputs import (
+    GeneratedInputArgumentsFactory,
+    make_dynamic_set_getter,
+    make_hashable_meta_value,
+    make_set_meta_cache_key,
+    normalize_set_meta_for_factory,
+)
 from .inputs import _build_input_fields, _build_logic_fields
 from .sets import FilterSet
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from django.db import models
-
+# Test-addressed aliases: hashing lives in ``utils/inputs.py``; family tests
+# keep importing the spec-era private names from this module.
+_make_hashable = make_hashable_meta_value
+_make_cache_key = make_set_meta_cache_key
 
 # Module-level dynamic-FilterSet cache per Layer 6 of Decision 3. Keys
-# are produced by ``_make_cache_key`` so dict / list / scalar shapes for
-# ``Meta.fields`` collapse onto stable tuple keys. The cache is the
-# duplicate-``__name__`` collision break-glass for the (deferred,
-# unconsumed) auto-FilterSet surface: two fields that auto-derive a
-# FilterSet against the same model from equivalent ``Meta`` would resolve
-# to the same generated class. No source path exercises this yet -- see
-# the module docstring; the cache is build-and-test-only at ``0.0.9``.
+# are produced by ``utils/inputs.py::make_set_meta_cache_key`` so dict /
+# list / scalar shapes for ``Meta.fields`` collapse onto stable tuple
+# keys. The cache is the duplicate-``__name__`` collision break-glass for
+# the (deferred, unconsumed) auto-FilterSet surface: two fields that
+# auto-derive a FilterSet against the same model from equivalent ``Meta``
+# would resolve to the same generated class. No source path exercises
+# this yet -- see the module docstring; the cache is build-and-test-only.
+# The hashing / ``type(...)`` skeleton is shared with
+# ``orders/factories.py`` via ``make_dynamic_set_getter``; this dict stays
+# family-owned so a filter clear cannot drop an order class (and the
+# reverse).
 #
 # Lifecycle: this cache has NO clear
 # hook, so after ``registry.clear()`` rebuilds model classes a dynamic
@@ -117,120 +129,24 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory):
 # ---------------------------------------------------------------------------
 
 
-def _make_hashable(v: Any) -> Any:
-    """Recursively convert unhashable objects into hashable equivalents.
-
-    ``dict`` and ``set`` / ``frozenset`` are *unordered* containers, so their
-    hashable form is sorted - two structurally-equal inputs must collapse to one
-    cache key regardless of source iteration order. ``list`` / ``tuple`` are
-    *ordered* (a list-shaped ``Meta.fields`` defines filter order), so their order
-    is preserved. Both unordered branches sort by ``repr`` rather than by the
-    values themselves so they stay total-ordered even for mixed,
-    mutually-unorderable member or key types (e.g. ``{1, "a"}`` or
-    ``{"a": 1, 0: 2}``); equal members produce equal reprs, so the canonical
-    order is stable.
-    """
-    if isinstance(v, dict):
-        return tuple(
-            sorted(((k, _make_hashable(val)) for k, val in v.items()), key=repr),
-        )
-    if isinstance(v, (set, frozenset)):
-        return tuple(sorted((_make_hashable(item) for item in v), key=repr))
-    if isinstance(v, (list, tuple)):
-        return tuple(_make_hashable(item) for item in v)
-    return v
-
-
 def _normalize_meta_for_factory(meta: dict[str, Any]) -> dict[str, Any]:
-    """Normalize Meta kwargs before cache keying and dynamic class creation.
-
-    Two equivalences must collapse onto one cache slot (and one generated
-    ``FilterSet`` class) or the BFS factory's duplicate-``__name__`` check
-    fires against two ``<Model>AutoFilter`` classes that are the same
-    declaration arrived via different surface shapes:
-
-    - ``filter_fields`` is the ``FilterSetMetaclass`` synonym for ``fields``;
-      promote it (or drop it when ``fields`` is already present) so the alias
-      is not an extras discriminator.
-    - Top-level ``set`` / ``frozenset`` ``fields`` (and set-valued lookup
-      bags under a dict-shaped ``fields``) are unordered; canonicalize them to
-      ``repr``-sorted lists so cache keys and generated filter order are stable
-      across ``PYTHONHASHSEED``. Ordered ``list`` / ``tuple`` ``fields`` keep
-      their declaration order.
-    """
-    safe_meta = {k: v for k, v in meta.items() if k not in _RESERVED_FACTORY_KEYS}
-    if "filter_fields" in safe_meta:
-        if "fields" not in safe_meta:
-            safe_meta["fields"] = safe_meta.pop("filter_fields")
-        else:
-            # ``fields`` wins (metaclass alias rule); drop the synonym so it
-            # cannot split an otherwise-identical cache slot via extras.
-            safe_meta.pop("filter_fields")
-    fields = safe_meta.get("fields")
-    if isinstance(fields, (set, frozenset)):
-        safe_meta["fields"] = sorted(fields, key=repr)
-    elif isinstance(fields, dict):
-        safe_meta["fields"] = {
-            key: (sorted(value, key=repr) if isinstance(value, (set, frozenset)) else value)
-            for key, value in fields.items()
-        }
-    return safe_meta
-
-
-def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
-    """Build a hashable cache key from a ``Meta``-shaped dict.
-
-    ``model`` is the primary discriminator. ``fields`` may be
-    ``"__all__"``, a list of field names, or a dict mapping field ->
-    list of lookups -- all serialised into a hashable form so identical
-    declarations share a class. Any extra meta keys are included
-    via ``_make_hashable``. Callers should pass meta already run through
-    ``_normalize_meta_for_factory`` so ``filter_fields`` and unordered
-    ``set`` / ``frozenset`` shapes have been canonicalized; the branches
-    below still accept those shapes directly as defense in depth.
-
-    ``set`` / ``frozenset`` (top-level or nested under dict-shaped
-    ``fields``) are sorted into a canonical form by ``_make_hashable`` /
-    ``_normalize_meta_for_factory``. Ordered ``list`` / ``tuple``
-    ``fields`` preserve declaration order -- prefer those when filter
-    order matters. Dict-shaped ``fields`` keys sort via ``key=repr`` so
-    mixed, mutually-unorderable key types cannot ``TypeError`` the key.
-    """
-    model = safe_meta.get("model")
-    fields = safe_meta.get("fields")
-    if isinstance(fields, dict):
-        fields_key: tuple = ("dict", _make_hashable(fields))
-    elif isinstance(fields, (list, tuple)):
-        fields_key = ("seq", tuple(_make_hashable(item) for item in fields))
-    elif isinstance(fields, (set, frozenset)):
-        fields_key = ("seq", tuple(sorted((_make_hashable(item) for item in fields), key=repr)))
-    else:
-        fields_key = ("raw", fields)
-    extra = _make_hashable(
-        {k: v for k, v in safe_meta.items() if k not in {"model", "fields"}},
+    """Normalize filter Meta kwargs: strip reserved keys, promote ``filter_fields``."""
+    return normalize_set_meta_for_factory(
+        meta,
+        reserved_keys=_RESERVED_FACTORY_KEYS,
+        fields_alias="filter_fields",
     )
-    return (model, fields_key, extra)
 
 
-def _create_dynamic_filterset_class(safe_meta: dict[str, Any]) -> type[FilterSet]:
-    """Build a synthetic ``FilterSet`` subclass from a ``Meta`` dict.
-
-    Replaces graphene-django's ``custom_filterset_factory`` (which the
-    cookbook reaches for) with a plain ``type(name, (FilterSet,),
-    {"Meta": meta})`` call. Spec line 247 explicitly drops the
-    ``replace_csv_filters`` rewrap -- Strawberry's typed input handles
-    ``list[T]`` natively.
-    """
-    model: type[models.Model] | None = safe_meta.get("model")
-    if model is None:
-        raise ConfigurationError(
-            "get_filterset_class requires `model` when called without an explicit "
-            "filterset_class; received meta without a `model` key.",
-        )
-    meta_attrs = dict(safe_meta)
-    name = f"{model.__name__}AutoFilter"
-    meta_class = type("Meta", (object,), meta_attrs)
-    return type(name, (FilterSet,), {"Meta": meta_class})
+_get_filterset_class = make_dynamic_set_getter(
+    cache=_dynamic_filterset_cache,
+    set_base_class=FilterSet,
+    auto_name_suffix="AutoFilter",
+    getter_name="get_filterset_class",
+    reserved_keys=_RESERVED_FACTORY_KEYS,
+    explicit_param="filterset_class",
+    fields_alias="filter_fields",
+)
 
 
 def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) -> type[FilterSet]:
@@ -266,13 +182,4 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
         BFS factory's ``_type_filterset_registry`` collision check; resolve by
         declaring an explicit ``filterset_class=`` at one of the two call sites.
     """
-    if filterset_class is not None:
-        return filterset_class
-    safe_meta = _normalize_meta_for_factory(meta)
-    cache_key = _make_cache_key(safe_meta)
-    cached = _dynamic_filterset_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    generated = _create_dynamic_filterset_class(safe_meta)
-    _dynamic_filterset_cache[cache_key] = generated
-    return generated
+    return _get_filterset_class(filterset_class, **meta)

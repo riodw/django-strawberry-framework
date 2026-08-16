@@ -22,9 +22,8 @@ The shape is the ``036`` discipline adapted to forms (spec-038 Decision 7):
   the stable class-level set - read with NO instantiation, so a kwarg-requiring
   form still has a discoverable shape, P2), not the model's editable columns.
 - Where a ``ModelForm`` field has a backing model column, the annotation routes
-  through the read-side ``convert_scalar`` / ``convert_choices_to_enum`` /
-  ``relation_input_annotation`` so the wire contract is symmetric with the read
-  ``DjangoType``. A plain ``Form`` field with no column uses
+  through ``model_column_input_annotation`` so the wire contract is symmetric
+  with the read ``DjangoType``. A plain ``Form`` field with no column uses
   ``converter.convert_form_field`` (the model-less table). The two key spaces
   (``forms.Field`` / ``models.Field``) stay strictly separate: the column is
   resolved first, then handed to the ``models.Field``-keyed converters.
@@ -53,20 +52,18 @@ from ..mutations.inputs import (
     CREATE,
     PARTIAL,
     annotate_queryset_relation,
-    relation_input_annotation,
+    model_column_input_annotation,
 )
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
-from ..types.converters import convert_scalar
 from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
-    generated_input_type_name,
     guard_dropped_required,
     iter_input_field_collisions,
     make_input_namespace,
+    name_set_input_type_name,
     optional_input_field,
-    pascalize_token,
     resolve_effective_fields,
 )
 from ..utils.strings import graphql_camel_name
@@ -249,24 +246,19 @@ def form_input_type_name(
     to the same effective set produce the same name (dedupe via the materialize
     ledger) while a different shape produces a different name.
 
-    The narrowed-shape suffix reuses ``utils/inputs.py::pascalize_token`` (the
-    injective single-leading-capital token scheme, promoted from
-    ``mutations/inputs.py`` - spec-039 Md5) so the bare concatenation of sorted
-    field tokens is uniquely decomposable - two distinct field sets never collide on
-    one generated name. The suffix rule + the full-vs-narrowed branching are
-    single-sited in ``utils/inputs.py::generated_input_type_name``.
-
-    Identity is ``(form_class, operation_kind, frozenset(effective_field_names))``;
-    ``operation_kind`` picks the ``Input`` / ``PartialInput`` suffix (a ``FORM``
-    sentinel from a plain ``DjangoFormMutation`` falls under the ``Input``
-    suffix - it is a create-shaped input).
+    Identity is ``(form_class, operation_kind, frozenset(effective_field_names))``.
+    Token concatenation, full-vs-narrowed comparison, and the
+    ``PartialInput`` / ``Input`` suffix ride
+    ``utils/inputs.py::name_set_input_type_name`` (the name-set owner shared
+    with model ``mutation_input_type_name``). This wrapper supplies the
+    form-class base name and the create-vs-partial decision
+    (``operation_kind == PARTIAL``; a ``FORM`` sentinel is create-shaped).
     """
-    token = "".join(pascalize_token(name) for name in sorted(effective_field_names))
-    return generated_input_type_name(
+    return name_set_input_type_name(
         form_class.__name__,
         is_partial=operation_kind == PARTIAL,
-        is_full_shape=frozenset(effective_field_names) == frozenset(full_field_names),
-        token=token,
+        effective_field_names=effective_field_names,
+        full_field_names=full_field_names,
     )
 
 
@@ -361,16 +353,15 @@ def _field_triple_and_spec(
 ) -> tuple[str, Any, InputFieldSpec, bool]:
     """Resolve one form field to its ``(python_attr, base_annotation, InputFieldSpec, required)``.
 
-    A ``ModelForm`` field with a backing column routes through the read-side
-    converters (keyed on the resolved ``models.Field``): a relation column ->
-    ``relation_input_annotation`` (``<name>_id`` / ``categoryId`` + the
-    Relay-vs-raw-pk id type, ``relation_single`` / ``relation_multi``); a
-    file/image column -> ``Upload`` (``file``); else ``convert_scalar`` (the
-    symmetric enum for ``choices``, ``scalar``). A column-less field (a plain
-    ``Form`` field or a ``ModelForm`` extra field) uses
-    ``converter.convert_form_field`` (the model-less table) for the kind, and the
-    relation / file annotations are finalized here (where ``Upload`` and the
-    model-less relation id-type are known).
+    A ``ModelForm`` field with a backing column routes through
+    ``model_column_input_annotation`` (keyed on the resolved ``models.Field``):
+    a relation column -> ``<name>_id`` / ``categoryId`` + the Relay-vs-raw-pk
+    id type, ``relation_single`` / ``relation_multi``; a file/image column ->
+    ``Upload`` (``file``); else the read-side scalar / choice-enum (``scalar``).
+    A column-less field (a plain ``Form`` field or a ``ModelForm`` extra field)
+    uses ``converter.convert_form_field`` (the model-less table) for the kind,
+    and the relation / file annotations are finalized here (where ``Upload`` and
+    the model-less relation id-type are known).
 
     Returns the BASE (non-optional) annotation; the create/partial requiredness
     widening is applied by the caller. The returned ``required`` is the shared
@@ -392,27 +383,24 @@ def _field_triple_and_spec(
     # too, not just the model-less one) - see ``converter.form_field_required``.
     field_required = form_field_required(field, column=column)
     if column is not None:
-        # ModelForm field with a backing model column: route the ``models.Field``
-        # through the read-side converters so the wire contract is symmetric with
-        # the read ``DjangoType``.
+        # ModelForm field with a backing model column: the shared column mapper
+        # types the GraphQL id / Upload / scalar; kind + related_model stay
+        # here for the reverse map.
+        python_attr, graphql_name, annotation = model_column_input_annotation(
+            column,
+            type_name,
+            primary_of=registry.get,
+        )
         if getattr(column, "is_relation", False):
-            python_attr, graphql_name, annotation = relation_input_annotation(
-                column,
-                related_primary_type=registry.get(column.related_model),
-            )
             kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
             # The decode resolves ids against the SAME model the id type derived
             # from (the backing column's related model), not the form field's
             # (possibly ``None``) ``queryset.model``.
             related_model = column.related_model
         elif isinstance(column, (models.FileField, models.ImageField)):
-            python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
+            kind = FILE
         else:
-            python_attr, graphql_name, annotation, kind = _simple_triple(
-                name,
-                convert_scalar(column, type_name, force_nullable=False),
-                SCALAR,
-            )
+            kind = SCALAR
     else:
         # Column-less form field: the model-less ``convert_form_field`` table owns
         # the kind; relation / file annotations are finalized here. Requiredness

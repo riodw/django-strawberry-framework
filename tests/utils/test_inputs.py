@@ -31,6 +31,7 @@ from django_strawberry_framework.utils.inputs import (
     make_set_meta_cache_key,
     make_shape_build_cache,
     materialize_generated_input_class,
+    name_set_input_type_name,
     normalize_set_meta_for_factory,
     pascalize_token,
     set_input_type_name,
@@ -626,6 +627,57 @@ def test_pascalize_token_is_injective_across_legal_field_name_boundaries():
         ("_foo", "x_foo"),
     ):
         assert pascalize_token(left) != pascalize_token(right)
+
+
+def test_name_set_input_type_name_canonical_and_narrowed():
+    """Full name-set shapes take ``<Base>Input`` / ``PartialInput``; a narrowing is tokenized."""
+    full = ("name", "category")
+    assert (
+        name_set_input_type_name(
+            "Item",
+            is_partial=False,
+            effective_field_names=full,
+            full_field_names=full,
+        )
+        == "ItemInput"
+    )
+    assert (
+        name_set_input_type_name(
+            "Item",
+            is_partial=True,
+            effective_field_names=full,
+            full_field_names=full,
+        )
+        == "ItemPartialInput"
+    )
+    assert (
+        name_set_input_type_name(
+            "Item",
+            is_partial=False,
+            effective_field_names=("name",),
+            full_field_names=full,
+        )
+        == "ItemNameInput"
+    )
+
+
+def test_name_set_input_type_name_token_boundaries_do_not_collide():
+    """Sorted ``pascalize_token`` concatenation stays uniquely decomposable."""
+    full = ("other",)
+    left = name_set_input_type_name(
+        "Item",
+        is_partial=False,
+        effective_field_names=("a_b", "c"),
+        full_field_names=full,
+    )
+    right = name_set_input_type_name(
+        "Item",
+        is_partial=False,
+        effective_field_names=("a", "b_c"),
+        full_field_names=full,
+    )
+    assert left != right
+    assert left == "ItemA_ubCInput" and right == "ItemAB_ucInput"
 
 
 def test_input_collision_walker_reports_shared_write_sources():

@@ -49,6 +49,7 @@ is engine behavior, not package-fixable.
 from __future__ import annotations
 
 import contextlib
+import copy
 import inspect
 from collections.abc import Sequence
 from enum import Enum
@@ -357,14 +358,23 @@ def _stamp_node_type(resolved_type: type, node: Any) -> Any:
     ``install_is_type_of``'s closure honors it before the isinstance
     fallback.
 
-    ``None`` (hidden/missing/uncoercible -> ``null``) passes through. A
-    consumer ``resolve_node(s)`` override may return a non-model object
-    that rejects attribute writes (``__slots__``); the stamp is
-    best-effort there - such objects fall back to the pre-032 isinstance
-    behavior.
+    ``None`` (hidden/missing/uncoercible -> ``null``) passes through. Model
+    instances are shallow-copied before stamping so a consumer that reuses
+    the same ORM object in another field or request cannot retain a routing
+    hint for the earlier refetch. A consumer ``resolve_node(s)`` override
+    may return a non-model object that rejects copying or attribute writes
+    (``__slots__``); the stamp is best-effort there - such objects fall back
+    to the pre-032 isinstance behavior.
     """
     if node is None:
         return node
+    definition = getattr(resolved_type, "__django_strawberry_definition__", None)
+    model = getattr(definition, "model", None)
+    if isinstance(model, type) and isinstance(node, model):
+        try:
+            node = copy.copy(node)
+        except (AttributeError, TypeError, copy.Error):
+            return node
     with contextlib.suppress(AttributeError):
         setattr(node, _NODE_TYPE_HINT_ATTR, resolved_type)
     return node

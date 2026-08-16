@@ -4,228 +4,279 @@ Status: verified
 
 ## System trace
 
-`rest_framework/` is the DRF-`ModelSerializer` write component (spec-039): schema-time
-serializer fields become GraphQL mutation inputs, bind through phase 2.5 on the
-shared `DjangoMutation` metaclass, and run decode → construct → `is_valid()` →
-save → payload under `run_write_pipeline_sync`. Soft-dep gated so a DRF-absent
-build never imports DRF-importing siblings.
+`rest_framework/` is the DRF-`ModelSerializer` write component (spec-039):
+schema-time serializer fields become GraphQL mutation inputs, bind through
+phase 2.5 on the shared `DjangoMutation` metaclass, and run decode →
+construct → `is_valid()` → save → payload under `run_write_pipeline_sync`.
+Soft-dep gated so a DRF-absent build never imports DRF-importing siblings.
 
-Folder shape after the five verified file reviews (+ evidence-only
-`hook_context.py`, present on disk after plan freeze):
+Present-day folder (~5930 lines; fresh integration of current source, not a
+recap of file artifacts):
 
-- `__init__.py` — `require_drf()` + import-time gate; install hint single-sited
-  here.
-- `serializer_converter.py` — `serializers.Field`-keyed fail-loud conversion +
-  per-field `resolve_serializer_field` / source axis / choice-enum cache /
-  nested detect helpers.
-- `inputs.py` — Slice-1 generators, descriptor identity, nested opt-in
-  recursion, fingerprint, writable/runtime field helpers, materialize + shape
-  cache (clears `rest_framework.input_namespace` / `rest_framework.shape_cache`).
-- `sets.py` — `SerializerMutation` Meta/bind/hooks; rides `DjangoMutation` +
-  `bind_mutations()`; schema-time nested + source-ownership walkers.
-- `resolvers.py` — serializer write runtime on the shared skeleton; freeze /
-  merge / agreement / ownership / intent / DRF error flatten.
-- `hook_context.py` — frozen `SerializerHookContext` + `UploadMetadata` (no
-  DRF import; still behind the package gate as product boundary).
+| Phase | Owner | Symbols |
+| --- | --- | --- |
+| Soft DRF gate | `__init__.py` | `require_drf` |
+| Hook freeze types | `hook_context.py` | `SerializerHookContext`, `UploadMetadata` |
+| Field→annotation / one-segment `source` / choice enums | `serializer_converter.py` | `convert_serializer_field`, `resolve_serializer_field`, `require_one_segment_source`, `backing_model_field`, `clear_serializer_choice_enums` |
+| Writable basis / ownership raise / fingerprint / nested input build / materialize / shape cache | `inputs.py` | `writable_*`, `raise_writable_source_ownership_errors`, `serializer_schema_fingerprint`, `NestedSerializerConfig`, `build_serializer_input_class`, `dedupe_serializer_input_shape`, `materialize_serializer_input_class` |
+| Meta / bind / schema ownership walk / seams | `sets.py` | `SerializerMutation`, `_validate_serializer_nested_fields`, `_assert_schema_source_ownership`, `_serializer_input_shape_for` → `dedupe_serializer_input_shape`, `build_and_stash_input`, `resolver_seams` |
+| Decode / construct / validate / save / payload | `resolvers.py` | `_decode_*`, `_frozen_hook_view`, agreement / runtime ownership / intent / attest, `run_write_pipeline_sync` |
 
-Connected behavior re-traced for this folder pass (not inherited as proven):
-`forms/converter.py` / `forms/inputs.py` / `forms/sets.py` / `forms/resolvers.py`
-(sibling Form/ModelForm flavor over the same `convert_with_mro` /
-`FieldConversionBase` / `InputFieldSpec` / `run_write_pipeline_sync` /
-`build_and_stash_input` / `construction_kwargs` / `resolver_seams` spine);
-`mutations/sets.py` / `mutations/resolvers.py` (metaclass, write skeleton,
-Meta helpers); `types/converters.py` (column-backed scalar / enum reuse);
-`utils/inputs.py` / `utils/converters.py` / `utils/write_values.py`; root
-`__getattr__` soft exports; live fakeshop serializer mutations under
-`examples/fakeshop/test_query/`; package `tests/rest_framework/`.
+Connected evidence (not rewritten unless this folder owns the rule):
+`forms/` (verified sibling flavor), `mutations/sets.py` /
+`mutations/resolvers.py` (shared substrate: `build_and_stash_input`,
+`construction_kwargs`, `resolver_seams`, `run_write_pipeline_sync`),
+`utils/inputs.py` / `utils/write_values.py`, root `__getattr__` soft exports,
+`tests/rest_framework/`, live fakeshop serializer mutations.
 
-Folder-level axes examined: duplicated policy across converter ↔ inputs ↔
-sets ↔ resolvers; state ownership (input namespace, shape cache, choice enums);
-competing helpers; public export flavor; lifecycle clears; assignment-named
-deferrals from file passes (especially nested/`backing_model_field`
-`source_attrs`); converter seams vs forms/types.
+Folder axes: policy split across converter ↔ inputs ↔ sets ↔ resolvers;
+state ownership (three clears); competing helpers; public soft-dep flavor;
+lifecycle work at several phases; vs forms/mutations when RF is true owner.
 
 ## Verification
 
-- ITEM_BASELINE `7cdcd641b7d743c58faba872ccf8c9c17ebacf03`: item-scoped
-  `git diff … -- django_strawberry_framework/rest_framework/` empty at pass
-  start (folder matched baseline). Concurrent dirt vs HEAD outside this item
-  left untouched. Plan checkbox not edited.
-- Re-read all six modules end-to-end. Grepped package for `source_attrs`,
-  `backing_model_field`, `require_one_segment` / dotted-source raises,
-  `raise_writable_source_ownership_errors`, `_write_surface_specs`,
-  `is_nested_serializer_field`, `register_subsystem_clear` owners under
-  `rest_framework.`, and form/types converter parallels.
-- Optional audit (`export_dry_review.py audit --target …/rest_framework
-  --stdout`) for orientation only.
-- Independently re-traced file-pass deferrals from source. Did not concatenate
-  file artifacts; used deferred labels only as search flags.
-- Focused proof (`--no-cov`, 4 passed):
-  `test_dotted_source_on_model_column_field_raises`,
-  `test_star_source_on_model_column_field_raises`,
-  `test_require_one_segment_source_rejects_star_and_dotted`,
-  `test_nested_dotted_source_rejected`. Schema-time configuration errors —
-  not earnable via live `/graphql`.
-- Ruff format + check on edited paths clean. No full pytest.
+- ITEM_BASELINE `77f9ec646f71da07fef6f7243e922d43524579ba`: folder matched
+  baseline at pass start (empty item-scoped diff). Concurrent dirt outside
+  this item left untouched. Plan checkbox not edited.
+- Re-read all six modules end-to-end. Grepped
+  `require_one_segment_source` / `source_attrs`, ownership raise + schema vs
+  runtime walkers, nested validators, shape-cache writers, clears,
+  `cached_build_input` usage, form/mutation parallels, error flatten,
+  relation-annotation twins.
+- Did not seed findings from the prior verified artifact; used it only to
+  preserve the audit trail under Iterations.
+- Confirmed sole `source_attrs` / `len != 1` predicate remains
+  `require_one_segment_source` (prior folder consolidation still holds).
+- Confirmed sole ownership raise remains
+  `raise_writable_source_ownership_errors`; schema/runtime walkers correctly
+  differ by tree (NestedSerializerConfig vs live serializer + client data).
+- Found post-build shape-cache get-or-store duplicated across
+  `sets._serializer_input_shape_for` (poking private
+  `_serializer_shape_build_cache`) and `inputs._dedupe_and_materialize_nested`
+  — same key/value contract, cache owned by inputs.
+- Ruff format + check on edited paths clean. No pytest (deferred:
+  `test_dedupe_serializer_input_shape_is_sole_cache_protocol`,
+  `test_identical_nested_shape_dedupes_to_one_class`,
+  `test_build_input_runs_required_guard_per_declaration`).
 
 ## Opportunities
 
-### 1. One-segment `source` policy at `require_one_segment_source` (accepted)
+### 1. Post-build shape-cache protocol at `dedupe_serializer_input_shape` (accepted)
 
-- **Repeated responsibility:** reject a bound serializer field whose
-  `source_attrs` is not exactly one segment (`source='*'` → `[]`, dotted →
-  multi-element) whenever the schema path needs a single write-back attribute.
-- **Sites:** `serializer_converter.py::backing_model_field` (model-column
-  resolve); `inputs.py::_resolve_nested_field` (opted-in nested write). File
-  review of the converter explicitly deferred this to the folder pass.
-- **Evidence:** identical `getattr(field, "source_attrs", None)` /
-  `len(...) != 1` predicate; both docs claim the same Decision-7 / rev6 #17
-  fail-loud policy; messages share one skeleton and differ only in nouns
-  (column vs nested attribute). Nested path cannot call `backing_model_field`
-  (no model column) but must obey the same detection.
-- **Owner:** `serializer_converter.py::require_one_segment_source` (source-axis
-  owner beside `backing_model_field`).
-- **Consolidation:** extract the raise helper with `field_label` /
-  `must_map_to` call-site nouns; migrate both sites; keep byte-stable wording.
-- **Proof:** helper unit test + existing column / nested dotted-source tests
-  (package-internal; bind-time config).
-- **Risks / non-goals:** do not force nested through `backing_model_field`; do
-  not change reverse-map source normalization
-  (`source if source != declared else None`); do not reject dotted sources on
-  model-less column-less scalars (still out of the one-segment write-back
-  paths).
+- **Repeated responsibility:** descriptor-keyed get-or-store on
+  `_serializer_shape_build_cache` after `build_serializer_input_class`.
+- **Sites:** `sets._serializer_input_shape_for` (top-level bind);
+  `inputs._dedupe_and_materialize_nested` (nested opt-in; then materializes).
+- **Evidence:** identical `cache.get(shape.cache_key)` / store `(cls, shape)`
+  protocol; cache and clear owner already live in `inputs.py`
+  (`rest_framework.shape_cache`); sets was reaching into a private ledger.
+  Materialize timing correctly differs (nested always; top via
+  `build_and_stash_input`) so a shared dedupe+materialize helper would need a
+  mode flag — reject that shape; share get-or-store only.
+- **Owner:** `inputs.py::dedupe_serializer_input_shape`.
+- **Consolidation:** extract helper; both sites call it; sets stops importing
+  `_serializer_shape_build_cache`.
+- **Proof:** new
+  `tests/rest_framework/test_inputs.py::test_dedupe_serializer_input_shape_is_sole_cache_protocol`;
+  existing nested + guard-per-declaration tests remain end-to-end proofs.
+- **Risks / non-goals:** do not force serializer through
+  `mutations.sets.cached_build_input` (pre-build key timing still wrong);
+  do not merge materialize into the helper.
 
-### Rejected / deferred (re-proved)
+### Rejected / deferred (re-proved this pass)
 
-1. **Merge serializer ↔ form scalar converter tables / fallthrough factories.**
-   Distinct key spaces (`serializers.Field` vs `forms.Field`) and capability
-   matrices; shared mechanics already in `convert_with_mro` +
-   `FieldConversionBase` + kinds. Reject.
+1. **Merge schema + runtime ownership walkers.** Raise already single-sited.
+   Walkers take different trees (config vs live+data); runtime exists because
+   schema cannot see `get_fields()` dynamism. Reject.
 
-2. **Merge `serializer_only_relation_annotation` ↔
-   `forms/inputs._model_less_relation_annotation` (or extract narrow
-   `relation_id_scalar`).** M3-required primary vs form raw-pk fallback,
-   id-like-suffix vs always `_id`, queryset discovery differ. Narrow extract
-   still needs a forms-clean migration of every form site — project pass when
-   forms are clean. Defer.
+2. **Fold `_validate_nested_config_keys` into
+   `_validate_serializer_nested_fields`.** Different timing (every build depth
+   vs class Meta), field set (effective vs full map), and only sets owns the
+   create/update override gate. Reject.
 
-3. **Move `resolve_serializer_field` into `inputs.py` (mirror forms ownership).**
-   Reshuffle, not a second implementation; resolve is tightly coupled to
-   source / type-override / choice-enum owned by the converter. Ownership is
-   clear. Reject.
+3. **Force serializer `build_input` through `cached_build_input`.** Descriptor
+   key only known post-build; would double-build. Reject. (Note:
+   `mutations.sets.cached_build_input` docstring still says form+serializer
+   "share" it — docstring drift on mutations substrate; project/mutations
+   cleanup, not an RF consolidation.)
 
-4. **Force serializer `build_input` through `cached_build_input`.** Wrong key
-   timing (descriptor only known post-build; P1.7). Reject.
+4. **Merge converter ↔ form scalar tables / resolve ownership.** Distinct key
+   spaces and capability matrices; shared mechanics already in
+   `convert_with_mro` / `FieldConversionBase`. Reject.
 
-5. **Unify form / serializer Meta matrices, construction waiver, or nested
-   validators.** Opposite Meta keys, `injected_fields` vs form hook waiver,
-   DRF write-method override gate has no form twin. Mode flags. Reject.
+5. **Merge `serializer_only_relation_annotation` ↔ form
+   `_model_less_relation_annotation`.** M3-required primary vs form raw-pk
+   fallback differ. Defer to project pass when forms stay clean.
 
-6. **Fold schema ↔ runtime source-ownership walkers.** Same raise owner already
-   (`raise_writable_source_ownership_errors`); walkers differ by phase (field_map
-   + NestedSerializerConfig vs live serializer + bind specs). Reject merge of
-   walkers.
+6. **Unify Meta matrices / construction waiver / nested validators with
+   forms.** Opposite Meta keys; `injected_fields` vs form hook waiver; DRF
+   write-method override has no form twin. Reject.
 
 7. **Generic nested walker for agreement / scope / intent / attest.** Same
-   tree shape, distinct per-node rules; helper would obscure ownership.
-   Reject.
+   tree shape, distinct per-node rules. Reject.
 
-8. **Triple clear owners (`rest_framework.input_namespace` /
-   `rest_framework.shape_cache` / `rest_framework.choice_enums`).** Intentional
-   lifecycle roles (lazy ledger + parked globals; per-pass shape cache;
-   serializer-only enum name cache). Matches forms/mutations pattern. Reject.
+8. **Triple clears (`input_namespace` / `shape_cache` / `choice_enums`).**
+   Intentional lifecycle roles. Reject.
 
-9. **Fold `hook_context.py` into resolvers (or reverse).** Frozen public hook
-   types vs runtime freeze/merge machinery; correct separation. Reject.
+9. **Fold `hook_context.py` into resolvers.** Frozen public types vs runtime
+   freeze/merge machinery. Reject.
 
-10. **Promote id-like-suffix / `serializer_field_description` to `utils`.** No
-    second consumer outside this folder. Reject.
+10. **Share decode / error flatten with forms.** Destination policy differs;
+    spine already in `utils.write_values`. Reject.
 
-11. **Relocate `writable_*` / `runtime_validated_data_fields` out of `inputs.py`.**
-    Reorganization, not duplicated responsibility; sets/resolvers correctly
-    import the schema-time field-basis owner. Reject.
+11. **Treat `_resolve_nested_field` vs `resolve_serializer_field` as competing
+    layers.** Opt-in recursive build vs fail-loud default. Reject.
 
-12. **Public flavor.** Root soft-exports `SerializerMutation`,
-    `NestedSerializerConfig`, `register_serializer_field_converter`, etc.
-    through `__getattr__` + `require_drf`; package `__init__` is the gate only
-    (no `__all__` consumer bases). Soft-dep posture intentional vs forms'
-    hard import. Consistent.
+12. **Public soft-dep flavor.** Gate-only package `__init__`; soft exports via
+    root `__getattr__` + `require_drf`. Intentional vs forms' hard import.
+    Consistent.
 
 ## Judgment
 
-Folder ownership is layered correctly after the verified file passes:
-converter owns DRF-field conversion + source-axis resolve; inputs owns
-generation / fingerprint / nested recursion / field-basis helpers; sets owns
-Meta/bind/hooks; resolvers own runtime on the shared skeleton; hook_context
-owns frozen hook types; `__init__` owns the soft-dep gate. The only
-folder-visible unfinished wiring was the deferred one-segment `source`
-predicate split across converter and nested input resolve — now one owner.
-Remaining form/types parallels and walker shape lookalikes are intentional
-flavor or phase boundaries. Ready for Worker 2.
+Folder ownership is layered correctly. Prior one-segment `source` ownership
+still holds. The only fresh folder-visible unfinished wiring was the
+post-build shape-cache protocol split across sets (private-cache poke) and
+inputs (nested dedupe) — now one owner beside the cache. Remaining
+form/mutations parallels correctly live above this folder or are intentional
+flavor/phase boundaries. Ready for Worker 2.
 
 ## Implementation (Worker 1)
 
-- **Owner chosen:**
-  `serializer_converter.py::require_one_segment_source`.
+- **Owner chosen:** `inputs.py::dedupe_serializer_input_shape`.
 - **Migrated sources / callers / tests:**
-  - `backing_model_field` → calls helper with column nouns
-  - `inputs.py::_resolve_nested_field` → calls helper with nested nouns
-  - `tests/rest_framework/test_converter.py::test_require_one_segment_source_rejects_star_and_dotted`
-    (new); existing dotted/star column + nested tests remain the end-to-end
-    proofs
-- **Kept separate:** reverse-map source normalization; model-less column-less
-  dotted sources outside the write-back paths; schema vs runtime ownership
-  walkers; form/types converter tables; resolve ownership in converter;
-  `cached_build_input` timing; Meta matrices; clear owners; hook_context
-  module.
-- **Validation:** 4 focused tests passed (`--no-cov`); `uv run ruff format` +
-  `ruff check --fix` on edited paths. No full pytest.
-- **Changelog:** no — internal ownership completion; public error substrings
-  (`dotted source`) unchanged.
-- **Concurrent paths preserved:** only this folder's converter/inputs + the
-  converter test + this artifact. Plan checkbox not touched. Other dirty
-  packages left alone.
+  - `_dedupe_and_materialize_nested` → calls helper then materializes
+  - `sets._serializer_input_shape_for` → calls helper; drops
+    `_serializer_shape_build_cache` import
+  - `SerializerMutation.build_input` docstring updated to name the helper
+  - `tests/rest_framework/test_inputs.py::test_dedupe_serializer_input_shape_is_sole_cache_protocol`
+    (new)
+- **Kept separate:** `cached_build_input` timing; materialize at call sites;
+  schema vs runtime ownership walkers; nested Meta vs build-depth validators;
+  form/types converter tables; triple clears; hook_context; soft-dep flavor.
+- **Deferred finding:** `mutations.sets.cached_build_input` docstring claims
+  serializer shares the helper; present-day serializer deliberately does not
+  (post-build key). Out of RF remit.
+- **Validation:** sole `_serializer_shape_build_cache[` writer is the helper
+  (grep). `uv run ruff format` + `ruff check --fix` clean on edited paths.
+  Pytest deferred (maintainer gate).
+- **Changelog:** no — internal ownership; no public API change.
+- **Scoped diff statement:** item-scoped changes are
+  `rest_framework/inputs.py`, `rest_framework/sets.py`,
+  `tests/rest_framework/test_inputs.py`, and this artifact. Plan checkbox not
+  touched. Concurrent paths left alone. No commit.
 
 ## Independent verification (Worker 2)
 
-Re-traced folder ownership end-to-end (gate → converter/source axis → inputs
-generation/nested → sets Meta/bind → resolvers write runtime → hook_context
-frozen types). Challenged the accepted consolidation and the twelve rejected /
-deferred folder findings against live source, not the file artifacts.
+Re-traced `rest_framework/` as one component (gate → converter/source →
+inputs generation/nested/cache → sets Meta/bind → resolvers runtime →
+hook_context). Challenged the accepted cache-protocol consolidation and the
+twelve rejected / deferred findings against live source + ITEM_BASELINE-scoped
+diff (`77f9ec646f71da07fef6f7243e922d43524579ba`). Did not seed from prior
+file artifacts beyond the shared folder artifact.
 
 **Accepted consolidation — disposed verified**
 
-1. `require_one_segment_source` is the sole `source_attrs` / `len != 1`
-   predicate under `django_strawberry_framework/` (grep). Both write-back
-   schema paths call it: `backing_model_field` (column nouns) and
-   `_resolve_nested_field` (nested nouns). Nested correctly does not route
-   through `backing_model_field`. Scratch proved byte-stable messages for both
-   noun pairs; unbound (`source_attrs is None`) still no-ops. Focused proof
-   re-ran green (`--no-cov`, 4 passed): column dotted/star, helper unit, nested
-   dotted via `build_serializer_input_class`. Ownership is clearer than the
-   prior twin predicates; site nouns stay at call sites without a mode flag.
+1. `inputs.dedupe_serializer_input_shape` is the sole production writer of
+   `_serializer_shape_build_cache[` (grep under package + tests: only the
+   helper writes; tests assert). Callers:
+   - `sets._serializer_input_shape_for` (top-level bind / `input_type_name`)
+   - `inputs._dedupe_and_materialize_nested` (nested opt-in; then
+     `materialize_serializer_input_class`)
+   `sets` no longer imports `_serializer_shape_build_cache`. Materialize stays
+   at call sites (nested always; top via `build_and_stash_input`) — shared
+   get-or-store without a mode flag is the right boundary. New
+   `test_dedupe_serializer_input_shape_is_sole_cache_protocol` encodes the
+   protocol; existing nested-dedupe + guard-per-declaration tests remain
+   end-to-end proofs (pytest deferred). Ownership is clearer than the prior
+   twin inline get-or-store with sets poking a private inputs ledger.
 
 **Rejected / deferred — disposed (re-proved separate)**
 
-Converter↔form tables, relation-annotation project deferral, resolve ownership
-in converter, `cached_build_input` timing, Meta/waiver/nested-validator
-matrices, schema↔runtime ownership walkers (shared raise owner already),
-generic nested walkers, triple clear owners, hook_context separation,
-utils promotion of id-suffix/description, relocating writable helpers, and
-soft-dep public flavor — each still differs by key space, phase, Meta contract,
-or consumer count. No missed second one-segment detector in sets/resolvers
-(ownership walkers compare sources; they do not re-implement the segment
-count). `hook_context.py` remains evidence-only (not a plan row).
+1. Schema vs runtime ownership walkers: both raise through
+   `raise_writable_source_ownership_errors`; trees differ
+   (`NestedSerializerConfig` + schema field_map vs live serializer + client
+   data / nested specs). Runtime needed for `get_fields()` dynamism. Reject.
+2. `_validate_nested_config_keys` vs `_validate_serializer_nested_fields`:
+   every build depth / effective set vs class Meta / full map + create/update
+   override gate only in sets. Reject.
+3. Force serializer through `mutations.sets.cached_build_input`: pre-build key
+   vs post-build `SerializerInputShape`; would double-build. Docstring drift
+   on `cached_build_input` ("form + serializer share") is mutations/project
+   cleanup, not RF. Reject / defer as claimed.
+4–6. Converter↔form tables, relation-annotation twins
+   (`serializer_only_relation_annotation` ↔ `_model_less_relation_annotation`:
+   M3-required primary vs form raw-pk fallback), Meta/waiver matrices — flavor
+   / phase boundaries. Relation twin stays project-deferred.
+7–12. Generic nested walkers, triple clears, `hook_context` freeze types,
+   decode/error-flatten destination policy, `_resolve_nested_field` vs
+   `resolve_serializer_field` (opt-in vs fail-loud), soft-dep public flavor —
+   each still differs by contract or lifecycle role.
+
+**Missed consolidations / bypasses**
+
+No second shape-cache writer or private-cache poke. Production
+`build_serializer_input_class` callers that must share GraphQL type identity
+route through the helper (top via `_serializer_input_shape_for`; nested via
+`_dedupe_and_materialize_nested`). Isolated `build_serializer_inputs` is a
+dual create/partial test/convenience builder and correctly does not own bind
+dedupe. Prior one-segment `require_one_segment_source` remains sole
+`source_attrs` / `len != 1` predicate.
 
 **Item scope / concurrent WIP**
 
-ITEM_BASELINE-scoped diff is only converter + inputs +
-`test_require_one_segment_source_rejects_star_and_dotted`. Working-tree dirt on
-`sets.py` / `resolvers.py` / `test_inputs.py` / `test_resolvers.py` is empty vs
-baseline (pre-existing concurrent WIP) and was not absorbed. Broader package
-dirt outside this item left untouched. No commit. No full pytest.
+ITEM_BASELINE-scoped paths are only `rest_framework/inputs.py`,
+`rest_framework/sets.py`, `tests/rest_framework/test_inputs.py`, and this
+artifact. Broader working-tree dirt (other packages; plan checkboxes for
+auth/mutations/optimizer) left untouched except marking this folder item
+`[x]`. No commit. No pytest.
 
 Verdict: consolidation complete; folder ready to close.
+
+## Iterations
+
+### Prior pass (verified) — one-segment `source` consolidation
+
+Status was `verified` after Worker 2; plan checkbox remained OPEN (reason for
+this fresh folder pass). Summary only; full disposition preserved below.
+
+**Accepted then:** `serializer_converter.require_one_segment_source` as the
+sole `source_attrs` / `len != 1` predicate; call sites
+`backing_model_field` + `inputs._resolve_nested_field`. Re-confirmed still
+sole predicate on this fresh pass.
+
+**Rejected then (still hold):** converter↔form tables; relation-annotation
+project deferral; resolve ownership in converter; `cached_build_input`
+timing; Meta/waiver matrices; schema↔runtime ownership walkers; generic
+nested walkers; triple clears; hook_context separation; utils promotion of
+id-suffix/description; relocating writable helpers; soft-dep public flavor.
+
+#### Prior System trace (abridged)
+
+`rest_framework/` DRF-`ModelSerializer` write component. Six modules:
+`__init__` gate, `serializer_converter`, `inputs`, `sets`, `resolvers`,
+`hook_context`. Connected forms/mutations/utils as evidence.
+
+#### Prior Opportunities (accepted)
+
+One-segment `source` policy at `require_one_segment_source` — extracted
+helper with `field_label` / `must_map_to` nouns; byte-stable messages.
+
+#### Prior Implementation (Worker 1)
+
+Owner `serializer_converter.py::require_one_segment_source`. Migrated
+`backing_model_field` + `_resolve_nested_field` + unit test
+`test_require_one_segment_source_rejects_star_and_dotted`. Focused proof 4
+passed (`--no-cov`). Changelog no.
+
+#### Prior Independent verification (Worker 2)
+
+Re-traced folder end-to-end. Consolidation disposed verified: sole
+`source_attrs` predicate; both write-back paths call it; nested does not
+route through `backing_model_field`. Twelve rejected/deferred re-proved
+separate. ITEM_BASELINE then was
+`7cdcd641b7d743c58faba872ccf8c9c17ebacf03`. Verdict: consolidation complete;
+folder ready to close — but plan checkbox left open, triggering this fresh
+pass.
 
 <!-- LINK DEFINITIONS -->
 

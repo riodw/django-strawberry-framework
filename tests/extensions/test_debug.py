@@ -1182,6 +1182,19 @@ def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(monkeypatch, 
     assert "allow_unsafe_production" in warnings[0].getMessage()
 
 
+@pytest.mark.parametrize("debug_value", ["False", 1, object()])
+def test_malformed_debug_setting_stays_fail_closed(settings, debug_value):
+    """Only the exact boolean ``True`` may enable disclosure in the bare class entry."""
+    settings.DEBUG = debug_value
+    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
+
+    result = schema.execute_sync("{ ok }")
+
+    assert result.errors is None
+    assert result.data == {"ok": "ok"}
+    assert "debug" not in (result.extensions or {})
+
+
 @override_settings(DEBUG=False)
 def test_acknowledged_factory_publishes_the_payload_and_logs_no_warning(default_wrapper, caplog):
     """The acknowledgement is the ONE spelling that keeps the payload under DEBUG false."""

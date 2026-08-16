@@ -638,6 +638,33 @@ def test_descriptor_is_its_own_cache_key():
     {cshape: 1}
 
 
+def test_dedupe_serializer_input_shape_is_sole_cache_protocol():
+    """Top-level and nested builds share one post-build get-or-store (folder DRY).
+
+    ``dedupe_serializer_input_shape`` is the sole writer of
+    ``_serializer_shape_build_cache``; a second build of an identical descriptor
+    returns the same class object without a second store.
+    """
+    from django_strawberry_framework.rest_framework.inputs import (
+        _serializer_shape_build_cache,
+        clear_serializer_shape_build_cache,
+        dedupe_serializer_input_shape,
+    )
+
+    _register_products_types()
+    clear_serializer_shape_build_cache()
+    cre_a, shape_a = build_serializer_input_class(_item_serializer(), operation_kind="create")
+    cre_b, shape_b = build_serializer_input_class(_item_serializer(), operation_kind="create")
+    assert shape_a == shape_b
+    assert shape_a.cache_key not in _serializer_shape_build_cache
+
+    first_cls, first_shape = dedupe_serializer_input_shape(cre_a, shape_a)
+    second_cls, second_shape = dedupe_serializer_input_shape(cre_b, shape_b)
+    assert first_cls is second_cls is cre_a
+    assert first_shape is second_shape is shape_a
+    assert _serializer_shape_build_cache[shape_a.cache_key] == (cre_a, shape_a)
+
+
 # ---------------------------------------------------------------------------
 # Create-required narrowing guard + waiver + per-declaration discipline
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from django_strawberry_framework.utils.connections import (
     ConnectionWindowBounds,
     FetchMode,
     UnwindowableConnection,
+    assert_relay_pagination_bound,
     assert_window_fetch_mode,
     assert_window_fetch_mode_for,
     connection_sidecar_inputs_from_kwargs,
@@ -319,6 +320,22 @@ def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
     assert has_connection_sidecar_kwargs({"order_by": "O"}) is True
     assert has_connection_sidecar_kwargs({"filter": None, "order_by": None}) is False
     assert has_connection_sidecar_kwargs({}) is False
+
+
+def test_assert_relay_pagination_bound_matches_slice_metadata_text():
+    """Keyset page-size errors share SliceMetadata's exact ValueError text.
+
+    ``derive_keyset_window_bounds`` and the root keyset slicer both route
+    through this helper so a negative / over-cap ``first`` / ``last`` cannot
+    fork between the windowed and per-parent paths, or from the offset
+    vocabulary's messages.
+    """
+    assert_relay_pagination_bound("first", None, cap=10)  # non-int: no-op
+    assert_relay_pagination_bound("first", 3, cap=10)  # in range: no-op
+    with pytest.raises(ValueError, match="Argument 'first' must be a non-negative integer."):
+        assert_relay_pagination_bound("first", -1, cap=10)
+    with pytest.raises(ValueError, match="Argument 'last' cannot be higher than 10."):
+        assert_relay_pagination_bound("last", 11, cap=10)
 
 
 # ---------------------------------------------------------------------------

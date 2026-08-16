@@ -7,8 +7,14 @@ uses ``of_type`` wrapper stacks for ``GraphQLNonNull`` and ``GraphQLList``.
 Both contracts live here so optimizer and schema factories do not grow
 parallel unwrap loops.
 
-Also home to ``is_async_callable`` -- the partial-aware coroutine-callable
-predicate the public field factories and the GlobalID-callable validator share.
+Also home to the partial-aware async predicates the public field factories
+and the GlobalID-callable validator share:
+
+- ``is_async_callable`` -- coroutine-callable (``async def`` / async ``__call__``);
+- ``is_async_generator_callable`` -- async-generator-callable (``async def`` with
+  ``yield`` / async-gen ``__call__``), deliberately separate because GraphQL list
+  and connection completion accept ``AsyncIterable`` returns that the coroutine
+  predicate must not claim.
 
 And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
 accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the
@@ -61,6 +67,22 @@ def schema_config_from_info(info: Any) -> Any | None:
     return config
 
 
+def _callable_inspection_target(value: Any) -> Any:
+    """One hop through ``partial`` / ``staticmethod`` for the async predicates.
+
+    Shared by ``is_async_callable`` and ``is_async_generator_callable`` so the
+    wrapper shapes they see cannot drift. A single ``.func`` hop reaches the
+    partial target with no loop to bound: ``partial`` flattens nested partials at
+    construction (``partial(partial(f)).func is f``), so ``.func`` is never itself
+    a ``partial`` and the traversal is depth-1; the descriptor unwrap then runs on
+    that target so ``partial(staticmethod_obj)`` is handled too.
+    """
+    target = value.func if isinstance(value, functools.partial) else value
+    if isinstance(target, staticmethod):
+        target = target.__func__
+    return target
+
+
 def is_async_callable(value: Any) -> bool:
     """Return whether calling ``value`` yields a coroutine.
 
@@ -80,21 +102,32 @@ def is_async_callable(value: Any) -> bool:
        underlying coroutine function. A raw ``classmethod`` is not callable and is
        therefore outside this predicate's contract.
 
-    A single ``.func`` hop reaches the partial target with no loop to bound:
-    ``partial`` flattens nested partials at construction
-    (``partial(partial(f)).func is f``), so ``.func`` is never itself a ``partial``
-    and the traversal is depth-1; the descriptor unwrap then runs on that target so
-    ``partial(staticmethod_obj)`` is handled too. Resolvers whose sync entry point
-    returns an awaitable from elsewhere remain undetected -- the contract is to
-    signal async-ness through the standard coroutine-function flag, not an opaque
-    awaitable return.
+    Resolvers whose sync entry point returns an awaitable from elsewhere remain
+    undetected -- the contract is to signal async-ness through the standard
+    coroutine-function flag, not an opaque awaitable return. An ``async def`` that
+    ``yield``s is an async *generator* function and is intentionally False here;
+    use ``is_async_generator_callable`` for that shape.
     """
-    target = value.func if isinstance(value, functools.partial) else value
-    if isinstance(target, staticmethod):
-        target = target.__func__
+    target = _callable_inspection_target(value)
     # Inspecting ``__call__``'s async-ness, not testing callability -- so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
+        getattr(target, "__call__", None),  # noqa: B004
+    )
+
+
+def is_async_generator_callable(value: Any) -> bool:
+    """Return whether calling ``value`` yields an async generator / ``AsyncIterable``.
+
+    Sibling of ``is_async_callable`` for the ``async def`` + ``yield`` shape that
+    GraphQL list and connection completion accept as an ``AsyncIterable``. The
+    coroutine predicate must not claim that shape (``iscoroutinefunction`` is
+    False for async-generator functions), so field-factory dispatch keeps a
+    dedicated check. Sees through the same ``partial`` / ``staticmethod`` /
+    async ``__call__`` wrappers as ``is_async_callable``.
+    """
+    target = _callable_inspection_target(value)
+    return inspect.isasyncgenfunction(target) or inspect.isasyncgenfunction(
         getattr(target, "__call__", None),  # noqa: B004
     )
 

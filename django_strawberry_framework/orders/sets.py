@@ -11,11 +11,12 @@ On top of that skeleton the module carries:
   ``_get_concrete_field_names_for_order`` walk per spec-028.
 - The resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
-- The classmethod permission pipeline
-  (``_run_permission_checks`` / ``_active_permission_targets`` /
-  ``_active_permission_field_paths`` / ``_invoke_permission_method`` /
-  ``_request_from_info``) that drives active-input-only per-field
-  ``check_<field>_permission`` dispatch per Spec Decision 8 step 6.
+- The classmethod permission pipeline, inherited from
+  ``ActiveInputPermissionMixin`` (``_run_permission_checks`` /
+  ``_active_permission_targets`` / ``_active_permission_field_paths`` /
+  ``_invoke_permission_method`` / ``_request_from_info``) that drives
+  active-input-only per-field ``check_<field>_permission`` dispatch per
+  Spec Decision 8 step 6.
 - The cookbook-style ``get_flat_orders`` classmethod walking the
   normalized data structure.
 """
@@ -29,19 +30,13 @@ from django.db import models
 
 from ..exceptions import ConfigurationError
 from ..sets_mixins import (
+    ActiveInputPermissionAttrs,
+    ActiveInputPermissionMixin,
     ClassBasedTypeNameMixin,
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
     should_cache_expansion,
-)
-from ..utils.permissions import (
-    active_permission_targets,
-    extract_branch_value,
-    invoke_permission_method,
-    request_from_info,
-    run_active_input_permission_checks,
-    verbatim_path,
 )
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
@@ -95,13 +90,14 @@ class OrderSetMetaclass(type):
         return new_class
 
 
-class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
+class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=OrderSetMetaclass):
     """Consumer-facing ``OrderSet`` foundation.
 
     Layer-3 + Layer-4 + resolver-API port of
     ``django_graphene_filters/orderset.py::AdvancedOrderSet``. Inherits
     ``type_name_for`` from ``ClassBasedTypeNameMixin`` (the shared
-    ``{cls.__name__}InputType`` naming rule) and gets its
+    ``{cls.__name__}InputType`` naming rule), the Decision-8 permission
+    facade from ``ActiveInputPermissionMixin``, and its
     ``related_orders`` collection via ``OrderSetMetaclass``.
 
     The resolver-facing surface is the classmethod pair ``apply_sync`` /
@@ -148,6 +144,17 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         owner="_owner_definition",
         cache="_expanded_fields",
         guard="_is_expanding_fields",
+    )
+
+    # Family permission-facade config: shared with ``FilterSet`` through
+    # ``ActiveInputPermissionMixin``. Order inputs are a top-level list with
+    # ``None`` (not ``UNSET``) for omitted fields, no operator-bag logic keys.
+    _permission: ClassVar[ActiveInputPermissionAttrs] = ActiveInputPermissionAttrs(
+        family_label="OrderSet",
+        related_attr="related_orders",
+        target_attr="orderset",
+        field_specs=_field_specs,
+        handle_top_level_list=True,
     )
 
     @classmethod
@@ -255,167 +262,6 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         machinery.
         """
         return normalize_input_value(cls, input_value)
-
-    @classmethod
-    def _request_from_info(cls, info: Any) -> Any:
-        """Resolve the Django request from ``info.context``.
-
-        Canonical Strawberry-Django shape: ``info.context.request``. The
-        wrapper-less alternative ``isinstance(info.context, HttpRequest)``
-        is detected so consumers running a bare-HttpRequest context (the
-        Django test client default) work without bespoke wiring. Any
-        other shape raises ``ConfigurationError``. Thin delegate to
-        ``utils/permissions.py::request_from_info`` (single-sited with the
-        filter side).
-        """
-        return request_from_info(info, family_label="OrderSet")
-
-    @staticmethod
-    def _extract_branch_value(input_value: Any, field_name: str) -> Any:
-        """Return the value at ``field_name`` on a dataclass-or-dict input.
-
-        Collapses ``None`` to "branch not supplied" so the active-branch
-        caller treats absent branches uniformly. Mirror of
-        ``FilterSet._extract_branch_value`` minus the
-        ``strawberry.UNSET`` collapse -- order inputs default unsupplied
-        fields to ``None`` rather than UNSET (the apply pipeline never
-        sees an UNSET sentinel from the resolver layer because the
-        ``order_input_type`` argument shape is ``list[<T>!] | None``,
-        not a struct of UNSET-defaulted attributes). Thin delegate to
-        ``utils/permissions.py::extract_branch_value`` (no ``unset_sentinel``,
-        so the sentinel check is a harmless ``value is None`` no-op).
-        """
-        return extract_branch_value(input_value, field_name)
-
-    @classmethod
-    def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
-        """Return the base django source path for each active top-level leaf.
-
-        Drives ``_run_permission_checks``'s per-field gate dispatch. Emits one
-        entry per supplied leaf field -- its ``django_source_path`` -- so
-        ``check_<field>_permission`` fires once for a field regardless of which
-        input list element populates it. ``RelatedOrder`` branches are excluded
-        (they fire via the related-branch loop); ``None`` values are skipped
-        (active-input-only). Thin delegate to
-        ``_active_permission_targets``'s ``LEAF`` half; the order side has no
-        logical operator keys and falls back to the python-attr token verbatim
-        when a field has no field-spec entry (e.g. permission checks invoked
-        outside the apply pipeline before the bind populates ``_field_specs``).
-        """
-        return cls._active_permission_targets(input_value)[0]
-
-    @classmethod
-    def _active_permission_targets(
-        cls,
-        input_value: Any,
-    ) -> tuple[list[str], list[tuple[str, RelatedOrder, Any]]]:
-        """Single-pass ``(leaf source paths, active related branches)`` for one level.
-
-        The fused traversal ``_run_permission_checks`` consumes:
-        one ``iter_active_fields`` walk yields both the per-field gate paths and
-        the active ``RelatedOrder`` branches, instead of two full walks. Thin
-        delegate to ``utils/permissions.py::active_permission_targets`` with the
-        order family's config (``handle_top_level_list=True`` for the top-level
-        list input shape); ``_active_permission_field_paths`` takes the ``LEAF``
-        half.
-        """
-        return active_permission_targets(
-            cls,
-            input_value,
-            field_specs=_field_specs,
-            related_attr="related_orders",
-            logic_keys=frozenset(),
-            fallback_path=verbatim_path,
-            handle_top_level_list=True,
-        )
-
-    @staticmethod
-    def _invoke_permission_method(
-        bare_instance: Any,
-        field_path: str,
-        request: Any,
-        *,
-        fired: set[str] | None = None,
-    ) -> None:
-        """Call ``check_<field_path>_permission(request)`` if defined.
-
-        Thin delegate to ``utils/permissions.py::invoke_permission_method``
-        (single-sited with the filter side). When ``fired`` is supplied, the
-        method name is recorded after a successful fire and subsequent calls
-        with the same name skip the attribute lookup -- the per-class set keyed
-        out of ``_run_permission_checks``'s shared ``_fired`` map.
-        """
-        invoke_permission_method(bare_instance, field_path, request, fired=fired)
-
-    @classmethod
-    def _run_permission_checks(
-        cls,
-        input_value: Any,
-        request: Any,
-        *,
-        _fired: dict[type, set[str]] | None = None,
-        _bare: Any = None,
-        _depth: int = 0,
-    ) -> None:
-        """Fire ``check_<field>_permission(request)`` for fields in the input.
-
-        Active-input-only per spec-028 Decision 8 step 6 -- a declared
-        ``check_*`` gate that is not exercised by this call leaves the
-        queryset untouched. Recurses into the child orderset for each
-        active ``RelatedOrder`` branch so the cookbook's
-        nested-permission contract holds.
-
-        The order side has NO ``and`` / ``or`` / ``not`` operator-bag
-        recursion -- spec-028 Decision 8 line 686 ("no operator-bag, no
-        form validation"). It DOES share the filter side's related-branch
-        recursion cap, however: a consumer who declares a self-referential
-        ``RelatedOrder`` lets a client nest the same branch to arbitrary
-        depth, so the shared ``run_active_input_permission_checks`` caps the
-        related recursion (via the ``_depth`` budget threaded here) and raises
-        a typed ``ConfigurationError`` instead of a raw ``RecursionError``.
-
-        Permission methods are called via a bare instance allocated
-        with ``object.__new__(cls)``; this matches the cookbook
-        contract (per-field gates are written as regular
-        ``def check_X_permission(self, request)`` methods) without
-        requiring a fully-constructed ``OrderSet`` instance.
-
-        Dedup contract: ``_fired`` maps each ``OrderSet`` class to the
-        set of ``check_*_permission`` method names that have already
-        fired against THAT class in this top-level call. Shared across
-        the related-branch recursion (different classes), so a gate
-        fires at most once per class regardless of how many input list
-        elements reference the same field path.
-
-        Double-dispatch contract: for an active ``RelatedOrder`` branch
-        named ``shelf`` both gates fire -- the parent's
-        ``check_shelf_permission`` (the per-branch gate on the owning
-        orderset) AND the child orderset's own ``check_*_permission``
-        gates. They live in different per-class dedup sets, so both
-        fire once.
-        """
-        if input_value is None:
-            return
-        if _fired is None:
-            _fired = {}
-        bare = _bare if _bare is not None else object.__new__(cls)
-        # Fire the per-field and per-branch gates -- the active-input core shared
-        # with the filter side (``utils/permissions.py``): the active-field gate
-        # loop, the active-related-branch loop (recurse into the child orderset's
-        # own ``_run_permission_checks`` then fire the parent's per-branch gate),
-        # and the per-class ``_fired`` dedup. The order side has no logical
-        # ``and`` / ``or`` / ``not`` recursion (spec-028 Decision 8); the
-        # ``_depth`` budget threaded below caps only the related-branch recursion.
-        run_active_input_permission_checks(
-            cls,
-            input_value,
-            request,
-            fired=_fired,
-            bare=bare,
-            target_attr="orderset",
-            related_attr="related_orders",
-            depth=_depth,
-        )
 
     @classmethod
     def get_flat_orders(

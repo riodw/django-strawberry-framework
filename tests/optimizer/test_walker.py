@@ -2019,6 +2019,63 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
     assert "patron_id" in plan.only_fields
 
 
+def test_ensure_connector_only_fields_adds_generic_content_type():
+    """A ``GenericRelation`` list-prefetch projection must load the morph attach key.
+
+    Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` attaches by
+    ``(object_id, content_type_id)``. Scalar-only windows already took both from
+    ``prefetch_attach_columns``; list-prefetch / node-selection child plans share
+    ``_ensure_connector_only_fields`` and must not omit the morph half.
+    """
+    from apps.library.models import Branch, TaggedItem
+
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan(only_fields=["tag"])
+    parent_field = Branch._meta.get_field("tags")
+    _ensure_connector_only_fields(plan, parent_field)
+
+    object_id = TaggedItem._meta.get_field("object_id").attname
+    content_type_id = TaggedItem._meta.get_field("content_type").attname
+    assert object_id in plan.only_fields
+    assert content_type_id in plan.only_fields
+
+
+def test_generic_connection_node_selection_projects_content_type_column():
+    """A generic connection with node scalars still projects the morph attach key.
+
+    Unlike the scalar-only window path (``_project_scalar_only_window``), a
+    ``edges { node { tag } }`` selection builds ``only_fields`` via the walker
+    child plan and ``_ensure_connector_only_fields``. Both paths must include
+    ``content_type_id`` or prefetch attach deferred-refetches once per edge.
+    """
+    registry.clear()
+    try:
+        types = _generic_connection_types()
+        branch_model, branch_type = types["Branch"]
+        tagged_model = types["TaggedItem"][0]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "tagsConnection",
+                    node_selections=[_sel("tag")],
+                    arguments={"first": 2},
+                ),
+            ],
+            branch_model,
+            info=_fake_info(),
+            source_type=branch_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        only_fields, defer = prefetch.queryset.query.deferred_loading
+        assert defer is False
+        object_id = tagged_model._meta.get_field("object_id").attname
+        content_type_id = tagged_model._meta.get_field("content_type").attname
+        assert {"tag", object_id, content_type_id} <= set(only_fields)
+    finally:
+        registry.clear()
+
+
 # ---------------------------------------------------------------------------
 # Root origin-type propagation
 # ---------------------------------------------------------------------------
@@ -3261,6 +3318,36 @@ def test_scalar_only_window_projects_pk_connector_and_order_columns():
         assert defer is False
         # pk + reverse-FK connector both projected; Book is pk-ordered ("id").
         assert {"id", "shelf_id"} <= set(only_fields)
+    finally:
+        registry.clear()
+
+
+def test_scalar_only_generic_window_projects_content_type_column():
+    """A scalar-only ``GenericRelation`` window loads the morph attach key.
+
+    Django attaches generic children by ``(object_id, content_type_id)``. The
+    scalar-only projection must take ``join.content_type_column`` from
+    ``classify_relation_join`` (not re-derive via ``content_type_field_name``)
+    alongside the object-id connector, or prefetch attach deferred-refetches
+    the morph column once per row.
+    """
+    registry.clear()
+    try:
+        types = _generic_connection_types()
+        branch_model, branch_type = types["Branch"]
+        tagged_model = types["TaggedItem"][0]
+        plan = plan_optimizations(
+            [_conn_sel("tagsConnection", scalar_children=["totalCount"], arguments={"first": 2})],
+            branch_model,
+            info=_fake_info(),
+            source_type=branch_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        only_fields, defer = prefetch.queryset.query.deferred_loading
+        assert defer is False
+        object_id = tagged_model._meta.get_field("object_id").attname
+        content_type_id = tagged_model._meta.get_field("content_type").attname
+        assert {tagged_model._meta.pk.attname, object_id, content_type_id} <= set(only_fields)
     finally:
         registry.clear()
 

@@ -22,8 +22,9 @@ IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
 This module depends on neither ``connection.py`` nor ``optimizer/walker.py`` so
 both can import it without a cycle. Plan-time argument coercion (an inline Int
 literal arrives as a token STRING; a Strawberry resolver argument is already
-``int``) is deliberately NOT owned here - it is the walker's concern and stays
-in ``optimizer/walker.py::_coerce_pagination_int``; this helper assumes its
+``int``) is deliberately NOT owned here - it is the nested planner's concern and
+stays in ``optimizer/nested_planner.py::_coerce_pagination_int`` (the walker
+re-exports the same helper for argument-comparison); this helper assumes its
 ``first`` / ``last`` are already the values ``SliceMetadata`` will gate on.
 """
 
@@ -645,6 +646,26 @@ def derive_connection_window_bounds(
 _RELAY_MAX_RESULTS_DEFAULT = 100
 
 
+def assert_relay_pagination_bound(argument: str, value: Any, *, cap: int) -> None:
+    """Raise ``SliceMetadata``-parity ``ValueError``s for a negative or over-cap page size.
+
+    The ONE spelling of the Relay ``first`` / ``last`` bound check the keyset
+    fork cannot run through ``SliceMetadata.from_arguments`` (a keyset cursor
+    is not an offset). Shared by ``derive_keyset_window_bounds`` (plan/resolve
+    window bounds) and the root / per-parent keyset slicer
+    (``connection.py::_resolve_keyset_connection``), so a keyset connection's
+    consumer-visible pagination errors cannot fork from the offset vocabulary
+    or from each other. Non-``int`` values are ignored - matching
+    ``SliceMetadata``'s ``isinstance(..., int)`` gate that skips the bound.
+    """
+    if not isinstance(value, int):
+        return
+    if value < 0:
+        raise ValueError(f"Argument '{argument}' must be a non-negative integer.")
+    if value > cap:
+        raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
+
+
 def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
     """Resolve the effective ``relay_max_results`` cap for a keyset window.
 
@@ -691,11 +712,11 @@ def derive_keyset_window_bounds(
 
     - A keyset window is FORWARD-ONLY and always starts at offset 0 (the
       seek predicate, not a row offset, positions the page). ``limit`` is
-      ``first`` when supplied (validated against the same negative /
-      over-``max_results`` rules ``SliceMetadata`` applies, with its exact
-      error text so the consumer-visible errors do not fork), else the
-      effective ``relay_max_results`` cap - matching the root / per-parent
-      keyset slicer.
+      ``first`` when supplied (validated via ``assert_relay_pagination_bound``
+      against the same negative / over-``max_results`` rules ``SliceMetadata``
+      applies, with its exact error text so the consumer-visible errors do not
+      fork), else the effective ``relay_max_results`` cap - matching the root /
+      per-parent keyset slicer.
     - Backward shapes (``last`` with no ``first``, or any ``before:``) raise
       ``UnwindowableConnection``: the reversed keyset window is not planned
       in v1, and the per-parent / root keyset slicer resolves those shapes
@@ -708,11 +729,6 @@ def derive_keyset_window_bounds(
     if before is not None or (isinstance(last, int) and not isinstance(first, int)):
         raise UnwindowableConnection
     cap = resolve_relay_max_results(info, max_results)
-    limit = cap
-    if isinstance(first, int):
-        if first < 0:
-            raise ValueError("Argument 'first' must be a non-negative integer.")
-        if first > cap:
-            raise ValueError(f"Argument 'first' cannot be higher than {cap}.")
-        limit = first
+    assert_relay_pagination_bound("first", first, cap=cap)
+    limit = first if isinstance(first, int) else cap
     return ConnectionWindowBounds(0, limit, False)

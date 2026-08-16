@@ -779,6 +779,25 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
     return name, bool(getattr(entry, "descending", False))
 
 
+def order_entry_has_explicit_nulls(entry: Any) -> bool:
+    """Whether an order ``entry`` requests explicit ``NULLS FIRST`` / ``LAST``.
+
+    A string order ref (``"title"`` / ``"-title"``) never carries one; only an
+    ``OrderBy`` expression can (``nulls_first`` / ``nulls_last`` default to
+    ``None`` = the backend's default placement). A non-``None`` value means the
+    SQL NULL ordering is explicit. Callers decide the consequence: the nested
+    planner's composite-index advisory treats the whole order as UNKNOWN (a
+    plain ``Meta.indexes`` term cannot be proven to serve it), and the keyset
+    cursor path rejects the entry (value cursors cannot encode the nullable
+    domain). One vocabulary predicate so those sites cannot disagree on what
+    "explicit" means.
+    """
+    return (
+        getattr(entry, "nulls_first", None) is not None
+        or getattr(entry, "nulls_last", None) is not None
+    )
+
+
 def ends_in_unique_column(effective: tuple, model: type) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total order.
 

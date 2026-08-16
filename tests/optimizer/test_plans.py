@@ -28,6 +28,7 @@ from django_strawberry_framework.optimizer.plans import (
     diff_plan_for_queryset,
     ends_in_unique_column,
     lookup_paths,
+    order_entry_has_explicit_nulls,
     resolver_key,
     runtime_path_from_path,
     window_partition_for_prefetch,
@@ -1106,6 +1107,26 @@ class TestWindowPartitionForPrefetch:
         field = SimpleNamespace(many_to_many=True, remote_field=SimpleNamespace(), name="mock_rel")
         with pytest.raises(OptimizerError, match="could not resolve a parent partition"):
             window_partition_for_prefetch(field)
+
+
+class TestOrderEntryHasExplicitNulls:
+    """``order_entry_has_explicit_nulls`` is the shared OrderBy NULLS vocabulary gate."""
+
+    def test_string_refs_never_carry_nulls(self):
+        assert order_entry_has_explicit_nulls("title") is False
+        assert order_entry_has_explicit_nulls("-title") is False
+
+    def test_plain_orderby_is_not_explicit(self):
+        from django.db.models import F
+
+        assert order_entry_has_explicit_nulls(F("title").asc()) is False
+        assert order_entry_has_explicit_nulls(F("title").desc()) is False
+
+    def test_nulls_first_or_last_is_explicit(self):
+        from django.db.models import F
+
+        assert order_entry_has_explicit_nulls(F("title").asc(nulls_first=True)) is True
+        assert order_entry_has_explicit_nulls(F("title").desc(nulls_last=True)) is True
 
 
 class TestDeterministicOrderHoistParity:

@@ -23,6 +23,7 @@ from django_strawberry_framework.utils.relations import (
     RelationPathHop,
     classify_path,
     instance_accessor,
+    is_forward_many_to_many,
     path_traverses_to_many,
     validate_lookup_expr,
 )
@@ -179,6 +180,29 @@ def test_relation_kind_classifies_concrete_auto_created_o2o_as_forward_single():
     )
 
     assert relation_kind(field) == "forward_single"
+
+
+def test_is_forward_many_to_many_accepts_concrete_forward_m2m():
+    """A forward ``ManyToManyField`` is concrete and not auto-created."""
+    field = SimpleNamespace(many_to_many=True, concrete=True, auto_created=False)
+    assert is_forward_many_to_many(field) is True
+
+
+def test_is_forward_many_to_many_rejects_reverse_m2m_accessor():
+    """A reverse M2M accessor is auto-created and not concrete."""
+    field = SimpleNamespace(many_to_many=True, concrete=False, auto_created=True)
+    assert is_forward_many_to_many(field) is False
+
+
+def test_is_forward_many_to_many_rejects_non_m2m():
+    field = SimpleNamespace(many_to_many=False, concrete=True, auto_created=False)
+    assert is_forward_many_to_many(field) is False
+
+
+def test_is_forward_many_to_many_stock_book_genres():
+    """Library ``Book.genres`` is a forward writable M2M; reverse is not."""
+    assert is_forward_many_to_many(Book._meta.get_field("genres")) is True
+    assert is_forward_many_to_many(Genre._meta.get_field("books")) is False
 
 
 def test_instance_accessor_uses_get_accessor_name_for_reverse_relations():

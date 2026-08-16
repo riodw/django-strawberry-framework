@@ -262,6 +262,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_resource_policy.py",
     "tests/test_routers.py",
     "tests/test_scalars.py",
+    "tests/test_sets_mixins.py",
     "tests/test_strawberry_patches.py",
     "tests/test_views.py",
     "tests/testing/__init__.py",

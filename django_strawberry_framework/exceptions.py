@@ -33,6 +33,35 @@ def _safe_arg_repr(value: object) -> str:
         return f"<unprintable {_safe_type_name(value)}>"
 
 
+def _safe_model_label(model: object) -> str:
+    """Return a model label without trusting consumer-supplied metadata."""
+    try:
+        meta = getattr(model, "_meta", None)
+        label = getattr(meta, "label", None)
+    except BaseException:
+        return _safe_type_name(model)
+    if isinstance(label, str):
+        try:
+            return str(label) or _safe_type_name(model)
+        except BaseException:
+            pass
+    return _safe_type_name(model)
+
+
+def _safe_terminal_label(terminal: object) -> str:
+    """Return a terminal field name without trusting consumer-supplied metadata."""
+    try:
+        name = getattr(terminal, "name", None)
+    except BaseException:
+        return _safe_type_name(terminal)
+    if isinstance(name, str):
+        try:
+            return str(name) or _safe_type_name(terminal)
+        except BaseException:
+            pass
+    return _safe_type_name(terminal)
+
+
 def describe_value(value: object) -> str:
     """Render ``value`` as an error message's ``got <this>`` tail, without ever raising.
 
@@ -191,12 +220,10 @@ class PathResolutionError(ConfigurationError):
         field_path: str,
         segment: str,
     ) -> None:
-        model_label = getattr(getattr(model, "_meta", None), "label", None) or _safe_type_name(
-            model,
-        )
+        model_label = _safe_model_label(model)
         super().__init__(
-            f"Cannot classify path {field_path!r} on model {model_label}: "
-            f"segment {segment!r} is not a traversable model-field relation.",
+            f"Cannot classify path {_safe_arg_repr(field_path)} on model {model_label}: "
+            f"segment {_safe_arg_repr(segment)} is not a traversable model-field relation.",
         )
         self.model = model
         self.field_path = field_path
@@ -231,10 +258,10 @@ class LookupValidationError(ConfigurationError):
         lookup_expr: str,
         part: str,
     ) -> None:
-        terminal_label = getattr(terminal, "name", None) or _safe_type_name(terminal)
+        terminal_label = _safe_terminal_label(terminal)
         super().__init__(
-            f"Invalid lookup expression {lookup_expr!r} for terminal "
-            f"{terminal_label}: part {part!r} is not a valid transform or lookup.",
+            f"Invalid lookup expression {_safe_arg_repr(lookup_expr)} for terminal "
+            f"{terminal_label}: part {_safe_arg_repr(part)} is not a valid transform or lookup.",
         )
         self.terminal = terminal
         self.lookup_expr = lookup_expr

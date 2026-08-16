@@ -1264,6 +1264,29 @@ def _guard_nested_recursion(
         )
 
 
+def dedupe_serializer_input_shape(
+    input_cls: type,
+    shape: SerializerInputShape,
+) -> tuple[type, SerializerInputShape]:
+    """Return the canonical ``(class, shape)`` pair from the per-pass shape cache.
+
+    Post-build descriptor-keyed get-or-store: the serializer cache key is the
+    frozen ``SerializerInputShape`` itself, which exists only after
+    ``build_serializer_input_class`` walks, so callers build first then dedupe
+    here (unlike form ``cached_build_input``, which keys pre-build). Top-level
+    bind (``sets._serializer_input_shape_for``) and nested opt-in builds share
+    this one protocol so cache key / value contracts cannot drift across modules;
+    materialize stays at each call site (nested always materializes; top-level
+    materializes later via ``build_and_stash_input``).
+    """
+    cached = _serializer_shape_build_cache.get(shape.cache_key)
+    if cached is not None:
+        return cached
+    pair = (input_cls, shape)
+    _serializer_shape_build_cache[shape.cache_key] = pair
+    return pair
+
+
 def _dedupe_and_materialize_nested(
     nested_cls: type,
     nested_shape: SerializerInputShape,
@@ -1272,19 +1295,16 @@ def _dedupe_and_materialize_nested(
 
     Two references to the SAME nested shape (within one build or across two top-level mutations)
     must resolve to ONE class object, or Strawberry rejects two distinct types under one GraphQL
-    name. The nested build rides the SAME per-shape build cache the top level uses (keyed on the
-    frozen ``SerializerInputShape`` descriptor - nested and top-level keys never collide because
-    the descriptors differ), and materializes through the SAME ledger, so a genuine
-    distinct-class-same-name clash (an astronomically-unlikely digest collision) still fails loud
-    at materialize. Identical descriptors return the cached class; a first sighting is cached +
-    materialized. Materializing a cache hit is intentionally idempotent and keeps
-    the cache from assuming that the independently reset ledger is still warm.
+    name. The nested build rides the SAME per-shape build cache the top level uses via
+    ``dedupe_serializer_input_shape`` (keyed on the frozen ``SerializerInputShape``
+    descriptor - nested and top-level keys never collide because the descriptors differ),
+    and materializes through the SAME ledger, so a genuine distinct-class-same-name clash
+    (an astronomically-unlikely digest collision) still fails loud at materialize. Identical
+    descriptors return the cached class; a first sighting is cached + materialized.
+    Materializing a cache hit is intentionally idempotent and keeps the cache from assuming
+    that the independently reset ledger is still warm.
     """
-    cached = _serializer_shape_build_cache.get(nested_shape.cache_key)
-    if cached is None:
-        cached = (nested_cls, nested_shape)
-        _serializer_shape_build_cache[nested_shape.cache_key] = cached
-    nested_cls, nested_shape = cached
+    nested_cls, nested_shape = dedupe_serializer_input_shape(nested_cls, nested_shape)
     materialize_serializer_input_class(nested_shape.type_name, nested_cls)
     return nested_cls, nested_shape
 

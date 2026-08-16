@@ -162,6 +162,9 @@ def test_generic_relation_classifies_direct_fk_partitioned_by_object_id():
     # recommend the ``(content_type_id, object_id, ...)`` prefix (never object_id
     # alone) even though the content type is a constant WHERE, not a partition.
     assert descriptor.content_type_column == content_type_attname
+    # Attach-complete projection writers take both halves of Django's
+    # ``(object_id, content_type_id)`` key from one derived property.
+    assert descriptor.prefetch_attach_columns == (object_id_attname, content_type_attname)
     assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
     assert descriptor.through_model is None
     assert descriptor.parent_link_field is None

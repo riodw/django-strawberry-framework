@@ -1,15 +1,19 @@
 """Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
 
 The single owner for the package's "reach into a module that may not be
-importable / may not be loaded" patterns. Three call sites shared this
-shape before it was single-sited here:
+importable / may not be loaded" patterns. Call sites that share this
+shape route through here:
 
-- ``registry.py::_clear_if_importable`` (best-effort subsystem co-clears);
-- ``registry.py::_clear_if_loaded`` (the opt-in-preserving auth co-clear);
-- ``utils/inputs.py::_safe_import`` (generated-input namespace clearing).
+- ``registry.py::_clear_if_importable`` (best-effort per-type co-clears);
+- ``types/finalizer.py`` auth bind (opt-in-preserving ``loaded_attr``);
+- ``utils/inputs.py::_safe_import`` (generated-input namespace clearing;
+  attr-lenient wrapper over ``import_attr_if_importable``);
+- ``types/converters.py`` / ``optimizer/nested_planner.py`` (postgres-only
+  soft symbols via ``import_attr_if_importable``);
+- soft-dependency ``require_*`` guards (``require_optional_module``).
 
 New optional-import handling (a partially-installed extra, a sidecar
-package absent from a build) belongs here, not inline at a fourth call
+package absent from a build) belongs here, not inline at a new call
 site. ``import_attr`` is the STRICT sibling for internal
 deferred-import seams where a failure must propagate.
 """

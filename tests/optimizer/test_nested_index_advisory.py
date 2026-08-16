@@ -63,6 +63,7 @@ from django_strawberry_framework.optimizer.nested_planner import (
     _index_leading_terms,
     clear_index_advisory_dedup,
 )
+from django_strawberry_framework.utils.imports import import_attr_if_importable
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +79,14 @@ def _reset_index_advisory_dedup():
     clear_index_advisory_dedup()
     yield
     clear_index_advisory_dedup()
+
+
+def test_btree_index_soft_import_uses_shared_optional_import_owner() -> None:
+    """``_PostgresBTreeIndex`` is the shared ``import_attr_if_importable`` result, not a local try/except."""
+    expected = import_attr_if_importable("django.contrib.postgres.indexes", "BTreeIndex")
+    assert nested_planner._PostgresBTreeIndex is expected
+    assert nested_planner._PostgresBTreeIndex is BTreeIndex
+    assert (models.Index, BTreeIndex) == nested_planner._BTREE_INDEX_TYPES
 
 
 class _IdxParent(models.Model):

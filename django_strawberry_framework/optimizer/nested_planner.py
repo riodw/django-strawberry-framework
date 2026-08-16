@@ -36,6 +36,7 @@ from ..utils.connections import (
     has_connection_sidecar_kwargs,
     window_range_plan,
 )
+from ..utils.imports import import_attr_if_importable
 from ..utils.relations import instance_accessor
 from ..utils.typing import schema_config_from_info
 from . import logger
@@ -53,6 +54,7 @@ from .plans import (
     append_unique_many,
     deferred_loading_of,
     deterministic_order,
+    order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
 from .selections import (
@@ -70,14 +72,16 @@ from .selections import (
 # ``.fields`` API but back a non-ordering access method, and a custom ``Index``
 # subclass's method we cannot vouch for; all are excluded so the inventory
 # degrades them to UNKNOWN rather than trusting them to serve the window's
-# ``ORDER BY`` (the false-``covered`` defect for non-B-tree indexes). The
-# ``BTreeIndex`` import is guarded because ``django.contrib.postgres`` need not
-# be importable on every install; its absence simply leaves the plain
-# ``models.Index`` as the sole B-tree-backed type (the safe default).
-try:
-    from django.contrib.postgres.indexes import BTreeIndex as _PostgresBTreeIndex
-except Exception:  # pragma: no cover - contrib.postgres unavailable on this install
-    _PostgresBTreeIndex = None
+# ``ORDER BY`` (the false-``covered`` defect for non-B-tree indexes). Soft-import
+# ``BTreeIndex`` through the shared optional-import owner (same policy as
+# ``types/converters.py``'s postgres field classes): ``None`` when
+# ``django.contrib.postgres`` is unimportable; loud ``AttributeError`` if the
+# module loads but the class is missing. Absence leaves plain ``models.Index``
+# as the sole B-tree-backed type (the safe default).
+_PostgresBTreeIndex: type | None = import_attr_if_importable(
+    "django.contrib.postgres.indexes",
+    "BTreeIndex",
+)
 
 _BTREE_INDEX_TYPES: tuple[type, ...] = (
     (models.Index,) if _PostgresBTreeIndex is None else (models.Index, _PostgresBTreeIndex)
@@ -130,19 +134,20 @@ class NestedConnectionPlanResult:
 
 
 def _connector_only_field(parent_field: Any) -> str | None:
-    """Return the column Django needs to attach prefetched rows to parents.
+    """Return the single connector column Django needs for non-generic attach.
 
     The relation-kind-specific connector: the child FK attname for a reverse FK /
     reverse one-to-one, the target field's attname for a forward single-valued
     relation, and the related model's pk attname for an M2M (the join table owns
     the attach, so the child only needs its pk). Returns ``None`` when no column
-    resolves. Shared by ``_ensure_connector_only_fields`` (the list-prefetch
-    projection) and the scalar-only connection-window projection.
+    resolves. Attach-complete projection (connector plus a ``GenericRelation``
+    morph column) lives on ``RelationJoinDescriptor.prefetch_attach_columns``
+    and is consumed by ``walker._ensure_connector_only_fields`` and
+    ``_project_scalar_only_window``.
 
     A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
-    (which carries the moved-verbatim connector derivation as
-    ``parent_join_column``), kept under the historical name for its two
-    callers and the direct test-double pins.
+    (``parent_join_column`` only), kept under the historical name for direct
+    test-double pins.
     """
     return classify_relation_join(parent_field).parent_join_column
 
@@ -203,21 +208,6 @@ def _select_nested_strategy(hint: Any) -> Any:
     return active_strategy()
 
 
-def _has_explicit_nulls_placement(entry: Any) -> bool:
-    """Whether an order ``entry`` requests an explicit ``NULLS FIRST`` / ``LAST``.
-
-    A string order ref (``"title"`` / ``"-title"``) never carries one; only an
-    ``OrderBy`` expression can (``nulls_first`` / ``nulls_last`` default to
-    ``None`` = the backend's default placement). A non-``None`` value means the
-    SQL NULL ordering is explicit and cannot be proven served by a plain
-    ``Meta.indexes`` term, so the caller treats the whole order as UNKNOWN.
-    """
-    return (
-        getattr(entry, "nulls_first", None) is not None
-        or getattr(entry, "nulls_last", None) is not None
-    )
-
-
 def _concrete_order_terms(
     order_by: Sequence[Any],
     model: type[models.Model],
@@ -250,14 +240,14 @@ def _concrete_order_terms(
     which a plain ``Meta.indexes`` term (whose NULL ordering is the backend
     default) cannot be PROVEN to serve, so any such term returns ``None`` rather
     than collapse to a bare ``(attname, direction)`` that would falsely read as
-    covered.
+    covered (``plans.py::order_entry_has_explicit_nulls``).
     """
     by_name = {field.name: field.attname for field in model._meta.concrete_fields}
     attnames = set(by_name.values())
     terms: list[tuple[str, bool]] = []
     seen: set[str] = set()
     for entry in order_by:
-        if _has_explicit_nulls_placement(entry):
+        if order_entry_has_explicit_nulls(entry):
             return None
         parsed = order_entry_name_and_direction(entry)
         if parsed is None:
@@ -685,21 +675,13 @@ def _project_scalar_only_window(
     related_model = django_field.related_model
     fields: list[str] = []
     append_unique(fields, related_model._meta.pk.attname)
-    connector = _connector_only_field(django_field)
-    if connector is not None:
-        append_unique(fields, connector)
-    # GenericRelation: the connector above is only the ``object_id`` side.
-    # Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` attaches
-    # each fetched child to its parent by reading the child's ``content_type_id``
-    # (its ``rel_obj_attr`` key is ``(object_id, content_type_id)``), so a
-    # scalar-only window that ``.only()``-masks that column would deferred-refetch
-    # it once per row (an N+1 in sync, ``SynchronousOnlyOperation`` in async).
-    # Include the content-type attname so the attach key is already loaded - this
-    # stays required even though the morph WHERE is now alias-late (Django's, not
-    # the planner's): the attach happens regardless of where the predicate lives.
-    content_type_field_name = getattr(django_field, "content_type_field_name", None)
-    if content_type_field_name is not None:
-        append_unique(fields, related_model._meta.get_field(content_type_field_name).attname)
+    # Attach-complete set from one classify (connector + GenericRelation morph).
+    # Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` attaches by
+    # ``(object_id, content_type_id)``; masking either half deferred-refetches
+    # once per row (N+1 sync / ``SynchronousOnlyOperation`` async). Same
+    # ``prefetch_attach_columns`` owner as ``walker._ensure_connector_only_fields``.
+    for column in classify_relation_join(django_field).prefetch_attach_columns:
+        append_unique(fields, column)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
     return child_queryset.only(*fields)

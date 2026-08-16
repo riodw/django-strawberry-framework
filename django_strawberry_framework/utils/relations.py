@@ -420,10 +420,12 @@ def is_forward_many_to_many(field: object) -> bool:
     ``ManyToManyField`` is ``concrete`` (equivalently, not ``auto_created``);
     the reverse accessor is ``auto_created`` and not ``concrete``.
 
-    Single-sited here so the predicate cannot drift between the two mutation
-    surfaces that select editable M2M fields - the input generator
-    (``mutations/inputs.py::_select_editable_fields``) and the relation-field
-    index (``mutations/resolvers.py::_index_relation_fields``). ``getattr``
+    Single-sited here so the predicate cannot drift across the write surfaces
+    that select editable / attestable M2M fields - the model-mutation input
+    generator (``mutations/inputs.py::_select_editable_fields``), the
+    relation-field index (``mutations/resolvers.py::_index_relation_fields``),
+    and the DRF attestation filter
+    (``rest_framework/resolvers.py::_attestable_m2m_fields``). ``getattr``
     defaults defend against field shapes that omit a flag, matching
     ``relation_kind``'s read contract.
     """

@@ -13,6 +13,9 @@ mutation resolver is not the utility module for the other write flavors):
   decode spine (type-check -> visible object -> flavor projection);
 - ``decode_visible_relation_ids`` - the batched id-set compose (type-check each
   id, then one visibility / existence ``pk__in`` query);
+- ``store_decoded`` / ``decoded_into`` / ``scalar_into`` / ``file_into`` /
+  ``relation_into`` / ``decode_field_handlers`` - the SCALAR / RELATION / FILE
+  store-into-dest vocabulary the form and serializer walks share;
 - ``decode_provided_fields`` - the kind-routed walk over a bound write input.
 """
 
@@ -24,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from strawberry import relay
 
 from .errors import field_error, relation_field_error
-from .inputs import iter_provided_input_fields
+from .inputs import FILE, RELATION_MULTI, RELATION_SINGLE, iter_provided_input_fields
 from .querysets import (
     coerce_field_value_or_none,
     pks_all_present,
@@ -262,6 +265,150 @@ def decode_visible_relation_ids(
     return pks, None
 
 
+def _spec_field_name(spec: Any) -> str:
+    """Default GraphQL error-path: the spec's own wire name."""
+    return spec.graphql_name
+
+
+def _no_relation_extra(_spec: Any) -> dict[str, Any]:
+    """Default relation-decoder extras: none."""
+    return {}
+
+
+def store_decoded(
+    dest: dict[str, Any],
+    spec: Any,
+    pair: tuple[Any, FieldError | None],
+) -> FieldError | None:
+    """Store a successful ``(decoded, error)`` pair under ``spec.target_name``.
+
+    The leftover glue every form / serializer kind handler copied after a decode:
+    a ``FieldError`` short-circuits the walk without writing the dest; otherwise
+    the value lands under the flavor's bound-data key (form field name /
+    serializer field name). FILE uses this with ``(upload, None)``; nested
+    serializer decode uses it around ``_decode_nested``.
+    """
+    decoded, error = pair
+    if error is not None:
+        return error
+    dest[spec.target_name] = decoded
+    return None
+
+
+def decoded_into(
+    dest: dict[str, Any],
+    decode: Callable[[Any, Any], tuple[Any, FieldError | None]],
+) -> Callable[[Any, Any], FieldError | None]:
+    """Build a kind handler: ``decode(spec, value)`` then ``store_decoded``.
+
+    The primitive SCALAR / FILE / RELATION / nested handlers all specialize.
+    ``decode`` returns ``(decoded, None)`` or ``(None, FieldError)``.
+    """
+
+    def handler(spec: Any, value: Any) -> FieldError | None:
+        return store_decoded(dest, spec, decode(spec, value))
+
+    return handler
+
+
+def scalar_into(
+    dest: dict[str, Any],
+    *,
+    field_name: Callable[[Any], str] = _spec_field_name,
+) -> Callable[[Any, Any], FieldError | None]:
+    """SCALAR handler: ``decode_scalar_leaf`` then store under ``target_name``.
+
+    ``field_name(spec)`` is the GraphQL path the error keys to (default
+    ``spec.graphql_name``; serializer nested decode passes the dotted prefix).
+    """
+    return decoded_into(
+        dest,
+        lambda spec, value: decode_scalar_leaf(field_name(spec), value),
+    )
+
+
+def file_into(
+    dest: dict[str, Any],
+) -> Callable[[Any, Any], FieldError | None]:
+    """FILE handler: store the Upload under ``spec.target_name``.
+
+    Destination is flavor policy: form ``provided_files`` (Django ``files=``),
+    serializer ``provided_data`` (DRF reads files from ``data``).
+    """
+    return decoded_into(dest, lambda _spec, value: (value, None))
+
+
+def relation_into(
+    dest: dict[str, Any],
+    *,
+    single: Callable[..., tuple[Any, FieldError | None]],
+    multi: Callable[..., tuple[Any, FieldError | None]],
+    info: Any,
+    field_name: Callable[[Any], str] = _spec_field_name,
+    extra: Callable[[Any], dict[str, Any]] = _no_relation_extra,
+) -> Callable[[Any, Any], FieldError | None]:
+    """RELATION_SINGLE / RELATION_MULTI handler over flavor decoders.
+
+    Picks ``multi`` vs ``single`` from ``spec.kind``, calls with the shared
+    kwargs (``graphql_name``, ``related_model``, ``info``) plus flavor extras
+    (the form's ``form_field``), then ``store_decoded``. Flavor null / skip /
+    projection policy stays on the decoder (form ``empty_values`` +
+    ``to_field_name``; serializer ``None`` + ``obj.pk`` / batched ids).
+    """
+
+    def decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+        decoder = multi if spec.kind == RELATION_MULTI else single
+        return decoder(
+            value,
+            graphql_name=field_name(spec),
+            related_model=spec.related_model,
+            info=info,
+            **extra(spec),
+        )
+
+    return decoded_into(dest, decode)
+
+
+def decode_field_handlers(
+    dest: dict[str, Any],
+    *,
+    info: Any,
+    single: Callable[..., tuple[Any, FieldError | None]],
+    multi: Callable[..., tuple[Any, FieldError | None]],
+    file_dest: dict[str, Any] | None = None,
+    field_name: Callable[[Any], str] = _spec_field_name,
+    extra: Callable[[Any], dict[str, Any]] = _no_relation_extra,
+    extra_handlers: dict[str, Callable[[Any, Any], FieldError | None]] | None = None,
+) -> tuple[
+    dict[str, Callable[[Any, Any], FieldError | None]],
+    Callable[[Any, Any], FieldError | None],
+]:
+    """Build the SCALAR / RELATION_* / FILE handler map both write flavors share.
+
+    Returns ``(handlers, scalar_handler)`` for ``decode_provided_fields``.
+    ``file_dest`` is the form ``provided_files`` split (Django ``files=``);
+    omitted, FILE lands in ``dest`` (DRF ``data``). ``extra_handlers`` is the
+    serializer nested map. Flavor relation decoders stay arguments so form
+    per-element ``to_field_name`` and serializer batched ids cannot drift into
+    a mode flag.
+    """
+    relation = relation_into(
+        dest,
+        single=single,
+        multi=multi,
+        info=info,
+        field_name=field_name,
+        extra=extra,
+    )
+    handlers = {
+        RELATION_SINGLE: relation,
+        RELATION_MULTI: relation,
+        FILE: file_into(dest if file_dest is None else file_dest),
+        **(extra_handlers or {}),
+    }
+    return handlers, scalar_into(dest, field_name=field_name)
+
+
 def decode_provided_fields(
     specs: list,
     data: Any,
@@ -275,11 +422,11 @@ def decode_provided_fields(
     the ``{spec.input_attr: spec}`` reverse map, walk the PROVIDED input fields
     (``UNSET`` stripped - single-sited in ``iter_provided_input_fields``), and
     hand each ``(spec, value)`` to the flavor's handler for ``spec.kind``
-    (falling back to ``scalar_handler`` for the scalar leaf). Each handler owns
-    its flavor's destination policy (the form splits ``provided_files`` for
-    Django's ``files=``; the serializer routes everything into ``data``,
-    including its ``NESTED_*`` recursion) by closing over the destination
-    dict(s), and returns a ``FieldError`` to short-circuit or ``None`` to
+    (falling back to ``scalar_handler`` for the scalar leaf). Destination policy
+    is the ``decode_field_handlers`` / ``*_into`` factories (the form splits
+    ``provided_files`` for Django's ``files=``; the serializer routes everything
+    into ``data``, including its ``NESTED_*`` recursion via ``extra_handlers``).
+    Each handler returns a ``FieldError`` to short-circuit or ``None`` to
     continue. Returns the first handler ``FieldError`` or ``None``.
 
     The model flavor's ``mutations/resolvers.py::_decode_relations`` is a

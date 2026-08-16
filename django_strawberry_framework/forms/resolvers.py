@@ -111,11 +111,10 @@ from ..mutations.resolvers import (
 from ..utils.querysets import sync_pipeline_recourse
 from ..utils.write_transaction import pipeline_write_phase
 from ..utils.write_values import (
+    decode_field_handlers,
     decode_provided_fields,
-    decode_scalar_leaf,
     decode_visible_relation,
 )
-from .converter import FILE, RELATION_MULTI, RELATION_SINGLE
 from .inputs import get_form_fields
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -255,55 +254,29 @@ def _decode_form_data(
 
     A relation decode ``FieldError`` short-circuits. The reverse-map build + the
     ``UNSET``-strip walk + the kind dispatch are single-sited in
-    ``utils/write_values.py::decode_provided_fields``; the
-    handlers below carry the FORM destination policy (data/files split, form-key
-    routing).
+    ``utils/write_values.py::decode_provided_fields``; the SCALAR / RELATION /
+    FILE store-into-dest handlers are the shared ``decode_field_handlers``
+    factories. Flavor coloring stays in the relation decoders (``empty_values``
+    skip + ``to_field_name``) and in ``file_dest=provided_files`` (Django
+    ``files=``, never ``data=``).
     """
     form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
 
     provided_data: dict[str, Any] = {}
     provided_files: dict[str, Any] = {}
-
-    def _relation(spec: Any, value: Any) -> Any | None:
-        decoder = (
-            _decode_form_relation_multi
-            if spec.kind == RELATION_MULTI
-            else _decode_form_relation_single
-        )
-        decoded, error = decoder(
-            value,
-            graphql_name=spec.graphql_name,
-            related_model=spec.related_model,
-            form_field=form_fields[spec.target_name],
-            info=info,
-        )
-        if error is not None:
-            return error
-        provided_data[spec.target_name] = decoded
-        return None
-
-    def _file(spec: Any, value: Any) -> None:
-        # NEVER ``data=``: a bound Django form reads uploads from ``files=``.
-        provided_files[spec.target_name] = value
-        return None
-
-    def _scalar(spec: Any, value: Any) -> Any | None:
-        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
-        # ``decode_scalar_leaf``), keyed to the input's GraphQL field name. Only
-        # the storability check belongs here; the form owns its own null /
-        # datetime coercion (so the model path's ``_explicit_null_error`` /
-        # ``_make_aware_if_naive`` siblings are intentionally absent).
-        decoded, text_error = decode_scalar_leaf(spec.graphql_name, value)
-        if text_error is not None:
-            return text_error
-        provided_data[spec.target_name] = decoded
-        return None
-
+    handlers, scalar_handler = decode_field_handlers(
+        provided_data,
+        info=info,
+        single=_decode_form_relation_single,
+        multi=_decode_form_relation_multi,
+        file_dest=provided_files,
+        extra=lambda spec: {"form_field": form_fields[spec.target_name]},
+    )
     error = decode_provided_fields(
         mutation_cls._input_field_specs,
         data,
-        handlers={RELATION_SINGLE: _relation, RELATION_MULTI: _relation, FILE: _file},
-        scalar_handler=_scalar,
+        handlers=handlers,
+        scalar_handler=scalar_handler,
     )
     if error is not None:
         return {}, {}, error

@@ -276,7 +276,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         (cookbook lines 115-170) with two adaptations:
 
         - cookbook's DISTINCT ON tuple-half dropped (spec-028 Decision 12
-          -- DISTINCT ON deferred to ``0.0.9``).
+          -- no DISTINCT ON surface ships).
         - return shape changed from ``list[str]`` (cookbook's
           ``"-name"`` bare-string form) to
           ``list[tuple[str, Ordering | None]]`` (Spec Decision 5's

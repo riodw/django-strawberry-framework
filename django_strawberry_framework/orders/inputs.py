@@ -192,13 +192,12 @@ def convert_order_field_to_input_annotation(
     choice / FK / PK / ``BigIntegerField`` columns.
 
     The ``model_field`` and ``owner_definition`` arguments are unused at
-    the body level today; they are kept in the signature for
-    forward-compatibility (Spec Decision 12 -- a future DISTINCT ON
-    extension or per-type direction enum in ``0.0.9`` would consult
-    them) and for shape-symmetry with
-    ``filters/inputs.py::convert_filter_to_input_annotation``.
+    the body level; they are kept in the signature for shape-symmetry
+    with ``filters/inputs.py::convert_filter_to_input_annotation``, not
+    for a DISTINCT ON extension -- per spec-028 Decision 12 no DISTINCT
+    ON surface ships.
     """
-    del model_field, owner_definition  # reserved for future-extension (see docstring).
+    del model_field, owner_definition  # unused; kept for shape-symmetry (see docstring).
     return Ordering | None
 
 

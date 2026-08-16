@@ -797,13 +797,16 @@ cannot reach.
   maintainer reads 058 as the promotion owner, Slice 2 ships the binding
   behind the deferred key and 058 flips it — one-line change, tests keyed on
   a constant.
-- **Stale card reference — `BACKLOG.md` item 38.** The card's
-  Foundation-slice seam cites "BACKLOG.md item 38 for the `DjangoModelField`
-  custom Strawberry field class", but item 38 in today's `BACKLOG.md` is
-  the layered manual-relation-override *test policy*; no `DjangoModelField`
-  entry exists anywhere in the file. The open question it anchored —
-  custom field class vs `strawberry.field(permission_classes=...)` vs
-  resolver wrapping — is answered by this spec without it: **resolver
+- **Stale card reference — `BACKLOG.md` item 38 (retired).** The card's
+  Foundation-slice seam used to cite "BACKLOG.md item 38 for the
+  `DjangoModelField` custom Strawberry field class", but item 38 in
+  `BACKLOG.md` is the layered manual-relation-override *test policy*; no
+  `DjangoModelField` entry exists anywhere in the file. That citation has
+  since been dropped from the card, which now records the answer directly
+  ([`KANBAN.md`][kanban], `TODO-BETA-054-0.1.1`). The open question it
+  anchored — custom field class vs
+  `strawberry.field(permission_classes=...)` vs resolver wrapping — is
+  answered by this spec without it: **resolver
   wrapping** (upstream-parity, zero-config, zero-overhead on unmanaged
   fields). Mapping onto Strawberry's `permission_classes` is rejected —
   `BasePermission.has_permission(source, info, **kwargs)` is

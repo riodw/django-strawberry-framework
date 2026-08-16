@@ -36,6 +36,7 @@ symmetric by construction (spec-036 Decision 6).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 import strawberry
@@ -302,11 +303,11 @@ def relation_id_scalar(related_model: type, related_primary_type: type | None) -
     ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
     Relay-Node-shaped; otherwise the related model's raw pk scalar via
     ``scalar_for_field``. This is the id-type rule the three write flavors
-    used to re-spell: model-backed ``relation_input_annotation``, form
-    ``_model_less_relation_annotation``, serializer
-    ``serializer_only_relation_annotation``. Primary-required vs raw-pk
-    fallback stays at those call sites (serializer M3 raises before calling
-    this; form / model pass ``registry.get``, which may be ``None``).
+    used to re-spell: model-backed ``relation_input_annotation`` and
+    column-less ``annotate_queryset_relation`` (form + serializer).
+    Primary-required vs raw-pk fallback stays at those call sites (serializer
+    M3 raises before calling this; form / model pass ``registry.get``, which
+    may be ``None``).
     """
     if related_primary_type is not None and implements_relay_node(related_primary_type):
         return relay.GlobalID
@@ -327,6 +328,65 @@ def relation_id_annotation(
     """
     id_scalar = relation_id_scalar(related_model, related_primary_type)
     return list[id_scalar] if many else id_scalar
+
+
+def related_model_of_queryset(queryset: Any) -> type | None:
+    """Return ``queryset.model`` when a relation queryset is typed, else ``None``.
+
+    Column-less write-input relations (form ``ModelChoiceField``, serializer
+    ``PrimaryKeyRelatedField``) type their GraphQL id from the queryset's model.
+    A ``None`` queryset (assigned in ``__init__``) or a queryset with no
+    ``model`` cannot be typed. Schema-time builders raise via
+    ``require_queryset_related_model``; runtime probes use this non-raising form.
+    """
+    return getattr(queryset, "model", None)
+
+
+def require_queryset_related_model(
+    queryset: Any,
+    *,
+    missing: Callable[[], ConfigurationError],
+) -> type:
+    """Return ``queryset.model``, or raise the flavor's configuration error.
+
+    The fail-loud half of column-less relation typing. Form and serializer each
+    name their own missing-queryset diagnostic; the ``None`` check is one rule
+    so a missing model cannot leak as ``AttributeError``.
+    """
+    related_model = related_model_of_queryset(queryset)
+    if related_model is None:
+        raise missing()
+    return related_model
+
+
+def annotate_queryset_relation(
+    queryset: Any,
+    *,
+    many: bool,
+    python_attr: str,
+    primary_of: Callable[[type], type | None],
+    missing: Callable[[], ConfigurationError],
+) -> tuple[str, Any, type]:
+    """Return ``(python_attr, id-annotation, related_model)`` for a column-less relation.
+
+    Form ``_model_less_relation_annotation`` and serializer
+    ``serializer_only_relation_annotation`` both type a relation with no backing
+    model column from ``queryset.model``. This helper owns that shared spine:
+    resolve the related model (fail-loud via ``missing``), apply the flavor's
+    primary lookup, and package ``relation_id_annotation`` with the related
+    model the reverse map records.
+
+    Queryset discovery (form ``field.queryset`` vs serializer
+    ``child_relation``), missing-queryset wording, primary-required vs raw-pk
+    fallback, and naming (``<name>_id`` vs id-like-suffix) stay at each flavor.
+    """
+    related_model = require_queryset_related_model(queryset, missing=missing)
+    annotation = relation_id_annotation(
+        related_model,
+        primary_of(related_model),
+        many=many,
+    )
+    return python_attr, annotation, related_model
 
 
 def relation_input_annotation(

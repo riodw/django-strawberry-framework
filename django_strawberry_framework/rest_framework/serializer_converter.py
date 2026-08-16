@@ -66,7 +66,7 @@ from django.db import models
 from rest_framework import serializers
 
 from ..exceptions import ConfigurationError, _safe_type_name
-from ..mutations.inputs import relation_id_annotation, relation_input_annotation
+from ..mutations.inputs import annotate_queryset_relation, relation_input_annotation
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
@@ -646,7 +646,7 @@ def serializer_only_relation_annotation(
     whose ``source`` names no concrete column) resolves its related model from
     ``field.queryset.model`` (the single ``PrimaryKeyRelatedField``) or
     ``field.child_relation.queryset.model`` (a ``ManyRelatedField``). The id type
-    rides ``relation_id_annotation`` after ``_require_relation_primary`` (M3:
+    rides ``annotate_queryset_relation`` after ``_require_relation_primary`` (M3:
     a missing primary is a class-creation error, not a raw-pk fallback).
 
     A relation with neither a backing column NOR a concrete ``queryset.model``
@@ -656,21 +656,21 @@ def serializer_only_relation_annotation(
     it cannot be typed.
     """
     related_field = field.child_relation if kind == RELATION_MULTI else field
-    queryset = getattr(related_field, "queryset", None)
-    related_model = getattr(queryset, "model", None)
-    if related_model is None:
-        raise ConfigurationError(
+    many = kind == RELATION_MULTI
+    input_attr, _ = serializer_field_graphql_name(field.field_name, kind)
+    return annotate_queryset_relation(
+        getattr(related_field, "queryset", None),
+        many=many,
+        python_attr=input_attr,
+        primary_of=lambda model: _require_relation_primary(field.field_name, model),
+        missing=lambda: ConfigurationError(
             f"Serializer relation field {field.field_name!r} has no backing model column "
             "and no concrete queryset.model at schema build, so its related model - and "
             "thus its id type - cannot be resolved. Declare it on a ModelSerializer over a "
             "relation column, or give it a concrete queryset "
             "(e.g. PrimaryKeyRelatedField(queryset=Model.objects.all())).",
-        )
-    primary = _require_relation_primary(field.field_name, related_model)
-    many = kind == RELATION_MULTI
-    annotation = relation_id_annotation(related_model, primary, many=many)
-    input_attr, _ = serializer_field_graphql_name(field.field_name, kind)
-    return input_attr, annotation, related_model
+        ),
+    )
 
 
 def _is_consumer_declared(field: serializers.Field) -> bool:

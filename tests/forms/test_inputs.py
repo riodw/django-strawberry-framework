@@ -396,6 +396,7 @@ def test_model_choice_field_to_relay_target_uses_globalid():
     spec = next(s for s in specs if s.target_name == "target")
     assert spec.input_attr == "target_id"
     assert spec.kind == RELATION_SINGLE
+    assert spec.related_model is relay_target
 
 
 def test_model_choice_field_to_non_relay_target_uses_raw_pk():

@@ -48,6 +48,7 @@ from django_strawberry_framework.mutations.inputs import (
     NON_FIELD_ERROR_KEY,
     PARTIAL,
     FieldError,
+    annotate_queryset_relation,
     build_mutation_input,
     build_payload_type,
     clear_mutation_input_namespace,
@@ -56,8 +57,10 @@ from django_strawberry_framework.mutations.inputs import (
     materialize_mutation_input_class,
     mutation_input_type_name,
     payload_object_slot,
+    related_model_of_queryset,
     relation_id_annotation,
     relation_id_scalar,
+    require_queryset_related_model,
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import Upload
@@ -275,6 +278,70 @@ def test_relation_id_annotation_wraps_multi_as_list_of_the_same_scalar():
     plain_model, _plain_type = _make_non_relay_target()
     assert relation_id_annotation(plain_model, None, many=False) is int
     assert relation_id_annotation(plain_model, None, many=True) == list[int]
+
+
+class _QuerySet:
+    """Minimal queryset stand-in for column-less related-model discovery tests."""
+
+    def __init__(self, model: type | None = None) -> None:
+        self.model = model
+
+
+def test_related_model_of_queryset_reads_model_or_none():
+    """``queryset.model`` is the column-less related-model basis; missing stays ``None``."""
+
+    class Target:
+        pass
+
+    assert related_model_of_queryset(_QuerySet(Target)) is Target
+    assert related_model_of_queryset(None) is None
+    assert related_model_of_queryset(_QuerySet(None)) is None
+
+
+def test_require_queryset_related_model_raises_flavor_error_when_untyped():
+    """Missing ``queryset.model`` raises the caller's configuration error, not AttributeError."""
+    with pytest.raises(ConfigurationError, match="missing qs"):
+        require_queryset_related_model(
+            None,
+            missing=lambda: ConfigurationError("missing qs"),
+        )
+
+
+def test_annotate_queryset_relation_packages_id_type_and_related_model():
+    """Column-less wrap returns ``(python_attr, annotation, related_model)`` over the shared id type."""
+    relay_model, relay_type = _make_relay_target()
+    python_attr, annotation, related_model = annotate_queryset_relation(
+        _QuerySet(relay_model),
+        many=False,
+        python_attr="target_id",
+        primary_of=lambda _model: relay_type,
+        missing=lambda: ConfigurationError("untyped"),
+    )
+    assert python_attr == "target_id"
+    assert annotation is relay.GlobalID
+    assert related_model is relay_model
+
+    python_attr, annotation, related_model = annotate_queryset_relation(
+        _QuerySet(relay_model),
+        many=True,
+        python_attr="targets",
+        primary_of=lambda _model: relay_type,
+        missing=lambda: ConfigurationError("untyped"),
+    )
+    assert python_attr == "targets"
+    assert annotation == list[relay.GlobalID]
+    assert related_model is relay_model
+
+
+def test_form_and_serializer_column_less_relation_share_queryset_annotation():
+    """Form and serializer column-less relation helpers import the same owner."""
+    from django_strawberry_framework.forms import inputs as form_inputs
+    from django_strawberry_framework.rest_framework import (
+        serializer_converter as ser_converter,
+    )
+
+    assert form_inputs.annotate_queryset_relation is annotate_queryset_relation
+    assert ser_converter.annotate_queryset_relation is annotate_queryset_relation
 
 
 # ---------------------------------------------------------------------------

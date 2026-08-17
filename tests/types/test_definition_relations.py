@@ -1,14 +1,30 @@
-"""DjangoTypeDefinition tests for related-target lookup and custom Relay ID-resolver detection.
+"""DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
 
-The lookup powers the Decision-4 owner-aware FK/PK conditional in
-``FilterSet.filter_for_field`` / ``filter_for_lookup``. Tests cover
-forward FK, forward M2M, reverse FK (via ``Book.loans`` -> ``Loan.book``
-with ``related_name="loans"``), scalar non-relation field, missing
-field, and the default-reverse-name (``<model>_set``) branch via an
-inline test-fixture model declared without ``related_name=``.
+Three surfaces, all reached through a directly constructed or
+registry-resolved ``DjangoTypeDefinition``:
+
+- ``related_target_for``: the lookup powering the Decision-4 owner-aware
+  FK/PK conditional in ``FilterSet.filter_for_field`` /
+  ``filter_for_lookup``. Covers forward FK, forward M2M, reverse FK (via
+  ``Book.loans`` -> ``Loan.book`` with ``related_name="loans"``),
+  OneToOne in both directions, scalar non-relation field, missing field,
+  ``GenericForeignKey``, unregistered target, primary-wins target
+  resolution, the post-finalize memo cache, and malformed model /
+  relation metadata degrading to ``None``.
+- ``graphql_type_name``: the shared name-derivation rule, including the
+  unreadable-origin and invalid-name rejections.
+- custom Relay ID-resolver detection (``has_custom_id_resolver_for`` /
+  ``origin_has_custom_id_resolver`` / ``_is_framework_relay_id_resolver``):
+  memoization, the framework-default exemptions, ``relay.NodeID``
+  placement, and fail-closed handling of hostile class metadata.
+
+``Meta.name`` validation at type creation lives with its siblings in
+``tests/types/test_base.py``.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 import strawberry
@@ -16,16 +32,20 @@ from apps.library.models import Book, Genre, Loan, Shelf
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.types.definition import (
+    DjangoTypeDefinition,
+    _is_framework_relay_id_resolver,
+    origin_has_custom_id_resolver,
+)
 from django_strawberry_framework.types.relay import _resolve_id_default
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
-    registry.clear()
-    yield
-    registry.clear()
+def _isolate_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 def test_related_target_for_resolves_fk_m2m_and_reverse():
@@ -146,6 +166,143 @@ def test_related_target_for_returns_none_when_target_unregistered():
     # resolve a target definition and returns ``None`` (the defensive
     # registry-miss branch).
     assert definition.related_target_for("shelf") is None
+
+
+def _malformed_definition(*, origin=object, model=Book, name=None):
+    """Build a directly constructed definition carrying malformed metadata.
+
+    The constructor takes eleven arguments of which only three vary across
+    the hostile-metadata tests, so every such test declares its variation
+    here rather than re-inlining the full call.
+    """
+    return DjangoTypeDefinition(
+        origin=origin,
+        model=model,
+        name=name,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+
+def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name():
+    """An unreadable origin name and an empty ``name`` are both typed failures."""
+
+    class _HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("name exploded")
+            return super().__getattribute__(name)
+
+    class _HostileOrigin(metaclass=_HostileMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="Could not inspect"):
+        _ = _malformed_definition(origin=_HostileOrigin).graphql_type_name
+    with pytest.raises(ConfigurationError, match="empty name"):
+        _ = _malformed_definition(name="").graphql_type_name
+
+
+def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(monkeypatch):
+    """Every unreadable step of the target walk degrades to ``None``, never an exception."""
+
+    class _UnreadableRelationFlag:
+        @property
+        def is_relation(self):
+            raise RuntimeError("relation flag exploded")
+
+    class _UnreadableTarget:
+        is_relation = True
+
+        @property
+        def related_model(self):
+            raise RuntimeError("target exploded")
+
+    cases = [
+        SimpleNamespace(get_field=lambda name: (_ for _ in ()).throw(RuntimeError("field"))),
+        SimpleNamespace(get_field=lambda name: _UnreadableRelationFlag()),
+        SimpleNamespace(get_field=lambda name: _UnreadableTarget()),
+    ]
+    for meta in cases:
+        definition = _malformed_definition(model=SimpleNamespace(_meta=meta))
+        assert definition.related_target_for("relation") is None
+
+    target = object()
+    field = SimpleNamespace(is_relation=True, related_model=target)
+    definition = _malformed_definition(
+        model=SimpleNamespace(_meta=SimpleNamespace(get_field=lambda name: field)),
+    )
+    monkeypatch.setattr(registry, "get", lambda model: (_ for _ in ()).throw(RuntimeError()))
+    assert definition.related_target_for("relation") is None
+
+    target_type = object()
+    monkeypatch.setattr(registry, "get", lambda model: target_type)
+    monkeypatch.setattr(
+        registry,
+        "get_definition",
+        lambda type_cls: (_ for _ in ()).throw(RuntimeError()),
+    )
+    assert definition.related_target_for("relation") is None
+
+
+def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
+    """Unreadable ``__mro__`` / ``__dict__`` metadata counts as a custom resolver."""
+
+    class _HostileMroMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__mro__":
+                raise RuntimeError("mro exploded")
+            return super().__getattribute__(name)
+
+    class _HostileMro(metaclass=_HostileMroMeta):
+        pass
+
+    class _HostileDictMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__dict__":
+                raise RuntimeError("dict exploded")
+            return super().__getattribute__(name)
+
+    class _HostileDict(metaclass=_HostileDictMeta):
+        pass
+
+    class _UnreadableMro:
+        def __iter__(self):
+            raise RuntimeError("mro iteration exploded")
+
+    class _UnreadableMroMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__mro__":
+                return _UnreadableMro()
+            return super().__getattribute__(name)
+
+    class _UnreadableMroOrigin(metaclass=_UnreadableMroMeta):
+        pass
+
+    assert origin_has_custom_id_resolver(_HostileMro, "id") is True
+    assert origin_has_custom_id_resolver(_HostileDict, "id") is True
+    assert origin_has_custom_id_resolver(_UnreadableMroOrigin, "id") is True
+
+
+def test_custom_id_detection_fails_closed_for_hostile_relay_resolver():
+    """A ``resolve_id_attr`` that raises or returns a non-string counts as custom."""
+
+    class _RaisingNode(relay.Node):
+        @classmethod
+        def resolve_id_attr(cls):
+            raise RuntimeError("resolver exploded")
+
+    class _NonStringNode(relay.Node):
+        @classmethod
+        def resolve_id_attr(cls):
+            return 123
+
+    assert origin_has_custom_id_resolver(_RaisingNode, "id") is True
+    assert origin_has_custom_id_resolver(_NonStringNode, "id") is True
 
 
 def test_related_target_for_caches_resolved_pair_after_finalize():
@@ -385,3 +542,58 @@ def test_related_target_for_returns_none_for_generic_foreign_key():
     # ``content_object`` is a GFK: ``is_relation`` is True but
     # ``related_model`` is ``None`` -> the target-model guard returns ``None``.
     assert definition.related_target_for("content_object") is None
+
+
+def test_related_target_for_rejects_unhashable_field_names():
+    """Malformed lookup names fail closed instead of leaking a dict-key TypeError."""
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+
+    finalize_django_types()
+    assert BookType.__django_strawberry_definition__.related_target_for([]) is None
+
+
+def test_graphql_type_name_rejects_hostile_metadata():
+    """A malformed definition name raises a typed error with safe diagnostics."""
+
+    class HostileName:
+        def __str__(self):
+            raise RuntimeError("str should not escape")
+
+        def __repr__(self):
+            raise RuntimeError("repr should not escape")
+
+    definition = _malformed_definition(origin=Book, name=HostileName())
+    with pytest.raises(
+        ConfigurationError,
+        match="must be a non-empty string; got <unprintable HostileName>",
+    ):
+        _ = definition.graphql_type_name
+
+
+def test_graphql_type_name_rejects_invalid_graphql_names():
+    """Directly constructed definitions preserve the GraphQL name contract."""
+    definition = _malformed_definition(origin=Book, name="bad-name")
+    with pytest.raises(ConfigurationError, match="valid GraphQL name"):
+        _ = definition.graphql_type_name
+
+
+def test_custom_id_resolver_guards_reject_malformed_pk_names():
+    """Unhashable primary-key names cannot escape the FK-id safety checks."""
+    definition = _malformed_definition(origin=Book)
+    assert definition.has_custom_id_resolver_for([]) is False
+    assert origin_has_custom_id_resolver(Book, []) is False
+
+
+def test_framework_id_resolver_guard_survives_hostile_descriptor():
+    """A broken ``__func__`` descriptor is treated as consumer-owned."""
+
+    class HostileResolver:
+        @property
+        def __func__(self):
+            raise RuntimeError("descriptor should not escape")
+
+    assert _is_framework_relay_id_resolver(HostileResolver()) is False

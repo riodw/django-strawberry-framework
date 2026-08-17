@@ -279,6 +279,7 @@ TRACKED_FILE_PATHS = (
     "tests/types/test_definition_order.py",
     "tests/types/test_definition_order_schema.py",
     "tests/types/test_definition_relations.py",
+    "tests/types/test_finalizer.py",
     "tests/types/test_generic_foreign_key.py",
     "tests/types/test_relations.py",
     "tests/types/test_relay_interfaces.py",

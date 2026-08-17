@@ -32,7 +32,7 @@ from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
 from strawberry.utils.inspect import in_async_context
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 
 # ``SyncMisuseError`` moved to ``utils/querysets.py``; the
 # redundant ``as`` alias re-exports it from this module so ``from
@@ -48,6 +48,17 @@ from ..utils.querysets import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (quoted annotation).
     from .definition import DjangoTypeDefinition
+
+
+def _safe_class_name(value: object) -> str:
+    """Render a class name without allowing hostile metaclass metadata to escape."""
+    try:
+        name = value.__name__
+    except BaseException:
+        return _safe_type_name(value)
+    if isinstance(name, str):
+        return str.__str__(name)
+    return _safe_arg_repr(name)
 
 
 def implements_relay_node(type_cls: type) -> bool:
@@ -111,7 +122,13 @@ def install_is_type_of(type_cls: type) -> None:
     model = model_for(type_cls)
 
     def is_type_of(obj: object, info: object) -> bool:  # noqa: ARG001
-        hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
+        try:
+            hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
+        except BaseException:
+            # A consumer model may expose the private hint slot through a
+            # hostile descriptor. The hint is only a dispatch optimization;
+            # preserve the ordinary isinstance fallback when reading it fails.
+            hinted = None
         if hinted is not None:
             return hinted is type_cls
         return isinstance(obj, (type_cls, model))
@@ -131,22 +148,22 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
     spec-015 #"Inherited interfaces via parent").
 
     Raises:
-        ConfigurationError: a ``TypeError`` from ``cls.__bases__``
-            assignment is wrapped with the offending interface named in
-            the message so consumers see "cannot add interface X" rather
-            than a raw layout TypeError
-            (spec-015 Risk note #"surface any `TypeError` as a `ConfigurationError`").
+        ConfigurationError: an exception from ``cls.__bases__`` assignment is
+            wrapped with the offending interface named in the message so
+            consumers see "cannot add interface X" rather than a raw layout
+            or hostile-metaclass exception (spec-015 Risk note #"surface any
+            `TypeError` as a `ConfigurationError`").
     """
     additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
     if not additions:
         return
     try:
         type_cls.__bases__ = (*type_cls.__bases__, *additions)
-    except TypeError as exc:
-        offending = ", ".join(iface.__name__ for iface in additions)
+    except BaseException as exc:
+        offending = ", ".join(_safe_class_name(iface) for iface in additions)
         raise ConfigurationError(
-            f"{type_cls.__name__}: cannot add interface(s) {offending} to bases. "
-            f"Python rejected the resulting MRO ({exc}). Either drop the "
+            f"{_safe_class_name(type_cls)}: cannot add interface(s) {offending} to bases. "
+            f"Python rejected the resulting MRO ({_safe_arg_repr(exc)}). Either drop the "
             "incompatible interface from Meta.interfaces or rework the class "
             "hierarchy.",
         ) from exc
@@ -185,7 +202,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     else:
         return
     raise ConfigurationError(
-        f"{model.__name__}: relay.Node is not supported on models with a "
+        f"{_safe_class_name(model)}: relay.Node is not supported on models with a "
         "composite primary key. Either declare an explicit id: "
         "relay.NodeID[...] annotation on the DjangoType or remove "
         "relay.Node from Meta.interfaces.",
@@ -496,13 +513,23 @@ def encode_typename(
     """
     if callable(strategy):
         result = strategy(type_cls, definition.model, root)
-        if not isinstance(result, str) or not result:
+        if not isinstance(result, str):
             raise ConfigurationError(
                 f"{definition.graphql_type_name}: the Meta.globalid_strategy callable "
-                f"returned {result!r}; a (type_cls, model, root) -> str encoder "
+                f"returned {_safe_arg_repr(result)}; a (type_cls, model, root) -> str encoder "
                 "must return a non-empty string for the GlobalID type-name slot.",
             )
-        return result
+        # A str subclass can override ``__str__`` / ``__format__`` and escape
+        # later in Strawberry's base64 encoder. Normalize it through the base
+        # descriptor so the validated return contract is an inert exact str.
+        normalized = str.__str__(result)
+        if not normalized:
+            raise ConfigurationError(
+                f"{definition.graphql_type_name}: the Meta.globalid_strategy callable "
+                f"returned {_safe_arg_repr(result)}; a (type_cls, model, root) -> str encoder "
+                "must return a non-empty string for the GlobalID type-name slot.",
+            )
+        return normalized
     if strategy in MODEL_LABEL_STRATEGIES:
         return definition.model._meta.label_lower
     # ``type`` (the only remaining string strategy): the GraphQL type name.
@@ -708,26 +735,44 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
     if not isinstance(gid, (relay.GlobalID, str)):
         raise ConfigurationError(
             f"decode_global_id: expected a relay.GlobalID or its base64 string, got "
-            f"{type(gid).__name__}. A GlobalID must be the encoded id, not a raw payload.",
+            f"{_safe_type_name(gid)}. A GlobalID must be the encoded id, not a raw payload.",
         )
 
     if isinstance(gid, str):
+        raw_gid = str.__str__(gid)
         try:
-            decoded = relay.GlobalID.from_id(gid)
+            decoded = relay.GlobalID.from_id(raw_gid)
         except ValueError as exc:
             raise ConfigurationError(
-                f"decode_global_id: {gid!r} is not a valid GlobalID (malformed base64 or "
+                f"decode_global_id: {_safe_arg_repr(raw_gid)} is not a valid GlobalID (malformed base64 or "
                 "not a 'type_name:node_id' shape).",
             ) from exc
     else:
         decoded = gid
 
-    type_name = decoded.type_name
-    node_id = decoded.node_id
+    try:
+        type_name = decoded.type_name
+        node_id = decoded.node_id
+    except BaseException as exc:
+        raise ConfigurationError(
+            "decode_global_id: GlobalID fields could not be read; both type_name and "
+            "node_id must be non-empty strings.",
+        ) from exc
+    if not isinstance(type_name, str) or not isinstance(node_id, str):
+        raise ConfigurationError(
+            "decode_global_id: GlobalID fields must be strings; both type_name and "
+            "node_id must be non-empty.",
+        )
+    # ``isinstance`` intentionally accepts GlobalID subclasses. Normalize
+    # their string slots before truthiness, splitting, and registry lookups so
+    # hostile ``__str__`` / ``__format__`` overrides cannot escape this input
+    # boundary.
+    type_name = str.__str__(type_name)
+    node_id = str.__str__(node_id)
     if not type_name or not node_id:
         raise ConfigurationError(
-            f"decode_global_id: GlobalID has an empty slot (type_name={type_name!r}, "
-            f"node_id={node_id!r}); both must be non-empty.",
+            f"decode_global_id: GlobalID has an empty slot (type_name={_safe_arg_repr(type_name)}, "
+            f"node_id={_safe_arg_repr(node_id)}); both must be non-empty.",
         )
 
     is_model_label = "." in type_name
@@ -802,7 +847,7 @@ def _order_nodes(
                 output.append(index[key])
             except KeyError as exc:
                 raise model.DoesNotExist(
-                    f"{model.__name__}: no row matching {id_attr}={key!r}.",
+                    f"{_safe_class_name(model)}: no row matching {id_attr}={key!r}.",
                 ) from exc
         else:
             output.append(index.get(key))

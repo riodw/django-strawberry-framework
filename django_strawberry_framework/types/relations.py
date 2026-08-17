@@ -26,6 +26,17 @@ from django.db import models
 from ..utils.relations import RelationKind
 
 
+def _hash_component(value: object) -> int:
+    """Return a stable hash component even for malformed unhashable metadata."""
+    try:
+        return hash(value)
+    except BaseException:
+        try:
+            return hash(type(value))
+        except BaseException:
+            return id(type(value))
+
+
 @dataclass(frozen=True)
 class PendingRelation:
     """Relation field whose target ``DjangoType`` was not registered during collection.
@@ -55,7 +66,22 @@ class PendingRelation:
     relation_kind: RelationKind
     nullable: bool
 
-    __hash__ = object.__hash__  # identity-based hash; django_field may be unhashable
+    def __hash__(self) -> int:
+        """Hash equal records alike without requiring a hashable Django field."""
+        return hash(
+            tuple(
+                _hash_component(value)
+                for value in (
+                    self.source_type,
+                    self.source_model,
+                    self.field_name,
+                    self.django_field,
+                    self.related_model,
+                    self.relation_kind,
+                    self.nullable,
+                )
+            ),
+        )
 
 
 class _PendingRelationAnnotationMeta(type):

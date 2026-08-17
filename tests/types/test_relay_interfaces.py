@@ -29,6 +29,7 @@ from django_strawberry_framework.types.relay import (
     _resolve_id_default,
     _resolve_node_default,
     _resolve_nodes_default,
+    _safe_class_name,
     apply_interfaces,
     decode_global_id,
     encode_typename,
@@ -40,11 +41,9 @@ from django_strawberry_framework.utils.strings import snake_case
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
-    """Drop registry state on entry/exit so each test starts clean."""
-    registry.clear()
-    yield
-    registry.clear()
+def _isolate_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 def _field_map_for(fields):
@@ -56,6 +55,21 @@ def _meta(**attrs):
     """Build a throw-away ``Meta`` class with ``model=Category`` plus extras."""
     attrs.setdefault("model", Category)
     return type("Meta", (), attrs)
+
+
+def test_safe_class_name_renders_non_string_metaclass_name_metadata():
+    """A non-string ``__name__`` renders through ``repr`` instead of escaping."""
+
+    class _NonStringNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                return 42
+            return super().__getattribute__(name)
+
+    class _MalformedName(metaclass=_NonStringNameMeta):
+        pass
+
+    assert _safe_class_name(_MalformedName) == "42"
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +339,25 @@ def test_consumer_declared_is_type_of_is_preserved():
 
     assert CustomNode.__dict__["is_type_of"] is consumer_is_type_of
     assert CustomNode.__dict__["is_type_of"](Category(), info=None) is sentinel
+
+
+def test_is_type_of_hostile_hint_descriptor_falls_back_to_instance_check():
+    """A hostile Relay hint descriptor cannot break concrete-type dispatch."""
+
+    class HostileObject:
+        def __getattribute__(self, name):
+            if name == "_dsf_node_type_hint":
+                raise RuntimeError("hostile hint descriptor")
+            return super().__getattribute__(name)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    is_type_of = CategoryNode.__dict__["is_type_of"]
+    assert is_type_of(Category(), info=None) is True
+    assert is_type_of(HostileObject(), info=None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1539,6 +1572,36 @@ def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
         finalize_django_types()
 
 
+def test_composite_pk_diagnostic_survives_hostile_model_name(monkeypatch):
+    """A hostile model ``__name__`` cannot replace the composite-pk error."""
+
+    class HostileName(str):
+        def __str__(self):
+            raise RuntimeError("hostile model name")
+
+        def __format__(self, spec):
+            raise RuntimeError("hostile model format")
+
+    class CategoryNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    # ``__name__`` is NOT restorable by ``monkeypatch``: a class carries it on the
+    # ``type`` descriptor rather than in its own ``__dict__``, so monkeypatch reads
+    # the slot as absent and undoes with ``delattr`` -- which a heap type refuses.
+    # The teardown then RAISES and the hostile name leaks into every later test in
+    # the worker. Save and restore by assignment; do not "modernize" this block.
+    original_name = Category.__name__
+    Category.__name__ = HostileName("Category")
+    try:
+        monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
+        with pytest.raises(ConfigurationError, match="composite primary key"):
+            finalize_django_types()
+    finally:
+        Category.__name__ = original_name
+
+
 def test_install_relay_node_resolvers_preserves_consumer_override():
     """A consumer-declared ``resolve_id_attr`` is preserved by ``install_relay_node_resolvers``.
 
@@ -1568,6 +1631,28 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
     install_relay_node_resolvers(CategoryNode)
     assert CategoryNode.__dict__["resolve_id_attr"].__func__ is consumer_func
     assert CategoryNode.resolve_id_attr() == sentinel_value
+
+
+def test_apply_interfaces_diagnostic_survives_hostile_class_names():
+    """An MRO TypeError cannot escape while naming hostile interface classes."""
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name in {"__name__", "__qualname__"}:
+                raise RuntimeError(f"hostile {name}")
+            return super().__getattribute__(name)
+
+    class BadInterface(metaclass=HostileMeta):
+        pass
+
+    class Host(metaclass=HostileMeta):
+        pass
+
+    class Definition:
+        interfaces = (BadInterface,)
+
+    with pytest.raises(ConfigurationError, match="cannot add interface"):
+        apply_interfaces(Host, Definition)
 
 
 # ---------------------------------------------------------------------------
@@ -1693,6 +1778,32 @@ def test_globalid_callable_non_string_return_raises(bad_return):
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="must return a non-empty string"):
         _emitted_typename(CategoryNode)
+
+
+def test_globalid_callable_string_subclass_is_normalized():
+    """A callable encoder's hostile ``str`` subclass cannot escape later encoding."""
+
+    class HostileString(str):
+        def __str__(self):
+            raise RuntimeError("hostile string")
+
+        def __format__(self, spec):
+            raise RuntimeError("hostile format")
+
+    def encoder(type_cls, model, root):
+        return HostileString("custom-payload")
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = encoder
+
+    finalize_django_types()
+    emitted = _emitted_typename(CategoryNode)
+    assert emitted == "custom-payload"
+    assert type(emitted) is str
 
 
 def test_encode_typename_helper_dispatch():
@@ -2697,6 +2808,62 @@ def test_decode_non_str_input_raises(bad_input):
     """A non-``str`` / non-``GlobalID`` argument raises from the runtime input-type gate."""
     with pytest.raises(ConfigurationError, match="relay.GlobalID or its base64 string"):
         decode_global_id(bad_input)
+
+
+def test_decode_hostile_input_type_name_stays_typed():
+    """A hostile input metaclass cannot escape the GlobalID type gate."""
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("hostile type name")
+            return super().__getattribute__(name)
+
+    class BadInput(metaclass=HostileMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="relay.GlobalID or its base64 string"):
+        decode_global_id(BadInput())
+
+
+def test_decode_hostile_globalid_slots_stay_typed():
+    """A malformed GlobalID subclass cannot escape while its slots are read."""
+
+    class HostileGlobalID(relay.GlobalID):
+        def __getattribute__(self, name):
+            if name in {"type_name", "node_id"}:
+                raise RuntimeError(f"hostile {name}")
+            return super().__getattribute__(name)
+
+    value = object.__new__(HostileGlobalID)
+    object.__setattr__(value, "type_name", "CategoryNode")
+    object.__setattr__(value, "node_id", "1")
+    with pytest.raises(ConfigurationError, match="fields could not be read"):
+        decode_global_id(value)
+
+
+def test_decode_globalid_rejects_non_string_slots():
+    """A GlobalID carrying a non-string slot is rejected before decoding."""
+    value = object.__new__(relay.GlobalID)
+    object.__setattr__(value, "type_name", 123)
+    object.__setattr__(value, "node_id", "1")
+
+    with pytest.raises(ConfigurationError, match="fields must be strings"):
+        decode_global_id(value)
+
+
+def test_decode_hostile_string_subclass_stays_typed():
+    """A malformed string subclass cannot escape while its diagnostic is rendered."""
+
+    class HostileString(str):
+        def __repr__(self):
+            raise RuntimeError("hostile id repr")
+
+        def __format__(self, spec):
+            raise RuntimeError("hostile id format")
+
+    with pytest.raises(ConfigurationError, match="not a valid GlobalID"):
+        decode_global_id(HostileString("!!!not-base64!!!"))
 
 
 def test_decode_empty_type_name_raises():

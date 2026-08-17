@@ -33,7 +33,7 @@ dependencies = [
     # ``Schema._sync_extensions``, so concurrent requests share one instance's
     # engine-owned ``execution_context``. 0.316.0 materializes classes and
     # factories per operation on both execution colors.
-    "strawberry-graphql>=0.316.0",
+    "strawberry-graphql>=0.324.0",
     "django-filter>=25.2",
     "wrapt>=2.0.1",
 ]

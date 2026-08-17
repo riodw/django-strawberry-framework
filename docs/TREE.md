@@ -262,7 +262,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
-│   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
+│   ├── factories.py              # Order input-class BFS factory + the (currently unconsumed) dynamic-OrderSet cache.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
@@ -386,7 +386,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
-│   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
+│   ├── factories.py              # Order input-class BFS factory + the (currently unconsumed) dynamic-OrderSet cache.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── permissions/    # planned by TODO-BETA-059-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
@@ -473,6 +473,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
+├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
@@ -551,17 +552,21 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
-│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup and custom Relay ID-resolver detection.
+│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
+│   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
-│   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
+│   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
 │   ├── test_resolvers.py         # Relation resolver tests for cardinality, FK-ID elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
+│       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
+    ├── test_context.py           # Tests for the shared request-context read / write / delete dispatch.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
+    ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
@@ -691,6 +696,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
+├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046).
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
@@ -772,17 +778,21 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
-│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup and custom Relay ID-resolver detection.
+│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
+│   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
-│   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
+│   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
 │   ├── test_resolvers.py         # Relation resolver tests for cardinality, FK-ID elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
+│       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
+    ├── test_context.py           # Tests for the shared request-context read / write / delete dispatch.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
+    ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).

@@ -51,6 +51,10 @@ from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
+    FILE,
+    RELATION_MULTI,
+    RELATION_SINGLE,
+    SCALAR,
     build_strawberry_input_class,
     iter_input_field_collisions,
     make_input_namespace,
@@ -417,6 +421,51 @@ def relation_input_annotation(
     return python_attr, graphql_name, annotation
 
 
+def model_column_write_kind(field: models.Field) -> str:
+    """Return the write-input decode kind for a backing ``models.Field``.
+
+    ``model_column_input_annotation`` (036 naming + GraphQL annotation) and the
+    form / serializer reverse maps all classify a column the same way: relation
+    -> ``relation_single`` / ``relation_multi``, ``FileField`` / ``ImageField``
+    -> ``file``, else ``scalar``. Naming, source, type-override, and the
+    serializer's required-primary policy stay at each flavor.
+    """
+    if getattr(field, "is_relation", False):
+        return RELATION_MULTI if getattr(field, "many_to_many", False) else RELATION_SINGLE
+    if isinstance(field, (models.FileField, models.ImageField)):
+        return FILE
+    return SCALAR
+
+
+def model_column_write_annotation(
+    field: models.Field,
+    type_name: str,
+    *,
+    primary_of: Callable[[type], type | None],
+    kind: str | None = None,
+) -> Any:
+    """Return the GraphQL annotation for a backing column, without naming.
+
+    Relation rides ``relation_id_annotation`` (primary lookup via ``primary_of``);
+    file -> ``Upload``; else ``convert_scalar(..., force_nullable=False)``.
+    ``model_column_input_annotation`` adds the 036 ``<name>_id`` naming; the
+    serializer overlay uses this for relation / file columns and then applies
+    ``serializer_field_graphql_name``. Serializer SCALAR type-override stays at
+    ``_model_backed_scalar_annotation``.
+    """
+    if kind is None:
+        kind = model_column_write_kind(field)
+    if kind in (RELATION_SINGLE, RELATION_MULTI):
+        return relation_id_annotation(
+            field.related_model,
+            primary_of(field.related_model),
+            many=kind == RELATION_MULTI,
+        )
+    if kind == FILE:
+        return Upload
+    return convert_scalar(field, type_name, force_nullable=False)
+
+
 def model_column_input_annotation(
     field: models.Field,
     type_name: str,
@@ -426,28 +475,37 @@ def model_column_input_annotation(
     """Return ``(python_attr, graphql_name, annotation)`` for a model column.
 
     ``build_mutation_input`` and form ``_field_triple_and_spec`` (column arm)
-    both type a backing ``models.Field`` the same way: relation via
-    ``relation_input_annotation``, ``FileField`` / ``ImageField`` via ``Upload``
-    (spec-037; a file column is a SCALAR input so the python attr is the plain
-    field name, never ``<name>_id``). File columns then ride the same
-    override-skip / requiredness / ``| None``-widening tail as any scalar
-    (spec-037 lifted the spec-036 ``NotImplementedError`` carve-out). Else
+    both type a backing ``models.Field`` the same way: kind via
+    ``model_column_write_kind``, relation via ``relation_input_annotation``,
+    ``FileField`` / ``ImageField`` via ``Upload`` (spec-037; a file column is a
+    SCALAR input so the python attr is the plain field name, never
+    ``<name>_id``). File columns then ride the same override-skip / requiredness
+    / ``| None``-widening tail as any scalar (spec-037 lifted the spec-036
+    ``NotImplementedError`` carve-out). Else
     ``convert_scalar(..., force_nullable=False)`` so the generator owns
     nullability (spec-036 Decision 6). ``primary_of`` is the flavor's
     related-primary lookup (``registry.get`` for model and form). Serializer
     naming, source, and primary-required policy stay at
     ``resolve_serializer_field``.
     """
-    if getattr(field, "is_relation", False):
+    kind = model_column_write_kind(field)
+    if kind in (RELATION_SINGLE, RELATION_MULTI):
         return relation_input_annotation(
             field,
             related_primary_type=primary_of(field.related_model),
         )
     python_attr = field.name
     graphql_name = graphql_camel_name(python_attr)
-    if isinstance(field, (models.FileField, models.ImageField)):
-        return python_attr, graphql_name, Upload
-    return python_attr, graphql_name, convert_scalar(field, type_name, force_nullable=False)
+    return (
+        python_attr,
+        graphql_name,
+        model_column_write_annotation(
+            field,
+            type_name,
+            primary_of=primary_of,
+            kind=kind,
+        ),
+    )
 
 
 # ``_pascalize_token`` was promoted to ``utils/inputs.py::pascalize_token`` (spec-039

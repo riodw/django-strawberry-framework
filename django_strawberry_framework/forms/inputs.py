@@ -53,6 +53,7 @@ from ..mutations.inputs import (
     PARTIAL,
     annotate_queryset_relation,
     model_column_input_annotation,
+    model_column_write_kind,
 )
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
@@ -71,7 +72,6 @@ from .converter import (
     FILE,
     RELATION_MULTI,
     RELATION_SINGLE,
-    SCALAR,
     convert_form_field,
     form_field_required,
 )
@@ -384,23 +384,19 @@ def _field_triple_and_spec(
     field_required = form_field_required(field, column=column)
     if column is not None:
         # ModelForm field with a backing model column: the shared column mapper
-        # types the GraphQL id / Upload / scalar; kind + related_model stay
-        # here for the reverse map.
+        # types the GraphQL id / Upload / scalar; kind comes from
+        # ``model_column_write_kind``; related_model stays here for the reverse map.
         python_attr, graphql_name, annotation = model_column_input_annotation(
             column,
             type_name,
             primary_of=registry.get,
         )
-        if getattr(column, "is_relation", False):
-            kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
+        kind = model_column_write_kind(column)
+        if kind in (RELATION_SINGLE, RELATION_MULTI):
             # The decode resolves ids against the SAME model the id type derived
             # from (the backing column's related model), not the form field's
             # (possibly ``None``) ``queryset.model``.
             related_model = column.related_model
-        elif isinstance(column, (models.FileField, models.ImageField)):
-            kind = FILE
-        else:
-            kind = SCALAR
     else:
         # Column-less form field: the model-less ``convert_form_field`` table owns
         # the kind; relation / file annotations are finalized here. Requiredness

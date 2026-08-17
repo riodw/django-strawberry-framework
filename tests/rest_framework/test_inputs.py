@@ -641,9 +641,10 @@ def test_descriptor_is_its_own_cache_key():
 def test_dedupe_serializer_input_shape_is_sole_cache_protocol():
     """Top-level and nested builds share one post-build get-or-store (folder DRY).
 
-    ``dedupe_serializer_input_shape`` is the sole writer of
-    ``_serializer_shape_build_cache``; a second build of an identical descriptor
-    returns the same class object without a second store.
+    ``dedupe_serializer_input_shape`` is the sole serializer caller of
+    ``get_or_store_shape_build`` on ``_serializer_shape_build_cache``; a second
+    build of an identical descriptor returns the same class object without a
+    second store.
     """
     from django_strawberry_framework.rest_framework.inputs import (
         _serializer_shape_build_cache,

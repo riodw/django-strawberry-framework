@@ -21,6 +21,7 @@ from django_strawberry_framework.utils.inputs import (
     build_strawberry_input_class,
     create_dynamic_set_class,
     emit_set_input_field_triples,
+    get_or_store_shape_build,
     graphql_camel_name,
     iter_input_field_collisions,
     iter_set_subclasses,
@@ -605,6 +606,30 @@ def test_make_shape_build_cache_returns_dict_and_clear():
     assert len(cache) == 1
     clear()
     assert cache == {}
+
+
+def test_get_or_store_shape_build_stores_on_miss_and_reuses_on_hit():
+    """A miss stores ``factory()``; a later hit returns it without calling factory again."""
+    cache: dict[str, str] = {}
+    calls: list[int] = []
+
+    def factory() -> str:
+        calls.append(1)
+        return "built"
+
+    assert get_or_store_shape_build(cache, "k", factory) == "built"
+    assert get_or_store_shape_build(cache, "k", factory) == "built"
+    assert calls == [1]
+    assert cache["k"] == "built"
+
+
+def test_write_flavor_shape_caches_share_get_or_store_owner():
+    """Model bind, form cached_build_input, and serializer dedupe import one get-or-store."""
+    from django_strawberry_framework.mutations import sets as mutation_sets
+    from django_strawberry_framework.rest_framework import inputs as ser_inputs
+
+    assert mutation_sets.get_or_store_shape_build is get_or_store_shape_build
+    assert ser_inputs.get_or_store_shape_build is get_or_store_shape_build
 
 
 def test_pascalize_token_is_injective_across_legal_field_name_boundaries():

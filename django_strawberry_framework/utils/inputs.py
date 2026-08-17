@@ -723,10 +723,8 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
       ``register_subsystem_clear`` by the CONSUMING subsystem, not here).
 
     Pure plumbing; no registration. This module owns the helper (and unit-tests
-    it); the serializer cache CONSUMER (``rest_framework/sets.py``) and the
-    ``forms/sets.py`` re-point through it (the helper is
-    authored here, the serializer cache is consumed there, matching the spec-038
-    split: generators in ``inputs.py``, cache consumer in ``sets.py``).
+    it). Each flavor still owns its cache dict and its key type. The get-or-store
+    walk those caches share is ``get_or_store_shape_build``.
     """
     cache: dict[Any, Any] = {}
 
@@ -734,6 +732,32 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
         cache.clear()
 
     return cache, clear_fn
+
+
+def get_or_store_shape_build(cache: dict[Any, Any], key: Any, factory: Callable[[], Any]) -> Any:
+    """Return the cached value for ``key``, storing ``factory()`` on a miss.
+
+    The get-or-store spine the three write-flavor shape caches share:
+
+    - model bind (``mutations/sets.py::_materialize_input_for``) keys
+      ``MutationInputShape.cache_key`` and puts ``build_mutation_input`` in
+      the factory so a hit never re-walks editable columns;
+    - form ``cached_build_input`` keys the pre-build name-set after the
+      per-declaration guard;
+    - serializer ``dedupe_serializer_input_shape`` keys the post-build
+      ``SerializerInputShape`` descriptor (nested opt-in and top-level bind).
+
+    ``factory`` is how timing differs without a mode flag: a pre-build key
+    puts the generator in the factory; a post-build key puts the already
+    walked ``(cls, shape)`` pair in the factory (cheap). Descriptor-vs-name-set
+    identity and each flavor's cache dict stay at the call site.
+    """
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    built = factory()
+    cache[key] = built
+    return built
 
 
 def pascalize_token(name: str) -> str:

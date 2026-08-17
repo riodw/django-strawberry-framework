@@ -66,6 +66,7 @@ from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
     generated_input_type_name,
+    get_or_store_shape_build,
     guard_dropped_required,
     iter_input_field_collisions,
     make_input_namespace,
@@ -1277,14 +1278,15 @@ def dedupe_serializer_input_shape(
     bind (``sets._serializer_input_shape_for``) and nested opt-in builds share
     this one protocol so cache key / value contracts cannot drift across modules;
     materialize stays at each call site (nested always materializes; top-level
-    materializes later via ``build_and_stash_input``).
+    materializes later via ``build_and_stash_input``). The get-or-store itself
+    rides ``utils/inputs.py::get_or_store_shape_build`` (the same spine the
+    model bind and form ``cached_build_input`` use).
     """
-    cached = _serializer_shape_build_cache.get(shape.cache_key)
-    if cached is not None:
-        return cached
-    pair = (input_cls, shape)
-    _serializer_shape_build_cache[shape.cache_key] = pair
-    return pair
+    return get_or_store_shape_build(
+        _serializer_shape_build_cache,
+        shape.cache_key,
+        lambda: (input_cls, shape),
+    )
 
 
 def _dedupe_and_materialize_nested(

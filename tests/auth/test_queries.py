@@ -199,6 +199,18 @@ def test_allow_any_default_returns_null_for_anonymous_and_the_user_when_authenti
 
 
 @pytest.mark.django_db
+def test_me_accepts_a_regular_mapping_context_with_a_django_request():
+    """A direct ``Schema.execute`` mapping context carries its Django request to ``me``."""
+    schema = _me_schema()
+    user = User.objects.create_user(username="mapping_me", password="pw-9x-strong")
+
+    result = schema.execute_sync(_ME_Q, context_value={"request": _session_request(user)})
+
+    assert result.errors is None, result.errors
+    assert result.data["me"] == {"username": "mapping_me"}
+
+
+@pytest.mark.django_db
 def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
     """An absent request user is anonymous -> ``null``, never a ``'NoneType'`` crash.
 

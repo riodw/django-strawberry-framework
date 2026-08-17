@@ -1108,6 +1108,16 @@ class _DeleteRaises(DBSessionStore):
         raise OSError("session delete failed")
 
 
+class _DeleteCancelled(DBSessionStore):
+    """A real DB store whose cleanup delete is cancelled after establishment fails."""
+
+    def delete(self, session_key=None):
+        raise asyncio.CancelledError("session delete cancelled")
+
+    async def adelete(self, session_key=None):
+        raise asyncio.CancelledError("async session delete cancelled")
+
+
 def _request_with_store(store):
     """A Django request wired to an explicit session store, anonymous actor."""
     request = RequestFactory().post("/graphql/")
@@ -1280,6 +1290,22 @@ def test_login_cleanup_failure_retains_primary_and_chains_cleanup():
     assert "login-signal boom" in str(primary)  # the establishment failure is retained
     assert isinstance(primary.__context__, OSError)  # cleanup chained via PEP 3134
     assert "delete failed" in str(primary.__context__)
+
+
+@pytest.mark.django_db
+def test_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
+    """A cancellation during compensation cannot replace the establishment failure."""
+    create_users(1)
+    schema = _login_logout_schema()
+    request = _request_with_store(_DeleteCancelled())
+    with _raising_login_receiver():
+        res = _login_exec(schema, request)
+    assert res.errors is not None
+    primary = res.errors[0].original_error
+    assert isinstance(primary, RuntimeError)
+    assert "login-signal boom" in str(primary)
+    assert isinstance(primary.__context__, asyncio.CancelledError)
+    assert "delete cancelled" in str(primary.__context__)
 
 
 # --- Backend matrix (Django HTTP) ---------------------------------------------
@@ -1804,6 +1830,23 @@ async def test_channels_http_login_cleanup_failure_retains_primary_and_chains_cl
     primary = excinfo.value
     assert isinstance(primary.__context__, OSError)  # cleanup chained via PEP 3134
     assert "async session delete failed" in str(primary.__context__)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_channels_http_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
+    """The native Channels compensation has the same primary-error guarantee."""
+    await _acreate_users(1)
+    user = await get_user_model().objects.aget(username="staff_1")
+    store = _DeleteCancelled()
+    adapter = _channels_adapter(store=store)
+    with (
+        _raising_login_receiver(),
+        pytest.raises(RuntimeError, match="login-signal boom") as excinfo,
+    ):
+        await auth_mutations._channels_http_login_establish(adapter, store, user)
+    primary = excinfo.value
+    assert isinstance(primary.__context__, asyncio.CancelledError)
+    assert "async session delete cancelled" in str(primary.__context__)
 
 
 @pytest.mark.django_db(transaction=True)

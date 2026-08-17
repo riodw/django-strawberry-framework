@@ -44,9 +44,11 @@ operation-scoped ``error`` frames. Runtime resolver errors normally ride inside
 ``error`` frames and can still disclose schema, validation, extension, or
 consumer-authored information, so gating them avoids an unnecessary disclosure
 distinction. ``complete``, ``connection_ack``, ``ping`` / ``pong``, the legacy
-keep-alive ``ka``, and every other connection-control frame are delegated to
-upstream untouched: they carry no operation information, and one of them
-(``complete``) is what upstream emits at the end of every operation.
+keep-alive ``ka``, and every other connection-control frame use upstream's own
+payload and protocol semantics: they carry no operation information, and one of
+them (``complete``) is what upstream emits at the end of every operation. Their
+writes still pass through the adapter's revocation latch and shared actor lease,
+so a control frame cannot overtake a concurrent revocation decision.
 
 Delegation is not unconditional, though, and the condition is the connection's
 own state rather than the frame's type: **once the revocation is DECIDED the
@@ -55,8 +57,9 @@ Ending a revoked operation's result loop normally means upstream proceeds to its
 own ``complete``, which would otherwise be delegated straight through and land
 AFTER this module's ``4403`` - a control frame on a socket the package says it
 terminated. The adapter's ``send_json`` carries the whole ruling, including why
-the cut-off is the decision rather than the committed close, and why the read
-needs no actor lease.
+the cut-off is the decision rather than the committed close. The information-bearing
+path performs the actor validation; the delegated control path only uses the same
+lease to serialize its state check with the asynchronous write.
 
 **Revocation is connection-scoped.** The first failed validation - at either
 checkpoint - atomically marks the connection revoked, suppresses the pending
@@ -83,9 +86,10 @@ delegate to the real schema and return ``_stop_aware_results``, a generator that
 consults the connection's revocation state before pulling each value and simply
 RETURNS once the connection is revoked. Upstream's ``async for result in
 result_source`` loop therefore ends NORMALLY, at its own next iteration, and the
-wrapper closes the inner source in its own ``finally`` - so the subscription
-generator's ``finally`` runs deterministically, at the revocation, rather than
-whenever the interpreter's asyncgen finalizer gets to it.
+wrapper closes the inner source when it exposes the optional ``aclose`` hook - so
+the subscription generator's ``finally`` runs deterministically, at the revocation,
+rather than whenever the interpreter's asyncgen finalizer gets to it. Async
+iterators without that hook remain valid on the legacy upstream path.
 
 Termination is the mechanism, and cancellation is deliberately not: a revoked
 operation must be stopped even when every subsequent value is already available.
@@ -415,8 +419,9 @@ _REVOCATION_ABANDONED = "abandoned"
 #: graphql-ws), and the operation-scoped ``error`` both protocols use for
 #: pre-execution and other operation errors. Every other frame type either belongs
 #: to connection control (``connection_ack``, ``connection_error``, ``ping``,
-#: ``pong``, ``ka``) or announces an ending rather than a payload (``complete``),
-#: and is delegated to upstream unchanged.
+#: ``pong``, ``ka``) or announces an ending rather than a payload (``complete``).
+#: Their payloads remain upstream-owned; the adapter still serializes their writes
+#: with the connection's revocation decision.
 _INFORMATION_BEARING_FRAME_TYPES = frozenset({"next", "data", "error"})
 
 #: The private scope key holding the last successful revalidation's monotonic
@@ -615,6 +620,9 @@ class _ConnectionRevocation:
             self.state = _REVOCATION_CLOSING
             self.attempt = asyncio.create_task(self._attempt_close(websocket))
         if self.state == _REVOCATION_CLOSING:
+            if self.attempt.done() and self.attempt.cancelled():
+                self.state = _REVOCATION_ABANDONED
+                return
             await asyncio.shield(self.attempt)
 
     async def settle(self) -> None:
@@ -636,7 +644,11 @@ class _ConnectionRevocation:
         completion, and re-raising - the caller's cancellation is honoured, and no
         task retains this connection past it.
         """
-        if self.attempt is None or self.attempt.done():
+        if self.attempt is None:
+            return
+        if self.attempt.done():
+            if self.attempt.cancelled():
+                self.state = _REVOCATION_ABANDONED
             return
         try:
             await asyncio.shield(self.attempt)
@@ -968,10 +980,12 @@ async def _stop_aware_results(source: Any, consumer: Any, schema: Any) -> Any:
     under the lease, like any other frame. Taking the lease here would instead
     serialize the connection's result production behind its own sends.
 
-    ``finally`` closes the inner source, so the subscription's own ``finally``
-    runs at the revocation and before teardown rather than whenever the
-    interpreter's asyncgen finalizer reaches it. That is the package's own
-    guarantee rather than a restatement of upstream's, and it has to be: transport-ws
+    ``finally`` closes the inner source when it exposes the async-generator
+    ``aclose`` hook, so the subscription's own ``finally`` runs at the revocation and
+    before teardown rather than whenever the interpreter's asyncgen finalizer reaches
+    it. An async iterator without that optional hook remains valid on the legacy
+    handler's older upstream path, which never required one. That is the package's
+    own guarantee rather than a restatement of upstream's, and it has to be: transport-ws
     did not close its result source at all up to 0.318.1 (no ``finally``, no
     ``aclosing``, and the local went out of scope) and wraps the loop in
     ``aclosing`` from 0.319.0 on. Legacy's ``cleanup_operation`` closes whatever is
@@ -997,7 +1011,14 @@ async def _stop_aware_results(source: Any, consumer: Any, schema: Any) -> Any:
                 result = mask_execution_result(result, policy)
             yield result
     finally:
-        await source.aclose()
+        # ``Schema.subscribe`` / ``stream`` are typed as async generators,
+        # but the upstream legacy handler accepts any async iterator. Keep
+        # that compatibility on the package's older Strawberry range too:
+        # the newer transport handler closes its source with ``aclosing``,
+        # while older handlers do not require an ``aclose`` method at all.
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 class _StopAwareSchema:
@@ -1207,23 +1228,22 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             The close itself is unaffected: ``_ConnectionRevocation`` reaches the
             transport through the adapter's ``close``, never through ``send_json``.
 
-            **A suppression is not an authorization, so it takes no lease.** The
-            revoked read below is deliberately outside the connection's actor
-            lease: taking the lease here would put every ping, pong and keep-alive
-            behind the protected-send serialization point, which is a real
-            head-of-line change on connection-control traffic. It is sound because
-            ``revoked`` is a latch - the state only ever moves away from
-            ``PERMITTED`` and never back - so a stale read can only be stale in
-            one direction: one frame goes out that a concurrent checkpoint was
-            about to forbid, which is the same outcome any frame racing a
-            checkpoint already has. The reverse error - a frame written after the
-            decision was published - cannot occur, because ``decide()`` publishes
-            the transition synchronously, before any await.
+            **Delegated control frames use the same lease as protected sends.** The
+            revoked read and the actual ``send_json`` must be one critical section:
+            without the lease, a control frame can pass the read, suspend in
+            upstream's asynchronous send, and then commit after another task has
+            published the revocation decision. That violates the connection-wide
+            cut-off even though control frames carry no operation payload. The
+            lease makes the decision and the send mutually exclusive; a ping or
+            keep-alive can therefore wait behind one session read or protected
+            send, which is the deliberate head-of-line cost of the stronger
+            "nothing after revocation" invariant.
             """
             if message.get("type") not in _INFORMATION_BEARING_FRAME_TYPES:
-                if self.ws_consumer._revocation.revoked:
-                    return
-                await super().send_json(message)
+                async with actor_lease(self.ws_consumer.scope):
+                    if self.ws_consumer._revocation.revoked:
+                        return
+                    await super().send_json(message)
                 return
             await send_revalidated_operation_frame(self, message, super().send_json)
 

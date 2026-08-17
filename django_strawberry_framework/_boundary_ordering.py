@@ -3,11 +3,12 @@
 ``views.py`` owns the boundary itself - the cumulative body cap (spec-046
 Decision 7) and the header-only wire-encoding refusals (Decision 9) - while
 ``middleware/request_body.py`` owns *where in the request lifecycle* it runs
-(Decision 18). Those two modules have to agree about two facts per request and
-about one static fact concerning the view class itself, and the per-request
-agreement runs in both directions, so the marks, the method name, and their
-meanings live here rather than in either of them: neither of the two imports the
-other, and this module imports nothing but the standard library.
+(Decision 18). Those two modules have to agree about the boundary's completion
+and prepared view per request, the identity of the mounted callback, and one
+static fact concerning the view class itself. The per-request agreement runs in
+both directions, so the marks, names, and their meanings live here rather than
+in either of them: neither of the two imports the other, and this module imports
+nothing but the standard library.
 
 The protocol
 ------------
@@ -24,14 +25,25 @@ once it has run that boundary, and read by
 :class:`_CsrfOrderingExemption`. It says: *this request's body has already been
 measured, by a chain participant, before anything parsed it.*
 
+:data:`_BOUNDARY_MOUNT` identifies one callback returned by
+``views.py::_RequestBodyBoundaryMixin.as_view``. When the middleware prepares
+that mount's view instance through Django's normal ``setup`` lifecycle, it puts
+the token and instance on the request under :data:`_BOUNDARY_PREPARED_VIEW`.
+The callback consumes only an instance carrying its own token. This makes the
+view whose boundary ran the view whose ``dispatch`` continues: request-derived
+boundary state and lifecycle side effects cannot diverge across two instances.
+
 :data:`_BOUNDARY_METHOD` is not a mark and not per-request: it is the *name* of
 the boundary method ``views.py::_RequestBodyBoundaryMixin`` defines, read by the
 boundary middleware off a marked callback's ``view_class`` before that class is
-constructed. It says: *this class is one whose boundary a chain entry can run.*
+constructed, and used again to invoke that boundary on the instance it then
+builds. It says: *this class is one whose boundary a chain entry can run.*
 It lives here for the same reason the marks do - the middleware has to recognize
 the boundary without importing the module that defines it, and a name held in the
 consumer of the protocol rather than in the protocol itself is a fact stated
-twice.
+twice. Both of the middleware's uses read it from here, which is what makes the
+name the recognition accepts a class for the same name the hook runs; spelling it
+at the call site would be that second statement, and the two could then drift.
 
 The invariant :class:`_CsrfOrderingExemption` rests on is that the stamp has one
 writer: it is written only by a chain participant that has already run the
@@ -63,8 +75,19 @@ _BOUNDARY_MARKER = "graphql_request_body_boundary"
 #: both package views at the top of ``run``.
 _BOUNDARY_ENFORCED = "graphql_request_body_boundary_enforced"
 
+#: Stamped on one package callback with an opaque per-mount token, then copied by
+#: ordinary Django decorators along with the callback's other attributes.
+_BOUNDARY_MOUNT = "graphql_request_body_boundary_mount"
+
+#: Stamped on a request with ``(mount token, prepared view instance)`` after the
+#: middleware has set that instance up and successfully run its boundary. The
+#: matching package callback consumes it before dispatch.
+_BOUNDARY_PREPARED_VIEW = "graphql_request_body_boundary_prepared_view"
+
 #: The name of the boundary method a package view carries, probed on a marked
-#: callback's ``view_class`` by the boundary middleware before it builds anything.
+#: callback's ``view_class`` by the boundary middleware before it builds anything -
+#: and then the name it invokes on the instance it builds, so the boundary that runs
+#: is the one the probe accepted the class for.
 #: Defined by ``views.py::_RequestBodyBoundaryMixin._enforce_request_boundary`` and
 #: named here because the middleware has to recognize it without importing that
 #: module. A class carrying no callable of this name is not one whose boundary that

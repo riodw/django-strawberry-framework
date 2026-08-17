@@ -407,15 +407,18 @@ def test_validation_accepts_every_audited_upstream_body_and_refuses_a_third():
                 if alias not in cls.databases:
                     connections[alias].reset_disallowed_methods()
 
-    audited = (_ClassAttributeShape, _FeatureFlagShape)
+    audited = (
+        (_ClassAttributeShape, _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE),
+        (_FeatureFlagShape, _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE),
+    )
     assert len(_django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES) == len(audited)
-    for shape in audited:
+    for shape, expected_source in audited:
         with mock.patch.object(
             _django_patches,
             "_original_remove_databases_failures",
             shape.__dict__["_remove_databases_failures"],
         ):
-            _django_patches._validate_upstream_shape()  # accepted: no raise
+            assert _django_patches._validate_upstream_shape() == expected_source
 
     with mock.patch.object(
         _django_patches,
@@ -444,17 +447,27 @@ def test_disallowed_methods_read_prefers_the_class_attribute_shape():
     class _FakeConnection:
         features = _UnusedFeatures()
 
-    assert (
-        _django_patches._disallowed_connection_methods(_ClassAttributeCls, _FakeConnection())
-        is _ClassAttributeCls._disallowed_connection_methods
-    )
+    with mock.patch.object(
+        _django_patches,
+        "_validated_remove_databases_failures_source",
+        _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
+    ):
+        assert (
+            _django_patches._disallowed_connection_methods(_ClassAttributeCls, _FakeConnection())
+            is _ClassAttributeCls._disallowed_connection_methods
+        )
 
     connection = connections["default"]
     original_cursor = connection.cursor
     sentinel = mock.sentinel.class_attribute_cursor
     connection.cursor = _database_failure(sentinel)
     try:
-        _django_patches._patched_remove_databases_failures(_ClassAttributeCls)
+        with mock.patch.object(
+            _django_patches,
+            "_validated_remove_databases_failures_source",
+            _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
+        ):
+            _django_patches._patched_remove_databases_failures(_ClassAttributeCls)
         assert connection.cursor is sentinel
     finally:
         connection.cursor = original_cursor
@@ -472,37 +485,78 @@ def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag():
 
     class _FeatureFlagCls:
         databases = frozenset()
-
-    assert not hasattr(_FeatureFlagCls, "_disallowed_connection_methods")
+        # A legacy override may survive a Django upgrade. Django 6.1's
+        # ``_add_databases_failures`` ignores it and wraps the feature list,
+        # so removal must ignore it too or leave three wrappers installed.
+        _disallowed_connection_methods = (("cursor", "legacy queries"),)
 
     class _Features:
-        disallowed_simple_test_case_connection_methods = (("cursor", "queries"),)
+        disallowed_simple_test_case_connection_methods = (
+            ("cursor", "queries"),
+            ("chunked_cursor", "queries"),
+        )
 
     class _FakeConnection:
         features = _Features()
 
-    assert (
-        _django_patches._disallowed_connection_methods(_FeatureFlagCls, _FakeConnection())
-        is _Features.disallowed_simple_test_case_connection_methods
-    )
+    with mock.patch.object(
+        _django_patches,
+        "_validated_remove_databases_failures_source",
+        _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
+    ):
+        assert (
+            _django_patches._disallowed_connection_methods(_FeatureFlagCls, _FakeConnection())
+            is _Features.disallowed_simple_test_case_connection_methods
+        )
 
     connection = connections["default"]
     original_cursor = connection.cursor
-    sentinel = mock.sentinel.feature_flag_cursor
-    connection.cursor = _database_failure(sentinel)
+    original_chunked_cursor = connection.chunked_cursor
+    cursor_sentinel = mock.sentinel.feature_flag_cursor
+    chunked_cursor_sentinel = mock.sentinel.feature_flag_chunked_cursor
+    connection.cursor = _database_failure(cursor_sentinel)
+    connection.chunked_cursor = _database_failure(chunked_cursor_sentinel)
     # The patched loop visits every alias, so the flag has to be readable on
     # each one (the sharded settings mode configures more than ``default``).
     for alias in connections:
         connections[alias].features.disallowed_simple_test_case_connection_methods = (
             ("cursor", "queries"),
+            ("chunked_cursor", "queries"),
         )
     try:
-        _django_patches._patched_remove_databases_failures(_FeatureFlagCls)
-        assert connection.cursor is sentinel
+        with mock.patch.object(
+            _django_patches,
+            "_validated_remove_databases_failures_source",
+            _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
+        ):
+            _django_patches._patched_remove_databases_failures(_FeatureFlagCls)
+        assert connection.cursor is cursor_sentinel
+        assert connection.chunked_cursor is chunked_cursor_sentinel
     finally:
         connection.cursor = original_cursor
+        connection.chunked_cursor = original_chunked_cursor
         for alias in connections:
             del connections[alias].features.disallowed_simple_test_case_connection_methods
+
+
+def test_disallowed_methods_rejects_an_unvalidated_upstream_shape():
+    """An unrecognized upstream body makes the method read raise, never guess a shape.
+
+    The two audited Django shapes keep the ``(name, operation)`` pairs in
+    different places, and the validated upstream source is the only thing that
+    says which. A third shape means the pairs are somewhere this patch has not
+    audited, so falling back to either read would silently unwrap the wrong
+    objects during test teardown - a corruption no assertion in the consumer's
+    suite would attribute here. The raise is what keeps a future Django's
+    restructuring a loud failure at the patch instead.
+    """
+    with mock.patch.object(
+        _django_patches,
+        "_validated_remove_databases_failures_source",
+        "unexpected source",
+    ):
+        with pytest.raises(RuntimeError, match="without a validated upstream"):
+            _django_patches._disallowed_connection_methods(object, object())
 
 
 def test_apply_fails_loudly_when_upstream_source_is_unavailable():

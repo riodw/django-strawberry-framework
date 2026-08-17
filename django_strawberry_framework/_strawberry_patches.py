@@ -156,7 +156,10 @@ its body parse is dead code today; eight sites are reachable):
   the guard *widens* behavior beneficially - a scalar ``operations`` or
   ``map`` previously escaped ``replace_placeholders_with_files`` /
   ``data.get("query")`` as an unhandled ``500`` and now gets the
-  controlled ``400``;
+  controlled ``400``. A well-typed JSON list remains permitted for a
+  batched ``operations`` document, so the sync and async multipart
+  delegates below separately reject only the map-specific structural
+  failures that the generic helper cannot distinguish;
 - the GET ``variables`` / ``extensions`` parses inside
   ``BaseView.parse_query_params`` (``base.py``): the guard is WRONG
   here. Upstream's own downstream handling in ``parse_http_body`` is
@@ -178,6 +181,33 @@ established by
 upstream body change fails loudly at ``apply()`` time instead of being
 silently superseded. The shield shares the envelope guard's lifecycle:
 retire both together when upstream #3398 lands.
+
+A third gap: structurally-invalid multipart maps
+-------------------------------------------------
+
+The generic guard cannot reject every JSON array: an array of objects is a
+valid batched operation document, including in multipart form. The multipart
+``map`` control document is narrower, though: Strawberry passes its parsed
+value to ``replace_placeholders_with_files``, which requires a mapping and
+walks every path as a string. A JSON array such as ``[{}]`` consequently
+survives the generic guard and then raises ``AttributeError`` at ``.items()``;
+with a real file present, integer path values and invalid list indexes can
+likewise raise ``AttributeError``, ``TypeError``, ``ValueError``, or
+``IndexError``. Upstream catches only ``KeyError`` around that call, so those
+malformed client inputs become raw ``500`` responses.
+
+:func:`apply` therefore also wraps the sync and async ``parse_multipart``
+delegators. They retain upstream's accepted multipart behavior and translate
+only those structural traversal failures to Strawberry's existing
+``"Unable to parse the multipart body"`` ``400``. The delegated method also
+covers work this patch does not harden - the request adapter's form handling,
+the view's own ``parse_json`` hook - so the translation is scoped by
+PROVENANCE, not by exception type alone: the traceback must pass through
+``replace_placeholders_with_files``'s frame. A same-typed genuine server-side
+bug elsewhere in the parse therefore keeps its ``500`` instead of being
+misreported as a client error. This is deliberately not a reimplementation: a
+change to upstream's accepted multipart parser flows through, while a changed
+method signature - or a moved upload utility - fails loudly at installation.
 
 Upstream status
 ---------------
@@ -214,10 +244,18 @@ cause. Retire the envelope guard once #3398 lands ``isinstance`` checks
 (or equivalent) ahead of both ``data.get("query")`` and each batch
 ``item.get(...)``.
 
-Two lifecycles, and one that left
----------------------------------
+The third gap is present in the installed upstream multipart utility:
+``replace_placeholders_with_files`` calls ``files_map.items()`` and then
+``path.split(".")`` without first validating those values' JSON shapes. Retire
+the multipart delegates once Strawberry validates the map is a mapping and
+every file path is a string before traversal (or catches the same structural
+errors at its HTTP boundary).
 
-Read the retirement question per concern, because this module carries two
+Three lifecycles, and one that left
+-----------------------------------
+
+independent upstream *bugs* that do not retire together:
+Read the retirement question per concern, because this module carries three
 independent upstream *bugs* that do not retire together:
 
 1. **The ``UnicodeDecodeError`` translation** - retirable once upstream
@@ -227,25 +265,28 @@ independent upstream *bugs* that do not retire together:
    retirable together once upstream #3398 lands the ``isinstance``
    checks; the shield exists only to keep the guard off the GET path, so
    it has no independent lifecycle.
+3. **The sync and async multipart delegates** - retirable once upstream
+   validates malformed ``map`` containers and paths before the upload
+   utility traverses them.
 
 There used to be a third entry: the strict UTF-8 wire contract, which is
 **not** retirable with either, because upstream will never "fix" behavior
 that is not a bug (RFC 8259 auto-detection over raw ``bytes``) - the
 package deliberately narrows it. Keeping a permanent policy in a module
-whose other two concerns are scheduled for deletion made "delete this
-module when 1 and 2 land" a security regression waiting to happen, so the
+whose other three concerns are scheduled for deletion made "delete this
+module when 1, 2, and 3 land" a security regression waiting to happen, so the
 policy moved to ``views.py::_RequestBodyBoundaryMixin.parse_json`` (see
 "Where the strict UTF-8 wire contract lives" above). **This module can now
-be deleted outright once 1 and 2 both retire**, and that is the only
+be deleted outright once 1, 2, and 3 all retire**, and that is the only
 reason the deletion is safe.
 
 Re-checking whether upstream fixed this
 ---------------------------------------
 
-You do not need to redo the research from scratch. Two ways to tell
-whether the two *upstream-bug* halves are still required (the wire
+You do not need to redo the research from scratch. Three ways to tell
+whether the three *upstream-bug* halves are still required (the wire
 contract is not an upstream question at all, and no longer lives here -
-see "Two lifecycles" above):
+see "Three lifecycles" above):
 
 1. End-to-end, for **gap 2 only**. Set ``DJANGO_STRAWBERRY_FRAMEWORK =
    {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop scalar-body
@@ -271,7 +312,15 @@ see "Two lifecycles" above):
    That is the wire contract passing, not upstream. Use probe 2 for
    gap 1, or mount ``strawberry.django.views.GraphQLView`` directly.
 
-2. Quick probe of the *installed* version. This module captures the
+2. End-to-end, for **gap 3 only**. Run the live multipart-map rows with
+   the Strawberry patch disabled. A raw ``500`` for ``map=[{}]`` means
+   the upstream utility still leaks its ``AttributeError``; a controlled
+   upstream ``400`` means this wrapper can be considered for retirement::
+
+       uv run pytest examples/fakeshop/test_query/test_transport_api.py \
+           -k multipart_map
+
+3. Quick probe of the *installed* version. This module captures the
    unwrapped upstream callable, so you can exercise each gap directly::
 
        from django_strawberry_framework import _strawberry_patches as p
@@ -291,9 +340,13 @@ see "Two lifecycles" above):
        # sync_base_view.py / async_base_view.py and confirm a non-dict guard
        # now precedes it.
 
+       # Gap 3 (multipart map) needs ``map`` to be checked as a mapping
+       # before the utility calls ``.items()`` and iterates string paths.
+
    To check a newer release without upgrading, re-read ``parse_json`` /
    ``decode_json`` at the permalink above (gap 1) and ``parse_http_body``
-   (gap 2) on the current ``main``. The latest published version is at
+   (gap 2) plus ``replace_placeholders_with_files`` (gap 3) on the current
+   ``main``. The latest published version is at
    ``https://pypi.org/pypi/strawberry-graphql/json`` (``info.version``).
 
 The ``parse_query_params`` shield has no upstream bug of its own to
@@ -317,22 +370,54 @@ from .conf import upstream_patches_enabled
 
 try:
     from cross_web import HTTPException
+    from strawberry.file_uploads.utils import replace_placeholders_with_files
+    from strawberry.http.async_base_view import AsyncBaseHTTPView
     from strawberry.http.base import BaseView
+    from strawberry.http.sync_base_view import SyncBaseHTTPView
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
     BaseView = None  # type: ignore[assignment,misc]
     HTTPException = None  # type: ignore[assignment,misc]
+    AsyncBaseHTTPView = None  # type: ignore[assignment,misc]
+    SyncBaseHTTPView = None  # type: ignore[assignment,misc]
+    replace_placeholders_with_files = None  # type: ignore[assignment,misc]
+
+
+_PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
+_PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
+_PATCH_OWNER = "django_strawberry_framework._strawberry_patches"
+
+
+def _captured_upstream_method(owner: Any | None, name: str) -> Any:
+    """Return the upstream method, retaining it across an in-process reload.
+
+    The AppConfig may be called again after ``importlib.reload()`` in tests or
+    a long-lived development process. At that point ``owner`` still holds this
+    module's previous replacement. Keep the original that replacement carries
+    so the reloaded applier validates and reinstalls a fresh single wrapper,
+    rather than mistaking its own old source for upstream drift.
+    """
+    if owner is None:
+        return None
+    method = owner.__dict__.get(name)
+    if getattr(method, _PATCH_OWNER_ATTRIBUTE, None) == _PATCH_OWNER:
+        return getattr(method, _PATCH_ORIGINAL_ATTRIBUTE, None)
+    return method
 
 
 # Capture the genuine upstream methods once, at import time, before ``apply()``
-# can install our replacements. ``_patched_parse_json`` delegates to the
-# captured ``parse_json`` (so a self-healing re-install never wraps a wrapper),
-# and ``_patched_parse_query_params`` routes its nested parses through the same
-# captured original to keep the scalar guard off the GET path.
-_original_parse_json = None if BaseView is None else BaseView.__dict__.get("parse_json")
-_original_parse_query_params = (
-    None if BaseView is None else BaseView.__dict__.get("parse_query_params")
+# can install our replacements. The captured values also survive an in-process
+# reload, so a reloaded applier never wraps a previous package wrapper.
+_original_parse_json = _captured_upstream_method(BaseView, "parse_json")
+_original_parse_query_params = _captured_upstream_method(BaseView, "parse_query_params")
+_original_sync_parse_multipart = _captured_upstream_method(
+    SyncBaseHTTPView,
+    "parse_multipart",
+)
+_original_async_parse_multipart = _captured_upstream_method(
+    AsyncBaseHTTPView,
+    "parse_multipart",
 )
 
 
@@ -345,6 +430,13 @@ _original_parse_query_params = (
 # (and deletable) without reaching into the package's view surface, so
 # ``tests/test_views.py`` pins both against what upstream actually raises.
 _UPSTREAM_JSON_PARSE_REASON = "Unable to parse request body as JSON"
+
+
+# Keep the sync and async transports on Strawberry's existing multipart parsing
+# vocabulary. The async view already uses this reason when its request adapter
+# cannot produce form data, and malformed JSON values in ``map`` reach the same
+# upstream parser just one step later.
+_UPSTREAM_MULTIPART_PARSE_REASON = "Unable to parse the multipart body"
 
 
 # The exact upstream body :func:`_patched_parse_query_params` supersedes
@@ -380,9 +472,8 @@ _UPSTREAM_PARSE_QUERY_PARAMS_SOURCE = textwrap.dedent(
 def _validate_upstream_shape() -> None:
     """Fail loudly when Strawberry no longer exposes the method shapes we patch.
 
-    Two patched methods, two validation depths (delegators pin the call
-    shape, reimplementers pin the body - the ``_django_patches``
-    precedent):
+    Four patched methods have two validation depths (delegators pin the call
+    shape, reimplementers pin the body - the ``_django_patches`` precedent):
 
     - ``parse_json`` is wrapped and delegated to, so only the captured
       delegation target's presence and ``(self, data)`` arity are
@@ -396,36 +487,40 @@ def _validate_upstream_shape() -> None:
     if (
         BaseView is None
         or HTTPException is None
+        or SyncBaseHTTPView is None
+        or AsyncBaseHTTPView is None
+        or not callable(replace_placeholders_with_files)
         or not callable(_original_parse_json)
         or not callable(_original_parse_query_params)
+        or not callable(_original_sync_parse_multipart)
+        or not callable(_original_async_parse_multipart)
     ):
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Strawberry patch: expected "
-            "strawberry.http.base.BaseView.parse_json, BaseView.parse_query_params, "
+            "BaseView.parse_json, BaseView.parse_query_params, "
+            "SyncBaseHTTPView.parse_multipart, AsyncBaseHTTPView.parse_multipart, "
+            "strawberry.file_uploads.utils.replace_placeholders_with_files, "
             "and cross_web.HTTPException. "
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
             "or use supported dependency versions.",
         )
-    parameters = tuple(inspect.signature(_original_parse_json).parameters.values())
-    if len(parameters) != 2 or any(
-        parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+    for method, name, argument in (
+        (_original_parse_json, "BaseView.parse_json", "data"),
+        (_original_parse_query_params, "BaseView.parse_query_params", "params"),
+        (_original_sync_parse_multipart, "SyncBaseHTTPView.parse_multipart", "request"),
+        (_original_async_parse_multipart, "AsyncBaseHTTPView.parse_multipart", "request"),
     ):
-        raise RuntimeError(
-            "Cannot apply django-strawberry-framework's Strawberry patch: "
-            "BaseView.parse_json no longer has the expected (self, data) signature. "
-            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
-            "or use a supported Strawberry version.",
-        )
-    parameters = tuple(inspect.signature(_original_parse_query_params).parameters.values())
-    if len(parameters) != 2 or any(
-        parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
-    ):
-        raise RuntimeError(
-            "Cannot apply django-strawberry-framework's Strawberry patch: "
-            "BaseView.parse_query_params no longer has the expected (self, params) signature. "
-            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
-            "or use a supported Strawberry version.",
-        )
+        parameters = tuple(inspect.signature(method).parameters.values())
+        if len(parameters) != 2 or any(
+            parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD
+            for parameter in parameters
+        ):
+            raise RuntimeError(
+                "Cannot apply django-strawberry-framework's Strawberry patch: "
+                f"{name} no longer has the expected (self, {argument}) signature. "
+                'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+                "or use a supported Strawberry version.",
+            )
     try:
         source = textwrap.dedent(inspect.getsource(_original_parse_query_params))
     except (OSError, TypeError):
@@ -487,7 +582,8 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     site (nine, one of them dead code at 0.316.0; see the module
     docstring's inventory): correct at the seven body/multipart sites (at
     the multipart sites it converts an upstream scalar-``operations``/``map``
-    ``500`` into this ``400``), and deliberately kept OFF the two GET
+    ``500`` into this ``400``; the paired multipart delegates handle the
+    remaining map-specific structural errors), and deliberately kept OFF the two GET
     sites inside
     ``parse_query_params``, which :func:`_patched_parse_query_params`
     routes through the captured original so upstream's own per-param
@@ -555,30 +651,124 @@ def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
     return params
 
 
-def _patch_is_installed() -> bool:
-    """Return ``True`` iff both patched methods currently point at our replacements.
+# The exception types the upstream upload utility raises on malformed client
+# input while it walks the ``map`` document: ``.items()`` on a non-mapping,
+# ``.split(".")`` on a non-string path, ``int(key)`` on a non-numeric list
+# index, and an out-of-range list index.
+_MULTIPART_TRAVERSAL_ERRORS = (
+    AttributeError,
+    IndexError,
+    TypeError,
+    ValueError,
+)
 
-    A partial install (a third party reverted one of the two methods)
-    reports ``False`` so the next ``apply()`` re-installs the pair
-    together - the scalar guard must never run without its GET shield.
+
+def _raised_inside_the_upload_utility(exc: BaseException) -> bool:
+    """Return ``True`` when ``exc`` was raised from the upstream upload utility.
+
+    The delegated ``parse_multipart`` covers more than the traversal this patch
+    hardens - the request adapter's form handling, the view's ``parse_json``
+    hook - and a genuine SERVER-side bug in any of those can share the
+    traversal's exception types. Reporting one as a client ``400`` would hide a
+    ``500``, so the translation is scoped by provenance rather than by type
+    alone: the traceback must pass through
+    ``replace_placeholders_with_files``'s own frame, which is the exact call
+    upstream wraps in a ``KeyError``-only ``except``.
+    """
+    code = replace_placeholders_with_files.__code__
+    traceback = exc.__traceback__
+    while traceback is not None:
+        if traceback.tb_frame.f_code is code:
+            return True
+        traceback = traceback.tb_next
+    return False
+
+
+def _patched_sync_parse_multipart(self: Any, request: Any) -> Any:
+    """Translate malformed multipart structures to Strawberry's controlled ``400``.
+
+    The generic JSON guard deliberately allows a list of objects because that is
+    a valid batched GraphQL request. A multipart ``map`` is different: it is a
+    mapping consumed immediately by ``replace_placeholders_with_files``. A list
+    of objects therefore parses successfully but has no ``.items()``, and bad
+    path values can fail with ``AttributeError``, ``IndexError``, ``TypeError``,
+    or ``ValueError`` while the utility walks them. Upstream catches only
+    ``KeyError`` there, so the other malformed client inputs escape as ``500``.
+
+    Delegate rather than copy the upstream parser: Strawberry retains ownership
+    of accepted multipart semantics and a future body change flows through. Only
+    a traversal failure raised INSIDE the upload utility is translated (see
+    :func:`_raised_inside_the_upload_utility`), so a same-typed server-side bug
+    anywhere else in the delegated parse still surfaces as the ``500`` it is;
+    ``HTTPException`` and every unrelated application exception pass through.
+    """
+    try:
+        return _original_sync_parse_multipart(self, request)
+    except _MULTIPART_TRAVERSAL_ERRORS as exc:
+        if not _raised_inside_the_upload_utility(exc):
+            raise
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
+
+
+async def _patched_async_parse_multipart(self: Any, request: Any) -> Any:
+    """Async twin of :func:`_patched_sync_parse_multipart`."""
+    try:
+        return await _original_async_parse_multipart(self, request)
+    except _MULTIPART_TRAVERSAL_ERRORS as exc:
+        if not _raised_inside_the_upload_utility(exc):
+            raise
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
+
+
+def _mark_patch_replacement(patched: Any, original: Any) -> None:
+    """Stamp a replacement with its owner and the upstream callable it wraps.
+
+    Called at import, before ``apply()`` can install anything, so a reloaded
+    module can recover the genuine upstream method from a previously installed
+    replacement (:func:`_captured_upstream_method`). A function rather than a
+    module-level loop so the marking leaves no loop variables bound in the
+    module namespace.
+    """
+    setattr(patched, _PATCH_OWNER_ATTRIBUTE, _PATCH_OWNER)
+    setattr(patched, _PATCH_ORIGINAL_ATTRIBUTE, original)
+
+
+_mark_patch_replacement(_patched_parse_json, _original_parse_json)
+_mark_patch_replacement(_patched_parse_query_params, _original_parse_query_params)
+_mark_patch_replacement(_patched_sync_parse_multipart, _original_sync_parse_multipart)
+_mark_patch_replacement(_patched_async_parse_multipart, _original_async_parse_multipart)
+
+
+def _patch_is_installed() -> bool:
+    """Return ``True`` iff every patched method currently points at our replacement.
+
+    A partial install (a third party reverted one method) reports ``False`` so
+    the next ``apply()`` re-installs the complete patch. The scalar guard must
+    never run without its GET shield, and malformed multipart maps must have the
+    same controlled response on both transports.
     """
     return (
         BaseView is not None
         and BaseView.__dict__.get("parse_json") is _patched_parse_json
         and BaseView.__dict__.get("parse_query_params") is _patched_parse_query_params
+        and SyncBaseHTTPView is not None
+        and SyncBaseHTTPView.__dict__.get("parse_multipart") is _patched_sync_parse_multipart
+        and AsyncBaseHTTPView is not None
+        and AsyncBaseHTTPView.__dict__.get("parse_multipart") is _patched_async_parse_multipart
     )
 
 
 def apply() -> None:
     """Apply the Strawberry defensive patches shipped by the package.
 
-    Installs :func:`_patched_parse_json` (the two-gap body hardening) and
-    :func:`_patched_parse_query_params` (the GET shield that keeps the
-    scalar guard off upstream's query-param parses) as a pair.
+    Installs :func:`_patched_parse_json` (the two-gap body hardening),
+    :func:`_patched_parse_query_params` (the GET shield that keeps the scalar
+    guard off upstream's query-param parses), and the sync/async multipart
+    delegates that normalize malformed multipart structures as one patch.
 
-    Idempotent and self-healing: re-entrant calls are no-ops when both
-    patches are still installed, and re-install the pair if a third
-    party reverted either method since the prior call. Called from
+    Idempotent and self-healing: re-entrant calls are no-ops when every member
+    is still installed, and re-install the complete patch if a third party
+    reverted any member since the prior call. Called from
     :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`
     at Django startup.
 
@@ -587,10 +777,10 @@ def apply() -> None:
     - The ``APPLY_UPSTREAM_PATCHES`` setting disables the patches
       globally (``False``) or for the ``"strawberry"`` dependency
       (``{"strawberry": False}``). Returns before touching anything.
-    - Both patches are already installed (re-entrant call).
+    - Every patch member is already installed (re-entrant call).
 
     Before installation, validates the imported symbols, the delegated
-    ``parse_json``'s ``(self, data)`` signature, and the superseded
+    methods' ``(self, argument)`` signatures, and the superseded
     ``parse_query_params`` body source (see
     :func:`_validate_upstream_shape`). Dependency drift raises a
     targeted ``RuntimeError`` instead of silently dropping the request
@@ -603,3 +793,5 @@ def apply() -> None:
         return
     BaseView.parse_json = _patched_parse_json
     BaseView.parse_query_params = _patched_parse_query_params
+    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart
+    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart

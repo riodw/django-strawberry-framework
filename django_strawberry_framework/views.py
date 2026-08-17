@@ -83,6 +83,7 @@ leaf-module imports and never package-root exports.
 from __future__ import annotations
 
 import codecs
+from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
@@ -94,6 +95,8 @@ from strawberry.django.views import AsyncGraphQLView, GraphQLView
 from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
     _BOUNDARY_MARKER,
+    _BOUNDARY_MOUNT,
+    _BOUNDARY_PREPARED_VIEW,
     _CSRF_ORDERING_EXEMPTION,
 )
 from django_strawberry_framework._request_body import body_exceeds_limit
@@ -511,23 +514,28 @@ class _RequestBodyBoundaryMixin:
 
     @classonlymethod
     def as_view(cls, **initkwargs: Any) -> Any:  # noqa: N805 - Django's own signature
-        """Return upstream's view callback, stamped with the two ordering marks.
+        """Return upstream's view callback, stamped with the ordering protocol.
 
         The ordering half of the body boundary (spec-046 Decision 18), stamped
         once, here, so both views get it and a URLconf author cannot forget it.
-        Both marks live on the callback the URL resolver holds, because that is the
-        object the chain reads them off - the CSRF middleware reads
-        ``csrf_exempt`` there, and
+        The marks live on the callback the URL resolver holds, because that is the
+        object the chain reads them off - the CSRF middleware reads ``csrf_exempt``
+        there, and
         ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` reads
         its marker off the ``view_func`` it is handed. Putting them there rather
         than on ``dispatch`` for ``View.as_view`` to copy means a consumer subclass
         that overrides ``dispatch`` keeps the ordering too.
 
-        The marks are set on upstream's callback rather than applied through a
-        wrapping decorator, so the transport's coroutine marking and Django's
-        ``view_class`` / ``view_initkwargs`` bookkeeping - which the middleware
-        needs to build the instance whose boundary it runs - are the untouched
-        originals.
+        The small wrapper has one second job: when the chain prepared this exact
+        mount's view instance, ran ``setup``, and enforced its boundary, dispatch
+        continues on that instance instead of constructing and setting up a second
+        one. The opaque mount token makes the handoff exact even when ordinary
+        Django decorators copy the callback's attributes. Without it, request-local
+        cap state derived in ``setup`` could differ between the checked instance and
+        the dispatched one while the request stamp made the latter skip its own
+        boundary. ``functools.wraps`` preserves the transport's coroutine marking
+        and Django's ``view_class`` / ``view_initkwargs`` bookkeeping, which the
+        middleware still uses to prepare the instance.
 
         ``csrf_exempt`` is the withdrawable exemption rather than a plain ``True``:
         it is false for a request whose boundary a chain entry has already run
@@ -540,9 +548,37 @@ class _RequestBodyBoundaryMixin:
         can still lose the ordering (a wrapper that drops the attributes, and a
         consumer middleware that reads the body inbound).
         """
-        view = super().as_view(**initkwargs)
+        upstream_view = super().as_view(**initkwargs)
+        mount = object()
+
+        def prepared_view(request: HttpRequest) -> Any:
+            prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
+            if type(prepared) is not tuple or len(prepared) != 2 or prepared[0] is not mount:
+                return None
+            delattr(request, _BOUNDARY_PREPARED_VIEW)
+            return prepared[1]
+
+        if cls.view_is_async:
+
+            @wraps(upstream_view)
+            async def view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+                instance = prepared_view(request)
+                if instance is None:
+                    return await upstream_view(request, *args, **kwargs)
+                return await instance.dispatch(request, *args, **kwargs)
+
+        else:
+
+            @wraps(upstream_view)
+            def view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+                instance = prepared_view(request)
+                if instance is None:
+                    return upstream_view(request, *args, **kwargs)
+                return instance.dispatch(request, *args, **kwargs)
+
         view.csrf_exempt = _CSRF_ORDERING_EXEMPTION
         setattr(view, _BOUNDARY_MARKER, True)
+        setattr(view, _BOUNDARY_MOUNT, mount)
         return view
 
     def _enforce_request_boundary(self, request: HttpRequest) -> None:

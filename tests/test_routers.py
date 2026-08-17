@@ -103,6 +103,7 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -1428,6 +1429,36 @@ def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
     assert router.application_mapping["http"] is django_application
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(7, id="integer"),
+        pytest.param(b"graphql", id="bytes"),
+        pytest.param(object(), id="arbitrary-object"),
+        pytest.param("[", id="invalid-regex"),
+    ],
+)
+def test_malformed_websocket_url_pattern_fails_at_construction(pattern):
+    """A malformed route value cannot silently install a never-matching WebSocket route."""
+    with pytest.raises(ConfigurationError, match="websocket_url_pattern"):
+        _router(websocket_url_pattern=pattern)
+
+
+def test_hostile_websocket_url_pattern_repr_still_has_a_typed_error():
+    """The malformed-route rejection remains render-safe for hostile string subclasses."""
+
+    class HostilePattern(str):
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+        def __str__(self):
+            raise RuntimeError("str exploded")
+
+    with pytest.raises(ConfigurationError, match="unprintable HostilePattern"):
+        _router(websocket_url_pattern=HostilePattern("graphql"))
+
+
 def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias():
     """Spec-046 Decision 4: both NEGATIVE halves of the rename.
 
@@ -1458,6 +1489,51 @@ def test_repeated_access_returns_the_cached_class_which_is_subclassable():
     assert issubclass(Extended, ProtocolTypeRouter)
     # The star surface is pinned to the one public symbol (Decision 3).
     assert routers_module.__all__ == ("DjangoGraphQLProtocolRouter",)
+
+
+def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch):
+    """Concurrent lazy access cannot materialize two router class identities."""
+    original_guard = routers_module.require_channels
+    monkeypatch.setattr(routers_module, "_ROUTER_CLASS", None)
+    entered = threading.Event()
+    second_entered = threading.Event()
+    ready = threading.Barrier(2)
+    calls = 0
+    results = []
+    errors = []
+
+    def synchronized_guard():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            # Without the build lock, the second thread reaches this guard while the first
+            # is held here, forcing both uncached builders to run. With the lock, the wait
+            # times out and the second thread returns the first cached class afterward.
+            second_entered.wait(timeout=0.2)
+        else:
+            second_entered.set()
+        return original_guard()
+
+    monkeypatch.setattr(routers_module, "require_channels", synchronized_guard)
+
+    def load_class():
+        try:
+            ready.wait(timeout=5)
+            results.append(_router_class())
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=load_class) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    assert entered.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    assert results[0] is results[1]
 
 
 # ---------------------------------------------------------------------------
@@ -1758,6 +1834,22 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
             return _valid_asgi_application
 
     callback = _mounted_ws_callback(_router(websocket_consumer_class=_Unintrospectable()))
+
+    assert callback is _valid_asgi_application
+
+
+def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable():
+    """A consumer-defined signature descriptor may fail without blocking a valid factory."""
+
+    class _BrokenSignature:
+        @property
+        def __signature__(self):
+            raise RuntimeError("signature inspection exploded")
+
+        def __call__(self, **kwargs):
+            return _valid_asgi_application
+
+    callback = _mounted_ws_callback(_router(websocket_consumer_class=_BrokenSignature()))
 
     assert callback is _valid_asgi_application
 
@@ -4052,6 +4144,65 @@ async def test_connection_control_frames_never_reach_the_outbound_checkpoint(mon
         assert gate.sends_under_lease == [True]
 
 
+async def test_control_frame_send_serializes_with_a_concurrent_revocation():
+    """A revocation waits for an in-flight delegated frame instead of overtaking it.
+
+    The control-frame branch must hold the connection actor lease through its
+    asynchronous upstream send. Without that lease, the send can suspend after its
+    ``revoked`` check, a concurrent checkpoint can publish the revocation, and the
+    control frame can then commit after the connection-wide cut-off.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    sent = []
+
+    class TransportHandler:
+        async def handle_subscribe(self, message):
+            return None
+
+    class LegacyHandler:
+        async def handle_start(self, message):
+            return None
+
+    class Adapter:
+        def __init__(self, ws_consumer, *_args):
+            self.ws_consumer = ws_consumer
+
+        async def send_json(self, message):
+            entered.set()
+            await release.wait()
+            sent.append(message)
+
+    class BaseConsumer:
+        graphql_transport_ws_handler_class = TransportHandler
+        graphql_ws_handler_class = LegacyHandler
+        websocket_adapter_class = Adapter
+
+    consumer_class = consumers_module.build_revalidating_consumer_class(BaseConsumer)
+    consumer = SimpleNamespace(
+        _revocation=consumers_module._ConnectionRevocation(),
+        scope={},
+    )
+    adapter = consumer_class.websocket_adapter_class(consumer)
+
+    send_task = asyncio.create_task(adapter.send_json({"type": "pong"}))
+    await _reached(entered, "the delegated control frame never reached upstream send")
+
+    async def revoke():
+        async with session_store_module.actor_lease(consumer.scope):
+            consumer._revocation.decide()
+
+    revoke_task = asyncio.create_task(revoke())
+    await asyncio.sleep(0)
+    assert not revoke_task.done(), "revocation overtook the delegated frame send"
+
+    release.set()
+    await send_task
+    await revoke_task
+    assert sent == [{"type": "pong"}]
+    assert consumer._revocation.revoked
+
+
 #: Upstream's OWN default for ``max_subscriptions_per_connection``
 #: (``strawberry/channels/handlers/ws_handler.py::GraphQLWSConsumer.__init__``, and
 #: the same value on ``AsyncBaseHTTPView``). RE-TYPED, like every other floor
@@ -4484,6 +4635,48 @@ async def _discard(task):
     """Await a task that is expected to end cancelled, leaving nothing behind."""
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+async def test_a_prestart_cancelled_close_task_becomes_abandoned():
+    """A close task cancelled before its body starts cannot leave CLOSING behind."""
+    revocation = consumers_module._ConnectionRevocation()
+    revocation.decide()
+    starter = asyncio.create_task(revocation.close(_ParkedCloseWebSocket()))
+    await asyncio.sleep(0)
+    attempt = revocation.attempt
+    attempt.cancel()
+    await asyncio.sleep(0)
+
+    await revocation.settle()
+    assert attempt.done() and attempt.cancelled()
+    assert revocation.state == consumers_module._REVOCATION_ABANDONED
+    await _discard(starter)
+
+
+async def test_close_observes_an_already_cancelled_attempt_as_abandoned():
+    """A later close finds the cancelled attempt ABANDONED and starts no replacement.
+
+    ABANDONED is a terminal reading of the ONE attempt this connection is
+    permitted, not a reset: the state exists so a checkpoint arriving after the
+    starting one was cancelled stops waiting on a task that will never finish,
+    without silently retrying a close on a socket whose first attempt already
+    reached the transport. The attempt count and the attempt's identity are what
+    say so - a second attempt would show up as either.
+    """
+    revocation = consumers_module._ConnectionRevocation()
+    revocation.decide()
+    starter = asyncio.create_task(revocation.close(_ParkedCloseWebSocket()))
+    await asyncio.sleep(0)
+    attempt = revocation.attempt
+    attempt.cancel()
+    await asyncio.sleep(0)
+
+    await revocation.close(_ParkedCloseWebSocket())
+
+    assert revocation.state == consumers_module._REVOCATION_ABANDONED
+    assert revocation.attempts == 1
+    assert revocation.attempt is attempt
+    await _discard(starter)
 
 
 def _consumer_with_a_controlled_teardown(monkeypatch, teardown):
@@ -4973,6 +5166,53 @@ class _UnrenderableFrame:
         raise AttributeError("an incremental patch frame carries no flat error list")
 
 
+class _AsyncIteratorWithoutClose:
+    """A valid legacy-protocol result source without the optional ``aclose`` hook."""
+
+    def __init__(self):
+        self._values = iter(("value",))
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._values)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _SchemaReturningAsyncIterator:
+    """A schema whose two result-source seams both hand back a bare async iterator."""
+
+    error_policy = None
+
+    async def subscribe(self, *args, **kwargs):
+        return _AsyncIteratorWithoutClose()
+
+    async def stream(self, *args, **kwargs):
+        return _AsyncIteratorWithoutClose()
+
+
+@pytest.mark.parametrize("seam", ["subscribe", "stream"])
+async def test_the_stop_aware_schema_accepts_an_async_iterator_without_aclose(seam):
+    """Legacy-compatible async iterators do not fail during the wrapper's cleanup.
+
+    Both result-source names are exercised because which one a handler reads
+    depends on the installed upstream release, and the two are separate methods
+    on the wrapper: covering only one would leave a whole protocol's cleanup
+    unasserted on the other's release.
+    """
+    schema = _SchemaReturningAsyncIterator()
+    wrapper = consumers_module._StopAwareSchema(
+        schema,
+        SimpleNamespace(_revocation=SimpleNamespace(revoked=False)),
+    )
+
+    source = await getattr(wrapper, seam)("subscription { value }")
+    assert [value async for value in source] == ["value"]
+
+
 async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unchanged():
     """The masking shape gate passes an unmaskable frame through by IDENTITY.
 
@@ -5402,3 +5642,38 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
     assert probe.reads == 1
     assert running.emitted == ["transition-running-1", "transition-running-2"]
     assert running.finalized
+
+
+@pytest.mark.parametrize(
+    ("subprotocol", "expected_close"),
+    [
+        pytest.param(_TRANSPORT_WS, 4400, id="graphql-transport-ws"),
+        pytest.param(_LEGACY_WS, 1002, id="graphql-ws"),
+    ],
+)
+@pytest.mark.django_db
+async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
+    subprotocol,
+    expected_close,
+):
+    """Malformed non-text frames retain Strawberry's protocol-specific closes."""
+    communicator = _ws_communicator(_router(), subprotocol=subprotocol)
+    connected, _ = await communicator.connect(timeout=10)
+    assert connected
+    await communicator.send_input({"type": "websocket.receive", "bytes": b"\x00"})
+    output = await communicator.receive_output(timeout=10)
+    assert output["type"] == "websocket.close"
+    assert output["code"] == expected_close
+
+
+@pytest.mark.django_db
+async def test_router_delegates_legacy_invalid_json_continuation():
+    """Legacy graphql-ws ignores malformed JSON and continues its connection."""
+    communicator = _ws_communicator(_router(), subprotocol=_LEGACY_WS)
+    connected, _ = await communicator.connect(timeout=10)
+    assert connected
+    await communicator.send_input({"type": "websocket.receive", "text": "{"})
+    assert await communicator.receive_nothing(timeout=0.2)
+    await communicator.send_json_to({"type": "connection_init"})
+    output = await communicator.receive_json_from(timeout=10)
+    assert output["type"] == "connection_ack"

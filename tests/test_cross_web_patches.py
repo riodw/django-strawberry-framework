@@ -166,6 +166,28 @@ def test_patch_is_installed_false_when_symbol_missing():
         assert patches._patch_is_installed() is False
 
 
+def test_capture_returns_none_for_missing_adapter_or_body_property():
+    """Neither a missing adapter nor a non-property ``body`` may capture as a usable getter.
+
+    The capture runs at module scope, before ``apply()`` can complain, so both
+    absent-shape cases have to resolve to the ``None`` sentinel rather than
+    raising: an unimportable patch module takes the package's app config down
+    with it on precisely the installs whose shape ``apply()`` is meant to refuse
+    by name. The second case is the one that cannot be inferred from the first -
+    a ``body`` that is present but is not a readable ``property`` is not
+    something this patch can supersede, and capturing it would let ``apply()``
+    install over an unrecognized descriptor.
+    """
+    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):
+        assert patches._captured_upstream_body_getter() is None
+
+    class _MalformedAdapter:
+        body = object()
+
+    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", _MalformedAdapter):
+        assert patches._captured_upstream_body_getter() is None
+
+
 def test_apply_fails_loudly_when_symbol_missing():
     """A dependency-shape change cannot silently disable request hardening."""
     with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):

@@ -335,10 +335,11 @@ def _measured_remaining(stream: Any) -> int | _Probe:
       than of the body it exposes) accepts the restore and still ends up
       somewhere else, and the bounded read would then read the wrong bytes -
       previously it silently produced an empty body.
-    - a position or end that is not exactly a built-in ``int`` (a ``seek`` that
-      returns ``None``, which is legal for a stream that simply does not report
-      positions, or any other object) is ``UNMEASURABLE``: no subtraction and no
-      comparison is attempted on it, and the restore already succeeded by then.
+    - a position or end that is not exactly a built-in ``int`` (a ``tell()`` or
+      ``seek`` that returns ``None``, which is legal for a stream that simply does
+      not report positions, or any other object) is ``UNMEASURABLE``: no seek,
+      subtraction, comparison, or equality operation is attempted on a foreign
+      position object.
 
     Why a probed count of zero or less is a measurement FAILURE
     ----------------------------------------------------------
@@ -382,6 +383,8 @@ def _measured_remaining(stream: Any) -> int | _Probe:
         position = stream.tell()
     except Exception:  # a probe that cannot report a position has not moved one
         return _Probe.UNMEASURABLE
+    if type(position) is not int:
+        return _Probe.UNMEASURABLE
     try:
         end = stream.seek(0, os.SEEK_END)
     except Exception:  # the position is now unknown rather than known-intact
@@ -393,7 +396,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:
         return _Probe.CORRUPTED
     if not probed:
         return _Probe.UNMEASURABLE
-    if type(end) is not int or type(position) is not int:
+    if type(end) is not int:
         return _Probe.UNMEASURABLE
     remaining = end - position
     if remaining <= 0:
@@ -409,11 +412,20 @@ def _declares_seekable(stream: Any) -> bool:
     ``SpooledTemporaryFile`` - the ASGI body file at the supported floor - where
     capability is decided by ``tell()`` a moment later instead). A ``seekable()``
     that raises is treated exactly like one that answered ``False``: nothing has
-    moved, so the bounded read is both available and correct.
+    moved, so the bounded read is both available and correct. The attribute lookup
+    itself is guarded for the same reason, so a raising descriptor also selects
+    bounded fallback. A non-callable marker is treated as an explicit ``False``
+    rather than as an omitted method, so malformed foreign streams cannot be
+    probed accidentally.
     """
-    seekable = getattr(stream, "seekable", None)
-    if not callable(seekable):
+    try:
+        seekable = getattr(stream, "seekable", None)
+    except Exception:  # a capability attribute that fails answers no, not maybe
+        return False
+    if seekable is None:
         return True
+    if not callable(seekable):
+        return False
     try:
         return bool(seekable())
     except Exception:  # a capability query that fails answers no, not maybe
@@ -428,9 +440,12 @@ def _position_restored(stream: Any, position: Any) -> bool:
     "not known to be intact", and a stream whose coordinates are incoherent
     accepts the restore while ending up somewhere else entirely.
     """
+    if type(position) is not int:
+        return False
     try:
         stream.seek(position)
-        return bool(stream.tell() == position)
+        restored = stream.tell()
+        return type(restored) is int and restored == position
     except Exception:  # an unverifiable restore is a failed restore
         return False
 
@@ -446,6 +461,10 @@ def _bounded_read_exceeds_limit(request: HttpRequest, stream: Any, limit: int) -
     replacement this module installs in its place. A failure in any of them means
     the same thing - the package cannot prove this body is within the limit - so
     it produces the same fail-closed ``True``, and the caller's ordinary ``413``.
+    The chunk validation belongs inside this boundary too: only an exact built-in
+    ``bytes`` value may reach truth or length testing. Otherwise a truthy foreign
+    object whose ``__len__`` returns zero can keep the loop's byte counter fixed
+    forever, and either protocol can run arbitrary consumer code in the body gate.
 
     The concrete shape this closes is an ordinary aborted or broken client: a
     non-seekable request stream whose ``read`` raises ``OSError``, which Django
@@ -507,6 +526,8 @@ def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> 
     read_so_far = 0
     while read_so_far <= limit:
         chunk = request.read(min(_READ_CHUNK_BYTES, limit + 1 - read_so_far))
+        if type(chunk) is not bytes:
+            raise TypeError("request.read() returned a non-bytes body chunk")
         if not chunk:
             break
         chunks.append(chunk)

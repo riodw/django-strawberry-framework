@@ -246,6 +246,13 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         if response.streaming:
             return response
 
+        # The stock postprocess refuses encoded bodies because its HTML handle
+        # insertion operates on decoded response bytes. Keep the GraphQL
+        # additions behind the same guard; appending the bridge script to a
+        # gzip (or otherwise encoded) body would corrupt the response.
+        if response.get("Content-Encoding", ""):
+            return response
+
         content_type = response.get("Content-Type", "").split(";")[0]
         is_html = content_type in _HTML_TYPES
         is_graphiql = getattr(request, "_is_graphiql", False)

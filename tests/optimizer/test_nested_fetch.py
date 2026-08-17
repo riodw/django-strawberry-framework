@@ -194,6 +194,26 @@ def test_active_strategy_defaults_windowed_and_reads_contextvar():
     assert active_strategy() is WINDOWED_STRATEGY
 
 
+def test_active_strategy_preserves_falsey_consumer_strategy():
+    """A valid strategy whose truth value is false must remain active."""
+
+    class FalseyStrategy:
+        name = "falsey"
+
+        def __bool__(self):
+            return False
+
+        def plan(self, request, plan):
+            return True
+
+    custom = FalseyStrategy()
+    token = _active_strategy.set(custom)
+    try:
+        assert active_strategy() is custom
+    finally:
+        _active_strategy.reset(token)
+
+
 def test_on_execute_publishes_instance_strategy():
     """``on_execute`` publishes the instance's strategy for the walker's lifetime."""
     custom = SimpleNamespace(name="custom", plan=lambda request, plan: True)

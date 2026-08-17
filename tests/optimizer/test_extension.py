@@ -1912,6 +1912,47 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     assert isinstance(hash(_hashable_variable_value(cyclic)), int)
 
 
+def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
+    """Hostile custom-scalar values cannot abort plan-cache key construction."""
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    class ExplodingHash:
+        def __hash__(self):
+            raise RuntimeError("hash boom")
+
+    class ExplodingItems(dict):
+        def items(self):
+            raise RuntimeError("items boom")
+
+    class ExplodingIterator(list):
+        def __iter__(self):
+            raise RuntimeError("iter boom")
+
+    class HostileRepr:
+        def __hash__(self):
+            return 1
+
+        def __repr__(self):
+            raise RuntimeError("repr boom")
+
+    class UnhashableMetaclass(type):
+        __hash__ = None
+
+    class UnhashableType(metaclass=UnhashableMetaclass):
+        __hash__ = None
+
+    values = (
+        ExplodingHash(),
+        ExplodingItems(value=1),
+        ExplodingIterator([1]),
+        {HostileRepr(): 1},
+        UnhashableType(),
+    )
+    for value in values:
+        frozen = _hashable_variable_value(value)
+        assert isinstance(hash(frozen), int)
+
+
 def test_build_cache_key_tolerates_unhashable_pagination_variable():
     """Nested pagination-named args accept every standard input container.
 

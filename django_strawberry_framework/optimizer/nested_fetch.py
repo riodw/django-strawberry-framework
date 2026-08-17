@@ -370,4 +370,5 @@ _active_strategy: ContextVar[NestedConnectionStrategy | None] = ContextVar(
 
 def active_strategy() -> NestedConnectionStrategy:
     """The strategy the current execution planned with; windowed by default."""
-    return _active_strategy.get() or WINDOWED_STRATEGY
+    strategy = _active_strategy.get()
+    return strategy if strategy is not None else WINDOWED_STRATEGY

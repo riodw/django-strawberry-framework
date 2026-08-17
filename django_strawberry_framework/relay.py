@@ -66,7 +66,11 @@ from .list_field import _validate_relay_djangotype_target
 from .registry import register_subsystem_clear
 from .resource_policy import check_deadline
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
-from .utils.querysets import coerce_field_value_or_none, model_for
+from .utils.querysets import (
+    coerce_field_value_or_none,
+    model_for,
+    reject_async_in_sync_context,
+)
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -76,6 +80,12 @@ __all__ = ("DjangoNodeField", "DjangoNodesField")
 # ``registry.clear()`` co-clears it). Appended by BOTH factories on every
 # call; only emptiness is load-bearing, the factory-name entries aid debugging.
 _node_fields_declared: list[str] = []
+
+_SYNC_RESOLVER_RECOURSE = (
+    "DjangoNodeField and DjangoNodesField execute resolve_node(s) synchronously "
+    "under schema.execute_sync(); make the consumer override synchronous or run "
+    "the schema asynchronously."
+)
 
 
 def _clear_node_fields_declared() -> None:
@@ -432,6 +442,14 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # Calling the classmethod (not the underscore default) preserves
         # consumer overrides for free.
         result = resolved.resolve_node(pk, info=info, required=False)
+        if not in_async_context():
+            result = reject_async_in_sync_context(
+                result,
+                owner=resolved.__name__,
+                method="resolve_node",
+                context="Relay refetch",
+                recourse=_SYNC_RESOLVER_RECOURSE,
+            )
         if inspect.isawaitable(result):
             return _await_and_stamp(resolved, result)
         return _stamp_node_type(resolved, result)
@@ -468,9 +486,11 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     the same positional assumption Strawberry's native batch resolver makes).
     The obvious ``get_queryset().filter(pk__in=node_ids)`` spelling violates
     this (unordered, shrunk for missing ids, IndexError on duplicates); the
-    ``AwaitableOrValue`` return (sync list or coroutine) is accepted, and a
-    wrong-length return is rejected with a ``ConfigurationError`` naming the
-    type rather than producing silently wrong rows.
+    ``AwaitableOrValue`` return (sync list or coroutine) is accepted in async
+    execution; a coroutine returned under ``schema.execute_sync`` is rejected
+    with ``SyncMisuseError``. A wrong-length return is rejected with a
+    ``ConfigurationError`` naming the type rather than producing silently
+    wrong rows.
     """
     if target_type is not None:
         _validate_node_target(target_type, field="DjangoNodesField")
@@ -534,17 +554,20 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
                 return _interleave(positions, per_type)
 
             return _gather()
-        per_type = {
-            resolved_type: [
+        per_type = {}
+        for resolved_type, pks in groups.items():
+            result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
+            result = reject_async_in_sync_context(
+                result,
+                owner=resolved_type.__name__,
+                method="resolve_nodes",
+                context="Relay refetch",
+                recourse=_SYNC_RESOLVER_RECOURSE,
+            )
+            per_type[resolved_type] = [
                 _stamp_node_type(resolved_type, node)
-                for node in _check_nodes_result(
-                    resolved_type,
-                    resolved_type.resolve_nodes(info=info, node_ids=pks, required=False),
-                    pks,
-                )
+                for node in _check_nodes_result(resolved_type, result, pks)
             ]
-            for resolved_type, pks in groups.items()
-        }
         return _interleave(positions, per_type)
 
     return strawberry.field(

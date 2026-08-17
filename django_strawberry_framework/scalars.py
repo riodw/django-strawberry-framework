@@ -26,6 +26,8 @@ from strawberry.file_uploads.scalars import Upload, UploadDefinition
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
+from .exceptions import _safe_arg_repr, _safe_type_name
+
 # Re-export Strawberry's built-in ``Upload`` scalar (and its ``UploadDefinition``)
 # as the package's public upload scalar (spec-037). ``Upload`` is a
 # ``NewType("Upload", bytes)`` already present in Strawberry's
@@ -71,16 +73,23 @@ def _parse_bigint(value: Any) -> int:
         # *value*, matching the GraphQL scalar parse_value contract.
         raise ValueError("BigInt does not accept boolean values")  # noqa: TRY004
     if isinstance(value, int):
-        return value
+        # Use the base descriptor so an int subclass cannot retain a hostile
+        # ``__int__`` implementation in the value handed to a resolver.
+        return int.__int__(value)
     if isinstance(value, str):
-        if not _BIGINT_STRING_PATTERN.fullmatch(value):
+        # Normalize str subclasses before regex and integer conversion so
+        # consumer-defined ``__int__`` / ``__str__`` methods cannot alter the
+        # accepted value or replace the scalar's ValueError contract.
+        plain_value = str.__str__(value)
+        if not _BIGINT_STRING_PATTERN.fullmatch(plain_value):
             raise ValueError(
                 f"BigInt requires a plain ASCII decimal integer string "
                 f"(optional leading minus for non-zero, no leading zeroes, "
-                f"no underscores, no plus sign, no Unicode digits); got {value!r}",
+                f"no underscores, no plus sign, no Unicode digits); got "
+                f"{_safe_arg_repr(value)}",
             )
-        return int(value)
-    raise ValueError(f"BigInt cannot parse {type(value).__name__}")
+        return int(plain_value)
+    raise ValueError(f"BigInt cannot parse {_safe_type_name(value)}")
 
 
 def _serialize_bigint(value: Any) -> str:
@@ -100,8 +109,11 @@ def _serialize_bigint(value: Any) -> str:
     if isinstance(value, bool):
         raise TypeError(f"BigInt cannot serialize bool value {value!r}")
     if isinstance(value, int):
-        return str(value)
-    raise TypeError(f"BigInt cannot serialize {type(value).__name__}")
+        # ``str(value)`` dispatches to a subclass's override.  The scalar wire
+        # format is always canonical decimal, so bypass consumer-supplied
+        # ``__str__`` implementations on otherwise valid int subclasses.
+        return int.__str__(value)
+    raise TypeError(f"BigInt cannot serialize {_safe_type_name(value)}")
 
 
 BigInt = NewType("BigInt", int)
@@ -141,15 +153,37 @@ def strawberry_config(
         raise ValueError(
             "strawberry_config() owns scalar_map; pass consumer scalars with extra_scalar_map=...",
         )
-    extra = dict(extra_scalar_map) if extra_scalar_map else {}
+    if extra_scalar_map is None:
+        extra: dict[object, ScalarDefinition] = {}
+    else:
+        try:
+            # ``dict`` deliberately retains Strawberry's permissive key/value
+            # contract, while materializing once gives each call an isolated
+            # map.  A hostile mapping must not replace the promised factory
+            # boundary with its own arbitrary exception.
+            extra = dict(extra_scalar_map)
+        except BaseException as exc:
+            raise ValueError(
+                "strawberry_config(extra_scalar_map=...) must be materializable; "
+                f"got {_safe_arg_repr(extra_scalar_map)}.",
+            ) from exc
     collisions = _PACKAGE_SCALAR_MAP.keys() & extra.keys()
     if collisions:
         raise ValueError(
             "strawberry_config(extra_scalar_map=...) cannot redeclare package-defined scalars: "
-            f"{', '.join(sorted(getattr(k, '__name__', repr(k)) for k in collisions))}. "
+            f"{', '.join(sorted(_safe_scalar_map_key_label(k) for k in collisions))}. "
             "Define a Strawberry custom scalar of a different NewType / class "
             "to register under a separate key.",
         )
     merged: dict[object, ScalarDefinition] = dict(_PACKAGE_SCALAR_MAP)
     merged.update(extra)
     return StrawberryConfig(scalar_map=merged, **config_kwargs)
+
+
+def _safe_scalar_map_key_label(key: object) -> str:
+    """Describe a collision key without trusting consumer-defined metadata."""
+    try:
+        name = getattr(key, "__name__", None)
+    except BaseException:
+        name = None
+    return name if isinstance(name, str) else _safe_arg_repr(key)

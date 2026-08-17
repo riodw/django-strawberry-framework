@@ -273,11 +273,13 @@ class Settings:
         """Replace the cached user-settings mapping in place.
 
         ``None`` restores django-backed lazy reload on next attribute access.
-        Mapping values replace the cached settings; ``dict`` instances are
-        retained, and other mappings are copied into a plain ``dict``.  The
-        live-source pointer tracks ``value`` itself (pre-normalization) so a
-        subsequent django-backed read can keep the cache when
-        ``django.conf.settings`` still holds that same object.
+        Mapping values replace the cached settings and make this instance
+        explicitly configured (not django-backed); ``dict`` instances are
+        retained, and other mappings are copied into a plain ``dict``.  This
+        keeps a direct ``reload(mapping)`` call from being immediately
+        overwritten by the live Django setting.  The setting-changed receiver
+        uses ``_reload_from_django`` instead, preserving the singleton's
+        django-backed live-sync contract.
         """
         if value is None:
             self._user_settings = None
@@ -285,7 +287,18 @@ class Settings:
             self._django_backed = True
             return
         self._user_settings = _normalize_user_settings(value)
+        self._live_source = _LIVE_UNSET
+        self._django_backed = False
+
+    def _reload_from_django(self, value: Mapping[str, Any] | None) -> None:
+        """Apply a ``setting_changed`` value while retaining live Django backing."""
+        if value is None:
+            self.reload(None)
+            return
+        normalized = _normalize_user_settings(value)
         self._live_source = value
+        self._user_settings = normalized
+        self._django_backed = True
 
     def __getattr__(self, name: str) -> Any:
         """Retrieve a setting's value using attribute-style access.
@@ -526,7 +539,7 @@ def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:
     receiver matches the signal signature; it is required, not optional.
     """
     if setting == DJANGO_SETTINGS_KEY:
-        settings.reload(value)
+        settings._reload_from_django(value)
 
 
 # Import-time side effect: install the signal receiver so test overrides take

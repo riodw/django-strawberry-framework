@@ -313,6 +313,30 @@ def test_longer_cycle_renders_full_path():
     assert _cascade_state.get() is None
 
 
+@pytest.mark.django_db(transaction=True)
+def test_root_queryset_filter_override_is_neutralized_by_sealing():
+    """A hostile root ``filter`` override cannot erase a cascade predicate."""
+
+    class FilterEraser(models.QuerySet):
+        def filter(self, *args, **kwargs):
+            return _CtParent.objects.all()
+
+    with _tables(_CtTarget, _CtParent):
+        parent_type = _register_ct_pair(
+            lambda cls, qs, info: qs.exclude(name="hidden"),
+        )
+        visible = _CtTarget.objects.create(name="visible")
+        hidden = _CtTarget.objects.create(name="hidden")
+        _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="drops", target=hidden)
+
+        hostile_root = FilterEraser(model=_CtParent, using="default")
+        result = apply_cascade_permissions(parent_type, hostile_root, _INFO)
+
+        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
+        assert _cascade_state.get() is None
+
+
 def test_cyclic_diamond_fails_closed():
     """A diamond whose sink cascades back to the source raises on either branch."""
 
@@ -1713,24 +1737,82 @@ def test_root_queryset_shape_rejections():
     up-front rejection the walk would leak a raw ``TypeError`` /
     ``NotSupportedError`` from Django mid-composition instead of the
     fail-closed configuration error.
+
+    Every message names ``apply_cascade_permissions``: the shape checks are made
+    by the shared visibility source boundary, but the consumer called THIS
+    helper from inside their own hook, so the cascade's renderer keeps the
+    attribution (and the cascade's recourse) rather than telling them about a
+    function they never called.
     """
     parent_type = _register_ct_pair(None)
 
-    with pytest.raises(ConfigurationError, match="got Manager"):
+    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*got Manager"):
         apply_cascade_permissions(parent_type, _CtParent.objects, _INFO)
-    with pytest.raises(ConfigurationError, match="got list"):
+    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*got list"):
         apply_cascade_permissions(parent_type, [], _INFO)
-    with pytest.raises(ConfigurationError, match="concrete table"):
+    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*concrete table"):
         apply_cascade_permissions(parent_type, _CtOther.objects.all(), _INFO)
-    with pytest.raises(ConfigurationError, match="sliced"):
+    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*sliced"):
         apply_cascade_permissions(parent_type, _CtParent.objects.all()[:5], _INFO)
-    with pytest.raises(ConfigurationError, match="combined"):
+    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*combined"):
         apply_cascade_permissions(
             parent_type,
             _CtParent.objects.all().union(_CtParent.objects.all()),
             _INFO,
         )
     assert _cascade_state.get() is None
+
+
+def test_unsealable_root_query_class_fails_closed_with_cascade_prose():
+    """A root carrying a foreign ``Query`` class fails closed, attributed to the cascade.
+
+    The root is sealed before the walk narrows it, and a foreign ``Query``
+    subclass cannot be faithfully rebuilt into a framework-owned execution
+    queryset. The boundary's ``untrusted`` defect is the cascade's to explain:
+    the consumer passed this object to ``apply_cascade_permissions``.
+    """
+    from django.db.models import sql
+
+    class _ForeignRootQuery(sql.Query):
+        pass
+
+    parent_type = _register_ct_pair(None)
+    hostile_root = _CtParent.objects.all()
+    hostile_root._query = _ForeignRootQuery(_CtParent)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="apply_cascade_permissions.*cannot be sealed into a framework-owned",
+    ):
+        apply_cascade_permissions(parent_type, hostile_root, _INFO)
+    assert _cascade_state.get() is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_values_root_is_supported_input():
+    """A ``.values(...)`` root still cascades - the seal runs model-rows-off here.
+
+    The cascade never iterates the root's rows; it composes ``.filter(...)`` onto
+    them, exactly as it accepts a ``.values()`` hook RETURN. Sealing the root
+    must not quietly narrow the accepted input to model rows.
+    """
+    with _tables(_CtTarget, _CtParent):
+        parent_type = _register_ct_pair(
+            lambda cls, qs, info: qs.exclude(name="hidden"),
+        )
+        visible = _CtTarget.objects.create(name="visible")
+        hidden = _CtTarget.objects.create(name="hidden")
+        _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="drops", target=hidden)
+
+        result = apply_cascade_permissions(
+            parent_type,
+            _CtParent.objects.values("name"),
+            _INFO,
+        )
+
+        assert [row["name"] for row in result] == ["keeps"]
+        assert _cascade_state.get() is None
 
 
 @pytest.mark.django_db

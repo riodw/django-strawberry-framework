@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Iterable, Mapping
 from dataclasses import dataclass, fields, replace
 from itertools import islice
 from typing import Any
@@ -67,6 +67,7 @@ __all__ = (
     "ResourceLimitExceeded",
     "ResourcePolicy",
     "bounded_rows",
+    "bounded_rows_async",
     "check_deadline",
     "clear_resource_context",
     "effective_bound",
@@ -217,8 +218,8 @@ class ResourcePolicy:
         ``connection.py::_resolve_connection_fast_path`` (the head both
         connection entry points share), the Relay refetch fields
         (``relay.py::DjangoNodeField`` / ``DjangoNodesField``), and the write
-        pipelines (``mutations/resolvers.py::run_write_pipeline_sync`` and the
-        delete branch) before their transaction opens. It is not a preemptive
+        pipelines (``mutations/resolvers.py::run_write_pipeline_sync``) before
+        their transaction opens. It is not a preemptive
         timeout and does not claim to be one - nothing in-process can interrupt
         a query already handed to the database driver, so what the deadline buys
         is that the request starts no MORE work.
@@ -258,7 +259,21 @@ class ResourcePolicy:
             if field.name == "execution_deadline_seconds":
                 if value is None:
                     continue
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                if isinstance(value, float):
+                    finite = math.isfinite(value)
+                elif isinstance(value, int):
+                    try:
+                        finite = math.isfinite(float(value))
+                    except OverflowError:
+                        finite = False
+                else:
+                    finite = False
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not finite
+                    or value <= 0
+                ):
                     raise ConfigurationError(
                         "ResourcePolicy.execution_deadline_seconds must be None or a "
                         f"positive number of seconds; got {describe_value(value)}.",
@@ -282,12 +297,16 @@ class ResourcePolicy:
         positive value, and from a value only downward; widening it back to
         ``None`` is a widening like any other.
         """
-        for name, value in overrides.items():
-            if name not in {field.name for field in fields(self)}:
+        known = {field.name for field in fields(self)}
+        for name in overrides:
+            if name not in known:
                 raise ConfigurationError(
                     f"ResourcePolicy has no bound named {name!r}.",
                 )
+        candidate = replace(self, **overrides)
+        for name in overrides:
             current = getattr(self, name)
+            value = getattr(candidate, name)
             if name == "execution_deadline_seconds":
                 widens = value is None and current is not None
                 widens = widens or (value is not None and current is not None and value > current)
@@ -299,7 +318,7 @@ class ResourcePolicy:
                     f"allows {current!r} and the override asks for {value!r}. Widen the "
                     "schema-construction policy instead.",
                 )
-        return replace(self, **overrides)
+        return candidate
 
 
 #: The package's fail-closed baseline, used whenever no policy has been resolved
@@ -448,6 +467,71 @@ def bounded_rows(
         # whole", which would be a bound that silently stops applying to
         # exactly the shapes nobody anticipated.
         return list(islice(result, limit))
+
+
+async def bounded_rows_async(
+    result: Any,
+    info: Any,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> Any:
+    """Apply a raw-list row bound to a result that may be async-iterable.
+
+    ``graphql-core`` accepts ``AsyncIterable`` list results and materializes
+    them during async completion. A synchronous ``bounded_rows`` call cannot
+    slice an async generator, however, so an async field must consume only its
+    bounded prefix before returning the result to GraphQL. Synchronous
+    iterables (including Django ``QuerySet`` objects, which expose both
+    protocols) stay on ``bounded_rows`` so lazy querysets retain their SQL
+    ``LIMIT`` instead of being materialized through the async iterator.
+
+    When the prefix ends early, the iterator is closed. A cleanup failure is
+    raised when iteration itself succeeded; when iteration already failed, the
+    source error remains primary and the cleanup failure is attached as a note
+    rather than masking the useful failure.
+    """
+    if not isinstance(result, AsyncIterable) or isinstance(result, Iterable):
+        return bounded_rows(result, info, declared, trusted=trusted)
+    check_deadline(info)
+    limit = effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
+    iterator = aiter(result)
+    rows: list[Any] = []
+    exhausted = False
+    primary_error: BaseException | None = None
+    try:
+        async for item in iterator:
+            rows.append(item)
+            if len(rows) >= limit:
+                break
+        else:
+            exhausted = True
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        if not exhausted:
+            try:
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    await close()
+            except BaseException as close_error:
+                if primary_error is None:
+                    raise
+                # ``BaseException.add_note`` is 3.11+, and this runs inside a
+                # ``finally``: on the 3.10 support floor the resulting
+                # ``AttributeError`` would REPLACE the source error, masking
+                # exactly the failure this branch exists to preserve. Writing
+                # the ``__notes__`` list the note protocol is built on is what
+                # ``add_note`` does on 3.11+ (same list, same traceback
+                # rendering) and is the only form that carries the diagnostic
+                # across the whole supported range.
+                notes = [*getattr(primary_error, "__notes__", ())]
+                notes.append(
+                    f"bounded_rows_async iterator cleanup failed: {close_error!r}",
+                )
+                primary_error.__notes__ = notes
+    return rows
 
 
 def validate_collection_bound(declared: Any, *, field: str) -> None:

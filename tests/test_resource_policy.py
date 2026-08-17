@@ -29,6 +29,7 @@ where they matter. What is left here is the surface a request cannot express:
 
 from __future__ import annotations
 
+import math
 import time
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
@@ -36,8 +37,9 @@ from typing import Any
 import pytest
 import strawberry
 from graphql import GraphQLError, parse
+from strawberry.types import Info
 
-from django_strawberry_framework import Upload
+from django_strawberry_framework import DjangoSchema, Upload
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.resource_policy import (
     DjangoResourcePolicyExtension,
@@ -51,6 +53,7 @@ from django_strawberry_framework.resource_policy import (
     ResourceLimitExceeded,
     ResourcePolicy,
     bounded_rows,
+    bounded_rows_async,
     check_deadline,
     clear_resource_context,
     effective_bound,
@@ -102,12 +105,18 @@ def test_a_non_positive_integer_bound_is_rejected_at_construction(value):
         -1,
         "5",
         True,
+        math.inf,
+        math.nan,
+        10**400,
     ],
     ids=[
         "zero",
         "negative",
         "string",
         "bool",
+        "infinity",
+        "nan",
+        "oversized-integer",
     ],
 )
 def test_an_invalid_execution_deadline_is_rejected(value):
@@ -211,6 +220,12 @@ def test_a_deadline_narrows_from_absent_to_present_but_never_back():
         with_deadline.narrowed(execution_deadline_seconds=6)
 
 
+def test_narrowing_validates_override_domains_before_comparing_them():
+    """An invalid override is a configuration error, not a comparison ``TypeError``."""
+    with pytest.raises(ConfigurationError, match="max_page_size must be a positive integer"):
+        DEFAULT_RESOURCE_POLICY.narrowed(max_page_size="five")
+
+
 def test_effective_bound_takes_the_tighter_of_the_two_unless_trusted():
     assert effective_bound(100, None) == 100
     assert effective_bound(100, 5) == 5
@@ -268,6 +283,74 @@ def test_a_non_policy_value_under_the_key_is_ignored():
     """A consumer key collision must not become "the request has no bounds"."""
     context = {DST_RESOURCE_POLICY: "not a policy"}
     assert policy_from_info(SimpleNamespace(context=context)) is DEFAULT_RESOURCE_POLICY
+
+
+def test_nested_sync_schema_restores_the_outer_policy_and_deadline():
+    """An inner schema must not widen later outer collection work."""
+
+    @strawberry.type
+    class InnerQuery:
+        @strawberry.field
+        def ping(self) -> str:
+            return "pong"
+
+    @strawberry.type
+    class OuterQuery:
+        @strawberry.field
+        def nested(self, info: Info) -> str:
+            before = policy_from_info(info)
+            inner = DjangoSchema(query=InnerQuery)
+            inner_result = inner.execute_sync("{ ping }", context_value=info.context)
+            after = policy_from_info(info)
+            rows = bounded_rows(list(range(10)), info)
+            return (
+                f"{before.max_list_rows}:{after.max_list_rows}:{len(rows)}:"
+                f"{before.execution_deadline_seconds}:{after.execution_deadline_seconds}:"
+                f"{inner_result.errors}"
+            )
+
+    schema = DjangoSchema(
+        query=OuterQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1, execution_deadline_seconds=60),
+    )
+    result = schema.execute_sync("{ nested }", context_value={})
+
+    assert result.errors is None, result.errors
+    assert result.data["nested"] == "1:1:1:60:60:None"
+
+
+async def test_nested_async_schema_restores_the_outer_policy_and_deadline():
+    """The same context restoration contract holds across awaited inner execution."""
+
+    @strawberry.type
+    class InnerQuery:
+        @strawberry.field
+        async def ping(self) -> str:
+            return "pong"
+
+    @strawberry.type
+    class OuterQuery:
+        @strawberry.field
+        async def nested(self, info: Info) -> str:
+            before = policy_from_info(info)
+            inner = DjangoSchema(query=InnerQuery)
+            inner_result = await inner.execute("{ ping }", context_value=info.context)
+            after = policy_from_info(info)
+            rows = bounded_rows(list(range(10)), info)
+            return (
+                f"{before.max_list_rows}:{after.max_list_rows}:{len(rows)}:"
+                f"{before.execution_deadline_seconds}:{after.execution_deadline_seconds}:"
+                f"{inner_result.errors}"
+            )
+
+    schema = DjangoSchema(
+        query=OuterQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1, execution_deadline_seconds=60),
+    )
+    result = await schema.execute("{ nested }", context_value={})
+
+    assert result.errors is None, result.errors
+    assert result.data["nested"] == "1:1:1:60:60:None"
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +437,71 @@ def test_bounded_rows_honours_a_trusted_widening():
     ]
 
 
+async def test_bounded_rows_async_closes_after_the_effective_prefix():
+    class Rows:
+        def __init__(self):
+            self.value = 0
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            value = self.value
+            self.value += 1
+            return value
+
+        async def aclose(self):
+            self.closed = True
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    rows = Rows()
+
+    assert await bounded_rows_async(rows, info) == [0, 1]
+    assert rows.closed is True
+
+
+async def test_bounded_rows_async_preserves_source_errors_when_cleanup_fails():
+    class BrokenRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise ValueError("source failed")
+
+        async def aclose(self):
+            raise RuntimeError("cleanup failed")
+
+    with pytest.raises(ValueError, match="source failed") as caught:
+        await bounded_rows_async(BrokenRows(), SimpleNamespace(context={}))
+
+    # The source error stays primary AND the masked cleanup failure rides along as
+    # a note -- the half that separates this from a plain re-raise.
+    assert any("cleanup failed" in note for note in getattr(caught.value, "__notes__", []))
+
+
+async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_error():
+    class BrokenCleanupRows:
+        def __init__(self):
+            self.value = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.value += 1
+            return self.value
+
+        async def aclose(self):
+            raise RuntimeError("cleanup failed")
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=1))
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await bounded_rows_async(BrokenCleanupRows(), info)
+
+
 # ---------------------------------------------------------------------------
 # The pre-parse text scan
 # ---------------------------------------------------------------------------
@@ -410,6 +558,10 @@ class _Probe:
     @strawberry.field
     def echo(self, text: str = "x", tags: list[str] | None = None) -> str:
         return text
+
+    @strawberry.field
+    def nested(self, tags: list[list[str]] | None = None) -> str:
+        return tags[0][0] if tags else ""
 
     @strawberry.field
     def blob(self, payload: strawberry.scalars.JSON = None) -> str:
@@ -495,6 +647,26 @@ def test_an_untyped_container_inside_a_scalar_is_still_charged():
 def test_a_scalar_where_a_list_is_declared_is_charged_as_one_item():
     """GraphQL coerces a bare value into a single-item list; the charge follows."""
     _charge("query T($t: [String!]) { echo(tags: $t) }", {"t": "solo"})
+
+
+def test_scalar_list_coercion_charges_synthetic_lists_as_input_nodes():
+    """The coerced one-item list itself counts toward the input-node budget."""
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($t: [String!]) { echo(tags: $t) }",
+            {"t": "solo"},
+            policy=ResourcePolicy(max_input_nodes=1),
+        )
+    assert caught.value.bound == "max_input_nodes"
+
+
+def test_scalar_list_coercion_charges_each_declared_list_level():
+    """A bare variable is coerced to one item at every declared list level."""
+    document = "query T($t: [[String!]]) { nested(tags: $t) }"
+    _charge(document, {"t": "solo"}, policy=ResourcePolicy(max_value_depth=2))
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(document, {"t": "solo"}, policy=ResourcePolicy(max_value_depth=1))
+    assert caught.value.bound == "max_value_depth"
 
 
 def test_a_container_referenced_twice_is_charged_per_reference():
@@ -677,6 +849,18 @@ def test_the_extension_is_appended_as_a_class_when_absent():
     assert _with_resource_policy_extension(None) == [DjangoResourcePolicyExtension]
 
 
+def test_extension_installation_does_not_call_consumer_iterable_truthiness():
+    """A stateful list subclass cannot suppress or break automatic installation."""
+
+    class _HostileTruthiness(list):
+        def __bool__(self):
+            raise RuntimeError("bool exploded")
+
+    marker = object()
+    installed = _with_resource_policy_extension(_HostileTruthiness([marker]))
+    assert installed == [marker, DjangoResourcePolicyExtension]
+
+
 def test_an_unrelated_extension_is_preserved_alongside_the_appended_one():
     marker = object()
     assert _with_resource_policy_extension([marker]) == [marker, DjangoResourcePolicyExtension]
@@ -717,6 +901,20 @@ def test_an_upload_that_cannot_report_its_size_is_rejected():
                 {"f": SimpleNamespace(size=size)},
             )
         assert caught.value.bound == "max_upload_file_bytes"
+
+
+def test_an_upload_size_descriptor_that_raises_is_rejected():
+    class BrokenUpload:
+        @property
+        def size(self):
+            raise RuntimeError("size unavailable")
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query U($f: Upload!) { stash(document: $f) }",
+            {"f": BrokenUpload()},
+        )
+    assert caught.value.bound == "max_upload_file_bytes"
 
 
 def test_a_measurable_upload_is_charged_its_bytes():

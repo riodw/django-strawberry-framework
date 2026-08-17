@@ -294,6 +294,24 @@ def test_stamp_node_type_passes_through_none_and_unstampable_objects():
     assert not hasattr(unstampable, "_dsf_node_type_hint")
 
 
+def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
+    class Model:
+        pass
+
+    class UncopyableNode(Model):
+        def __reduce_ex__(self, protocol):
+            raise TypeError("copy unavailable")
+
+    resolved_type = type(
+        "ResolvedType",
+        (),
+        {"__django_strawberry_definition__": type("Definition", (), {"model": Model})()},
+    )
+    node = UncopyableNode()
+    assert _stamp_node_type(resolved_type, node) is node
+    assert not hasattr(node, "_dsf_node_type_hint")
+
+
 @pytest.mark.django_db
 def test_typed_node_field_resolves_target():
     """``DjangoNodeField(CategoryNode)`` returns the row for a matching id."""
@@ -1022,6 +1040,84 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
     )
     assert result.errors is None
     assert result.data["nodes"] == [{"__typename": "CategoryNode", "name": target.name}]
+
+
+@pytest.mark.django_db
+def test_node_sync_with_async_consumer_resolve_node_raises_sync_misuse():
+    """Sync node refetch rejects an async consumer ``resolve_node`` explicitly."""
+    services.seed_data(1)
+
+    class AsyncCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        async def resolve_node(
+            cls,
+            node_id,
+            *,
+            info,
+            required=False,
+        ):
+            del cls, node_id, info, required
+            return None
+
+    schema = _schema_with(
+        "category",
+        AsyncCategoryNode | None,
+        DjangoNodeField(AsyncCategoryNode),
+    )
+    row = Category.objects.order_by("pk").first()
+    result = schema.execute_sync(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", row.pk)},
+    )
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "resolve_node" in str(result.errors[0])
+    assert result.data == {"category": None}
+
+
+@pytest.mark.django_db
+def test_nodes_sync_with_async_consumer_resolve_nodes_raises_sync_misuse():
+    """Sync batch refetch rejects an async consumer ``resolve_nodes`` explicitly."""
+    services.seed_data(1)
+
+    class AsyncCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        async def resolve_nodes(
+            cls,
+            *,
+            info,
+            node_ids,
+            required=False,
+        ):
+            del cls, info, required
+            return [None for _ in node_ids]
+
+    schema = _schema_with(
+        "categories",
+        list[AsyncCategoryNode | None],
+        DjangoNodesField(AsyncCategoryNode),
+    )
+    row = Category.objects.order_by("pk").first()
+    result = schema.execute_sync(
+        _CATEGORIES_QUERY,
+        variable_values={"ids": [_gid("products.category", row.pk)]},
+    )
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "resolve_nodes" in str(result.errors[0])
+    assert result.data is None
 
 
 @pytest.mark.django_db

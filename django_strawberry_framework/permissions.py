@@ -122,7 +122,12 @@ from .utils.querysets import SyncMisuseError as SyncMisuseError
 # ``.values(...)`` re-projection runs on a genuine ``QuerySet.values`` (never a
 # consumer ``_values`` override), and only the SQL-composability battery around
 # that re-projection stays cascade-local.
-from .utils.querysets import apply_type_visibility_sync, model_for, run_in_one_sync_boundary
+from .utils.querysets import (
+    _prepared_visibility_source,
+    apply_type_visibility_sync,
+    model_for,
+    run_in_one_sync_boundary,
+)
 
 _ASYNC_RECOURSE = (
     "apply_cascade_permissions walks target hooks synchronously and "
@@ -317,76 +322,79 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
     return requested
 
 
-def _structural_defect(queryset: Any, model: type[models.Model]) -> tuple[str, str] | None:
-    """Return the first structural defect in a direct root/nested queryset.
+def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
+    """Build the cascade's error renderer for the shared visibility SOURCE boundary.
 
-    Rejects the four composability-breaking root shapes -- non-``QuerySet``,
-    wrong concrete table, sliced, combined -- ahead of the walk. Hook RETURNS
-    no longer come through here: the shared visibility boundary
-    (``utils/querysets.py::_normalized_visibility_result``) owns their shape /
-    concrete-table / alias contract, and ``_validated_target_subquery`` keeps
-    only the cascade-local SQL-composability battery. This checker stays for
-    the root because ``apply_cascade_permissions`` is invoked directly from
-    inside consumer hooks, not through the boundary. Returns ``(code,
-    detail)`` -- ``code`` in ``{"type", "table", "sliced", "combined"}`` -- or
-    ``None`` when the queryset is structurally composable.
+    The twin of :func:`_edge_error_renderer`, for the other end of the helper:
+    ``apply_cascade_permissions`` seals its root through
+    ``utils/querysets.py::_prepared_visibility_source``, which owns the
+    shape / concrete-table / sealability contract but words its defaults for
+    ``apply_type_visibility``. The consumer never called that function -- they
+    called this one, from inside their own ``get_queryset`` -- so the cascade
+    keeps its own prose (and its own recourse) on every source defect.
+
+    The cascade seals with ``require_model_rows=False`` (a ``.values()`` root is
+    the cascade's supported input, exactly as it is for a hook return), which
+    also leaves the ``sliced`` rejection to :func:`_validate_root_queryset`
+    below, so the reachable codes here are ``type``, ``table``, and
+    ``untrusted``.
     """
-    if not isinstance(queryset, models.QuerySet):
-        return ("type", type(queryset).__name__)
-    if queryset.model._meta.concrete_model is not model._meta.concrete_model:
-        return ("table", queryset.model.__name__)
+
+    def _render(code: str, detail: str) -> str:
+        if code == "type":
+            return (
+                f"apply_cascade_permissions requires a QuerySet of {model.__name__} "
+                f"rows for {cls.__name__}; got {detail}. Pass the "
+                f"get_queryset hook's queryset (a Manager needs .all(); a list has "
+                f"no lazy query to compose into)."
+            )
+        if code == "table":
+            return (
+                f"apply_cascade_permissions for {cls.__name__} requires a QuerySet "
+                f"over {model.__name__}'s concrete table; got a {detail} queryset."
+            )
+        # ``code == "untrusted"`` -- the only remaining source defect reachable
+        # with no required alias and ``require_model_rows=False``; an unhandled
+        # future code would fall through silently, so this last branch is
+        # unconditional.
+        return (
+            f"apply_cascade_permissions for {cls.__name__} got a root queryset that "
+            f"cannot be sealed into a framework-owned execution queryset ({detail}); "
+            f"the cascade narrows a rebuilt queryset rather than the caller's object, "
+            f"and a foreign Query class, a foreign row iterable, or an unresolved "
+            f"deferred filter cannot be faithfully rebuilt. Pass plain query state."
+        )
+
+    return _render
+
+
+def _validate_root_queryset(cls: type, queryset: models.QuerySet) -> None:
+    """Reject a sealed root/nested ``queryset`` the cascade cannot narrow.
+
+    Runs on the SEALED source, so the shape / concrete-table / sealability
+    rejections have already been made by
+    ``utils/querysets.py::_prepared_visibility_source`` (with the cascade's
+    :func:`_root_error_renderer` prose). What is left is the pair the seal does
+    not decide for a ``require_model_rows=False`` source: sliced and combined
+    (``union()`` / ``intersection()`` / ``difference()``) roots. Both are
+    rejected up front because the walk narrows by ``.filter(...)``, which Django
+    refuses on either shape, so accepting one would leak a raw ``TypeError`` /
+    ``NotSupportedError`` mid-walk instead of the fail-closed configuration
+    error.
+    """
     if queryset.query.is_sliced:
-        return ("sliced", "")
-    if queryset.query.combinator:
-        return ("combined", queryset.query.combinator)
-    return None
-
-
-def _validate_root_queryset(cls: type, queryset: Any, model: type[models.Model]) -> None:
-    """Reject a root/nested ``queryset`` that is not this type's model rows.
-
-    The composed constraints are only sound over a real ``QuerySet`` of
-    ``cls``'s model rows: a list or ``Manager`` has no lazy query to compose
-    into, and a queryset over an unrelated model (or an MTI sibling on a
-    different concrete table) would attach the edge filters to the wrong
-    table. Proxy / concrete siblings share the concrete table and are
-    accepted. Sliced and combined (``union()`` / ``intersection()`` /
-    ``difference()``) roots are rejected up front: the walk narrows by
-    ``.filter(...)``, which Django refuses on both shapes, so accepting one
-    would leak a raw ``TypeError`` / ``NotSupportedError`` mid-walk instead of
-    the fail-closed configuration error.
-    """
-    defect = _structural_defect(queryset, model)
-    if defect is None:
-        return
-    code, detail = defect
-    if code == "type":
-        raise ConfigurationError(
-            f"apply_cascade_permissions requires a QuerySet of {model.__name__} "
-            f"rows for {cls.__name__}; got {detail}. Pass the "
-            f"get_queryset hook's queryset (a Manager needs .all(); a list has "
-            f"no lazy query to compose into).",
-        )
-    if code == "table":
-        raise ConfigurationError(
-            f"apply_cascade_permissions for {cls.__name__} requires a QuerySet "
-            f"over {model.__name__}'s concrete table; got a {detail} queryset.",
-        )
-    if code == "sliced":
         raise ConfigurationError(
             f"apply_cascade_permissions for {cls.__name__} got a sliced "
             f"queryset; the cascade narrows by .filter(...), which cannot be "
             f"applied after a slice. Cascade first, slice after.",
         )
-    # ``code == "combined"`` -- the only remaining defect the shared checker
-    # emits; an unhandled future code would fall through silently, so this
-    # last branch is unconditional.
-    raise ConfigurationError(
-        f"apply_cascade_permissions for {cls.__name__} got a {detail}() "
-        f"combined queryset; the cascade narrows by .filter(...), which Django "
-        f"does not support after a combinator. Cascade each branch before "
-        f"combining.",
-    )
+    if queryset.query.combinator:
+        raise ConfigurationError(
+            f"apply_cascade_permissions for {cls.__name__} got a "
+            f"{queryset.query.combinator}() combined queryset; the cascade narrows "
+            f"by .filter(...), which Django does not support after a combinator. "
+            f"Cascade each branch before combining.",
+        )
 
 
 def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
@@ -579,8 +587,9 @@ def apply_cascade_permissions(
 
     Raises:
         ConfigurationError: a malformed ``queryset`` (non-``QuerySet`` /
-            wrong concrete table / sliced / combined -- the walk narrows by
-            ``.filter(...)``, which supports neither); a bare-string ``fields=``
+            wrong concrete table / unsealable query state / sliced / combined --
+            the walk narrows a rebuilt queryset by ``.filter(...)``, which
+            supports neither of the last two); a bare-string ``fields=``
             or a ``fields=``
             name that is unknown, non-cascadable, or an unsupported forward
             relation; a full walk over a model carrying an unsupported forward
@@ -598,7 +607,24 @@ def apply_cascade_permissions(
             or pass ``fields=`` to skip the async-hooked edge (Decision 10).
     """
     model = model_for(cls)
-    _validate_root_queryset(cls, queryset, model)
+    # The helper is called from inside a consumer-owned ``get_queryset`` hook,
+    # so its root argument is untrusted query state even when it claims to be a
+    # ``QuerySet``. Validate and rebuild it through the shared visibility
+    # boundary before dispatching ``.filter(...)`` below: a consumer subclass
+    # (or an instance-shadowed method on an exact ``QuerySet``) must not be able
+    # to erase the cascade predicate and then pass an apparently valid but
+    # unfiltered query back to the outer hook-result seal. The cascade's own
+    # renderer keeps the source defects attributed to THIS call, and
+    # ``require_model_rows=False`` matches the cascade's hook-return contract:
+    # a ``.values()`` root is supported input, and the slice rejection stays in
+    # ``_validate_root_queryset``.
+    queryset, _required_alias = _prepared_visibility_source(
+        cls,
+        queryset,
+        render_error=_root_error_renderer(cls, model),
+        require_model_rows=False,
+    )
+    _validate_root_queryset(cls, queryset)
     names_to_walk = _validate_fields(model, fields)
     plan = _edge_plan(model)
     if names_to_walk is None and plan.unsupported:

@@ -7,7 +7,7 @@ Target release: ``0.0.7``.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterable, Callable, Iterable, Sequence
 from typing import Any
 
 import strawberry
@@ -15,17 +15,18 @@ from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
-from .resource_policy import bounded_rows, validate_collection_bound
+from .resource_policy import bounded_rows, bounded_rows_async, validate_collection_bound
 from .types import DjangoType
 from .types.base import _is_relay_shaped
 from .utils.querysets import (
+    SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
 )
-from .utils.typing import is_async_callable
+from .utils.typing import is_async_callable, is_async_generator_callable
 
 __all__ = ("DjangoListField",)
 
@@ -62,7 +63,16 @@ async def _bounded_async(
     into a crash on every type that declares a hook. Ordering the two this way is
     a correctness constraint, not a preference.
     """
-    return bounded_rows(await awaitable, info, max_rows, trusted=trusted)
+    return await bounded_rows_async(await awaitable, info, max_rows, trusted=trusted)
+
+
+def _require_async_iterable_context() -> None:
+    """Reject async-only iterable results from synchronous GraphQL execution."""
+    if not in_async_context():
+        raise SyncMisuseError(
+            "A DjangoListField resolver returned an AsyncIterable in a sync execution "
+            "context. Use `await schema.execute(...)` for async iterable resolvers.",
+        )
 
 
 def _validate_djangotype_target(
@@ -213,7 +223,23 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         wrapped = _default
     else:
         user_resolver = resolver
-        if is_async_callable(user_resolver):
+
+        async def _resolve_async_iterable(source: Any, info: Info) -> Any:
+            return await bounded_rows_async(
+                await _post_process_consumer_async(target_type, source, info),
+                info,
+                max_rows,
+                trusted=trusted_max_rows,
+            )
+
+        if is_async_generator_callable(user_resolver):
+
+            def _wrap(root: Any, info: Info) -> Any:
+                source = user_resolver(root, info)
+                _require_async_iterable_context()
+                return _resolve_async_iterable(source, info)
+
+        elif is_async_callable(user_resolver):
 
             async def _wrap(root: Any, info: Info) -> Any:
                 # ``await`` the consumer coroutine BEFORE handing
@@ -223,7 +249,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 # post-processing, so a returned ``Manager`` has already been
                 # coerced to a ``QuerySet`` and the visibility hook has already
                 # composed onto the unsliced source.
-                return bounded_rows(
+                return await bounded_rows_async(
                     await _post_process_consumer_async(
                         target_type,
                         await user_resolver(root, info),
@@ -236,8 +262,12 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         else:
 
             def _wrap(root: Any, info: Info) -> Any:
+                source = user_resolver(root, info)
+                if isinstance(source, AsyncIterable) and not isinstance(source, Iterable):
+                    _require_async_iterable_context()
+                    return _resolve_async_iterable(source, info)
                 return bounded_rows(
-                    _post_process_consumer_sync(target_type, user_resolver(root, info), info),
+                    _post_process_consumer_sync(target_type, source, info),
                     info,
                     max_rows,
                     trusted=trusted_max_rows,

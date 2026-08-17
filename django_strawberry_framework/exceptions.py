@@ -17,12 +17,31 @@ __all__ = (
 
 
 def _safe_type_name(value: object) -> str:
-    """Return ``type(value).__name__`` without trusting hostile metaclass metadata."""
-    try:
-        name = type(value).__name__
-    except BaseException:
-        return "object"
-    return name if isinstance(name, str) else "object"
+    """Return the name identifying ``value``'s kind, without trusting its metadata.
+
+    A class names itself. Reporting its metaclass instead would put ``ModelBase``
+    in front of every Django model and ``type`` in front of every plain class,
+    identifying nothing in the one diagnostic a consumer has left, so a class
+    contributes its own ``__name__`` and any other object contributes its type's.
+    A class whose own ``__name__`` is unreadable or non-string falls back to the
+    metaclass name before the ``"object"`` last resort, so the caller still gets
+    the most specific label that can be rendered safely.
+    """
+    sources = (value, type(value)) if isinstance(value, type) else (type(value),)
+    for source in sources:
+        try:
+            name = source.__name__
+        except BaseException:
+            continue
+        if not isinstance(name, str):
+            continue
+        # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
+        # that object would let its ``__str__`` / ``__format__`` run while a
+        # typed error message is being assembled, replacing the framework error
+        # with an arbitrary consumer exception.  The base ``str`` slot strips
+        # the subclass before the value reaches any f-string or join operation.
+        return str.__str__(name)
+    return "object"
 
 
 def _safe_arg_repr(value: object) -> str:

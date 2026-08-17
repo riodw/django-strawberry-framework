@@ -109,10 +109,16 @@ Per `docs/builder/BUILD.md` `### Tracked binary / generated files: churn and con
 
 ## Artifact list
 
-- `docs/builder/bld-016-r1-rationale_and_spec_reconciliation.md` — Worker 1 (procedural-closure shape: plan + final verification in one artifact)
-- `docs/builder/bld-016-r2-walker_source_reference_fix.md` — full cycle: Worker 1 plan -> Worker 2 build -> Worker 3 review -> Worker 1 final verification
-- `docs/builder/bld-016-r3-doc_completion_archive_audit.md` — Worker 1 (procedural-closure shape)
-- `docs/builder/bld-016-final.md` — Worker 1, the final test-run gate
+- `docs/builder/bld-016-r1-rationale_and_spec_reconciliation.md` — Worker 1 (procedural-closure shape: plan + final verification in one artifact). **RETIRED at closeout**, readable at `88e6a410`.
+- `docs/builder/bld-016-r2-walker_source_reference_fix.md` — full cycle: Worker 1 plan -> Worker 2 build -> Worker 3 review -> Worker 1 final verification. **RETIRED at closeout**, readable at `88e6a410`.
+- `docs/builder/bld-016-r3-doc_completion_archive_audit.md` — Worker 1 (procedural-closure shape). **RETIRED at closeout**, readable at `88e6a410`.
+- `docs/builder/bld-016-final.md` — Worker 1, the final test-run gate. **RETIRED at closeout**, readable at `88e6a410`; what it carried is audited and reproduced in `## Retained from the final gate, which is retired` below.
+
+All four artifacts are kept by name above because the names are the record of what the cycle produced.
+**This plan is the cycle's sole surviving document**, which is the same end state the spec-009 cycle
+reached. This cycle's four `docs/builder/worker-memory/spec-016-worker-*.md` scratch files were removed
+with them; the four zero-byte `worker-N.md` files in that directory belong to a concurrent session and
+were left untouched.
 
 **No `bld-integration.md` for this cycle.** R2 lands one docstring line and R1/R3 land Markdown, so there is no cross-round DRY surface for a consolidation pass to find. The integration pass's two live obligations — `docs/builder/BUILD.md` `## Cross-slice integration pass` step 1 (read every closed artifact in full) and step 6 (the staged-anchor sweep for `TODO(spec-016` / `TODO-(ALPHA|BETA|STABLE)-016`) — are folded into the final gate, which records them explicitly.
 
@@ -184,3 +190,59 @@ This is the sixth and seventh instance in this cycle of one failure shape: **a p
 through an instrument inherits that instrument's blind spot, and the number outlives the measurement.**
 Both standing rules already in the record cover it -- count occurrences rather than matching lines, and
 state the corpus and the pattern as explicit parameters of any figure.
+
+## Retained from the final gate, which is retired
+
+`docs/builder/bld-016-final.md` was retired after its content was audited item by item; it is readable
+at `88e6a410`. Everything it carried is either recorded elsewhere or reproduced below.
+
+**Both of its escalations are closed, and neither needed action.** The failing row
+`tests/test_sets_mixins.py::test_permission_facade_methods_are_single_sourced_on_the_mixin` passed on
+re-run at retirement: the concurrent session's `OrderSet._run_permission_checks` override that caused
+it is gone from `HEAD` and from the worktree, so the single-source assertion holds again. The three
+`git diff HEAD --check` whitespace errors sat in another session's `docs/review/rev-middleware*.md`
+files, which are untracked and therefore outside `git diff` entirely; `AGENTS.md` rule 22 protects
+them regardless. The gate's staging note is also spent -- the mixed index it warned about was cleared
+and this cycle's work committed by targeted path at `7e43cd10`, `88e6a410` and `6dfd9ef5`.
+
+Its `### Deferred work catalog` survives in three places rather than one: **items 1, 3, 4, 5, 6, 7 and
+9** are homed on cards 051 and 052 (above); **items 8, 10, 11 and 13** are recorded as rulings in
+`docs/SPECS/appx/spec-016-fieldmeta_consolidation-0_0_6-rationale.md`, which is a shipped document and
+the right home for them -- the deliberately-stale `DONE/build-004` citation with its executable
+re-point target, the `[backlog]` keep-ruling, the raw `path:NN` exception, and the card-body
+non-restatement with its flip condition; and **item 17** is carded on 052 as the checker's reflow
+obligation. **Item 18** is the staging note, spent. That leaves four entries with no other home:
+
+- **The `CHANGELOG.md` cluster -- six stale elements on one line, still undecided.** Cited by
+  substring per rule 27: `CHANGELOG.md` #"Consolidated field metadata onto". Each element verified at
+  exactly one occurrence: (a) the pre-renumber card id
+  `012-fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement-0.0.6` as the link **text**,
+  written by the board-graduation commit before the 2026-07-30 renumber; (b) `_record_pending_relation`,
+  deleted; (c) `resolved_relation_annotation` named as the `types/` reader, true but the canonical read
+  moved upstream; (d) `walker._walk_selections`, now `_resolve_optimizer_hints`; (e)
+  `extension.check_schema`, bare where the symbol carries its class; (f) four dotted `module.symbol`
+  forms where rule 27 requires `path/file.py::QualifiedName`. **The link target is acquitted** -- the
+  `KANBAN.md#...` anchor resolves, so only the text is stale. `AGENTS.md` rule 21 makes this a
+  maintainer decision, and the likely answer is **partial**: element (a) is true as history and matches
+  the decided-non-edit class `TODO-ALPHA-052-0.1.0` already protects for twelve similar citations.
+- **`verified_upstream` `CardItem` rows are incomplete on 82 of 96 rows across the 49 done cards**
+  (re-derived exactly at the gate). Not a defect -- a board convention. Recorded because **any future
+  "every card item is complete" invariant must exclude that section or it will fail on almost every
+  done card**, and because the convention is what turns card 16's single incomplete row from a defect
+  into an expected shape.
+- **The `docs/SPECS/NEXT.md` Step 3c reference-resolution loop resolves only package-root-relative and
+  `optimizer/`-sibling paths**, so it reports `types/`-relative shorthand such as `finalizer.py` as
+  unresolved forever. Any reuse must either add a `types/` candidate root -- all seven rows then
+  resolve -- or name the expected row explicitly, or it reads a correct file as defective every time.
+- **`scripts/review_inspect.py`'s output is structurally blind to a docstring change.** It replaces
+  every string-literal token **including docstrings** with `...`, so a clean shadow overview is not
+  evidence about a docstring diff. Proved rather than asserted:
+  `grep -c 'DUAL CONTRACT' docs/shadow/django_strawberry_framework__optimizer__walker.stripped.py` -> `0`.
+  This cycle's entire change surface was invisible to it.
+
+The gate's remaining content was its own evidence -- the AST proof that the one docstring hunk moved no
+executable statement, the V1-V11 spot re-verification, the spec-side gate results, and the board/DB
+figure re-derivations. The claims those support live in the reconciled spec and in this plan's
+verification pass; the gate-time measurements themselves (dirty counts, `HEAD` and blob hashes, staged
+path counts) were explicitly declared non-quotable by the gate itself, since they describe other
+sessions' moving work rather than this cycle's.

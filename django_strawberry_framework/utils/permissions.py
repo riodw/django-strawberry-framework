@@ -32,7 +32,7 @@ from typing import Any
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_type_name
 from .input_values import (
     LEAF,
     RELATED,
@@ -122,15 +122,24 @@ class ChannelsRequestAdapter:
         """Return the resolved Channels connection scope."""
         return self._scope
 
+    def _scope_value(self, key: str) -> Any:
+        """Read a scope value without allowing a hostile mapping to escape raw."""
+        try:
+            return Mapping.get(self._scope, key)
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"The Channels request scope could not be read while resolving its {key!r} value.",
+            ) from exc
+
     @property
     def user(self) -> Any:
         """The scope's ``user`` (``AuthMiddlewareStack``-populated); ``None`` when absent."""
-        return self._scope.get("user")
+        return self._scope_value("user")
 
     @property
     def session(self) -> Any:
         """The scope's ``session`` (``SessionMiddleware``-populated); ``None`` when absent."""
-        return self._scope.get("session")
+        return self._scope_value("session")
 
     def __getattr__(self, name: str) -> Any:
         """Delegate every non-scope attribute to the original context value."""
@@ -139,11 +148,17 @@ class ChannelsRequestAdapter:
 
 def _channels_scope(request: Any) -> Mapping[str, Any] | None:
     """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
-    consumer = getattr(request, "consumer", None)
-    scope = getattr(consumer, "scope", None)
+    try:
+        consumer = getattr(request, "consumer", None)
+        scope = getattr(consumer, "scope", None)
+    except BaseException:
+        scope = None
     if isinstance(scope, Mapping):
         return scope
-    scope = getattr(request, "scope", None)
+    try:
+        scope = getattr(request, "scope", None)
+    except BaseException:
+        scope = None
     if isinstance(scope, Mapping):
         return scope
     return None
@@ -158,7 +173,10 @@ def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     """
     if not isinstance(context, Mapping):
         return None
-    request = context.get("request")
+    try:
+        request = Mapping.get(context, "request")
+    except BaseException:
+        return None
     if request is None:
         return None
     scope = _channels_scope(request)
@@ -169,7 +187,18 @@ def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
 
 def _request_from_context(context: Any) -> Any | None:
     """Resolve every supported Django or Channels request context shape."""
-    request = getattr(context, "request", None)
+    if isinstance(context, Mapping):
+        try:
+            request = Mapping.get(context, "request")
+        except BaseException:
+            return None
+        if isinstance(request, HttpRequest):
+            return request
+        return _channels_request_adapter(context)
+    try:
+        request = getattr(context, "request", None)
+    except BaseException:
+        request = None
     if request is not None:
         return request
     if isinstance(context, HttpRequest):
@@ -183,18 +212,23 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     Canonical Strawberry-Django shape: ``info.context.request``. The
     wrapper-less alternative (``info.context`` *is* a bare ``HttpRequest`` -- the
     Django test-client default) is also accepted so consumers work without
-    bespoke wiring. Strawberry's Channels mapping context is also accepted: its
-    ``"request"`` carries the ASGI scope through ``consumer.scope`` for HTTP or
-    directly through ``scope`` for WebSockets and is wrapped in a
-    ``ChannelsRequestAdapter`` (spec-041 Decision 11). Any other shape raises
-    ``ConfigurationError`` naming ``family_label`` (``FilterSet`` / ``OrderSet``
-    / ``DjangoMutation``) so the consumer sees which surface failed. The message
-    is **family-neutral** (no ``.apply`` suffix): the helper is shared by the
-    filter / order ``apply`` seam AND the mutation ``check_permission`` seam,
-    which has no ``.apply`` method, so hard-coding ``.apply`` would mis-describe
-    the mutation caller.
+    bespoke wiring. A normal mapping context whose ``"request"`` value is a
+    Django ``HttpRequest`` is equivalent to the attribute form; this is the
+    standard direct-``Schema.execute`` context shape. Strawberry's Channels
+    mapping context is also accepted: its ``"request"`` carries the ASGI scope
+    through ``consumer.scope`` for HTTP or directly through ``scope`` for
+    WebSockets and is wrapped in a ``ChannelsRequestAdapter`` (spec-041 Decision
+    11). Any other shape raises ``ConfigurationError`` naming ``family_label``
+    (``FilterSet`` / ``OrderSet`` / ``DjangoMutation``) so the consumer sees which
+    surface failed. The message is **family-neutral** (no ``.apply`` suffix): the
+    helper is shared by the filter / order ``apply`` seam AND the mutation
+    ``check_permission`` seam, which has no ``.apply`` method, so hard-coding
+    ``.apply`` would mis-describe the mutation caller.
     """
-    context = getattr(info, "context", None)
+    try:
+        context = getattr(info, "context", None)
+    except BaseException:
+        context = None
     if context is None:
         raise ConfigurationError(
             f"{family_label} requires `info.context`; received `info` without a context.",
@@ -204,10 +238,11 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
         return request
     raise ConfigurationError(
         f"{family_label} could not resolve a Django HttpRequest from `info.context` "
-        f"(got {type(context).__name__}). Expected `info.context.request`, a bare "
-        "HttpRequest, or a Strawberry Channels mapping context whose `request` "
-        'carries an ASGI scope (`context["request"].consumer.scope` for the HTTP '
-        'consumer, `context["request"].scope` for the WebSocket consumer).',
+        f"(got {_safe_type_name(context)}). Expected `info.context.request`, a bare "
+        "HttpRequest, a mapping whose `request` is an HttpRequest, or a Strawberry "
+        "Channels mapping context whose `request` carries an ASGI scope "
+        '(`context["request"].consumer.scope` for the HTTP consumer, '
+        '`context["request"].scope` for the WebSocket consumer).',
     )
 
 
@@ -264,7 +299,14 @@ def auth_aliases_for_permission_classes(permission_classes: Any) -> frozenset[st
     ``resolve_auth_aliases`` prevents model, delete, and plain-form pipelines
     from spelling the policy independently.
     """
-    return resolve_auth_aliases() if permission_classes else frozenset()
+    try:
+        enabled = bool(permission_classes)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "Permission classes could not be inspected to determine whether authorization "
+            "is enabled.",
+        ) from exc
+    return resolve_auth_aliases() if enabled else frozenset()
 
 
 def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: Any = None) -> Any:
@@ -527,41 +569,53 @@ def _fire_flat_relation_path_gates(
 
     Hops are resolved against each set's declared related collection
     (``related_filters`` / ``related_orders``) by matching a related object's
-    ``field_name`` -- the ORM accessor, NOT its public attribute name -- so a
+    ``field_name`` -- the ORM accessor, NOT the public attribute name -- so a
     renamed branch (``visible_shelves = RelatedFilter(ShelfFilter,
-    field_name="shelves")``) still resolves; the branch gate fired is keyed on the
-    PUBLIC attr so it matches the gate the nested form fires. If any relation hop
-    has no matching declared related object, the walk stops without firing target
-    gates: the owner's flat-path gate stays the authorization point and no target
-    set is guessed. Dedup rides the shared per-class ``fired`` map, so a flat leaf
-    and its nested twin fire each gate at most once per request.
+    field_name="shelves")``) still resolves. Composite declarations whose
+    ``field_name`` spans multiple ORM hops (``target_version__milestone``)
+    are matched as one prefix, taking precedence over a shorter overlapping
+    declaration (``target_version``), so the flat and nested spellings reach
+    the same target gate. The branch gate fired is keyed on the PUBLIC attr so
+    it matches the gate the nested form fires. If any relation hop has no
+    matching declared related object, the walk stops without firing target
+    gates: the owner's flat-path gate stays the authorization point and no
+    target set is guessed. Dedup rides the shared per-class ``fired`` map, so a
+    flat leaf and its nested twin fire each gate at most once per request.
     """
     hops = source_path.split(LOOKUP_SEP)
     if len(hops) < 2:
         # Not a relation traversal -- the owner's own field gate is authoritative.
         return
     current_cls = owning_cls
-    last_index = len(hops) - 1
-    for index, hop in enumerate(hops):
-        if index == last_index:
-            # Terminal scalar field on the deepest resolved target set -- fire its
-            # field gate (the gate the nested form's child recursion fires).
-            _fire_gate_on_class(current_cls, hop, request, fired=fired)
-            return
-        related = getattr(current_cls, related_attr, {}) or {}
-        match = next(
-            (
-                (declared_attr, related_obj)
-                for declared_attr, related_obj in related.items()
-                if getattr(related_obj, "field_name", None) == hop
-            ),
-            None,
-        )
-        if match is None:
+    terminal_index = len(hops) - 1
+    index = 0
+    while index < terminal_index:
+        related = _related_declarations(current_cls, related_attr)
+        matches: list[tuple[int, Any, Any]] = []
+        for declared_attr, related_obj in related:
+            try:
+                field_name = getattr(related_obj, "field_name", None)
+            except BaseException as exc:
+                raise ConfigurationError(
+                    f"{_safe_type_name(current_cls)} declares an unreadable related "
+                    f"permission branch under {related_attr!r}.",
+                ) from exc
+            if not isinstance(field_name, str):
+                continue
+            field_hops = field_name.split(LOOKUP_SEP)
+            if hops[index : index + len(field_hops)] == field_hops:
+                matches.append((len(field_hops), declared_attr, related_obj))
+        if not matches:
             # No declared RelatedFilter/RelatedOrder for this hop -- do not guess a
             # target set; the owner's flat-path gate (fired by the caller) stands.
             return
-        declared_attr, related_obj = match
+        # A declaration may represent a multi-hop ORM path (for example,
+        # ``milestone`` mapped to ``target_version__milestone``) while a sibling
+        # declaration represents only its first hop (``target_version``). Follow
+        # the longest matching declaration so the flat spelling reaches the same
+        # branch and target permission gates as the nested declaration, rather than
+        # descending through the unrelated shorter branch and silently stopping.
+        consumed, declared_attr, related_obj = max(matches, key=lambda match: match[0])
         # Parent relation branch gate on the current set, keyed on the PUBLIC attr
         # so it matches the ``check_<branch>_permission`` the nested form fires.
         _fire_gate_on_class(current_cls, declared_attr, request, fired=fired)
@@ -569,6 +623,37 @@ def _fire_flat_relation_path_gates(
         if child_set is None:
             return
         current_cls = child_set
+        index += consumed
+    if index == terminal_index:
+        # Terminal scalar field on the deepest resolved target set -- fire its
+        # field gate (the gate the nested form's child recursion fires).
+        _fire_gate_on_class(current_cls, hops[terminal_index], request, fired=fired)
+
+
+def _related_declarations(cls: type, related_attr: str) -> tuple[tuple[Any, Any], ...]:
+    """Read a set's related declarations without trusting mapping overrides."""
+    try:
+        related = getattr(cls, related_attr, None)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{_safe_type_name(cls)} related permission declarations under "
+            f"{related_attr!r} could not be read.",
+        ) from exc
+    if related is None:
+        return ()
+    if not isinstance(related, Mapping):
+        raise ConfigurationError(
+            f"{_safe_type_name(cls)} related permission declarations under "
+            f"{related_attr!r} must be a mapping; got {_safe_type_name(related)}.",
+        )
+    try:
+        items = dict.items(related) if isinstance(related, dict) else related.items()
+        return tuple(items)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{_safe_type_name(cls)} related permission declarations under "
+            f"{related_attr!r} could not be read.",
+        ) from exc
 
 
 def run_active_input_permission_checks(
@@ -645,7 +730,12 @@ def run_active_input_permission_checks(
             next_depth = depth + 1
             cap = getattr(child_set, "_MAX_LOGIC_DEPTH", _MAX_RELATED_RECURSION_DEPTH)
             if next_depth > cap:
-                label = getattr(child_set, "__qualname__", repr(child_set))
+                try:
+                    label = getattr(child_set, "__qualname__", None)
+                except BaseException:
+                    label = None
+                if not isinstance(label, str):
+                    label = _safe_type_name(child_set)
                 raise ConfigurationError(
                     f"{label}: related-branch nesting exceeded the maximum traversal "
                     f"depth ({cap}). Flatten the related input or split into multiple "

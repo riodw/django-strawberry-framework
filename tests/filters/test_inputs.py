@@ -19,7 +19,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
-from django_filters import BooleanFilter
+from django_filters import BooleanFilter, CharFilter, ChoiceFilter
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType
@@ -47,6 +47,7 @@ from django_strawberry_framework.filters.inputs import (
     _iter_filterset_subclasses,
     _model_field_for_filter,
     _pascal_case,
+    _safe_repr,
     _scalar_from_form_field,
     _scalar_from_model_field,
     build_input_class,
@@ -302,6 +303,56 @@ def test_build_input_fields_handles_field_name_in_lookup_name_map():
     assert "branch" not in by_attr
 
 
+def test_declared_filter_name_ending_in_lookup_keeps_its_form_key():
+    """A declared ``name__exact`` filter must not collapse onto the ``name`` field.
+
+    The declaration name is the django-filter form key. If grouping treats its
+    final ``exact`` token as an auto-generated lookup, input generation emits a
+    ``name`` bag and normalization writes ``name``; the bound form only reads
+    ``name__exact`` and silently drops the supplied predicate.
+    """
+
+    class DeclaredLookupNameFilter(FilterSet):
+        name__exact = CharFilter(field_name="name", lookup_expr="exact")
+
+        class Meta:
+            model = Category
+            fields = []
+
+    triples = _build_input_fields(DeclaredLookupNameFilter)
+    by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
+    assert "name_exact" in by_attr
+    assert "name" not in by_attr
+    assert _field_specs[(DeclaredLookupNameFilter, "name_exact")].django_source_path == (
+        "name__exact"
+    )
+    assert DeclaredLookupNameFilter._normalize_input(
+        {"name_exact": {"exact": "alpha"}},
+    ) == {"name__exact": "alpha"}
+
+
+def test_declared_non_exact_filter_keeps_its_form_key():
+    """A declared non-``exact`` filter must not gain a generated lookup suffix.
+
+    django-filter registers a class-body declaration under its attribute name
+    (``custom``), even when ``lookup_expr="icontains"``. Emitting
+    ``custom__icontains`` in ``data`` is an unknown form key, so the form drops
+    the value and the declared filter silently applies nothing.
+    """
+
+    class DeclaredContainsFilter(FilterSet):
+        custom = CharFilter(field_name="name", lookup_expr="icontains")
+
+        class Meta:
+            model = Category
+            fields = []
+
+    _build_input_fields(DeclaredContainsFilter)
+    assert DeclaredContainsFilter._normalize_input(
+        {"custom": {"i_contains": "alpha"}},
+    ) == {"custom": "alpha"}
+
+
 # ---------------------------------------------------------------------------
 # convert_filter_to_input_annotation
 # ---------------------------------------------------------------------------
@@ -339,8 +390,6 @@ def test_convert_filter_to_input_annotation_handles_list_filter():
 def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_pipeline():
     """`ChoiceFilter` reaches into ``convert_choices_to_enum`` via the model field."""
     # ``Book.circulation_status`` is a TextChoices field on the example model.
-    from django_filters import ChoiceFilter
-
     f = ChoiceFilter()
     model_field = library_models.Book._meta.get_field("circulation_status")
     annotation = convert_filter_to_input_annotation(f, model_field)
@@ -352,8 +401,6 @@ def test_convert_filter_to_input_annotation_handles_choice_filter_via_converter_
 
 
 def test_convert_filter_to_input_annotation_rejects_non_choices_derived_enum():
-    from django_filters import ChoiceFilter
-
     f = ChoiceFilter()
     model_field = models.CharField()  # No `choices` attribute set.
     with pytest.raises(ConfigurationError):
@@ -386,18 +433,40 @@ def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
         convert_filter_to_input_annotation(f, None)
 
 
+def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
+    """Malformed filters with raising ``__repr__`` still raise ConfigurationError."""
+
+    class BadRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    class NoFieldFilter:
+        extra = {}
+        method = BadRepr()
+        field = None
+        lookup_expr = "exact"
+
+    with pytest.raises(ConfigurationError, match="unprintable"):
+        convert_filter_to_input_annotation(NoFieldFilter(), None)
+
+    class BadChoiceFilter(ChoiceFilter):
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    # A model field with no ``choices`` is what drives the ChoiceFilter branch to
+    # its rejection, which is the diagnostic under test.
+    with pytest.raises(ConfigurationError, match="unprintable"):
+        convert_filter_to_input_annotation(BadChoiceFilter(), models.CharField())
+
+
 def test_convert_filter_to_input_annotation_wraps_nullable():
     """``extra['required']=False`` (the default) wraps the annotation in `T | None`."""
-    from django_filters import CharFilter
-
     f = CharFilter()
     annotation = convert_filter_to_input_annotation(f, models.CharField())
     assert annotation == str | None
 
 
 def test_convert_filter_to_input_annotation_does_not_wrap_required():
-    from django_filters import CharFilter
-
     f = CharFilter(required=True)
     annotation = convert_filter_to_input_annotation(f, models.CharField())
     # Required filters return the scalar without the `| None` wrap.
@@ -437,8 +506,6 @@ def test_normalize_input_value_unwraps_enum_member():
         RED = "red"
         BLUE = "blue"
 
-    from django_filters import ChoiceFilter
-
     f = ChoiceFilter()
     assert normalize_input_value(f, Color.RED) == "red"
 
@@ -453,8 +520,6 @@ def test_normalize_input_value_unwraps_enum_member_with_none_value():
     class Tri(Enum):
         YES = "yes"
         UNKNOWN = None
-
-    from django_filters import ChoiceFilter
 
     assert normalize_input_value(ChoiceFilter(), Tri.UNKNOWN) is None
 
@@ -664,6 +729,44 @@ def test_filter_input_type_rejects_non_filterset():
 
     with pytest.raises(TypeError):
         filter_input_type(None)
+
+
+# ---------------------------------------------------------------------------
+# _safe_repr - diagnostic rendering of a hostile value
+# ---------------------------------------------------------------------------
+
+
+def test_filter_diagnostic_repr_falls_back_for_hostile_values_and_type_metadata():
+    """A diagnostic message can never be blocked or corrupted by the value it names.
+
+    Both fallback rungs return the same sentinel: a ``__repr__`` that raises drops
+    to the type name, and a ``__name__`` that is unavailable OR is not a string
+    drops further to the literal ``"object"``.
+    """
+
+    class _HostileNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                raise RuntimeError("name unavailable")
+            return super().__getattribute__(name)
+
+    class _HostileValue(metaclass=_HostileNameMeta):
+        def __repr__(self) -> str:
+            raise RuntimeError("repr unavailable")
+
+    assert _safe_repr(_HostileValue()) == "<unprintable object>"
+
+    class _NonStringNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                return 42
+            return super().__getattribute__(name)
+
+    class _NonStringName(metaclass=_NonStringNameMeta):
+        def __repr__(self) -> str:
+            raise RuntimeError("repr unavailable")
+
+    assert _safe_repr(_NonStringName()) == "<unprintable object>"
 
 
 # ---------------------------------------------------------------------------
@@ -1203,8 +1306,6 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
     the type-name stem must preserve the same digit boundary.
     """
     import re
-
-    from django_filters import CharFilter
 
     class DigitBoundaryFilter(FilterSet):
         field_2 = CharFilter(field_name="name", lookup_expr="exact")

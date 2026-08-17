@@ -9,13 +9,20 @@ two families distinct; the deep behavioral coverage (dedup, double-dispatch,
 logic recursion, list aggregation) lives in the family ``test_sets`` suites.
 """
 
+from collections.abc import Mapping
+
 import pytest
 import strawberry
 from django.http import HttpRequest
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.permissions import (
+    ChannelsRequestAdapter,
+    _channels_request_adapter,
+    _channels_scope,
     _fire_flat_relation_path_gates,
+    _related_declarations,
+    _request_from_context,
     active_permission_field_paths,
     active_related_branches,
     auth_aliases_for_permission_classes,
@@ -39,13 +46,16 @@ class _Ctx:
 
 @pytest.mark.parametrize("family_label", ["FilterSet", "OrderSet"])
 def test_request_from_info_resolves_and_names_family(family_label):
-    """``info.context.request`` and bare-HttpRequest both resolve; bad shapes name the family."""
+    """Every ordinary Django request context resolves; bad shapes name the family."""
     request = HttpRequest()
     info_with_request = type("Info", (), {"context": _Ctx(request)})()
     assert request_from_info(info_with_request, family_label=family_label) is request
 
     info_bare = type("Info", (), {"context": request})()
     assert request_from_info(info_bare, family_label=family_label) is request
+
+    info_mapping = type("Info", (), {"context": {"request": request}})()
+    assert request_from_info(info_mapping, family_label=family_label) is request
 
     info_no_ctx = type("Info", (), {"context": None})()
     with pytest.raises(ConfigurationError, match=f"{family_label} requires"):
@@ -202,6 +212,98 @@ def test_non_mapping_websocket_scope_is_not_recognized_as_channels():
     info = _channels_ws_info(["not", "a", "mapping"])
     with pytest.raises(ConfigurationError, match="OrderSet could not resolve"):
         request_from_info(info, family_label="OrderSet")
+
+
+def test_hostile_channels_scope_descriptors_become_configuration_errors():
+    """A malformed Channels request cannot leak a raw scope-descriptor exception."""
+
+    class _HostileConsumer:
+        @property
+        def scope(self):
+            raise RuntimeError("scope descriptor exploded")
+
+    class _HostileRequest:
+        consumer = _HostileConsumer()
+
+    info = type("Info", (), {"context": {"request": _HostileRequest()}})()
+    with pytest.raises(ConfigurationError, match="FilterSet could not resolve"):
+        request_from_info(info, family_label="FilterSet")
+
+
+def test_hostile_direct_scope_and_context_mapping_reads_fail_closed():
+    """A scope or context read that explodes yields no request rather than escaping."""
+
+    class _HostileDirectScope:
+        consumer = None
+
+        @property
+        def scope(self):
+            raise RuntimeError("direct scope exploded")
+
+    class _HostileContext(dict):
+        def __getitem__(self, key):
+            raise RuntimeError("context mapping exploded")
+
+    context = _HostileContext(request=object())
+
+    assert _channels_scope(_HostileDirectScope()) is None
+    assert _channels_request_adapter(context) is None
+    assert _request_from_context(context) is None
+
+
+def test_hostile_attribute_context_request_read_fails_closed():
+    """A context whose ``request`` descriptor raises resolves to no request."""
+
+    class _HostileContext:
+        @property
+        def request(self):
+            raise RuntimeError("request descriptor exploded")
+
+    assert _request_from_context(_HostileContext()) is None
+
+
+def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read():
+    """A scope mapping that fails during lookup is typed at the adapter boundary."""
+
+    class _HostileScope(dict):
+        def __getitem__(self, key):
+            raise RuntimeError("scope mapping exploded")
+
+    adapter = ChannelsRequestAdapter(object(), _HostileScope())
+    with pytest.raises(ConfigurationError, match="Channels request scope"):
+        _ = adapter.user
+
+
+def test_mapping_request_must_be_a_django_request_or_channels_context():
+    """A mapping's arbitrary ``request`` value must not bypass request validation."""
+
+    class _Context(dict):
+        pass
+
+    info = type("Info", (), {"context": _Context(request=object())})()
+    with pytest.raises(ConfigurationError, match="OrderSet could not resolve"):
+        request_from_info(info, family_label="OrderSet")
+
+
+def test_request_like_attribute_context_remains_supported():
+    """Non-mapping wrappers may carry the request-like object used by mutation hooks."""
+
+    request = object()
+    context = type("Context", (), {"request": request})()
+    info = type("Info", (), {"context": context})()
+    assert request_from_info(info, family_label="DjangoMutation") is request
+
+
+def test_hostile_info_context_descriptor_becomes_configuration_error():
+    """A broken ``info.context`` descriptor still follows the typed error boundary."""
+
+    class _Info:
+        @property
+        def context(self):
+            raise RuntimeError("context descriptor exploded")
+
+    with pytest.raises(ConfigurationError, match="FilterSet requires"):
+        request_from_info(_Info(), family_label="FilterSet")
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +494,49 @@ def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name()
     assert calls == ["Book.visible_shelves", "Shelf.code"]
 
 
+def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
+    """A multi-hop RelatedFilter branch wins over a shorter overlapping branch.
+
+    ``milestone`` can be declared over ``target_version__milestone`` while a
+    separate ``target_version`` branch also exists. A flat
+    ``target_version__milestone__key`` leaf must gate the declared composite
+    branch and its target, not descend through the shorter branch and stop
+    before the target permission hook.
+    """
+    calls: list[str] = []
+
+    class Milestone:
+        check_key_permission = _record_gate(calls, "Milestone.key")
+
+    class TargetVersion:
+        related_filters: dict = {}
+
+    class Card:
+        related_filters = {
+            "milestone": _Rel(
+                "target_version__milestone",
+                Milestone,
+                target_attr="filterset",
+            ),
+            "target_version": _Rel(
+                "target_version",
+                TargetVersion,
+                target_attr="filterset",
+            ),
+        }
+        check_milestone_permission = _record_gate(calls, "Card.milestone")
+
+    _fire_flat_relation_path_gates(
+        Card,
+        "target_version__milestone__key",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    assert calls == ["Card.milestone", "Milestone.key"]
+
+
 def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
     """A relation hop with no declared RelatedFilter stops the walk (no guessing)."""
     calls: list[str] = []
@@ -520,6 +665,87 @@ def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
     # The owner's own field gate is fired by the caller's normal leaf loop, not
     # by the relation-chain walk.
     assert calls == []
+
+
+def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_string_names():
+    """An unreadable branch name raises; a non-string one matches no hop and fires no gate."""
+
+    class _UnreadableRelation:
+        @property
+        def field_name(self):
+            raise RuntimeError("field name exploded")
+
+    class _UnreadableSet:
+        related_filters = {"category": _UnreadableRelation()}
+
+    with pytest.raises(ConfigurationError, match="unreadable related permission branch"):
+        _fire_flat_relation_path_gates(
+            _UnreadableSet,
+            "category__name",
+            HttpRequest(),
+            fired={},
+            related_attr="related_filters",
+            target_attr="filterset",
+        )
+
+    calls: list[str] = []
+
+    class _NonStringSet:
+        related_filters = {"category": _Rel(123, object(), target_attr="filterset")}
+        check_category_permission = _record_gate(calls, "_NonStringSet.category")
+
+    _fire_flat_relation_path_gates(
+        _NonStringSet,
+        "category__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+
+    assert calls == []
+
+
+def test_related_permission_declarations_fail_closed_for_malformed_metadata():
+    """Only a readable mapping declares related branches; absent means none, malformed raises."""
+
+    class _HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "related_filters":
+                raise RuntimeError("related descriptor exploded")
+            return super().__getattribute__(name)
+
+    class _UnreadableSet(metaclass=_HostileMeta):
+        pass
+
+    class _NoneSet:
+        related_filters = None
+
+    class _InvalidSet:
+        related_filters = []
+
+    class _UnreadableMapping(Mapping):
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
+
+        def items(self):
+            raise RuntimeError("items exploded")
+
+    mapping_set = type("MappingSet", (), {"related_filters": _UnreadableMapping()})
+
+    with pytest.raises(ConfigurationError, match="could not be read"):
+        _related_declarations(_UnreadableSet, "related_filters")
+    assert _related_declarations(_NoneSet, "related_filters") == ()
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        _related_declarations(_InvalidSet, "related_filters")
+    with pytest.raises(ConfigurationError, match="could not be read"):
+        _related_declarations(mapping_set, "related_filters")
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +916,59 @@ def test_auth_aliases_for_permission_classes_gates_alias_resolution(monkeypatch)
     assert calls == []
     assert auth_aliases_for_permission_classes([object()]) == frozenset({"auth"})
     assert calls == [None]
+
+
+def test_auth_alias_gate_rejects_unreadable_permission_collection_truthiness():
+    """A permission collection that cannot be tested for emptiness is a configuration error."""
+
+    class _UnreadablePermissions:
+        def __bool__(self):
+            raise RuntimeError("permission truthiness exploded")
+
+    with pytest.raises(ConfigurationError, match="could not be inspected"):
+        auth_aliases_for_permission_classes(_UnreadablePermissions())
+
+
+def test_related_depth_error_survives_hostile_child_qualname():
+    """The depth-limit error is raised even when the child set's own name cannot be read."""
+
+    class _HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__qualname__":
+                raise RuntimeError("qualname exploded")
+            return super().__getattribute__(name)
+
+    class _Child(metaclass=_HostileMeta):
+        _MAX_LOGIC_DEPTH = 0
+
+        @classmethod
+        def _run_permission_checks(
+            cls,
+            input_value,
+            request,
+            *,
+            _fired,
+            _depth,
+        ):
+            raise AssertionError("depth gate should fire before recursion")
+
+    related = type("Related", (), {"child_set": _Child})()
+
+    class _Parent:
+        @classmethod
+        def _active_permission_targets(cls, input_value):
+            return [], [("child", related, input_value)]
+
+    with pytest.raises(ConfigurationError, match="nesting exceeded"):
+        run_active_input_permission_checks(
+            _Parent,
+            {"child": {}},
+            HttpRequest(),
+            fired={},
+            bare=object(),
+            target_attr="child_set",
+            related_attr="related",
+        )
 
 
 @pytest.mark.django_db

@@ -232,6 +232,35 @@ def test_filter_cards_by_status_key_via_related_filter():
 
 
 @pytest.mark.django_db
+def test_flat_composite_milestone_filter_fires_target_permission_gate(monkeypatch):
+    """A flat composite relation path cannot bypass the target filter gate.
+
+    ``CardFilter.milestone`` maps the one GraphQL branch onto the composite ORM
+    path ``target_version__milestone``. Its generated ``milestoneKey`` flat
+    sibling must fire ``MilestoneFilter.check_key_permission`` just like the
+    nested ``milestone: { key: ... }`` form.
+    """
+    _seed_board()
+    from apps.kanban.filters import MilestoneFilter
+    from graphql import GraphQLError
+
+    def deny_key(self, request):
+        raise GraphQLError("milestone key denied")
+
+    # ``raising=False``: the gate is an opt-in hook the fixture filter does not
+    # declare, so the undo has to be a delete rather than a restore.
+    monkeypatch.setattr(MilestoneFilter, "check_key_permission", deny_key, raising=False)
+    response = post_graphql(
+        'query { allCards(filter: { milestoneKey: { exact: "alpha" } }) { title } }',
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "milestone key denied" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
 def test_filter_cards_by_own_pk_relay_global_id_in():
     """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs."""
     seed = _seed_board()

@@ -20,7 +20,9 @@ them on the family module. Set-family Decision-9 ledgers ride
 ``make_set_input_namespace`` (heavy clear); write flavors ride
 ``make_input_namespace`` (light clear). Layer-6 dynamic-set caches ride
 ``make_dynamic_set_getter`` (hashing / normalize / ``type(...)`` skeleton);
-each family keeps its own cache dict and base class.
+each family keeps its own cache dict and base class. The ``filter_fields``
+synonym ``FilterSetMetaclass`` and the filter factory share is
+``resolve_set_meta_fields`` -- class Meta and kwargs dicts apply one rule.
 
 This module depends on neither family package, so both can import it without a
 cycle (same contract as ``utils/connections.py``).
@@ -510,6 +512,55 @@ def make_hashable_meta_value(v: Any) -> Any:
     return v
 
 
+FILTERSET_FIELDS_ALIAS = "filter_fields"
+
+
+def _set_meta_has(source: Any, key: str) -> bool:
+    """Return whether a Meta class or kwargs mapping carries ``key``.
+
+    Mappings use own-key membership (Layer-6 factory kwargs). Anything else
+    uses ``hasattr`` so inherited Meta attributes count -- the
+    ``FilterSetMetaclass`` contract. Switching the class path to ``__dict__``
+    would promote ``filter_fields`` onto a subclass Meta that inherits
+    ``fields``, which is shipped behavior this helper must not change.
+    """
+    if isinstance(source, dict):
+        return key in source
+    return hasattr(source, key)
+
+
+def _set_meta_get(source: Any, key: str) -> Any:
+    """Read ``key`` from a Meta class or kwargs mapping."""
+    if isinstance(source, dict):
+        return source[key]
+    return getattr(source, key)
+
+
+def resolve_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> tuple[Any, bool]:
+    """Return ``(fields_value, from_alias)`` under the set-family synonym rule.
+
+    ``fields`` wins when present. Otherwise ``fields_alias``
+    (``FILTERSET_FIELDS_ALIAS`` / ``filter_fields`` on FilterSet; ``None`` on
+    OrderSet) is the cookbook / graphene-django synonym. ``from_alias`` is True
+    only when the caller should populate ``fields`` from the synonym.
+
+    This is the one fingerprint ``FilterSetMetaclass`` (class Meta) and
+    ``normalize_set_meta_for_factory`` (kwargs dict) both apply so a
+    ``filter_fields=`` declaration cannot mean one thing at class creation and
+    another in the Layer-6 cache key. Write-backs stay at the call sites: the
+    metaclass copies onto ``Meta.fields`` and leaves the consumer's alias
+    attribute in place; the factory DROPS the alias from the dict so it cannot
+    split a cache slot via extras.
+    """
+    if source is None:
+        return None, False
+    if _set_meta_has(source, "fields"):
+        return _set_meta_get(source, "fields"), False
+    if fields_alias is not None and _set_meta_has(source, fields_alias):
+        return _set_meta_get(source, fields_alias), True
+    return None, False
+
+
 def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
     """Build a hashable ``(model, fields_key, extra)`` cache key from Meta kwargs.
 
@@ -570,10 +621,10 @@ def normalize_set_meta_for_factory(
     ``<Model>Auto*`` classes that are the same declaration arrived via different
     surface shapes:
 
-    - ``fields_alias`` (``filter_fields`` on the filter side; ``None`` on
-      orders) is the metaclass synonym for ``fields``; promote it (or drop it
-      when ``fields`` is already present) so the alias is not an extras
-      discriminator.
+    - ``fields_alias`` (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
+      on orders) is the metaclass synonym for ``fields``. Promotion is
+      ``resolve_set_meta_fields``; this helper then drops the alias so it is
+      not an extras discriminator.
     - Top-level ``set`` / ``frozenset`` ``fields`` (and set-valued lookup bags
       under a dict-shaped ``fields``) are unordered; canonicalize them to
       ``repr``-sorted lists so cache keys and generated field order are stable
@@ -594,13 +645,13 @@ def normalize_set_meta_for_factory(
         raise ConfigurationError(
             "Generated set metadata entries could not be read.",
         ) from exc
-    if fields_alias is not None and fields_alias in safe_meta:
-        if "fields" not in safe_meta:
-            safe_meta["fields"] = safe_meta.pop(fields_alias)
-        else:
-            # ``fields`` wins (metaclass alias rule); drop the synonym so it
-            # cannot split an otherwise-identical cache slot via extras.
-            safe_meta.pop(fields_alias)
+    fields, from_alias = resolve_set_meta_fields(safe_meta, fields_alias=fields_alias)
+    if from_alias:
+        safe_meta["fields"] = fields
+    if fields_alias is not None:
+        # ``fields`` wins (metaclass alias rule); drop the synonym so it
+        # cannot split an otherwise-identical cache slot via extras.
+        safe_meta.pop(fields_alias, None)
     fields = safe_meta.get("fields")
     if isinstance(fields, (set, frozenset)):
         safe_meta["fields"] = _sorted_meta_values(fields)
@@ -676,8 +727,8 @@ def make_dynamic_set_getter(
     Filter and order factories keep disjoint caches and base classes; this
     single-sites the lookup / normalize / key / ``type(...)`` skeleton so a
     cache-key fix cannot drift between families. ``fields_alias`` is the
-    metaclass synonym (``filter_fields`` on the filter side; ``None`` on
-    orders, which has no synonym).
+    metaclass synonym (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
+    on orders, which has no synonym) resolved by ``resolve_set_meta_fields``.
     """
 
     def get_set_class(explicit: type | None, **meta: Any) -> type:

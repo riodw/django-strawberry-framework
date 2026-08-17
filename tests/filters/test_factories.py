@@ -571,6 +571,23 @@ def test_get_filterset_class_collapses_filter_fields_alias():
 
 
 @pytest.mark.django_db
+def test_filter_fields_alias_agrees_on_class_meta_and_factory_kwargs():
+    """Declared FilterSet Meta and Layer-6 kwargs resolve to the same fields."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            filter_fields = {"name": ["exact"]}
+
+    generated = get_filterset_class(
+        None,
+        model=Category,
+        filter_fields={"name": ["exact"]},
+    )
+    assert CategoryFilter._meta.fields == generated._meta.fields == {"name": ["exact"]}
+
+
+@pytest.mark.django_db
 def test_get_filterset_class_collapses_set_and_frozenset_fields():
     """Top-level set/frozenset Meta.fields must share a canonical cache slot.
 

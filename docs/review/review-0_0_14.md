@@ -211,20 +211,20 @@ top-level `_boundary_ordering.py`, `_request_body.py`, `consumers.py`, `error_po
     - [ ] `django_strawberry_framework/mutations/sets.py` -> `docs/review/rev-mutations__sets.md`
     - [ ] folder pass: `django_strawberry_framework/mutations/` -> `docs/review/rev-mutations.md`
   - `django_strawberry_framework/optimizer/`
-    - [ ] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
-    - [ ] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
-    - [ ] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
-    - [ ] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
-    - [ ] `django_strawberry_framework/optimizer/join_taxonomy.py` -> `docs/review/rev-optimizer__join_taxonomy.md`
-    - [ ] `django_strawberry_framework/optimizer/lateral_fetch.py` -> `docs/review/rev-optimizer__lateral_fetch.md`
-    - [ ] `django_strawberry_framework/optimizer/nested_fetch.py` -> `docs/review/rev-optimizer__nested_fetch.md`
-    - [ ] `django_strawberry_framework/optimizer/nested_planner.py` -> `docs/review/rev-optimizer__nested_planner.md`
-    - [ ] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
-    - [ ] `django_strawberry_framework/optimizer/predicates.py` -> `docs/review/rev-optimizer__predicates.md`
-    - [ ] `django_strawberry_framework/optimizer/selections.py` -> `docs/review/rev-optimizer__selections.md`
-    - [ ] `django_strawberry_framework/optimizer/single_parent_fetch.py` -> `docs/review/rev-optimizer__single_parent_fetch.md`
-    - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
-    - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
+    - [x] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
+    - [x] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
+    - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
+    - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
+    - [x] `django_strawberry_framework/optimizer/join_taxonomy.py` -> `docs/review/rev-optimizer__join_taxonomy.md`
+    - [x] `django_strawberry_framework/optimizer/lateral_fetch.py` -> `docs/review/rev-optimizer__lateral_fetch.md`
+    - [x] `django_strawberry_framework/optimizer/nested_fetch.py` -> `docs/review/rev-optimizer__nested_fetch.md`
+    - [x] `django_strawberry_framework/optimizer/nested_planner.py` -> `docs/review/rev-optimizer__nested_planner.md`
+    - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
+    - [x] `django_strawberry_framework/optimizer/predicates.py` -> `docs/review/rev-optimizer__predicates.md`
+    - [x] `django_strawberry_framework/optimizer/selections.py` -> `docs/review/rev-optimizer__selections.md`
+    - [x] `django_strawberry_framework/optimizer/single_parent_fetch.py` -> `docs/review/rev-optimizer__single_parent_fetch.md`
+    - [x] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+    - [x] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - `django_strawberry_framework/orders/`
     - [ ] `django_strawberry_framework/orders/base.py` -> `docs/review/rev-orders__base.md`
     - [ ] `django_strawberry_framework/orders/factories.py` -> `docs/review/rev-orders__factories.md`

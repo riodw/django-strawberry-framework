@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from django.db import models
 
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
+
+_GRAPHQL_NAME_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
 
 
 @dataclass
@@ -82,7 +86,8 @@ class DjangoTypeDefinition:
           the ``finalize_django_types()`` Phase-2.5 relation-as-Connection
           synthesis (``types/finalizer.py::_synthesize_relation_connections``)
           to resolve each eligible many-side relation's shape (absent keys
-          default to ``"both"``).
+          default to ``DEFAULT_RELATION_SHAPE`` from ``types/base.py``,
+          currently ``"connection"`` per spec-047 Decision 5).
         - ``relation_connections`` maps each synthesized relation
           connection's GENERATED Python attribute name to the UNDERLYING
           relation field name (``{"books_connection": "books"}``). Written
@@ -217,7 +222,29 @@ class DjangoTypeDefinition:
         ``finalizer.py``, ``filters/base.py``, and ``filters/inputs.py``
         which would silently diverge across renames.
         """
-        return self.name if self.name is not None else self.origin.__name__
+        try:
+            name = self.name if self.name is not None else self.origin.__name__
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"Could not inspect the GraphQL type name for {_safe_type_name(self.origin)}.",
+            ) from exc
+        if not isinstance(name, str):
+            raise ConfigurationError(
+                f"GraphQL type name for {_safe_type_name(self.origin)} must be a non-empty string; "
+                f"got {_safe_arg_repr(name)}.",
+            )
+        normalized = str.__str__(name)
+        if not normalized:
+            raise ConfigurationError(
+                f"GraphQL type name for {_safe_type_name(self.origin)} must be a non-empty string; "
+                "got an empty name.",
+            )
+        if not _GRAPHQL_NAME_RE.fullmatch(normalized) or normalized.startswith("__"):
+            raise ConfigurationError(
+                f"GraphQL type name for {_safe_type_name(self.origin)} must be a valid GraphQL "
+                f"name; got {_safe_arg_repr(normalized)}.",
+            )
+        return normalized
 
     def related_target_for(
         self,
@@ -238,6 +265,10 @@ class DjangoTypeDefinition:
         Returns ``None`` when no ``DjangoType`` is registered for the
         target model.
         """
+        if not isinstance(field_name, str):
+            return None
+        field_name = str.__str__(field_name)
+
         # In-function imports: dodge the `definition -> registry -> definition`
         # module-load cycle (registry imports DjangoTypeDefinition lazily under
         # TYPE_CHECKING). Do NOT hoist to module top.
@@ -263,19 +294,34 @@ class DjangoTypeDefinition:
             model_field = self.model._meta.get_field(field_name)
         except FieldDoesNotExist:
             result = None
+        except BaseException:
+            result = None
         else:
-            if not getattr(model_field, "is_relation", False):
+            try:
+                is_relation = getattr(model_field, "is_relation", False)
+            except BaseException:
+                is_relation = False
+            if not is_relation:
                 result = None
             else:
-                target_model = getattr(model_field, "related_model", None)
+                try:
+                    target_model = getattr(model_field, "related_model", None)
+                except BaseException:
+                    target_model = None
                 if target_model is None:
                     result = None
                 else:
-                    target_type = registry.get(target_model)
+                    try:
+                        target_type = registry.get(target_model)
+                    except BaseException:
+                        target_type = None
                     if target_type is None:
                         result = None
                     else:
-                        target_definition = registry.get_definition(target_type)
+                        try:
+                            target_definition = registry.get_definition(target_type)
+                        except BaseException:
+                            target_definition = None
                         result = (
                             (target_definition, model_field)
                             if target_definition is not None
@@ -299,11 +345,14 @@ class DjangoTypeDefinition:
         Memoized per ``pk_name``; both inputs (MRO class attributes and the
         ``NodeID`` annotation) are stable for the definition's lifetime.
         """
-        if pk_name in self._custom_id_resolver_cache:
-            return self._custom_id_resolver_cache[pk_name]
+        normalized_pk_name = _normalize_pk_name(pk_name)
+        if normalized_pk_name is None:
+            return False
+        if normalized_pk_name in self._custom_id_resolver_cache:
+            return self._custom_id_resolver_cache[normalized_pk_name]
 
-        result = origin_has_custom_id_resolver(self.origin, pk_name)
-        self._custom_id_resolver_cache[pk_name] = result
+        result = origin_has_custom_id_resolver(self.origin, normalized_pk_name)
+        self._custom_id_resolver_cache[normalized_pk_name] = result
         return result
 
 
@@ -314,14 +363,27 @@ def origin_has_custom_id_resolver(origin: type, pk_name: str) -> bool:
     hot path) and the optimizer's definition-less fallback so the two cannot
     drift. See ``has_custom_id_resolver_for`` for the two shapes detected.
     """
-    resolver_names = (pk_name, f"resolve_{pk_name}")
-    if any(
-        _class_has_custom_id_resolver(cls, name)
-        for cls in getattr(origin, "__mro__", ())
-        for name in resolver_names
-    ):
+    normalized_pk_name = _normalize_pk_name(pk_name)
+    if normalized_pk_name is None:
+        return False
+    try:
+        mro = getattr(origin, "__mro__", ())
+    except BaseException:
         return True
-    return _resolves_id_off_pk(origin, pk_name)
+    resolver_names = (normalized_pk_name, f"resolve_{normalized_pk_name}")
+    try:
+        if any(_class_has_custom_id_resolver(cls, name) for cls in mro for name in resolver_names):
+            return True
+    except BaseException:
+        return True
+    return _resolves_id_off_pk(origin, normalized_pk_name)
+
+
+def _normalize_pk_name(pk_name: Any) -> str | None:
+    """Return a plain primary-key name, or ``None`` for malformed input."""
+    if not isinstance(pk_name, str):
+        return None
+    return str.__str__(pk_name)
 
 
 def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
@@ -345,17 +407,25 @@ def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False
+    except BaseException:
+        return True
+    if not isinstance(id_attr, str):
+        return True
+    id_attr = str.__str__(id_attr)
     return id_attr not in ("pk", pk_name)
 
 
 def _class_has_custom_id_resolver(type_cls: type, name: str) -> bool:
     """Return whether ``type_cls`` defines a consumer id resolver marker."""
-    class_dict = getattr(type_cls, "__dict__", {})
-    if name not in class_dict:
-        return False
-    if name != "resolve_id":
+    try:
+        class_dict = getattr(type_cls, "__dict__", {})
+        if name not in class_dict:
+            return False
+        if name != "resolve_id":
+            return True
+        descriptor = class_dict[name]
+    except BaseException:
         return True
-    descriptor = class_dict[name]
     return not _is_framework_relay_id_resolver(descriptor)
 
 
@@ -365,9 +435,12 @@ def _is_framework_relay_id_resolver(value: Any) -> bool:
 
     from .relay import _resolve_id_default
 
-    resolver_func = getattr(value, "__func__", value)
-    node_default = getattr(relay.Node, "resolve_id", None)
-    node_default_func = getattr(node_default, "__func__", None)
+    try:
+        resolver_func = getattr(value, "__func__", value)
+        node_default = getattr(relay.Node, "resolve_id", None)
+        node_default_func = getattr(node_default, "__func__", None)
+    except BaseException:
+        return False
     return resolver_func is _resolve_id_default or (
         node_default_func is not None and resolver_func is node_default_func
     )

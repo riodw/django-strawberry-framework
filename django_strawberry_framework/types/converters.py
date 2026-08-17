@@ -71,7 +71,7 @@ from typing import Any
 import strawberry
 from django.db import models
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
@@ -302,6 +302,40 @@ _HSTORE_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
 )
 
 
+def _safe_text(value: Any, fallback: str) -> str:
+    """Render field metadata without allowing a hostile descriptor to escape."""
+    try:
+        rendered = str(value)
+    except BaseException:
+        return f"<unprintable {_safe_type_name(value)}>"
+    return rendered or fallback
+
+
+def _field_label(field: Any) -> str:
+    """Return ``Model.field`` for diagnostics, tolerating malformed field metadata."""
+    try:
+        model = getattr(field, "model", None)
+    except BaseException:
+        model = None
+    try:
+        model_name = getattr(model, "__name__", "<unbound>")
+    except BaseException:
+        model_name = "<unbound>"
+    try:
+        field_name = getattr(field, "name", "<unknown>")
+    except BaseException:
+        field_name = "<unknown>"
+    return f"{_safe_text(model_name, '<unbound>')}.{_safe_text(field_name, '<unknown>')}"
+
+
+def _field_has_choices(field: Any) -> bool:
+    """Read a field's choices flag without leaking hostile metadata errors."""
+    try:
+        return bool(field.choices)
+    except BaseException as exc:
+        raise ConfigurationError(f"Could not inspect choices for {_field_label(field)}.") from exc
+
+
 def scalar_for_field(field: models.Field) -> Any:
     """Resolve a Django field to its ``SCALAR_MAP`` Python / Strawberry scalar.
 
@@ -318,12 +352,9 @@ def scalar_for_field(field: models.Field) -> Any:
     for klass in type(field).__mro__:
         if klass in SCALAR_MAP:
             return SCALAR_MAP[klass]
-    model = getattr(field, "model", None)
-    model_label = getattr(model, "__name__", "<unbound>")
-    field_name = getattr(field, "name", "<unknown>")
     raise ConfigurationError(
-        f"Unsupported Django field type {type(field).__name__!r} on "
-        f"{model_label}.{field_name}. Add an entry to "
+        f"Unsupported Django field type {_safe_arg_repr(_safe_type_name(field))} on "
+        f"{_field_label(field)}. Add an entry to "
         "SCALAR_MAP or exclude this field via Meta.exclude.",
     )
 
@@ -404,7 +435,12 @@ def convert_scalar(
     # reads ``effective_null`` so the override applies uniformly across the
     # ArrayField / HStoreField / choice / scalar branches without per-branch
     # override logic.
-    effective_null = field.null if force_nullable is None else force_nullable
+    try:
+        effective_null = field.null if force_nullable is None else force_nullable
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not inspect nullability for {_field_label(field)}.",
+        ) from exc
     # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
     # so a subclass-of-``models.Field`` test double does not accidentally
     # match a parent in ``SCALAR_MAP``. The recursive call into
@@ -417,11 +453,11 @@ def convert_scalar(
     if _ARRAY_FIELD_CLS is not None and isinstance(field, _ARRAY_FIELD_CLS):
         if isinstance(field.base_field, _ARRAY_FIELD_CLS):
             raise ConfigurationError(
-                f"Nested ArrayField on {field.model.__name__}.{field.name} is not supported.",
+                f"Nested ArrayField on {_field_label(field)} is not supported.",
             )
-        if field.choices:
+        if _field_has_choices(field):
             raise ConfigurationError(
-                f"ArrayField on {field.model.__name__}.{field.name} declares choices on the outer "
+                f"ArrayField on {_field_label(field)} declares choices on the outer "
                 f"field; outer-array choices are ambiguous at the GraphQL boundary. Declare choices "
                 f"on base_field for element-level enum, or use FilterSet.",
             )
@@ -433,9 +469,9 @@ def convert_scalar(
     # ``dict[str, str | None]`` with no enum-able GraphQL shape), then
     # return ``strawberry.scalars.JSON`` widened on ``effective_null``.
     if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
-        if field.choices:
+        if _field_has_choices(field):
             raise ConfigurationError(
-                f"HStoreField on {field.model.__name__}.{field.name} declares choices; "
+                f"HStoreField on {_field_label(field)} declares choices; "
                 f"HStore stores a dict[str, str | None] with no enum-able shape at the "
                 f"GraphQL boundary. Drop the choices declaration or model the constrained "
                 f"shape with a separate field.",
@@ -447,7 +483,7 @@ def convert_scalar(
     # the MRO, so consumer subclasses of a supported field resolve to the
     # parent's scalar and an unsupported field raises ``ConfigurationError``.
     py_type = scalar_for_field(field)
-    if field.choices:
+    if _field_has_choices(field):
         py_type = convert_choices_to_enum(field, type_name)
     if effective_null:
         py_type = py_type | None
@@ -633,13 +669,40 @@ def build_enum_from_choices(
         ConfigurationError: empty sequence, grouped-choices form, or two values that
             sanitize to the same enum member.
     """
-    if not choice_pairs:
+    try:
+        pairs = tuple(choice_pairs)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{source_label} declares choices but the sequence could not be read; choices must be "
+            "a non-empty flat sequence of (value, label) pairs.",
+        ) from exc
+    if not pairs:
         raise ConfigurationError(
             f"{source_label} declares choices but the "
             "sequence is empty; choices must be a non-empty flat sequence "
             "of (value, label) pairs.",
         )
-    for _value, label in choice_pairs:
+    normalized_pairs: list[tuple[Any, Any]] = []
+    for entry in pairs:
+        if isinstance(entry, (str, bytes)):
+            malformed = True
+        else:
+            try:
+                value, label = entry
+            except BaseException as exc:
+                raise ConfigurationError(
+                    f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+                    "choices must be a flat sequence of (value, label) pairs.",
+                ) from exc
+            malformed = False
+        if malformed:
+            raise ConfigurationError(
+                f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+                "choices must be a flat sequence of (value, label) pairs.",
+            )
+        normalized_pairs.append((value, label))
+
+    for _value, label in normalized_pairs:
         # Django's grouped-choices form is
         # ``(group_label, [(value, label), ...])``. In the flat form the
         # second element is always a label string; in the grouped form it
@@ -657,15 +720,22 @@ def build_enum_from_choices(
 
     members: dict[str, Any] = {}
     collisions: dict[str, list[Any]] = {}
-    for value, _label in choice_pairs:
-        member = _sanitize_member_name(value, enum_name=enum_name)
+    for value, _label in normalized_pairs:
+        try:
+            member = _sanitize_member_name(value, enum_name=enum_name)
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"{source_label} choice value {_safe_arg_repr(value)} cannot be converted to "
+                "a GraphQL enum member name.",
+            ) from exc
         if member in members:
             collisions.setdefault(member, [members[member]]).append(value)
         else:
             members[member] = value
     if collisions:
         details = ", ".join(
-            f"{member!r} from values {sorted(map(repr, vals))}"
+            f"{_safe_arg_repr(member)} from values "
+            f"[{', '.join(sorted(_safe_arg_repr(value) for value in vals))}]"
             for member, vals in sorted(collisions.items())
         )
         raise ConfigurationError(
@@ -697,17 +767,37 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
             two choice values that sanitize to the same enum member (all raised by
             ``build_enum_from_choices``).
     """
-    cached = registry.get_enum(field.model, field.name)
+    try:
+        model = field.model
+        field_name = field.name
+        choices = field.choices
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not inspect choices for {_field_label(field)}.",
+        ) from exc
+
+    cached = registry.get_enum(model, field_name)
     if cached is not None:
         return cached
 
-    enum_name = f"{type_name}{pascal_case(field.name)}Enum"
+    try:
+        enum_name = f"{type_name}{pascal_case(field_name)}Enum"
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not derive an enum name for {_field_label(field)}.",
+        ) from exc
+    try:
+        choice_source = choices or []
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not inspect choices for {_field_label(field)}.",
+        ) from exc
     enum_cls = build_enum_from_choices(
-        list(field.choices or []),
+        choice_source,
         enum_name,
-        source_label=f"{field.model.__name__}.{field.name}",
+        source_label=_field_label(field),
     )
-    registry.register_enum(field.model, field.name, enum_cls)
+    registry.register_enum(model, field_name, enum_cls)
     return enum_cls
 
 

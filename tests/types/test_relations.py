@@ -1,11 +1,11 @@
-"""PendingRelation tests for identity hashing and dataclass field contracts.
+"""PendingRelation tests for hash consistency and dataclass field contracts.
 
-The ``@dataclass(frozen=True)`` decorator would normally synthesize a
-value-based ``__hash__`` that hashes every field; ``django_field`` may be
-a Django rel descriptor whose ``__hash__`` is ``None`` (non-hashable), so
-the class explicitly overrides ``__hash__`` with ``object.__hash__`` to
-preserve the identity contract that ``TypeRegistry.discard_pending``
-relies on while keeping the synthesized value-based ``__eq__``.
+The ``@dataclass(frozen=True)`` decorator synthesizes value-based equality.
+``django_field`` may be a Django rel descriptor whose ``__hash__`` is
+``None`` (non-hashable), so ``PendingRelation.__hash__`` uses guarded hash
+components that keep equal records equal in sets without requiring the
+descriptor itself to be hashable. ``TypeRegistry.discard_pending`` still
+matches records by identity, independently of equality or hashing.
 """
 
 from apps.products.models import Category, Item
@@ -31,19 +31,16 @@ def _build_pending() -> PendingRelation:
     )
 
 
-def test_pending_relation_hash_is_identity_based_with_non_hashable_django_field():
-    """``hash(pending)`` returns the ``id()``-derived value and does not raise.
+def test_pending_relation_hash_supports_non_hashable_django_field():
+    """``hash(pending)`` does not require a hashable Django relation field.
 
-    Pins the explicit ``__hash__ = object.__hash__`` override at
-    ``types/relations.py``: without it the dataclass-synthesized
-    ``__hash__`` would hash ``django_field`` and raise ``TypeError`` for
-    any non-hashable rel descriptor, contradicting the identity-based
-    ``discard_pending`` contract the class docstring names.
+    Pins the guarded hash implementation at ``types/relations.py``: without
+    it the dataclass-synthesized hash would raise ``TypeError`` for a
+    non-hashable rel descriptor.
     """
     pending = _build_pending()
 
-    # object.__hash__ derives from id(); compare against the same formula.
-    assert hash(pending) == object.__hash__(pending)
+    assert isinstance(hash(pending), int)
 
 
 def test_pending_relation_equality_still_works_with_non_hashable_django_field():
@@ -66,3 +63,62 @@ def test_pending_relation_is_set_member_with_non_hashable_django_field():
 
     assert pending in bucket
     assert len(bucket) == 1
+
+
+def test_equal_pending_relations_have_equal_hashes():
+    """Value equality and hashing remain consistent for duplicate records."""
+    first = _build_pending()
+    second = PendingRelation(
+        source_type=first.source_type,
+        source_model=first.source_model,
+        field_name=first.field_name,
+        django_field=first.django_field,
+        related_model=first.related_model,
+        relation_kind=first.relation_kind,
+        nullable=first.nullable,
+    )
+
+    assert first == second
+    assert hash(first) == hash(second)
+    assert {first, second} == {first}
+
+
+def test_pending_relation_hash_falls_back_when_value_and_type_hashing_fail():
+    """A field whose value AND type both refuse hashing degrades to ``id(type(value))``.
+
+    Pins the third rung of the ``_hash_component`` ladder specifically: the
+    expected hash is rebuilt with ``id(type(field))`` in the hostile slot, so a
+    regression that stopped at the second rung (``hash(type(value))``) cannot
+    pass by merely returning some integer.
+    """
+
+    class _HostileType(type):
+        def __hash__(cls):
+            raise RuntimeError("hostile type hash")
+
+    class _HostileField(metaclass=_HostileType):
+        def __hash__(self):
+            raise RuntimeError("hostile value hash")
+
+    source_type = type("Src", (), {})
+    pending = PendingRelation(
+        source_type=source_type,
+        source_model=Category,
+        field_name="items",
+        django_field=_HostileField(),  # type: ignore[arg-type]
+        related_model=Item,
+        relation_kind="reverse_many_to_one",
+        nullable=False,
+    )
+
+    assert hash(pending) == hash(
+        (
+            hash(source_type),
+            hash(Category),
+            hash("items"),
+            id(_HostileField),
+            hash(Item),
+            hash("reverse_many_to_one"),
+            hash(False),
+        ),
+    )

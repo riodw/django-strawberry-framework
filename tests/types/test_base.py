@@ -26,6 +26,7 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 import functools
 import itertools
+from collections.abc import Sequence
 
 import pytest
 import strawberry
@@ -38,7 +39,17 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
-from django_strawberry_framework.types.base import _detect_custom_get_queryset
+from django_strawberry_framework.types.base import (
+    _detect_custom_get_queryset,
+    _validate_connection,
+    _validate_cursor_field,
+    _validate_filterset_class,
+    _validate_globalid_callable,
+    _validate_globalid_strategy,
+    _validate_interfaces,
+    _validate_orderset_class,
+    _validate_relation_shapes,
+)
 from django_strawberry_framework.types.converters import (
     DjangoFilePathType,
     DjangoFileType,
@@ -60,11 +71,9 @@ CATEGORY_SCALAR_FIELDS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
-    """Drop registry state on entry/exit so each test starts clean."""
-    registry.clear()
-    yield
-    registry.clear()
+def _isolate_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +180,163 @@ def test_meta_optimizer_hints_must_be_mapping_when_declared():
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
                 optimizer_hints = []
+
+
+class _HostileMetaValue:
+    """A malformed Meta value whose diagnostic representation raises."""
+
+    def __repr__(self):
+        raise RuntimeError("repr should not escape")
+
+
+class _HostileMetaSequence(Sequence):
+    """A sequence whose item access raises while a Meta value is inspected.
+
+    Both call sites reach ``__getitem__`` through the ``Sequence`` ABC's
+    derived iterator, so ``__len__`` is never the failing step.
+    """
+
+    def __getitem__(self, index):
+        raise RuntimeError("sequence access should not escape")
+
+    def __len__(self):
+        raise RuntimeError("sequence length should not escape")
+
+
+def test_meta_validator_diagnostics_survive_hostile_values():
+    """Malformed Meta values cannot replace ConfigurationError with repr failures."""
+    meta = type("Meta", (), {"model": Category})
+    hostile = _HostileMetaValue()
+    validators = (
+        lambda: _validate_filterset_class(meta, hostile),
+        lambda: _validate_orderset_class(meta, hostile),
+        lambda: _validate_connection(meta, hostile, False),
+        lambda: _validate_cursor_field(meta, hostile, False),
+        lambda: _validate_relation_shapes(meta, hostile, False),
+        lambda: _validate_globalid_strategy(meta, hostile, False),
+        lambda: _validate_interfaces(
+            type("InterfaceMeta", (), {"model": Category, "interfaces": (hostile,)}),
+        ),
+    )
+    for validator in validators:
+        with pytest.raises(ConfigurationError, match="unprintable _HostileMetaValue"):
+            validator()
+
+
+def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys():
+    """Unknown connection keys cannot leak sorting or repr exceptions."""
+    meta = type("Meta", (), {"model": Category})
+    with pytest.raises(ConfigurationError, match="unknown sub-keys"):
+        _validate_connection(meta, {1: True, "bogus": False}, False)
+    with pytest.raises(ConfigurationError, match="unknown sub-keys"):
+        _validate_connection(meta, {_HostileMetaValue(): True}, False)
+
+
+def test_meta_cursor_field_hostile_sequence_is_typed():
+    """A broken sequence descriptor cannot escape as a raw runtime exception."""
+    meta = type("Meta", (), {"model": Category})
+    with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
+        _validate_cursor_field(meta, _HostileMetaSequence(), True)
+
+
+@pytest.mark.parametrize("key", ["fields", "exclude"])
+def test_meta_field_collections_wrap_hostile_iteration(key):
+    """A field collection that raises while iterating stays a typed shape error."""
+    meta_cls = type("Meta", (), {"model": Category, key: _HostileMetaSequence()})
+
+    with pytest.raises(ConfigurationError, match=f"Meta.{key} must"):
+        type("T", (DjangoType,), {"Meta": meta_cls})
+
+
+def test_meta_name_rejects_an_empty_string():
+    """An empty ``Meta.name`` is rejected at type creation."""
+    with pytest.raises(ConfigurationError, match="empty name"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                name = ""
+
+
+def test_meta_name_rejects_hostile_values_at_type_creation():
+    """A malformed ``Meta.name`` cannot survive to Strawberry schema creation."""
+
+    class HostileName:
+        def __repr__(self):
+            raise RuntimeError("repr should not escape")
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Meta.name must be a non-empty string; got <unprintable HostileName>",
+    ):
+
+        class BadNameType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                name = HostileName()
+
+
+def test_meta_name_rejects_invalid_graphql_names_at_type_creation():
+    """A syntactically invalid GraphQL name cannot leak Strawberry's GraphQLError."""
+    with pytest.raises(ConfigurationError, match="valid GraphQL name"):
+
+        class BadNameType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                name = "bad-name"
+
+
+def test_globalid_callable_wraps_non_signature_inspection_errors():
+    """A ``__signature__`` descriptor that raises is a typed configuration failure."""
+
+    class _UnreadableSignature:
+        @property
+        def __signature__(self):
+            raise RuntimeError("signature exploded")
+
+        def __call__(
+            self,
+            type_cls,
+            model,
+            root,
+        ):
+            return "value"
+
+    with pytest.raises(ConfigurationError, match="could not be inspected"):
+        _validate_globalid_callable("Meta.globalid_strategy", _UnreadableSignature())
+
+
+def test_meta_globalid_callable_hostile_descriptor_is_typed():
+    """A broken callable descriptor cannot escape GlobalID strategy validation."""
+
+    class HostileCallable:
+        @property
+        def __call__(self):
+            raise RuntimeError("callable descriptor should not escape")
+
+    meta = type("Meta", (), {"model": Category})
+    with pytest.raises(ConfigurationError, match="could not be inspected"):
+        _validate_globalid_strategy(meta, HostileCallable(), True)
+
+
+@pytest.mark.parametrize(
+    "attr",
+    [
+        "fields",
+        "exclude",
+        "nullable_overrides",
+        "required_overrides",
+        "filesystem_path_fields",
+    ],
+)
+def test_meta_name_collections_reject_non_string_entries(attr):
+    """All field-name collections reject unhashable entries before set operations."""
+    meta = type("Meta", (), {"model": Category, attr: (["name"],)})
+    with pytest.raises(ConfigurationError, match=f"Meta.{attr} must contain field name strings"):
+        type("InvalidNamesType", (DjangoType,), {"Meta": meta})
 
 
 def test_meta_fields_and_exclude_mutually_exclusive():
@@ -710,6 +876,30 @@ def test_meta_connection_stored_on_definition():
 
     definition = CategoryType.__django_strawberry_definition__
     assert definition.connection == {"total_count": True}
+
+
+def test_meta_connection_is_snapshotted_on_definition():
+    """Mutating the consumer's config dict cannot rewrite registered type metadata."""
+    from strawberry import relay
+
+    connection = {"total_count": True}
+
+    meta_cls = type(
+        "Meta",
+        (),
+        {
+            "model": Category,
+            "fields": CATEGORY_SCALAR_FIELDS,
+            "interfaces": (relay.Node,),
+            "connection": connection,
+        },
+    )
+    CategoryType = type("CategoryType", (DjangoType,), {"Meta": meta_cls})
+
+    connection["total_count"] = False
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.connection == {"total_count": True}
+    assert definition.connection is not connection
 
 
 def test_meta_connection_absent_leaves_definition_none():

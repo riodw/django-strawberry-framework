@@ -20,6 +20,7 @@ widening branch and ``registry.register_enum`` / ``get_enum``.
 
 import enum
 import itertools
+import re
 
 import pytest
 import strawberry
@@ -42,8 +43,11 @@ from django_strawberry_framework.types.converters import (
     DjangoFileType,
     DjangoImagePathType,
     DjangoImageType,
+    _field_has_choices,
+    _field_label,
     _field_output_type_for,
     _sanitize_member_name,
+    build_enum_from_choices,
     convert_choices_to_enum,
     convert_field_output,
     convert_scalar,
@@ -70,16 +74,14 @@ def _unique_app_label(base: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
-    """Drop registry state on entry/exit so each test starts clean.
+def _isolate_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``).
 
-    Note: clears the type + enum dicts but does not affect Django's app
-    registry. The ``ChoiceFixture`` model lives under a synthetic
-    ``app_label`` and is created once for the test session.
+    The clears cover the type + enum dicts and the connection-type cache but
+    not Django's app registry: the ``ChoiceFixture`` model lives under a
+    synthetic ``app_label`` and is created once for the test session.
     """
-    registry.clear()
-    yield
-    registry.clear()
 
 
 @pytest.fixture(scope="session")
@@ -202,6 +204,185 @@ def test_grouped_choices_form_rejected(grouped_choice_field):
     """Django's grouped-choices form raises ``ConfigurationError``, not a silent flatten."""
     with pytest.raises(ConfigurationError, match="grouped-choices"):
         convert_choices_to_enum(grouped_choice_field, "FixtureType")
+
+
+@pytest.mark.parametrize(
+    ("choice_pairs", "expected_message"),
+    [
+        pytest.param(
+            None,
+            "declares choices but the sequence could not be read;",
+            id="none",
+        ),
+        pytest.param(
+            ["a"],
+            "declares a malformed choice 'a';",
+            id="scalar-entry",
+        ),
+        pytest.param(
+            [("a",)],
+            "declares a malformed choice ('a',);",
+            id="short-pair",
+        ),
+        pytest.param(
+            [("a", "A", "extra")],
+            "declares a malformed choice ('a', 'A', 'extra');",
+            id="long-pair",
+        ),
+    ],
+)
+def test_build_enum_rejects_malformed_choice_pairs(choice_pairs, expected_message):
+    """Each malformed choice shape produces its own typed configuration failure."""
+    with pytest.raises(ConfigurationError, match=re.escape(expected_message)):
+        build_enum_from_choices(choice_pairs, "FixtureTypeEnum", source_label="probe")
+
+
+def test_build_enum_diagnostics_survive_hostile_choice_values():
+    """Hostile choice string/repr methods cannot escape enum construction."""
+
+    class HostileChoice:
+        def __str__(self):
+            return "a"
+
+        def __repr__(self):
+            raise RuntimeError("repr should not escape")
+
+    with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
+        build_enum_from_choices(
+            [("a", "A"), (HostileChoice(), "Hostile")],
+            "FixtureTypeEnum",
+            source_label="probe",
+        )
+
+
+def test_scalar_for_field_diagnostics_survive_hostile_metadata():
+    """Unsupported fields with broken metadata still raise ConfigurationError."""
+
+    class HostileMetadata:
+        def __str__(self):
+            raise RuntimeError("str should not escape")
+
+        def __repr__(self):
+            raise RuntimeError("repr should not escape")
+
+    class UnsupportedField(models.Field):
+        pass
+
+    class Owner(models.Model):
+        value = UnsupportedField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_hostile_converter")
+
+    field = Owner._meta.get_field("value")
+    field.name = HostileMetadata()
+    with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
+        scalar_for_field(field)
+
+
+def test_convert_choices_to_enum_diagnostics_survive_hostile_truthiness(
+    choice_fixture_model,
+    monkeypatch,
+):
+    """A choices container with broken truthiness still raises ConfigurationError."""
+
+    class HostileChoices:
+        def __bool__(self):
+            raise RuntimeError("bool should not escape")
+
+    field = choice_fixture_model._meta.get_field("status")
+    monkeypatch.setattr(field, "choices", HostileChoices())
+    with pytest.raises(ConfigurationError, match="Could not inspect choices"):
+        convert_choices_to_enum(field, "FixtureType")
+
+
+def test_field_diagnostics_survive_unreadable_metadata_descriptors():
+    class _HostileModelMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("model name exploded")
+            return super().__getattribute__(name)
+
+    class _HostileModel(metaclass=_HostileModelMeta):
+        pass
+
+    class _UnreadableModel:
+        @property
+        def model(self):
+            raise RuntimeError("model exploded")
+
+        name = "field"
+
+    class _UnreadableName:
+        model = object
+
+        @property
+        def name(self):
+            raise RuntimeError("name exploded")
+
+    assert _field_label(_UnreadableModel()) == "<unbound>.field"
+    assert _field_label(type("Field", (), {"model": _HostileModel, "name": "field"})()) == (
+        "<unbound>.field"
+    )
+    assert _field_label(_UnreadableName()) == "object.<unknown>"
+
+
+def test_converter_wraps_unreadable_choices_and_nullability_metadata():
+    class _UnreadableChoices:
+        model = object
+        name = "field"
+
+        @property
+        def choices(self):
+            raise RuntimeError("choices exploded")
+
+    class _UnreadableNull:
+        model = object
+        name = "field"
+
+        @property
+        def null(self):
+            raise RuntimeError("null exploded")
+
+    with pytest.raises(ConfigurationError, match="Could not inspect choices"):
+        _field_has_choices(_UnreadableChoices())
+    with pytest.raises(ConfigurationError, match="Could not inspect nullability"):
+        convert_scalar(_UnreadableNull(), "OwnerType")
+
+
+def test_choice_conversion_wraps_unrenderable_values_and_unreadable_field_metadata():
+    class _UnrenderableChoice:
+        def __str__(self):
+            raise RuntimeError("choice rendering exploded")
+
+    with pytest.raises(ConfigurationError, match="cannot be converted"):
+        build_enum_from_choices(
+            [(_UnrenderableChoice(), "label")],
+            "FixtureEnum",
+            source_label="probe",
+        )
+
+    class _UnreadableField:
+        @property
+        def model(self):
+            raise RuntimeError("field metadata exploded")
+
+        name = "field"
+        choices = (("a", "A"),)
+
+    with pytest.raises(ConfigurationError, match="Could not inspect choices"):
+        convert_choices_to_enum(_UnreadableField(), "FixtureType")
+
+
+def test_choice_enum_name_derivation_wraps_a_hostile_type_name(choice_fixture_model):
+    class _HostileTypeName:
+        def __format__(self, spec):
+            raise RuntimeError("type name formatting exploded")
+
+    field = choice_fixture_model._meta.get_field("status")
+    with pytest.raises(ConfigurationError, match="Could not derive an enum name"):
+        convert_choices_to_enum(field, _HostileTypeName())
 
 
 def test_choice_member_name_sanitization():

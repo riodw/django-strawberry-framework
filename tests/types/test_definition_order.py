@@ -354,7 +354,7 @@ def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver
 def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_class():
     """A hand-written ``Annotated[..., strawberry.lazy(...)]`` relation override wins.
 
-    The fourth shape of spec-010's manual annotation contract: the consumer's
+    The second shape of spec-010's manual annotation contract: the consumer's
     annotation reaches the class unrewritten, no pending relation is recorded
     for the field, the generated many-side resolver is still attached, and a
     real schema builds with the field typed as the class the lazy reference

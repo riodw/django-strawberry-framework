@@ -26,7 +26,9 @@ this module owns build-only. (Layer 6's dynamic FilterSet classes are
 plain ``type(...)`` products cached below, never materialized as module
 globals.) Hashing, Meta canonicalize, and the ``type(...)`` skeleton live
 in ``utils/inputs.py::make_dynamic_set_getter``; this module keeps the
-family cache and the ``filter_fields`` synonym.
+family cache and passes ``FILTERSET_FIELDS_ALIAS``. The synonym rule itself
+is ``utils/inputs.py::resolve_set_meta_fields`` (shared with
+``FilterSetMetaclass``).
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from ..utils.inputs import (
+    FILTERSET_FIELDS_ALIAS,
     GeneratedInputArgumentsFactory,
     make_dynamic_set_getter,
     make_hashable_meta_value,
@@ -134,7 +137,7 @@ def _normalize_meta_for_factory(meta: dict[str, Any]) -> dict[str, Any]:
     return normalize_set_meta_for_factory(
         meta,
         reserved_keys=_RESERVED_FACTORY_KEYS,
-        fields_alias="filter_fields",
+        fields_alias=FILTERSET_FIELDS_ALIAS,
     )
 
 
@@ -145,7 +148,7 @@ _get_filterset_class = make_dynamic_set_getter(
     getter_name="get_filterset_class",
     reserved_keys=_RESERVED_FACTORY_KEYS,
     explicit_param="filterset_class",
-    fields_alias="filter_fields",
+    fields_alias=FILTERSET_FIELDS_ALIAS,
 )
 
 

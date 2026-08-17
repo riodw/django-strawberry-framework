@@ -70,6 +70,7 @@ from ..utils.input_values import (
     iter_active_fields,
     iter_input_items,
 )
+from ..utils.inputs import FILTERSET_FIELDS_ALIAS, resolve_set_meta_fields
 from ..utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
@@ -989,7 +990,8 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
     Direct port of `django_graphene_filters/filterset.py::FilterSetMetaclass`.
     Expansion of related filters into per-lookup ORM paths is deferred to
     `FilterSet.get_filters` so circular `RelatedFilter` references
-    declared in the same module are legal.
+    declared in the same module are legal. ``Meta.filter_fields`` aliasing
+    is ``utils/inputs.py::resolve_set_meta_fields`` (shared with Layer 6).
     """
 
     def __new__(
@@ -1001,15 +1003,20 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         """Build the class, collect `RelatedFilter`s, and bind them to the owner."""
         class_items = tuple(attrs.items())
 
-        # Allow consumers to use `filter_fields` as a synonym for `fields`
-        # under `Meta`; matches the cookbook's `graphene-django` alias.
+        # ``filter_fields`` is the cookbook / graphene-django synonym for
+        # ``Meta.fields``. The promote-when-absent rule lives in
+        # ``utils/inputs.py::resolve_set_meta_fields`` so Layer-6 factory
+        # kwargs cannot drift from class-Meta aliasing. Write-back stays
+        # here: the consumer's ``filter_fields`` attribute is left in place
+        # (the factory dict path drops the alias so it cannot split a cache
+        # slot). Presence uses ``hasattr`` (inherited Meta attributes count).
         meta_class = attrs.get("Meta")
-        if (
-            meta_class
-            and hasattr(meta_class, "filter_fields")
-            and not hasattr(meta_class, "fields")
-        ):
-            meta_class.fields = meta_class.filter_fields
+        resolved_fields, from_alias = resolve_set_meta_fields(
+            meta_class,
+            fields_alias=FILTERSET_FIELDS_ALIAS,
+        )
+        if from_alias:
+            meta_class.fields = resolved_fields
 
         new_class = super().__new__(cls, name, bases, attrs)
 

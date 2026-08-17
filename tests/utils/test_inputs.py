@@ -16,6 +16,7 @@ import strawberry
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.inputs import (
+    FILTERSET_FIELDS_ALIAS,
     GeneratedInputFieldSpec,
     InputFieldSpec,
     build_strawberry_input_class,
@@ -35,6 +36,7 @@ from django_strawberry_framework.utils.inputs import (
     name_set_input_type_name,
     normalize_set_meta_for_factory,
     pascalize_token,
+    resolve_set_meta_fields,
     set_input_type_name,
 )
 
@@ -506,7 +508,7 @@ def test_normalize_set_meta_for_factory_promotes_fields_alias_and_strips_reserve
     normalized = normalize_set_meta_for_factory(
         {"model": object, "filter_fields": {"b", "a"}, "filterset_base_class": object},
         reserved_keys=frozenset({"filterset_base_class"}),
-        fields_alias="filter_fields",
+        fields_alias=FILTERSET_FIELDS_ALIAS,
     )
     assert "filter_fields" not in normalized
     assert "filterset_base_class" not in normalized
@@ -518,10 +520,58 @@ def test_normalize_set_meta_for_factory_prefers_fields_over_alias():
     normalized = normalize_set_meta_for_factory(
         {"fields": ["name"], "filter_fields": ["other"]},
         reserved_keys=frozenset(),
-        fields_alias="filter_fields",
+        fields_alias=FILTERSET_FIELDS_ALIAS,
     )
     assert normalized["fields"] == ["name"]
     assert "filter_fields" not in normalized
+
+
+def test_resolve_set_meta_fields_promotes_alias_on_dict_and_meta_class():
+    """Class Meta and factory kwargs apply the same ``filter_fields`` synonym."""
+    alias = {"code": ["exact"]}
+
+    class Meta:
+        filter_fields = alias
+
+    assert resolve_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == (alias, True)
+    assert resolve_set_meta_fields(
+        {"filter_fields": alias},
+        fields_alias=FILTERSET_FIELDS_ALIAS,
+    ) == (alias, True)
+
+
+def test_resolve_set_meta_fields_fields_wins_on_dict_and_meta_class():
+    """``fields`` wins on both surfaces; ``from_alias`` is False."""
+
+    class Both:
+        fields = ["name"]
+        filter_fields = ["other"]
+
+    assert resolve_set_meta_fields(Both, fields_alias=FILTERSET_FIELDS_ALIAS) == (["name"], False)
+    assert resolve_set_meta_fields(
+        {"fields": ["name"], "filter_fields": ["other"]},
+        fields_alias=FILTERSET_FIELDS_ALIAS,
+    ) == (["name"], False)
+
+
+def test_resolve_set_meta_fields_none_source_and_no_alias_family():
+    """``None`` source and the order-side ``fields_alias=None`` are no-ops."""
+    assert resolve_set_meta_fields(None, fields_alias=FILTERSET_FIELDS_ALIAS) == (None, False)
+    assert resolve_set_meta_fields(
+        {"filter_fields": ["name"]},
+        fields_alias=None,
+    ) == (None, False)
+
+
+def test_filterset_metaclass_and_factory_share_fields_alias_owner():
+    """Class-Meta promotion and Layer-6 kwargs canonicalize through one rule."""
+    from django_strawberry_framework.filters import factories as filter_factories
+    from django_strawberry_framework.filters import sets as filter_sets
+
+    assert filter_sets.resolve_set_meta_fields is resolve_set_meta_fields
+    assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
+    assert filter_factories.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
+    assert "resolve_set_meta_fields" in normalize_set_meta_for_factory.__code__.co_names
 
 
 def test_create_dynamic_set_class_requires_model():

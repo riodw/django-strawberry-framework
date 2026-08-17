@@ -268,6 +268,27 @@ def test_filterset_metaclass_aliases_filter_fields_to_fields():
 
     # Aliasing happens at metaclass time; the `Meta.fields` attribute lands.
     assert ShelfFilter._meta.fields == {"code": ["exact"]}
+    # The consumer's synonym stays on the class Meta (factory kwargs drop it).
+    assert ShelfFilter.Meta.filter_fields == {"code": ["exact"]}
+
+
+def test_filterset_metaclass_fields_alias_sees_inherited_meta_fields():
+    """``hasattr`` (not ``__dict__``) is the class-Meta alias presence contract.
+
+    A consumer Meta that subclasses another Meta already carrying ``fields``
+    skips the alias -- shipped FilterSetMetaclass behavior. The shared
+    resolver must not switch the class path to own-attribute checks.
+    """
+
+    class BaseMeta:
+        model = library_models.Shelf
+        fields = {"code": ["exact"]}
+
+    class ShelfFilter(FilterSet):
+        class Meta(BaseMeta):
+            filter_fields = {"is_private": ["exact"]}
+
+    assert ShelfFilter._meta.fields == {"code": ["exact"]}
 
 
 def test_filterset_metaclass_does_not_expand_at_class_creation():

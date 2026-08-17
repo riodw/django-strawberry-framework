@@ -15,12 +15,12 @@ the hunt; the live source is always authoritative.
 
 There are exactly two worker roles:
 
-- **Worker 1 — coordinator and verifier:** sets up and owns the progress file, dispatches every
+- **Worker 0 — coordinator and verifier:** sets up and owns the progress file, dispatches every
   item, independently verifies every fix, and runs the final gate.
-- **Worker 2 — hunter and implementer:** searches for confirmed bugs, implements root-cause fixes,
+- **Worker 1 — hunter and implementer:** searches for confirmed bugs, implements root-cause fixes,
   and adds the permanent tests that prove them.
 
-No Worker 0 or Worker 3 participates. Once started, the process is autonomous: continue through
+No Worker 2 or Worker 3 participates. Once started, the process is autonomous: continue through
 the next unchecked item and every necessary revision until the hunt is complete or a genuine
 external blocker requires maintainer input.
 
@@ -37,24 +37,24 @@ external blocker requires maintainer input.
   observed caller when the system invariant is wrong.
 - Every production fix receives a permanent behavioral test at the strongest reachable tier
   required by `AGENTS.md`.
-- Worker 2 may be deliberately messy and destructive inside disposable scratch scope. It may write
+- Worker 1 may be deliberately messy and destructive inside disposable scratch scope. It may write
   many temporary tests, mutate throwaway databases and state, monkeypatch internals, force invalid
   sequences, and leave failed experiments in place. Scratch belongs under
-  `docs/bug_hunt/temp-tests/<scope>/` or another path Worker 1 can identify and remove.
-- Destructiveness stops at the scratch boundary. Worker 2 never deletes or corrupts package source,
+  `docs/bug_hunt/temp-tests/<scope>/` or another path Worker 0 can identify and remove.
+- Destructiveness stops at the scratch boundary. Worker 1 never deletes or corrupts package source,
   permanent tests, maintainer work, credentials, external services, or non-disposable data. Its
   production edits are limited to confirmed fixes and their permanent tests.
-- Worker 2 does not clean up its scratch work. Worker 1 owns cleanup after the item is verified and
+- Worker 1 does not clean up its scratch work. Worker 0 owns cleanup after the item is verified and
   before the next item begins, so verification can inspect and rerun the exact destructive probes.
 - Only the maintainer commits, creates or switches branches, pushes, or changes the changelog.
 
 ## Progress file and setup
 
-Worker 1 owns one generated `docs/bug_hunt/bug_hunt-<release>.md` file for the entire run, named
+Worker 0 owns one generated `docs/bug_hunt/bug_hunt-<release>.md` file for the entire run, named
 from the release like the review and DRY flows (`0.0.13` becomes `bug_hunt-0_0_13.md`). It is the
 canonical plan, progress record, and handoff between workers.
 
-If an in-progress file already exists, resume it. Otherwise Worker 1 runs:
+If an in-progress file already exists, resume it. Otherwise Worker 0 runs:
 
 ```shell
 uv run python scripts/bug_hunt.py
@@ -78,8 +78,8 @@ of expected findings. Questions in it guide exploration; current source and exec
 decide the result.
 
 The snapshot remains fixed for the run even as earlier items change the working tree. Its stripped
-source and overview files help orient Worker 2 to the baseline structure when a matching snapshot
-exists. A new live file may have no shadow and is still a full hunt item. Worker 2 must read the
+source and overview files help orient Worker 1 to the baseline structure when a matching snapshot
+exists. A new live file may have no shadow and is still a full hunt item. Worker 1 must read the
 complete live target and connected live code before reaching a conclusion.
 
 Each progress item starts in this form:
@@ -91,15 +91,15 @@ Each progress item starts in this form:
         - <target and shadow inputs>
 ```
 
-Worker 1 alone updates the progress file. Valid item states are `pending`, `hunting`,
+Worker 0 alone updates the progress file. Valid item states are `pending`, `hunting`,
 `fix-implemented`, `revision-needed`, `no-bugs`, `verified`, and `blocked`. Before dispatch, Worker
-1 records a cycle baseline so changes from the current item can be separated from earlier and
+0 records a cycle baseline so changes from the current item can be separated from earlier and
 concurrent work.
 
-## Worker 2: search and implement
+## Worker 1: search and implement
 
-Use a fresh Worker 2 context for each item. Give it the exact target and prompt, the progress-file
-path, the hunt baseline, the cycle baseline, and the required reading. Worker 2 reads the progress
+Use a fresh Worker 1 context for each item. Give it the exact target and prompt, the progress-file
+path, the hunt baseline, the cycle baseline, and the required reading. Worker 1 reads the progress
 file but never edits it.
 
 ### Understand the target
@@ -118,11 +118,11 @@ contract lives behind it, and do not expand into unrelated subsystems once an ed
 
 ### Search and verify
 
-Worker 2's mandate is simple: **break things, break things, break things.** Write scratch test files.
+Worker 1's mandate is simple: **break things, break things, break things.** Write scratch test files.
 Be messy. Be hostile. Try misuse, malformed state, unnatural ordering, interruption, repetition,
 concurrency, partial success, and failure during failure handling. Within disposable scratch scope,
-Worker 2 is free to do anything useful to make the behavior fail. Do not clean up after yourself;
-leave every useful probe and its state for Worker 1.
+Worker 1 is free to do anything useful to make the behavior fail. Do not clean up after yourself;
+leave every useful probe and its state for Worker 0.
 
 Think creatively across layers, not merely through familiar local bug patterns. A clean function
 can still participate in a broken system when its caller, adapter, cache, registry, ORM boundary,
@@ -162,7 +162,7 @@ why every changed file is necessary. Do not limit a systemic fix to the entry-po
 keep the diff small.
 
 Add permanent tests in the same change. Use focused validation when useful and normally pass
-`--no-cov` to focused pytest runs. Do not run the full suite; Worker 1 owns the final gate. After
+`--no-cov` to focused pytest runs. Do not run the full suite; Worker 0 owns the final gate. After
 any edit, run:
 
 ```shell
@@ -170,7 +170,7 @@ uv run ruff format .
 uv run ruff check --fix .
 ```
 
-Worker 2 reports:
+Worker 1 reports:
 
 - target and result: `No bugs`, `Fixed <severity>`, or `Blocked`;
 - system paths and behavior examined;
@@ -178,16 +178,16 @@ Worker 2 reports:
 - files changed and why;
 - permanent and scratch tests, commands, and outcomes;
 - formatter and linter outcomes; and
-- every scratch path and disposable state deliberately left for Worker 1.
+- every scratch path and disposable state deliberately left for Worker 0.
 
-## Worker 1: verify and advance
+## Worker 0: verify and advance
 
-Worker 1 reviews every Worker 2 report for completeness and scope. A `No bugs` result needs enough
+Worker 0 reviews every Worker 1 report for completeness and scope. A `No bugs` result needs enough
 system trace and verification evidence to justify completion, but it does not require a second full
-hunt. Worker 1 reruns or inspects the strongest scratch probes, removes all item-owned scratch and
+hunt. Worker 0 reruns or inspects the strongest scratch probes, removes all item-owned scratch and
 disposable state, records `Status: no-bugs` and a concise `Result:` line, then checks the item.
 
-After any fix, Worker 1 independently verifies it before advancing:
+After any fix, Worker 0 independently verifies it before advancing:
 
 1. Inspect the item-scoped changes without absorbing unrelated dirty work.
 2. Re-trace the violated contract through the live target, affected callers, dependencies, tests,
@@ -202,14 +202,14 @@ After any fix, Worker 1 independently verifies it before advancing:
 7. Only after verification passes, remove every scratch file and disposable state created for the
    item and confirm that cleanup did not touch unrelated work.
 
-Worker 1 may use new scratch probes or focused tests when they improve confidence. It does not edit
+Worker 0 may use new scratch probes or focused tests when they improve confidence. It does not edit
 the production fix or its permanent tests during verification.
 
-If the fix is complete, Worker 1 records `Status: verified`, the verification evidence, changed
+If the fix is complete, Worker 0 records `Status: verified`, the verification evidence, changed
 files, validation, and cleanup, then checks the item and advances. If anything remains, it records
-`Status: revision-needed` with concrete reproducible feedback and returns the same item to Worker 2.
-Leave the scratch environment intact during a revision so Worker 2 can reproduce and extend it. The
-Worker 2 → Worker 1 loop continues automatically until verified. Use `blocked` only when the solution
+`Status: revision-needed` with concrete reproducible feedback and returns the same item to Worker 1.
+Leave the scratch environment intact during a revision so Worker 1 can reproduce and extend it. The
+Worker 1 → Worker 0 loop continues automatically until verified. Use `blocked` only when the solution
 requires maintainer authority or an external dependency that the workers cannot obtain.
 
 Use concise stable result lines:
@@ -226,26 +226,26 @@ Do not erase earlier results or revision feedback. Append an `Iteration:` line w
 
 ## Integration and final gate
 
-After all source-file items, Worker 2 performs the package integration item against the live final
+After all source-file items, Worker 1 performs the package integration item against the live final
 tree. It traces representative behavior across package boundaries and explicitly examines public
 exports and `__init__.py` files. It searches for failures that no individual entry point reveals:
 incompatible lifecycle phases, state owned in two places, circular initialization, divergent public
 flavors, and gaps between implementation, tests, examples, and documentation. Any fix follows the
-same Worker 2 implementation and Worker 1 verification loop.
+same Worker 1 implementation and Worker 0 verification loop.
 
-At the final item, Worker 1 runs:
+At the final item, Worker 0 runs:
 
 ```shell
 uv run pytest
 ```
 
 The gate passes only when the suite passes and configured package coverage remains 100%. Record the
-result, coverage, skips, and xfails. A product failure returns to Worker 2 for a root-cause fix and
-then through Worker 1 verification; an unrelated environment or concurrent-work failure is recorded
+result, coverage, skips, and xfails. A product failure returns to Worker 1 for a root-cause fix and
+then through Worker 0 verification; an unrelated environment or concurrent-work failure is recorded
 precisely and treated as a genuine blocker.
 
-When every item and the final gate are checked, Worker 1 sets the progress file to `Status:
+When every item and the final gate are checked, Worker 0 sets the progress file to `Status:
 complete` and reports confirmed fixes, no-bug items, blockers, final validation, and unrelated work
-left untouched. Confirm that Worker 1 removed all item-owned scratch before closeout. Do not remove
+left untouched. Confirm that Worker 0 removed all item-owned scratch before closeout. Do not remove
 `HUNT.md`, `dicta.md`, the completed progress file, or any sibling output under `docs/shadow/`, and
 do not commit.

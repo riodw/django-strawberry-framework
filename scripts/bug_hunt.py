@@ -70,7 +70,7 @@ _FALLBACK_DICTA = (
     "shadow inputs are orientation only.\n"
 )
 
-# Static boilerplate describing the Worker 2 single-file hunt.
+# Static boilerplate describing the Worker 1 single-file hunt.
 _HOW_TO_REVIEW_ONE_FILE = """## How to hunt one file
 Each item uses one source file as its entry point into the live system. The
 target is narrow; the investigation and root-cause fix may cross files.
@@ -89,14 +89,14 @@ target is narrow; the investigation and root-cause fix may cross files.
 - For every extreme, test the opposite extreme and then combine them across
   layers. Try to disprove every candidate and record only confirmed defects.
 - Do not clean up scratch probes or disposable state. Report every path and
-  leave it intact so Worker 1 can independently verify it and clean it up only
+  leave it intact so Worker 0 can independently verify it and clean it up only
   after the item passes.
 - Implement the root-cause fix at the layer that owns the broken invariant,
   including connected files when required. Add a permanent behavioral test for
   every production fix at the strongest tier required by `AGENTS.md`.
 - After edits run `uv run ruff format .` and `uv run ruff check --fix .`.
-- Report evidence, changed files, tests, and validation to Worker 1. Do not edit
-  this progress file; Worker 1 independently verifies fixes and advances it.
+- Report evidence, changed files, tests, and validation to Worker 0. Do not edit
+  this progress file; Worker 0 independently verifies fixes and advances it.
 
 ## Hunt items
 """
@@ -262,11 +262,11 @@ def _integration_block() -> str:
 
 
 def _final_gate_block() -> str:
-    """Render the Worker 1 full-suite gate."""
+    """Render the Worker 0 full-suite gate."""
     return (
         "- [ ] Final test gate\n"
         "    - Status: pending\n"
-        "    - Owner: Worker 1\n"
+        "    - Owner: Worker 0\n"
         "    - Prompt:\n"
         "        - Run `uv run pytest`; require a passing suite and 100% configured package "
         "coverage.\n"

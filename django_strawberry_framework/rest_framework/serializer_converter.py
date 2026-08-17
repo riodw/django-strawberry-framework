@@ -9,8 +9,8 @@ its Strawberry annotation + required-ness, in the graphene-django
 It is NOT a parallel copy of the read-side scalar table. Where a
 ``ModelSerializer`` field has a backing model column (resolved via the field's
 ``source``), the annotation routes through the read-side ``convert_scalar`` /
-``convert_choices_to_enum`` / ``relation_input_annotation`` at the
-``rest_framework/inputs.py`` build site (keyed on the resolved ``models.Field``),
+``convert_choices_to_enum`` / ``model_column_write_annotation`` at
+``resolve_serializer_field`` (keyed on the resolved ``models.Field``),
 so a ``choices`` column resolves to the SAME generated enum the read
 ``DjangoType`` synthesizes (the symmetric wire contract). The two key spaces -
 DRF ``serializers.Field`` here, ``models.Field`` on the read side - stay strictly
@@ -66,7 +66,11 @@ from django.db import models
 from rest_framework import serializers
 
 from ..exceptions import ConfigurationError, _safe_type_name
-from ..mutations.inputs import annotate_queryset_relation, relation_input_annotation
+from ..mutations.inputs import (
+    annotate_queryset_relation,
+    model_column_write_annotation,
+    model_column_write_kind,
+)
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
@@ -842,24 +846,24 @@ def resolve_serializer_field(
     The serializer-flavor analog of ``forms/inputs.py::_field_triple_and_spec``,
     extended with the ``source`` axis. A ``ModelSerializer`` field with a backing
     column (resolved via ``source``) routes through the read-side converters
-    (keyed on the resolved ``models.Field``): a relation column ->
-    ``relation_input_annotation`` (``<name>_id`` / the Relay-vs-raw-pk id type); a
-    file/image column -> ``Upload``; else ``convert_scalar`` (the symmetric enum
-    for ``choices``) - with the type-override conflict policy: a
-    CONSUMER-DECLARED model-backed scalar whose declared type disagrees with the
-    column's fails loud rather than silently picking the column. A column-less field
-    uses ``convert_serializer_field`` (the model-less table) for the kind, and the
+    (keyed on the resolved ``models.Field``): kind via
+    ``model_column_write_kind``; a relation / file column's annotation via
+    ``model_column_write_annotation`` (Relay-vs-raw-pk id type / ``Upload``);
+    a scalar via ``_model_backed_scalar_annotation`` (type-override conflict
+    policy: a CONSUMER-DECLARED model-backed scalar whose declared type disagrees
+    with the column's fails loud rather than silently picking the column). The
+    GraphQL name is ALWAYS derived from the DECLARED serializer field name via
+    the id-like-suffix rule (never ``source``). A column-less field uses
+    ``convert_serializer_field`` (the model-less table) for the kind, and the
     relation / file annotations are finalized here (where ``Upload`` and the
     serializer-only relation id-type are known); a column-less ``ChoiceField`` /
     ``MultipleChoiceField`` is upgraded to a generated GraphQL enum.
 
-    The GraphQL name is ALWAYS derived from the DECLARED serializer field name via
-    the id-like-suffix rule (never ``source``). Returns the BASE (non-nullable)
-    annotation; the create/partial requiredness + ``allow_null`` widening is
-    applied by the caller. The returned ``InputFieldSpec`` records the reverse map
-    the resolver consults - ``target_name`` is the DECLARED serializer
-    field name (the ``validated_data`` key), ``source`` the resolved one-segment
-    source.
+    Returns the BASE (non-nullable) annotation; the create/partial requiredness +
+    ``allow_null`` widening is applied by the caller. The returned
+    ``InputFieldSpec`` records the reverse map the resolver consults -
+    ``target_name`` is the DECLARED serializer field name (the ``validated_data``
+    key), ``source`` the resolved one-segment source.
     """
     # reject a nested serializer field FIRST, before the backing-column lookup - a
     # nested serializer over a reverse-relation column (``BranchSerializer.shelves``) would
@@ -878,40 +882,43 @@ def resolve_serializer_field(
     # re-discovering the serializer field set per request.
     related_model: type[models.Model] | None = None
 
-    if column is not None and getattr(column, "is_relation", False):
-        # Model-backed relation: the read-side ``relation_input_annotation`` owns the
-        # ``<column.name>_id`` attr + Relay-vs-raw-pk id type. The GraphQL name,
-        # though, follows the DECLARED serializer name (id-like-suffix rule), so a
-        # renamed ``category_pk = PrimaryKeyRelatedField(source="category")`` exposes
-        # ``categoryPk`` while the column is resolved via ``source``.
-        #
-        # H5: only a PK relation (``PrimaryKeyRelatedField`` / ``ManyRelatedField``
-        # of a PK child) decodes to a primary key, so a ``SlugRelatedField`` /
-        # ``HyperlinkedRelatedField`` / custom related field over a relation column
-        # fails loud here rather than silently misdecoding a pk into a slug-expecting
-        # field.
-        _reject_unsupported_relation_field(field)
-        kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
-        # M3: the serializer flavor requires a registered primary DjangoType for
-        # the target (stricter than the model fallback). Resolve + validate it
-        # here, then hand it to ``relation_input_annotation`` so the id type is the
-        # SAME Relay-vs-raw-pk decision the read side makes (a non-Relay target
-        # still legitimately uses the raw pk - M3 forbids a MISSING primary, not a
-        # non-Relay one).
-        related_model = column.related_model
-        primary = _require_relation_primary(field_name, related_model)
-        _, _, annotation = relation_input_annotation(column, related_primary_type=primary)
-        python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
-    elif column is not None and isinstance(column, (models.FileField, models.ImageField)):
-        kind = FILE
-        annotation = Upload
-        python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
-    elif column is not None:
-        # #8: an auto-generated ModelSerializer field routes through the read-side
-        # ``convert_scalar`` (enum symmetry); a CONSUMER-DECLARED field whose scalar
-        # disagrees with the column's fails loud rather than silently picking the column.
-        kind = SCALAR
-        annotation = _model_backed_scalar_annotation(field, column, type_name)
+    if column is not None:
+        # Model-backed field: ``model_column_write_kind`` is the one column
+        # classifier (shared with ``model_column_input_annotation`` / form).
+        # Relation / file annotations ride ``model_column_write_annotation``;
+        # SCALAR keeps the type-override conflict policy. The GraphQL name
+        # follows the DECLARED serializer name (id-like-suffix rule), so a
+        # renamed ``category_pk = PrimaryKeyRelatedField(source="category")``
+        # exposes ``categoryPk`` while the column is resolved via ``source``.
+        kind = model_column_write_kind(column)
+        if kind in (RELATION_SINGLE, RELATION_MULTI):
+            # H5: only a PK relation (``PrimaryKeyRelatedField`` / ``ManyRelatedField``
+            # of a PK child) decodes to a primary key, so a ``SlugRelatedField`` /
+            # ``HyperlinkedRelatedField`` / custom related field over a relation column
+            # fails loud here rather than silently misdecoding a pk into a slug-expecting
+            # field.
+            _reject_unsupported_relation_field(field)
+            related_model = column.related_model
+            # M3: the serializer flavor requires a registered primary DjangoType for
+            # the target (stricter than the model fallback). Resolve + validate it
+            # via ``primary_of`` so the id type is the SAME Relay-vs-raw-pk decision
+            # the read side makes (a non-Relay target still legitimately uses the
+            # raw pk - M3 forbids a MISSING primary, not a non-Relay one).
+            annotation = model_column_write_annotation(
+                column,
+                type_name,
+                primary_of=lambda model: _require_relation_primary(field_name, model),
+                kind=kind,
+            )
+        elif kind == FILE:
+            annotation = model_column_write_annotation(
+                column,
+                type_name,
+                primary_of=lambda _model: None,
+                kind=kind,
+            )
+        else:
+            annotation = _model_backed_scalar_annotation(field, column, type_name)
         python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
     else:
         # Column-less serializer field: the model-less converter owns the kind;

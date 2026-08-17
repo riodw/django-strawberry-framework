@@ -55,7 +55,11 @@ from strawberry.types.base import StrawberryList
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
-from ..utils.inputs import make_shape_build_cache, normalize_field_name_sequence
+from ..utils.inputs import (
+    get_or_store_shape_build,
+    make_shape_build_cache,
+    normalize_field_name_sequence,
+)
 from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
@@ -245,29 +249,22 @@ def cached_build_input(
     cached shape - the cache key (``shape_key``) excludes the waiver, so the
     guard is tied to the declaration, not the built shape.
 
-    The serializer flavor deliberately does NOT call this helper: its cache
-    key is the post-build ``SerializerInputShape`` descriptor, so
+    The get-or-store itself rides ``utils/inputs.py::get_or_store_shape_build``
+    (the same spine serializer ``dedupe_serializer_input_shape`` uses after
+    its walk). The serializer flavor deliberately does NOT call this helper:
+    its cache key is the post-build ``SerializerInputShape`` descriptor, so
     ``rest_framework/sets.py`` preserves the same guard-before-dedupe
-    discipline inline and routes dedupe through
-    ``inputs.dedupe_serializer_input_shape`` (see that seam's P1.7 note). The
-    materialize-then-stash tail both flavors still share is
-    ``build_and_stash_input``.
+    discipline inline. The materialize-then-stash tail both flavors still
+    share is ``build_and_stash_input``.
 
     On a cache miss ``build_fn()`` returns ``(input_cls, payload)`` where
     ``payload`` is the per-flavor stash value (the form's ``field_specs``
-    list); the pair is cached under ``shape_key`` so identical shapes reuse
-    one class object and the materialize ledger dedupes idempotently.
-    ``cache`` is the FLAVOR's own per-pass ``make_shape_build_cache()`` dict
-    (passed in, not owned here) so the mutation / form caches stay disjoint -
-    each is registered + cleared separately.
+    list). ``cache`` is the FLAVOR's own per-pass ``make_shape_build_cache()``
+    dict (passed in, not owned here) so the mutation / form caches stay
+    disjoint - each is registered + cleared separately.
     """
     guard()
-    cached = cache.get(shape_key)
-    if cached is not None:
-        return cached
-    built = build_fn()
-    cache[shape_key] = built
-    return built
+    return get_or_store_shape_build(cache, shape_key, build_fn)
 
 
 def build_and_stash_input(
@@ -1330,17 +1327,18 @@ def _materialize_input_for(
         fields=meta.fields,
         exclude=meta.exclude,
     )
-    input_cls = _shape_build_cache.get(shape.cache_key)
-    if input_cls is None:
-        input_cls = build_mutation_input(
+    input_cls = get_or_store_shape_build(
+        _shape_build_cache,
+        shape.cache_key,
+        lambda: build_mutation_input(
             meta.model,
             operation_kind=operation_kind,
             primary_type=primary_type,
             fields=meta.fields,
             exclude=meta.exclude,
             shape=shape,
-        )
-        _shape_build_cache[shape.cache_key] = input_cls
+        ),
+    )
     materialize_mutation_input_class(input_cls.__name__, input_cls)
     return input_cls
 

@@ -56,6 +56,8 @@ from django_strawberry_framework.mutations.inputs import (
     input_field_required,
     materialize_mutation_input_class,
     model_column_input_annotation,
+    model_column_write_annotation,
+    model_column_write_kind,
     mutation_input_type_name,
     payload_object_slot,
     related_model_of_queryset,
@@ -404,6 +406,70 @@ def test_model_and_form_name_set_shapes_share_type_name_owner():
     from django_strawberry_framework.mutations import inputs as mutation_inputs
 
     assert mutation_inputs.name_set_input_type_name is name_set_input_type_name
+
+
+def test_model_column_write_kind_classifies_relation_file_and_scalar():
+    """A backing column is relation / file / scalar by the one shared classifier."""
+    from django_strawberry_framework.utils.inputs import (
+        FILE,
+        RELATION_MULTI,
+        RELATION_SINGLE,
+        SCALAR,
+    )
+
+    class Probe(models.Model):
+        name = models.TextField()
+        attachment = models.FileField()
+        parent = models.ForeignKey("self", on_delete=models.CASCADE)
+        peers = models.ManyToManyField("self")
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    assert model_column_write_kind(Probe._meta.get_field("name")) == SCALAR
+    assert model_column_write_kind(Probe._meta.get_field("attachment")) == FILE
+    assert model_column_write_kind(Probe._meta.get_field("parent")) == RELATION_SINGLE
+    assert model_column_write_kind(Probe._meta.get_field("peers")) == RELATION_MULTI
+
+
+def test_model_column_write_annotation_maps_file_and_scalar():
+    """Annotation-only mapping is Upload for a file column, else convert_scalar."""
+    from django_strawberry_framework.types.converters import convert_scalar
+
+    class Probe(models.Model):
+        name = models.TextField()
+        attachment = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    attachment = Probe._meta.get_field("attachment")
+    assert (
+        model_column_write_annotation(
+            attachment,
+            "ProbeInput",
+            primary_of=lambda _model: None,
+        )
+        is Upload
+    )
+    name_field = Probe._meta.get_field("name")
+    assert model_column_write_annotation(
+        name_field,
+        "ProbeInput",
+        primary_of=lambda _model: None,
+    ) == convert_scalar(name_field, "ProbeInput", force_nullable=False)
+
+
+def test_form_and_serializer_column_kind_share_model_column_owner():
+    """Form reverse-map kind and serializer column resolve import the same owners."""
+    from django_strawberry_framework.forms import inputs as form_inputs
+    from django_strawberry_framework.rest_framework import (
+        serializer_converter as ser_converter,
+    )
+
+    assert form_inputs.model_column_write_kind is model_column_write_kind
+    assert ser_converter.model_column_write_kind is model_column_write_kind
+    assert ser_converter.model_column_write_annotation is model_column_write_annotation
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ import pytest
 from django import forms
 from rest_framework import serializers
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.forms import converter as form_converter
 from django_strawberry_framework.rest_framework import serializer_converter as ser_converter
 from django_strawberry_framework.utils.converters import (
@@ -140,6 +141,46 @@ def test_unhandled_field_raises_via_factory():
             scalar_registry={_Child: "won't match"},
             fallthrough_error_factory=_factory,
         )
+
+
+def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access():
+    """A hostile ``__getattribute__`` cannot replace typed converter failure."""
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__mro__":
+                raise RuntimeError("mro descriptor failed")
+            return super().__getattribute__(name)
+
+    class HostileFormField(forms.Field, metaclass=HostileMeta):
+        pass
+
+    class HostileSerializerField(serializers.Field, metaclass=HostileMeta):
+        pass
+
+    hostile_form = object.__new__(HostileFormField)
+    hostile_serializer = object.__new__(HostileSerializerField)
+    hostile_serializer.field_name = "hostile"
+
+    with pytest.raises(ConfigurationError, match="Unsupported form field type"):
+        form_converter.convert_form_field(hostile_form)
+    with pytest.raises(ConfigurationError, match="Unsupported serializer field type"):
+        ser_converter.convert_serializer_field(hostile_serializer)
+
+
+def test_mro_walk_bypasses_hostile_field_metaclass_hashing():
+    """A hostile class hash cannot abort the registry walk."""
+
+    class HostileMeta(type):
+        def __hash__(cls):
+            raise RuntimeError("class hash failed")
+
+    class HostileFormField(forms.Field, metaclass=HostileMeta):
+        pass
+
+    hostile_form = object.__new__(HostileFormField)
+    with pytest.raises(ConfigurationError, match="Unsupported form field type"):
+        form_converter.convert_form_field(hostile_form)
 
 
 # ---------------------------------------------------------------------------

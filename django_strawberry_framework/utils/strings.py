@@ -18,9 +18,22 @@ call site.
 import functools
 from collections.abc import Callable
 
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+
+
+def _plain_text(value: object) -> str:
+    """Normalize a string subclass before invoking string methods or cache machinery."""
+    if not isinstance(value, str):
+        raise ConfigurationError(
+            f"String helper input must be a string; got {_safe_type_name(value)}.",
+        )
+    if type(value) is str:
+        return value
+    return str.__str__(value)
+
 
 @functools.lru_cache(maxsize=2048)
-def snake_case(name: str) -> str:
+def _snake_case_cached(name: str) -> str:
     """Convert a camel/Pascal GraphQL name back to ``snake_case``.
 
     Strawberry's default name converter emits ``camelCase`` from
@@ -64,6 +77,17 @@ def snake_case(name: str) -> str:
     return "".join(out)
 
 
+@functools.wraps(_snake_case_cached)
+def snake_case(name: str) -> str:
+    """Normalize ``name`` before consulting the bounded conversion cache."""
+    return _snake_case_cached(_plain_text(name))
+
+
+snake_case.cache_clear = _snake_case_cached.cache_clear
+snake_case.cache_info = _snake_case_cached.cache_info
+snake_case.cache_parameters = _snake_case_cached.cache_parameters
+
+
 def pascal_case(name: str) -> str:
     """Convert a ``snake_case`` Django field name to ``PascalCase``.
 
@@ -97,6 +121,7 @@ def pascal_case(name: str) -> str:
         ``"_leading"`` -> ``"Leading"``;
         ``"double__underscore"`` -> ``"DoubleUnderscore"``.
     """
+    name = _plain_text(name)
     parts = [part for part in name.split("_") if part]
     if not parts:
         return ""
@@ -134,6 +159,7 @@ def graphql_camel_name(name: str) -> str:
     ``"double__name"`` into ``"doubleName"``, or ``"field_2"`` into
     ``"field2"``. An all-underscore name passes through unchanged.
     """
+    name = _plain_text(name)
     core = name.strip("_")
     if not core:
         return name
@@ -160,4 +186,4 @@ def flatten_lookup_path(name: str) -> str:
     exactly this class of bug), so when the escaping rules ever change there is
     ONE symbol to grep for, not four inline respellings.
     """
-    return name.replace("__", "_")
+    return _plain_text(name).replace("__", "_")

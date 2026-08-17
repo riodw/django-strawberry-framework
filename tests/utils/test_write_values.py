@@ -155,6 +155,26 @@ def test_decode_visible_relation_ids_batches_visibility_and_short_circuits():
     assert error.field == "categoryIds"
 
 
+def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error():
+    """A non-iterable or iterator failure stays inside the field error envelope."""
+
+    class HostileIterator:
+        def __iter__(self):
+            raise RuntimeError("hostile relation iterator")
+
+    for values in (object(), HostileIterator()):
+        pks, error = decode_visible_relation_ids(
+            values,
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse="Use a synchronous visibility hook.",
+        )
+        assert pks is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+
 def _spec(
     *,
     attr: str,

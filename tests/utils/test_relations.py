@@ -18,10 +18,14 @@ from django_strawberry_framework.utils import (
     is_many_side_relation_kind,
     relation_kind,
 )
+from django_strawberry_framework.utils import relations as relations_module
 from django_strawberry_framework.utils.relations import (
     ClassifiedPath,
     RelationPathHop,
+    _is_traversable_relation,
+    _path_traverses_to_many_cached,
     classify_path,
+    has_composite_pk,
     instance_accessor,
     is_forward_many_to_many,
     path_traverses_to_many,
@@ -38,6 +42,38 @@ from django_strawberry_framework.utils.relations import (
 )
 
 
+class _HostileRelationMetadata:
+    def __getattribute__(self, name):
+        if name in {
+            "many_to_many",
+            "one_to_many",
+            "one_to_one",
+            "auto_created",
+            "concrete",
+            "content_type_field_name",
+            "object_id_field_name",
+            "is_relation",
+            "_meta",
+        }:
+            raise RuntimeError("hostile relation metadata")
+        return super().__getattribute__(name)
+
+
+class _HostileTerminal:
+    def get_lookup(self, _part):
+        raise RuntimeError("hostile lookup")
+
+    def get_transform(self, _part):
+        raise RuntimeError("hostile transform")
+
+
+class _HostileAccessor:
+    name = "x"
+
+    def get_accessor_name(self):
+        raise RuntimeError("hostile accessor")
+
+
 def test_relation_kind_classifies_many_to_many_as_many():
     field = SimpleNamespace(
         many_to_many=True,
@@ -47,6 +83,12 @@ def test_relation_kind_classifies_many_to_many_as_many():
     )
 
     assert relation_kind(field) == "many"
+
+
+def test_relation_kind_hostile_metadata_raises_typed_configuration_error():
+    """A relation descriptor cannot replace a typed metadata error with its own exception."""
+    with pytest.raises(ConfigurationError):
+        relation_kind(_HostileRelationMetadata())
 
 
 def test_relation_kind_classifies_one_to_many_as_many():
@@ -199,6 +241,12 @@ def test_is_forward_many_to_many_rejects_non_m2m():
     assert is_forward_many_to_many(field) is False
 
 
+def test_is_forward_many_to_many_hostile_metadata_raises_typed_configuration_error():
+    """The writable-M2M predicate fails closed when relation flags cannot be read."""
+    with pytest.raises(ConfigurationError):
+        is_forward_many_to_many(_HostileRelationMetadata())
+
+
 def test_is_forward_many_to_many_stock_book_genres():
     """Library ``Book.genres`` is a forward writable M2M; reverse is not."""
     assert is_forward_many_to_many(Book._meta.get_field("genres")) is True
@@ -236,6 +284,12 @@ def test_instance_accessor_prefers_precomputed_field_meta_slot():
         get_accessor_name=lambda: "WRONG-not-consulted",
     )
     assert instance_accessor(meta_like) == "book_set"
+
+
+def test_instance_accessor_hostile_accessor_raises_typed_configuration_error():
+    """A hostile reverse accessor cannot leak its raw exception from the shared seam."""
+    with pytest.raises(ConfigurationError):
+        instance_accessor(_HostileAccessor())
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +540,25 @@ def test_classify_path_empty_path_infos_relation_raises():
     assert excinfo.value.segment == "rel"
 
 
+def test_classify_path_non_string_path_raises_typed_path_error():
+    """A non-string path is rejected through the path error contract before any split."""
+    with pytest.raises(PathResolutionError):
+        classify_path(Book, object())  # type: ignore[arg-type]
+
+
+def test_classify_path_malformed_path_info_member_raises_typed_path_error():
+    """Malformed path-info metadata cannot escape as an attribute error."""
+    fake_field = SimpleNamespace(is_relation=True, path_infos=[object()])
+    fake_model = SimpleNamespace(
+        _meta=SimpleNamespace(get_field=lambda _segment: fake_field),
+    )
+
+    with pytest.raises(PathResolutionError) as excinfo:
+        classify_path(fake_model, "rel")
+
+    assert excinfo.value.segment == "rel"
+
+
 def test_path_resolution_error_is_configuration_family():
     """``PathResolutionError`` is catchable as ConfigurationError and the base."""
     err = PathResolutionError(Book, "loans__x", "x")
@@ -655,6 +728,12 @@ def test_validate_lookup_expr_empty_part_raises():
     assert excinfo.value.part == ""
 
 
+def test_validate_lookup_expr_hostile_methods_raise_typed_lookup_error():
+    """A terminal's lookup hooks are contained by the lookup-validation boundary."""
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(_HostileTerminal(), "x")
+
+
 def test_lookup_validation_error_is_configuration_family():
     """``LookupValidationError`` is catchable as ConfigurationError and the base."""
     err = LookupValidationError(Book._meta.get_field("title"), "x", "x")
@@ -813,3 +892,164 @@ def test_classify_path_public_is_uncached_accepts_unhashable_model():
     # Uncached: a fresh frozen plan each call (equal but distinct objects).
     assert first == second
     assert first is not second
+
+
+def test_path_traverses_to_many_unhashable_model_fails_closed():
+    """The public probe bypasses its cache when the model key is unhashable."""
+    assert path_traverses_to_many([], "title") is False
+
+
+def test_has_composite_pk_hostile_metadata_raises_typed_configuration_error():
+    """Composite-PK detection must not leak a malformed model's metadata error."""
+    with pytest.raises(ConfigurationError):
+        has_composite_pk(_HostileRelationMetadata())
+
+
+def test_relation_metadata_rejects_non_boolean_and_non_string_slots():
+    """Relation flags must be real bools and name slots real strings, not truthy stand-ins."""
+    malformed_bool = SimpleNamespace(
+        many_to_many=1,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=True,
+    )
+    malformed_name = SimpleNamespace(
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=True,
+        content_type_field_name=123,
+    )
+
+    with pytest.raises(ConfigurationError, match="must be a bool"):
+        relation_kind(malformed_bool)
+    with pytest.raises(ConfigurationError, match="must be a string or None"):
+        relation_kind(malformed_name)
+
+
+def test_many_side_kind_membership_fails_closed_for_hostile_hashing():
+    """An unhashable kind is not many-side; the frozenset probe never raises."""
+
+    class _HostileKind:
+        def __hash__(self):
+            raise RuntimeError("kind hash exploded")
+
+    assert is_many_side_relation_kind(_HostileKind()) is False  # type: ignore[arg-type]
+
+
+def test_traversable_relation_probe_handles_false_and_hostile_flags():
+    """A field is untraversable when its relation flag is false or cannot be read at all."""
+
+    class _UnreadableRelationFlag:
+        @property
+        def is_relation(self):
+            raise RuntimeError("relation flag exploded")
+
+    assert _is_traversable_relation(SimpleNamespace(is_relation=False)) is False
+    assert _is_traversable_relation(_HostileRelationMetadata()) is False
+    assert _is_traversable_relation(_UnreadableRelationFlag()) is False
+
+
+def test_classify_path_wraps_malformed_relation_flags_and_taxonomy():
+    """Malformed flags at the segment gate and at the kind gate both surface as path errors."""
+    malformed_flag = SimpleNamespace(is_relation=1)
+    flag_model = SimpleNamespace(_meta=SimpleNamespace(get_field=lambda segment: malformed_flag))
+    with pytest.raises(PathResolutionError):
+        classify_path(flag_model, "relation")
+
+    path_info = SimpleNamespace(m2m=False, to_opts=SimpleNamespace(model=Book))
+    malformed_kind = SimpleNamespace(
+        is_relation=True,
+        path_infos=[path_info],
+        many_to_many=1,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=True,
+    )
+    kind_model = SimpleNamespace(_meta=SimpleNamespace(get_field=lambda segment: malformed_kind))
+    with pytest.raises(PathResolutionError):
+        classify_path(kind_model, "relation")
+
+
+def test_lookup_validation_wraps_every_transform_failure_stage():
+    """Lookup resolution, transform construction, and the exact-probe all fail as typed errors."""
+
+    class _RaisingTransformLookup:
+        def get_lookup(self, part):
+            return None
+
+        def get_transform(self, part):
+            raise RuntimeError("transform lookup exploded")
+
+    class _RaisingTransform:
+        def __init__(self, cursor):
+            raise RuntimeError("transform construction exploded")
+
+    class _ConstructingTerminal:
+        def get_lookup(self, part):
+            return None
+
+        def get_transform(self, part):
+            return _RaisingTransform
+
+    class _BrokenExact:
+        def get_lookup(self, part):
+            raise RuntimeError("exact lookup exploded")
+
+    class _BrokenExactTransform:
+        def __new__(cls, cursor):
+            return _BrokenExact()
+
+    class _BrokenExactTerminal:
+        def get_lookup(self, part):
+            return None
+
+        def get_transform(self, part):
+            return _BrokenExactTransform
+
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(_HostileTerminal(), "first__last")
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(_ConstructingTerminal(), "first__last")
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(_RaisingTransformLookup(), "last")
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(_BrokenExactTerminal(), "last")
+    with pytest.raises(LookupValidationError):
+        validate_lookup_expr(Book._meta.get_field("title"), 123)  # type: ignore[arg-type]
+
+
+def test_many_path_probes_fail_closed_for_unexpected_classifier_errors(monkeypatch):
+    """Both the cached and the uncached probe answer ``False`` when the classifier explodes."""
+    _path_traverses_to_many_cached.cache_clear()
+    monkeypatch.setattr(
+        relations_module,
+        "_classify_path_cached",
+        lambda model, path: (_ for _ in ()).throw(RuntimeError("classifier exploded")),
+    )
+    assert _path_traverses_to_many_cached(Book, "fresh_unexpected_path") is False
+
+    monkeypatch.setattr(
+        relations_module,
+        "classify_path",
+        lambda model, path: (_ for _ in ()).throw(RuntimeError("classifier exploded")),
+    )
+    assert path_traverses_to_many([], "path") is False
+
+
+def test_many_path_probe_rejects_a_non_string_path():
+    """A non-string path is not many-side rather than an error out of the probe."""
+    assert path_traverses_to_many(Book, 123) is False  # type: ignore[arg-type]
+
+
+def test_instance_accessor_rejects_malformed_accessor_metadata():
+    """Each accessor tier requires the declared shape: string slot, callable hook, string result."""
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        instance_accessor(SimpleNamespace(accessor_name=123))
+    with pytest.raises(ConfigurationError, match="must be callable"):
+        instance_accessor(SimpleNamespace(get_accessor_name=123, name="relation"))
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        instance_accessor(SimpleNamespace(get_accessor_name=lambda: 123, name="relation"))

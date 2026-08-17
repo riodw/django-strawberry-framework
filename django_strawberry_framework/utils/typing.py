@@ -35,7 +35,8 @@ def strawberry_schema_from_schema(schema: Any) -> Any:
     Test fixtures sometimes pass the inner schema directly, so the fallback is
     the input itself.
     """
-    return getattr(schema, "_strawberry_schema", schema)
+    unwrapped = getattr(schema, "_strawberry_schema", None)
+    return schema if unwrapped is None else unwrapped
 
 
 def strawberry_schema_from_info(info: Any) -> Any | None:
@@ -68,18 +69,18 @@ def schema_config_from_info(info: Any) -> Any | None:
 
 
 def _callable_inspection_target(value: Any) -> Any:
-    """One hop through ``partial`` / ``staticmethod`` for the async predicates.
+    """Unwrap ``partial`` / ``staticmethod`` layers for the async predicates.
 
     Shared by ``is_async_callable`` and ``is_async_generator_callable`` so the
-    wrapper shapes they see cannot drift. A single ``.func`` hop reaches the
-    partial target with no loop to bound: ``partial`` flattens nested partials at
-    construction (``partial(partial(f)).func is f``), so ``.func`` is never itself
-    a ``partial`` and the traversal is depth-1; the descriptor unwrap then runs on
-    that target so ``partial(staticmethod_obj)`` is handled too.
+    wrapper shapes they see cannot drift. ``partial`` flattens nested partials at
+    construction (``partial(partial(f)).func is f``), but a staticmethod descriptor
+    can contain a partial, so peel both wrapper kinds until the callable target is
+    reached. This handles both ``partial(staticmethod_obj)`` and
+    ``staticmethod(partial(callable_instance))``.
     """
-    target = value.func if isinstance(value, functools.partial) else value
-    if isinstance(target, staticmethod):
-        target = target.__func__
+    target = value
+    while isinstance(target, (functools.partial, staticmethod)):
+        target = target.func if isinstance(target, functools.partial) else target.__func__
     return target
 
 
@@ -159,7 +160,7 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
         ``Inner`` -> ``Inner`` (no wrapper to peel);
         ``None`` -> ``None`` (no ``of_type`` attribute).
     """
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
         if not hasattr(gql_type, "of_type"):
             return gql_type
         gql_type = gql_type.of_type
@@ -187,7 +188,7 @@ def unwrap_container_type(strawberry_type: Any) -> Any:
     """
     from strawberry.types.base import StrawberryContainer
 
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
         if not isinstance(strawberry_type, StrawberryContainer):
             return strawberry_type
         strawberry_type = strawberry_type.of_type
@@ -221,8 +222,9 @@ def unwrap_return_type(rt: Any) -> Any:
         ``StrawberryList(of_type=int)`` -> ``int``;
         ``int`` -> ``int`` (no wrapper to peel).
     """
-    inner = getattr(rt, "of_type", None)
-    if inner is not None:
+    missing = object()
+    inner = getattr(rt, "of_type", missing)
+    if inner is not missing:
         return inner
     if get_origin(rt) is list:
         args = get_args(rt)

@@ -488,25 +488,16 @@ def make_hashable_meta_value(v: Any) -> Any:
     object still hits the cache while distinct objects cannot alias.
     """
     if isinstance(v, dict):
-        try:
-            pairs = tuple(
-                (make_hashable_meta_value(key), make_hashable_meta_value(value))
-                for key, value in dict.items(v)
-            )
-            return tuple(sorted(pairs, key=_meta_sort_key))
-        except BaseException:
-            return _opaque_meta_value(v)
+        pairs = tuple(
+            (make_hashable_meta_value(key), make_hashable_meta_value(value))
+            for key, value in dict.items(v)
+        )
+        return tuple(sorted(pairs, key=_meta_sort_key))
     if isinstance(v, (set, frozenset)):
-        try:
-            values = (make_hashable_meta_value(item) for item in _base_meta_values(v))
-            return tuple(sorted(values, key=_meta_sort_key))
-        except BaseException:
-            return _opaque_meta_value(v)
+        values = (make_hashable_meta_value(item) for item in _base_meta_values(v))
+        return tuple(sorted(values, key=_meta_sort_key))
     if isinstance(v, (list, tuple)):
-        try:
-            return tuple(make_hashable_meta_value(item) for item in _base_meta_values(v))
-        except BaseException:
-            return _opaque_meta_value(v)
+        return tuple(make_hashable_meta_value(item) for item in _base_meta_values(v))
     try:
         hash(v)
     except BaseException:
@@ -996,15 +987,23 @@ def normalize_field_name_sequence(
     if isinstance(value, str):
         raise ConfigurationError(
             f"{flavor} Meta.fields / Meta.exclude must be a sequence of field "
-            f"names, not a bare string: {value!r}.",
+            f"names, not a bare string: {_safe_arg_repr(value)}.",
         )
-    names = tuple(value)
+    try:
+        names = tuple(value)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{flavor} Meta.{label} must be a readable sequence of field name strings; "
+            f"got {_safe_type_name(value)}.",
+        ) from exc
     non_strings = [name for name in names if not isinstance(name, str)]
     if non_strings:
         raise ConfigurationError(
             f"{flavor} Meta.{label} must be a sequence of field name strings; "
-            f"got non-string entry(ies): {non_strings!r}.",
+            "got non-string entry(ies): "
+            f"[{', '.join(_safe_arg_repr(name) for name in non_strings)}].",
         )
+    names = tuple(str.__str__(name) if type(name) is not str else name for name in names)
     seen: set[str] = set()
     duplicates = sorted({name for name in names if name in seen or seen.add(name)})
     if duplicates:
@@ -1171,8 +1170,32 @@ def build_strawberry_input_class(
     """
     namespace: dict[str, Any] = {"__annotations__": {}}
     seen_graphql_names: dict[str, str] = {}
-    for python_attr, annotation, raw_kwargs in field_specs:
-        kwargs = dict(raw_kwargs or {})
+    try:
+        specs = tuple(field_specs)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Generated input {name!r} field specifications could not be read.",
+        ) from exc
+    for index, field_spec in enumerate(specs):
+        try:
+            python_attr, annotation, raw_kwargs = field_spec
+        except BaseException as exc:
+            raise ConfigurationError(
+                "Generated input field specifications must contain "
+                f"(python_attr, annotation, field_kwargs) triples; entry {index} is "
+                f"{_safe_type_name(field_spec)}.",
+            ) from exc
+        try:
+            kwargs = (
+                dict(dict.items(raw_kwargs))
+                if isinstance(raw_kwargs, dict)
+                else ({} if raw_kwargs is None else dict(raw_kwargs))
+            )
+        except BaseException as exc:
+            raise ConfigurationError(
+                "Generated input field kwargs must be a mapping; "
+                f"entry {index} contains {_safe_type_name(raw_kwargs)}.",
+            ) from exc
         if python_attr in namespace["__annotations__"]:
             raise ConfigurationError(
                 f"Generated input {name!r} declares input attribute {python_attr!r} more than "

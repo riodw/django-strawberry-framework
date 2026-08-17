@@ -11,13 +11,18 @@ permission dispatch) lives in the ``filters`` / ``orders`` / ``utils.permissions
 suites that consume this substrate.
 """
 
+from collections.abc import Mapping
+
+import pytest
 import strawberry
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.input_values import (
     LEAF,
     LOGIC,
     RELATED,
     SetInputTraversal,
+    input_field_value,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
@@ -170,3 +175,220 @@ def test_iter_active_fields_inactive_or_non_walkable_top_level_yields_nothing():
     assert list(iter_active_fields(_Set, None, config)) == []
     assert list(iter_active_fields(_Set, strawberry.UNSET, config)) == []
     assert list(iter_active_fields(_Set, 42, config)) == []
+
+
+def test_dict_subclass_overrides_cannot_replace_the_shared_walk():
+    """The traversal uses the real dict operations, not consumer overrides."""
+
+    class _HostileDict(dict):
+        def items(self):
+            raise RuntimeError("hostile items")
+
+        def get(self, key, default=None):
+            raise RuntimeError("hostile get")
+
+    value = _HostileDict(name="x")
+    assert iter_input_items(value) == [("name", "x")]
+    assert input_field_value(value, "name") == "x"
+
+
+def test_malformed_dataclass_metadata_fails_closed_with_configuration_error():
+    """An unreadable ``__dataclass_fields__`` is a typed traversal error, not a raw one."""
+
+    class _HostileMetadata:
+        @property
+        def __dataclass_fields__(self):
+            raise RuntimeError("hostile metadata")
+
+    with pytest.raises(ConfigurationError, match="dataclass metadata could not be read"):
+        iter_input_items(_HostileMetadata())
+
+
+def test_non_string_input_keys_fail_closed_before_permission_dispatch():
+    """Input field names must be strings; a non-string key is refused at the walk."""
+    with pytest.raises(ConfigurationError, match="field names must be strings"):
+        iter_input_items({1: "unexpected"})
+
+
+def test_hostile_list_iteration_cannot_escape_the_order_walk():
+    """The top-level-list walk reads real list elements, not a subclass iterator."""
+
+    class _HostileList(list):
+        def __iter__(self):
+            raise RuntimeError("hostile list iterator")
+
+    class _Set:
+        related_orders = {}
+
+    value = _HostileList([{"title": "x"}])
+    config = SetInputTraversal(
+        field_specs={},
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+    fields = list(iter_active_fields(_Set, value, config))
+    assert [(field.python_attr, field.raw_value) for field in fields] == [("title", "x")]
+
+
+def test_nested_order_lists_fail_closed_instead_of_recursing_or_no_oping():
+    """A list element must be a mapping or dataclass; a nested list is rejected."""
+
+    class _Set:
+        related_orders = {}
+
+    config = SetInputTraversal(
+        field_specs={},
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+    with pytest.raises(ConfigurationError, match="list elements must be mapping or dataclass"):
+        list(iter_active_fields(_Set, [[{"title": "x"}]], config))
+
+
+def test_hostile_field_spec_mapping_fails_closed_with_configuration_error():
+    """A field-spec mapping that cannot answer a lookup aborts the walk with a typed error."""
+
+    class _HostileMap(dict):
+        def get(self, key, default=None):
+            raise RuntimeError("hostile field-spec lookup")
+
+    class _Set:
+        related_orders = {}
+
+    config = SetInputTraversal(
+        field_specs=_HostileMap(),
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+    with pytest.raises(ConfigurationError, match="field provenance could not be resolved"):
+        list(iter_active_fields(_Set, [{"title": "x"}], config))
+
+
+def test_dataclass_metadata_must_be_an_enumerable_mapping():
+    """``__dataclass_fields__`` must be a mapping and must enumerate without raising."""
+
+    class _NotAMapping:
+        __dataclass_fields__ = ("name",)
+
+    class _UnreadableMapping(Mapping):
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+        def __iter__(self):
+            raise RuntimeError("hostile field enumeration")
+
+        def __len__(self):
+            return 1
+
+    class _UnreadableDataclass:
+        __dataclass_fields__ = _UnreadableMapping()
+
+    with pytest.raises(ConfigurationError, match="metadata is not a mapping"):
+        iter_input_items(_NotAMapping())
+    with pytest.raises(ConfigurationError, match="dataclass fields could not be enumerated"):
+        iter_input_items(_UnreadableDataclass())
+
+
+def test_dataclass_and_object_field_read_failures_are_typed():
+    """Both the dataclass walk and the single-field read report their own typed failure."""
+
+    class _UnreadableDataclass:
+        __dataclass_fields__ = {"name": object()}
+
+        @property
+        def name(self):
+            raise RuntimeError("hostile dataclass field")
+
+    class _UnreadableObject:
+        def __getattribute__(self, name):
+            if name == "name":
+                raise RuntimeError("hostile object field")
+            return super().__getattribute__(name)
+
+    with pytest.raises(ConfigurationError, match="dataclass field value could not be read"):
+        iter_input_items(_UnreadableDataclass())
+    with pytest.raises(ConfigurationError, match=r": a field value could not be read"):
+        input_field_value(_UnreadableObject(), "name")
+
+
+def test_active_field_configuration_and_related_metadata_fail_closed():
+    """An unreadable traversal config, or unreadable/non-mapping related declarations, raise."""
+
+    class _UnreadableConfig:
+        @property
+        def handle_top_level_list(self):
+            raise RuntimeError("hostile traversal config")
+
+        unset_sentinel = None
+
+    class _HostileSetMeta(type):
+        def __getattribute__(cls, name):
+            if name == "related_orders":
+                raise RuntimeError("hostile related declarations")
+            return super().__getattribute__(name)
+
+    class _UnreadableSet(metaclass=_HostileSetMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="configuration could not be read"):
+        list(iter_active_fields(object, {"name": "x"}, _UnreadableConfig()))
+
+    config = SetInputTraversal(field_specs={}, related_attr="related_orders")
+    with pytest.raises(ConfigurationError, match="related-field declarations could not be read"):
+        list(iter_active_fields(_UnreadableSet, {"name": "x"}, config))
+
+    class _InvalidSet:
+        related_orders = []
+
+    with pytest.raises(ConfigurationError, match="declarations are not a mapping"):
+        list(iter_active_fields(_InvalidSet, {"name": "x"}, config))
+
+
+def test_active_field_related_mapping_operations_fail_closed():
+    """Membership and lookup on a related-declaration mapping each fail as typed errors."""
+
+    class _UnreadableContains(Mapping):
+        def __getitem__(self, key):
+            return object()
+
+        def __iter__(self):
+            return iter(("name",))
+
+        def __len__(self):
+            return 1
+
+        def __contains__(self, key):
+            raise RuntimeError("hostile membership")
+
+    class _UnreadableGetitem(_UnreadableContains):
+        def __contains__(self, key):
+            return True
+
+        def __getitem__(self, key):
+            raise RuntimeError("hostile related lookup")
+
+    config = SetInputTraversal(field_specs={}, related_attr="related_orders")
+    contains_set = type("ContainsSet", (), {"related_orders": _UnreadableContains()})
+    lookup_set = type("LookupSet", (), {"related_orders": _UnreadableGetitem()})
+
+    with pytest.raises(ConfigurationError, match="declarations could not be checked"):
+        list(iter_active_fields(contains_set, {"name": "x"}, config))
+    with pytest.raises(ConfigurationError, match="declaration could not be read"):
+        list(iter_active_fields(lookup_set, {"name": "x"}, config))
+
+
+def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapping():
+    """Inactive list elements are dropped; an absent related mapping leaves every field a leaf."""
+
+    class _Set:
+        related_orders = None
+
+    config = SetInputTraversal(
+        field_specs={},
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+
+    fields = list(iter_active_fields(_Set, [None, {"name": "x"}], config))
+
+    assert [(field.python_attr, field.kind) for field in fields] == [("name", LEAF)]

@@ -3,8 +3,8 @@
 This module single-sites the neutral generated-input mechanics that the filter
 and order families had grown as parallel copies. These tests pin the substrate
 directly and assert that BOTH families route through the one builder /
-field-spec / camel-name path, so a future re-divergence is caught here rather
-than via a silently drifted second copy.
+field-spec / camel-name path / Layer-6 Meta-cache skeleton, so a future
+re-divergence is caught here rather than via a silently drifted second copy.
 """
 
 import sys
@@ -19,6 +19,8 @@ from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
     GeneratedInputFieldSpec,
     InputFieldSpec,
+    _base_meta_values,
+    _sorted_meta_values,
     build_strawberry_input_class,
     create_dynamic_set_class,
     emit_set_input_field_triples,
@@ -34,6 +36,7 @@ from django_strawberry_framework.utils.inputs import (
     make_shape_build_cache,
     materialize_generated_input_class,
     name_set_input_type_name,
+    normalize_field_name_sequence,
     normalize_set_meta_for_factory,
     pascalize_token,
     promote_set_meta_fields,
@@ -130,6 +133,11 @@ def test_builder_rejects_duplicate_effective_graphql_names():
             "DuplicateGraphQLInput",
             [("first", int, {"name": "same"}), ("second", str, {"name": "same"})],
         )
+
+
+def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
+    with pytest.raises(ConfigurationError, match="field kwargs must be a mapping"):
+        build_strawberry_input_class("MalformedFieldKwargsInput", [("name", int, object())])
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +440,23 @@ def test_make_hashable_meta_value_sorts_mixed_dict_keys():
     assert set(result) == {("a", 1), (0, 2)}
 
 
+def test_base_meta_values_reads_builtin_dict_items():
+    """The container reader exposes built-in dict entries without invoking overrides."""
+    assert _base_meta_values({"name": 1}) == (("name", 1),)
+
+
+def test_normalize_set_meta_wraps_unreadable_reserved_key_membership():
+    class _UnreadableReservedKeys:
+        def __contains__(self, value: object) -> bool:
+            raise RuntimeError("membership unavailable")
+
+    with pytest.raises(ConfigurationError, match="entries could not be read"):
+        normalize_set_meta_for_factory(
+            {"fields": ("name",)},
+            reserved_keys=_UnreadableReservedKeys(),  # type: ignore[arg-type]
+        )
+
+
 def test_make_hashable_meta_value_keys_opaque_unhashable_by_identity():
     """Values that refuse ``hash()`` discriminate by type-and-object identity."""
 
@@ -445,6 +470,42 @@ def test_make_hashable_meta_value_keys_opaque_unhashable_by_identity():
     assert first == second
     assert first != other
     hash(first)
+
+
+def test_normalize_field_name_sequence_wraps_hostile_iterators():
+    class _HostileSequence:
+        def __iter__(self):
+            raise RuntimeError("hostile field sequence")
+
+    with pytest.raises(ConfigurationError, match="readable sequence"):
+        normalize_field_name_sequence(_HostileSequence(), flavor="Probe")
+
+
+def test_meta_sorting_wraps_a_hostile_generic_iterator():
+    class _HostileIterable:
+        def __iter__(self):
+            raise RuntimeError("metadata iteration exploded")
+
+    with pytest.raises(ConfigurationError, match="unreadable _HostileIterable container"):
+        _sorted_meta_values(_HostileIterable())
+
+
+def test_set_meta_helpers_reject_non_mapping_metadata():
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        make_set_meta_cache_key([])  # type: ignore[arg-type]
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        normalize_set_meta_for_factory([], reserved_keys=frozenset())  # type: ignore[arg-type]
+
+
+def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
+    class _UnreadableSpecs:
+        def __iter__(self):
+            raise RuntimeError("field specs exploded")
+
+    with pytest.raises(ConfigurationError, match="field specifications could not be read"):
+        build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())  # type: ignore[arg-type]
+    with pytest.raises(ConfigurationError, match="must contain.*triples"):
+        build_strawberry_input_class("MalformedInput", [("name", int)])  # type: ignore[list-item]
 
 
 def test_meta_cache_helpers_bypass_hostile_containers_and_reprs():

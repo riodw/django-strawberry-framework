@@ -19,12 +19,26 @@ import pytest
 
 from django_strawberry_framework.utils import imports as imports_module
 from django_strawberry_framework.utils.imports import (
+    import_attr,
     import_attr_if_importable,
     loaded_attr,
     require_optional_module,
 )
 
 _HINT = "TestFeature requires somepackage. Install it with `pip install somepackage`."
+
+
+class _HostileString(str):
+    def __hash__(self):
+        raise RuntimeError("hostile hash")
+
+    def __str__(self):
+        raise RuntimeError("hostile string")
+
+
+class _HostileHint(str):
+    def __str__(self):
+        raise RuntimeError("hostile hint")
 
 
 def test_require_optional_module_returns_the_real_module_on_success():
@@ -92,3 +106,27 @@ def test_loaded_attr_returns_none_without_importing_absent_module():
 
     assert loaded_attr(module_path, "Anything") is None
     assert module_path not in sys.modules
+
+
+def test_import_helpers_normalize_hostile_string_subclass_names(monkeypatch):
+    """A hostile name must not escape through ``sys.modules`` hashing or getattr."""
+    module_path = "dsf_hostile_name_module"
+    fake = types.ModuleType(module_path)
+    fake.Marker = object()
+    monkeypatch.setitem(sys.modules, module_path, fake)
+    hostile_path = _HostileString(module_path)
+    hostile_attr = _HostileString("Marker")
+
+    assert loaded_attr(hostile_path, hostile_attr) is fake.Marker
+    assert import_attr_if_importable(hostile_path, hostile_attr) is fake.Marker
+    assert import_attr(hostile_path, hostile_attr) is fake.Marker
+
+
+def test_require_optional_module_normalizes_a_hostile_install_hint():
+    with pytest.raises(ImportError) as exc_info:
+        require_optional_module(
+            "dsf_missing_module_for_hostile_hint",
+            install_hint=_HostileHint(_HINT),
+        )
+
+    assert str(exc_info.value) == _HINT

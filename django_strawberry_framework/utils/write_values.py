@@ -247,8 +247,19 @@ def decode_visible_relation_ids(
     whole-list ``None``; the serializer passes it through so ``is_valid()``
     decides. Returns ``(pks, None)`` on success or ``(None, FieldError)``.
     """
+    # Materialize the container before decoding any member.  GraphQL normally
+    # supplies a list, but callers can reach this shared seam with an arbitrary
+    # iterable (including a one-shot or hostile iterator).  A malformed
+    # container is an invalid relation value, not a resolver exception; keeping
+    # the failure in the same field-keyed envelope also guarantees that a
+    # partially-consumed iterator cannot lead to a visibility query.
+    try:
+        provided_values = list(values)
+    except BaseException:
+        return None, relation_field_error(graphql_name)
+
     pks: list[Any] = []
-    for value in values:
+    for value in provided_values:
         pk, error = type_check_relation_id(
             value,
             graphql_name=graphql_name,

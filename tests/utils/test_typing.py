@@ -208,6 +208,7 @@ class _MethodHolder:
 _async_static_obj = _MethodHolder.__dict__["async_static"]
 _sync_static_obj = _MethodHolder.__dict__["sync_static"]
 _async_cls_obj = _MethodHolder.__dict__["async_cls"]
+_async_static_partial_obj = staticmethod(functools.partial(_AsyncCallable()))
 
 
 @pytest.mark.parametrize(
@@ -224,6 +225,7 @@ _async_cls_obj = _MethodHolder.__dict__["async_cls"]
         (_sync_static_obj, False),
         (_async_cls_obj, False),  # raw ``classmethod`` descriptors are not callable
         (functools.partial(_async_static_obj), True),  # partial around a staticmethod descriptor
+        (_async_static_partial_obj, True),  # staticmethod descriptor around a partial instance
     ],
 )
 def test_is_async_callable_sees_through_supported_wrappers(value, expected):
@@ -265,6 +267,7 @@ class _AsyncGenMethodHolder:
 
 _async_gen_static_obj = _AsyncGenMethodHolder.__dict__["async_gen_static"]
 _async_gen_sync_static_obj = _AsyncGenMethodHolder.__dict__["sync_static"]
+_async_gen_static_partial_obj = staticmethod(functools.partial(_AsyncGenCallable()))
 
 
 @pytest.mark.parametrize(
@@ -280,6 +283,7 @@ _async_gen_sync_static_obj = _AsyncGenMethodHolder.__dict__["sync_static"]
         (functools.partial(_sync_fn), False),
         (_async_gen_static_obj, True),
         (_async_gen_sync_static_obj, False),
+        (_async_gen_static_partial_obj, True),  # staticmethod descriptor around a partial instance
     ],
 )
 def test_is_async_generator_callable_sees_through_supported_wrappers(value, expected):
@@ -302,6 +306,8 @@ def test_strawberry_schema_from_info_and_schema():
     inner = object()
     assert strawberry_schema_from_schema(SimpleNamespace(_strawberry_schema=inner)) is inner
     assert strawberry_schema_from_schema(inner) is inner
+    null_schema = SimpleNamespace(_strawberry_schema=None)
+    assert strawberry_schema_from_schema(null_schema) is null_schema
     wrapped = SimpleNamespace(schema=SimpleNamespace(_strawberry_schema=inner))
     assert strawberry_schema_from_info(wrapped) is inner
     assert strawberry_schema_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
@@ -347,3 +353,41 @@ def test_schema_config_from_info_explicit_none_wrapped_falls_back_to_direct():
     # And when both the wrapped dig and the direct config are absent, ``None``.
     no_config = SimpleNamespace(schema=SimpleNamespace(_strawberry_schema=None))
     assert schema_config_from_info(no_config) is None
+
+
+def test_unwrap_graphql_type_accepts_exact_wrapper_depth():
+    """The configured depth is inclusive; only a longer chain is corrupt."""
+
+    class Inner:
+        pass
+
+    class Wrap:
+        def __init__(self, of_type):
+            self.of_type = of_type
+
+    wrapped = Inner
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+        wrapped = Wrap(wrapped)
+
+    assert unwrap_graphql_type(wrapped) is Inner
+
+
+def test_unwrap_container_type_accepts_exact_wrapper_depth():
+    """The configured depth is inclusive for Strawberry containers too."""
+    from strawberry.types.base import StrawberryList
+
+    class Inner:
+        pass
+
+    wrapped = Inner
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+        wrapped = StrawberryList(of_type=wrapped)
+
+    assert unwrap_container_type(wrapped) is Inner
+
+
+def test_unwrap_return_type_preserves_none_inner_type():
+    """An ``of_type`` wrapper may carry ``None`` while being resolved."""
+    from types import SimpleNamespace
+
+    assert unwrap_return_type(SimpleNamespace(of_type=None)) is None

@@ -304,6 +304,55 @@ artifacts. Board — `KANBAN.md`, `KANBAN.html`, `examples/fakeshop/db.sqlite3`.
 the diff entirely. **Still not one `.py` file**, and the board write is confined to three appended
 `CardItem` rows on two To-Do cards.
 
+## Measurements carried forward from the final gate
+
+`docs/builder/bld-015-final.md` is **retained**, not retired. These four readings are duplicated here
+anyway, because they are the only passing-audit measurements the cycle produced and they exist
+nowhere else — so the gate can be deleted at any later date without losing them. Each was taken by
+the gate against `HEAD 4c9e4e0d`; none has been re-measured since, and a later reader should re-derive
+rather than inherit (this cycle's own repeated lesson).
+
+- **Substring-citation sweep — the proof that the reword damage was fully repaired.** Every
+  `spec-015 … #"substring"` citation in shipped source, tests and examples: **18 citation sites, 11
+  distinct substrings, 0 dangling.** Sixteen of the eighteen resolve exactly once in the spec; the
+  remaining two — both quoting ``surface any `TypeError` as a `ConfigurationError` `` from
+  `types/relay.py::apply_interfaces` and its test row — resolve in the **rationale companion**, which
+  is the deliberate disposition, not a break. **That two-in-the-companion split is the load-bearing
+  half**: a future sweep resolving citations against the spec alone will read those two as dangling
+  and "fix" them. The retarget those two actually want is carried by `TODO-ALPHA-051-0.0.15`.
+- **`path::Symbol` sweep.** Every repo-local `path::Symbol` reference in the reconciled spec, resolved
+  against `HEAD` blobs: **20 distinct refs, 0 dead** (upstream `strawberry_django/…` and
+  `django_graphene_filters/…` refs excluded — they name local comparison checkouts, not repo paths).
+- **Link / anchor audit.** Spec: 20 link definitions, 20 distinct body refs. Rationale companion: 37
+  and 37. Both files: **0 undefined refs, 0 orphaned definitions, 0 targets missing on disk, 0 dead
+  heading anchors**, and the ten canonical group headers present in order. The two checker traps that
+  produce false hits here — a naive slugger stripping `_`, and a sweep that does not mask code spans —
+  are already carded on `TODO-ALPHA-052-0.1.0` as slugger defects (c) and (d), so they are not
+  restated.
+- **F14's re-derivation trap** is now carried by the `[spec-011]` bullet on `TODO-ALPHA-051-0.0.15`
+  itself, where the count it corrects lives: the population is 8 occurrences across 4 files, but
+  `git grep -oh … | wc -l` reports 9, the extra being git's `Binary file … matches` line for
+  `db.sqlite3`.
+
+The gate's one standing *don't-fix-this* ruling has likewise moved to the board — the spec's
+`## Slice checklist` boxes stay `- [ ]`, on `TODO-ALPHA-052-0.1.0`'s deliberate-no-ops note.
+
+### Correction to `## Cycle outcome, recorded` above
+
+That section was written before the post-gate pass and three of its sentences are now false. They are
+left in place as the cycle's own record and corrected here rather than rewritten, the same discipline
+the section itself applies to R1's and R2's closed artifacts:
+
+- "**seven paths** … one added row in its terms CSV" — the CSV row was reverted when F13 proved a
+  false positive. The diff is nine paths and the CSV is byte-identical to `HEAD`.
+- "`check_spec_glossary` (**`OK: 19 terms`**, up from 18)" — it reads `OK: 18 terms`, the original
+  figure, for the same reason.
+- "**Eight items are deferred**, catalogued in `bld-015-final.md`. Two matter at commit: **F13 is only
+  half closed** … " — F13 is closed as *no change owed*, item 7 is fixed in the spec, and items 2, 4,
+  5 and 6 are homed on cards 051 and 052. Nothing in the catalog is still owed to a future cycle
+  except through those cards. `## Post-gate disposition of the deferred catalog` is the current
+  record.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->

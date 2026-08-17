@@ -115,7 +115,6 @@ from ..utils.write_values import (
     decode_provided_fields,
     decode_visible_relation,
 )
-from .inputs import get_form_fields
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) form pipeline. Mirrors the
@@ -260,7 +259,7 @@ def _decode_form_data(
     skip + ``to_field_name``) and in ``file_dest=provided_files`` (Django
     ``files=``, never ``data=``).
     """
-    form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
+    form_fields = dict(mutation_cls.get_form_fields())
 
     provided_data: dict[str, Any] = {}
     provided_files: dict[str, Any] = {}
@@ -344,7 +343,7 @@ def _reconstruct_partial_data(
     ``setattr`` on the located instance, not a bound-data reconstruction.
     """
     model = mutation_cls._mutation_meta.model
-    form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
+    form_fields = dict(mutation_cls.get_form_fields())
     m2m_field_names = {field.name for field in model._meta.many_to_many}
 
     m2m_data: dict[str, Any] = {}

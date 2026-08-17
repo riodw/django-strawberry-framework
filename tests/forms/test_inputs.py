@@ -59,6 +59,7 @@ from django_strawberry_framework.forms.inputs import (
     get_form_fields,
     guard_partial_required_column_less_fields,
     materialize_form_input_class,
+    normalize_form_field_basis,
     resolve_effective_form_fields,
 )
 from django_strawberry_framework.registry import registry
@@ -186,6 +187,19 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
     assert list(discovered) == ["email"]
     with pytest.raises(TypeError):
         KwargForm()  # proves the form genuinely cannot be instantiated no-arg
+
+
+def test_form_field_basis_rejects_malformed_names_and_field_values():
+    """A hook-returned basis reports every bad key AND every bad value in one error."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    with pytest.raises(ConfigurationError, match="invalid names.*invalid fields"):
+        normalize_form_field_basis(
+            ProbeForm,
+            {1: forms.CharField(), "name": object()},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +540,48 @@ def test_fields_narrowing_omits_dropped_field():
         guard_required=False,
     )
     assert "is_private" not in _field_map(cre2)
+
+
+def test_build_form_inputs_freezes_one_shot_narrowing_iterables():
+    """Both generated shapes honor one-shot ``fields`` and ``exclude`` iterables."""
+
+    form_cls = _item_model_form()
+    create, _, partial, _ = build_form_inputs(
+        form_cls,
+        operation_kind=CREATE,
+        fields=(
+            name
+            for name in (
+                "name",
+                "category",
+                "is_private",
+                "confirm",
+            )
+        ),
+        guard_required=False,
+    )
+    assert set(_field_map(create)) == {
+        "name",
+        "category_id",
+        "is_private",
+        "confirm",
+    }
+    assert set(_field_map(partial)) == {
+        "name",
+        "category_id",
+        "is_private",
+        "confirm",
+    }
+
+    create, _, partial, _ = build_form_inputs(
+        form_cls,
+        operation_kind=CREATE,
+        exclude=(name for name in ("is_private",)),
+        guard_required=False,
+    )
+    expected = {"name", "category_id", "confirm"}
+    assert set(_field_map(create)) == expected
+    assert set(_field_map(partial)) == expected
 
 
 def test_meta_fields_rejects_bare_string():

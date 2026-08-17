@@ -60,6 +60,7 @@ from django_strawberry_framework.forms.inputs import (
 )
 from django_strawberry_framework.forms.sets import (
     _cached_build_form_input,
+    _default_mutation_get_form_fields,
     _form_mutation_registry,
     clear_form_shape_build_cache,
     iter_form_mutations,
@@ -242,6 +243,16 @@ def test_modelform_non_model_meta_model_raises_at_class_creation():
             class Meta:
                 form_class = form_cls
                 operation = "create"
+
+
+def test_default_form_field_hook_rejects_a_class_without_form_metadata():
+    """The default field-basis hook fails loudly when neither snapshot nor Meta names a form."""
+
+    class MissingFormMetadata:
+        pass
+
+    with pytest.raises(ConfigurationError, match="cannot resolve Meta.form_class"):
+        _default_mutation_get_form_fields(MissingFormMetadata)
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +463,62 @@ def test_plain_form_fields_and_exclude_both_raises():
                 form_class = MultiForm
                 fields = ("a",)
                 exclude = ("b",)
+
+
+@pytest.mark.parametrize("narrowing", ["fields", "exclude"])
+def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing):
+    """One-shot ``Meta.fields`` / ``Meta.exclude`` iterables survive class validation.
+
+    Validation must normalize the declaration before the effective-field check consumes
+    it. Otherwise a generator or iterator validates successfully at class creation but
+    is exhausted by the phase-2.5 bind, which reports a false empty form input.
+    """
+
+    class TwoFieldForm(forms.Form):
+        message = forms.CharField()
+        subject = forms.CharField(required=False)
+
+    declaration = iter(("message",) if narrowing == "fields" else ("subject",))
+    if narrowing == "fields":
+
+        class Submit(DjangoFormMutation):
+            class Meta:
+                form_class = TwoFieldForm
+                fields = declaration
+                permission_classes = []
+
+    else:
+
+        class Submit(DjangoFormMutation):
+            class Meta:
+                form_class = TwoFieldForm
+                exclude = declaration
+                permission_classes = []
+
+    assert Submit._mutation_meta.fields == (("message",) if narrowing == "fields" else None)
+    assert Submit._mutation_meta.exclude == (("subject",) if narrowing == "exclude" else None)
+    finalize_django_types()
+    assert Submit._input_class is not None
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(escape):
+    """A broken permission iterable cannot escape class validation as its raw exception.
+
+    The normalization catches ``BaseException``, so an iterable raising from outside
+    the ``Exception`` hierarchy is still reported as a typed configuration error.
+    """
+
+    class BrokenPermissions:
+        def __iter__(self):
+            raise escape("permission iterator exploded")
+
+    with pytest.raises(ConfigurationError, match="permission_classes must be a sequence"):
+
+        class Submit(DjangoFormMutation):
+            class Meta:
+                form_class = _contact_form()
+                permission_classes = BrokenPermissions()
 
 
 def test_plain_form_hostile_form_repr_maps_to_configuration_error():
@@ -707,6 +774,144 @@ def test_plain_form_bind_materializes_input_and_ok_errors_payload():
     payload = mutation_materialized_names["SubmitPayload"]
     slots = {f.python_name for f in payload.__strawberry_definition__.fields}
     assert slots == {"ok", "errors"}
+
+
+def test_plain_form_get_form_fields_hook_controls_input_basis():
+    """The plain mutation hook may add a stable schema-time form field."""
+
+    form_cls = _contact_form()
+
+    class Submit(DjangoFormMutation):
+        @classmethod
+        def get_form_fields(cls):
+            fields = super().get_form_fields()
+            fields["injected"] = forms.CharField(required=False)
+            return fields
+
+        class Meta:
+            form_class = form_cls
+            permission_classes = []
+
+    finalize_django_types()
+
+    slots = {field.python_name for field in Submit._input_class.__strawberry_definition__.fields}
+    assert slots == {"message", "injected"}
+
+
+def test_default_get_form_fields_uses_frozen_form_class_snapshot():
+    """Changing ``Meta.form_class`` after declaration cannot drift the generated input."""
+
+    class FormA(forms.Form):
+        alpha = forms.CharField()
+
+    class FormB(forms.Form):
+        beta = forms.IntegerField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = FormA
+            permission_classes = []
+
+    Submit.Meta.form_class = FormB
+    finalize_django_types()
+
+    assert Submit._mutation_meta.form_class is FormA
+    assert Submit._input_class is form_materialized_names["FormAInput"]
+    assert {
+        field.python_name for field in Submit._input_class.__strawberry_definition__.fields
+    } == {"alpha"}
+    bound = Submit().get_form(None, data={"alpha": "ok"}, files={})
+    assert isinstance(bound, FormA)
+
+
+def test_modelform_get_form_fields_hook_controls_input_basis():
+    """The ModelForm mutation hook follows the same schema-time discovery contract."""
+    _declare_products_primaries()
+    form_cls = _item_model_form()
+
+    class CreateItem(DjangoModelFormMutation):
+        @classmethod
+        def get_form_fields(cls):
+            fields = super().get_form_fields()
+            fields["injected"] = forms.CharField(required=False)
+            return fields
+
+        class Meta:
+            form_class = form_cls
+            operation = "create"
+
+    finalize_django_types()
+
+    slots = {
+        field.python_name for field in CreateItem._input_class.__strawberry_definition__.fields
+    }
+    assert "injected" in slots
+
+
+def test_get_form_fields_hook_basis_drives_required_guard():
+    """Required fields from the hook cannot be narrowed away silently."""
+
+    form_cls = _contact_form()
+
+    class Submit(DjangoFormMutation):
+        @classmethod
+        def get_form_fields(cls):
+            fields = super().get_form_fields()
+            fields["injected"] = forms.CharField(required=True)
+            return fields
+
+        class Meta:
+            form_class = form_cls
+            fields = ("message",)
+            permission_classes = []
+
+    with pytest.raises(ConfigurationError, match="injected"):
+        finalize_django_types()
+
+
+@pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
+@pytest.mark.parametrize("bad_hook", [None, "not-callable"])
+def test_non_callable_get_form_fields_is_configuration_error(mutation_base, bad_hook):
+    """A malformed hook declaration fails as typed configuration, not raw ``TypeError``."""
+    form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
+    meta_attrs = (
+        {"form_class": form_cls, "permission_classes": []}
+        if mutation_base is DjangoFormMutation
+        else {"form_class": form_cls, "operation": "create"}
+    )
+    with pytest.raises(ConfigurationError, match=r"get_form_fields.*callable classmethod"):
+        type(
+            "NonCallableHookMutation",
+            (mutation_base,),
+            {"get_form_fields": bad_hook, "Meta": type("Meta", (), meta_attrs)},
+        )
+
+
+@pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
+@pytest.mark.parametrize("bad_return", [None, ["message"], [("message",)]])
+def test_malformed_get_form_fields_return_is_configuration_error(mutation_base, bad_return):
+    """Malformed hook returns fail through the typed configuration boundary for both bases."""
+
+    form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
+    meta_attrs = (
+        {"form_class": form_cls, "permission_classes": []}
+        if mutation_base is DjangoFormMutation
+        else {"form_class": form_cls, "operation": "create"}
+    )
+
+    def get_bad_form_fields(cls):
+        del cls
+        return bad_return
+
+    with pytest.raises(ConfigurationError, match=r"get_form_fields\(.*mapping"):
+        type(
+            "MalformedHookMutation",
+            (mutation_base,),
+            {
+                "get_form_fields": classmethod(get_bad_form_fields),
+                "Meta": type("Meta", (), meta_attrs),
+            },
+        )
 
 
 def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):

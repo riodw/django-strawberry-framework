@@ -187,11 +187,57 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
     return dict(form_class.base_fields)
 
 
+def _form_field_basis(
+    form_class: type[forms.BaseForm],
+    form_fields: Any = None,
+) -> dict[str, forms.Field]:
+    """Return the validated field basis used by every form-input operation.
+
+    ``form_fields`` is the optional stable mapping supplied by a mutation's
+    ``get_form_fields`` hook. Direct generator callers omit it and use the
+    form's class-level ``base_fields`` through ``get_form_fields``. Copying the
+    mapping keeps later narrowing/build passes from observing caller mutation,
+    while the hook remains responsible for returning a request-independent
+    field representation.
+    """
+    source = get_form_fields(form_class) if form_fields is None else form_fields
+    try:
+        basis = dict(source)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
+            "a mapping of field names to forms.Field instances.",
+        ) from exc
+    invalid_names = [name for name in basis if not isinstance(name, str)]
+    invalid_fields = [name for name, field in basis.items() if not isinstance(field, forms.Field)]
+    if invalid_names or invalid_fields:
+        raise ConfigurationError(
+            f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
+            "a mapping of string names to forms.Field instances; invalid names "
+            f"{invalid_names!r}, invalid fields {invalid_fields!r}.",
+        )
+    return basis
+
+
+def normalize_form_field_basis(
+    form_class: type[forms.BaseForm],
+    form_fields: Any,
+) -> dict[str, forms.Field]:
+    """Normalize a mutation hook's returned field basis with typed diagnostics."""
+    if form_fields is None:
+        raise ConfigurationError(
+            f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
+            "a mapping of field names to forms.Field instances, not None.",
+        )
+    return _form_field_basis(form_class, form_fields)
+
+
 def resolve_effective_form_fields(
     form_class: type[forms.BaseForm],
     *,
     fields: Any = None,
     exclude: Any = None,
+    form_fields: Any = None,
 ) -> dict[str, forms.Field]:
     """Return the effective ``{name: forms.Field}`` dict after ``fields`` / ``exclude``.
 
@@ -217,7 +263,7 @@ def resolve_effective_form_fields(
     re-binding wrapper folds into the ``seq_flavor`` arg - spec-039).
     """
     return resolve_effective_fields(
-        get_form_fields(form_class),
+        _form_field_basis(form_class, form_fields),
         fields=fields,
         exclude=exclude,
         subject=f"DjangoFormMutation for {form_class.__name__}",
@@ -471,6 +517,7 @@ def build_form_input_class(
     operation_kind: str,
     fields: Any = None,
     exclude: Any = None,
+    form_fields: Any = None,
 ) -> tuple[type, list[InputFieldSpec]]:
     """Build ONE ``@strawberry.input`` class from a form's declared fields.
 
@@ -488,8 +535,13 @@ def build_form_input_class(
     phase-2.5 bind calls ``materialize_form_input_class`` to pin the class as a
     module global.
     """
-    effective = resolve_effective_form_fields(form_class, fields=fields, exclude=exclude)
-    full_field_names = tuple(get_form_fields(form_class))
+    effective = resolve_effective_form_fields(
+        form_class,
+        fields=fields,
+        exclude=exclude,
+        form_fields=form_fields,
+    )
+    full_field_names = tuple(_form_field_basis(form_class, form_fields))
     type_name = form_input_type_name(
         form_class,
         operation_kind,
@@ -530,7 +582,10 @@ def build_form_input_class(
     return input_cls, field_specs
 
 
-def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
+def _required_form_field_names(
+    form_class: type[forms.BaseForm],
+    form_fields: Any = None,
+) -> set[str]:
     """Return the names of every declared form field that must appear in a create input.
 
     Uses the shared ``converter.form_field_required`` with each field's backing
@@ -541,7 +596,7 @@ def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
     """
     return {
         name
-        for name, field in get_form_fields(form_class).items()
+        for name, field in _form_field_basis(form_class, form_fields).items()
         if form_field_required(field, column=_model_column_for(form_class, name))
     }
 
@@ -549,6 +604,7 @@ def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
 def guard_create_required_fields(
     form_class: type[forms.BaseForm],
     effective_field_names: Any,
+    form_fields: Any = None,
 ) -> None:
     """Raise if a create-shaped narrowing drops a still-declared required form field.
 
@@ -574,7 +630,7 @@ def guard_create_required_fields(
     injected-field mechanism) and keeps its own pinned error wording.
     """
     guard_dropped_required(
-        _required_form_field_names(form_class),
+        _required_form_field_names(form_class, form_fields),
         effective_field_names,
         make_error=lambda dropped: ConfigurationError(
             f"DjangoFormMutation create input for {form_class.__name__} drops required form "
@@ -588,6 +644,7 @@ def guard_create_required_fields(
 def guard_partial_required_column_less_fields(
     form_class: type[forms.BaseForm],
     effective_field_names: Any,
+    form_fields: Any = None,
 ) -> None:
     """Raise if a partial (update) narrowing drops a required COLUMN-LESS form field.
 
@@ -613,7 +670,7 @@ def guard_partial_required_column_less_fields(
     """
     column_less_required = {
         name
-        for name in _required_form_field_names(form_class)
+        for name in _required_form_field_names(form_class, form_fields)
         if _model_column_for(form_class, name) is None
     }
     guard_dropped_required(
@@ -636,6 +693,7 @@ def build_form_inputs(
     fields: Any = None,
     exclude: Any = None,
     guard_required: bool = True,
+    form_fields: Any = None,
 ) -> tuple[type, list[InputFieldSpec], type, list[InputFieldSpec]]:
     """Build BOTH the create + partial inputs for a form, with the create-required guard.
 
@@ -658,20 +716,31 @@ def build_form_inputs(
     trusts the explicit override - surfaced here as an explicit parameter so the
     bind can pass ``guard_required=False``, never hard-coded always-on.
     """
-    effective = resolve_effective_form_fields(form_class, fields=fields, exclude=exclude)
+    effective = resolve_effective_form_fields(
+        form_class,
+        fields=fields,
+        exclude=exclude,
+        form_fields=form_fields,
+    )
+    # ``fields`` / ``exclude`` may be one-shot iterables when this public builder
+    # is called directly.  The effective mapping is the validated, stable shape;
+    # pass its names to both child builds so the second resolution cannot consume
+    # an iterator again (or silently widen an exhausted ``exclude`` to the full
+    # form).
+    effective_names = tuple(effective)
     if guard_required:
-        guard_create_required_fields(form_class, effective)
+        guard_create_required_fields(form_class, effective_names, form_fields)
 
     create_cls, create_specs = build_form_input_class(
         form_class,
         operation_kind=operation_kind,
-        fields=fields,
-        exclude=exclude,
+        fields=effective_names,
+        form_fields=form_fields,
     )
     partial_cls, partial_specs = build_form_input_class(
         form_class,
         operation_kind=PARTIAL,
-        fields=fields,
-        exclude=exclude,
+        fields=effective_names,
+        form_fields=form_fields,
     )
     return create_cls, create_specs, partial_cls, partial_specs

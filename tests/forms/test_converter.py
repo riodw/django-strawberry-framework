@@ -26,6 +26,7 @@ import uuid
 import pytest
 import strawberry
 from django import forms
+from strawberry.types.base import StrawberryOptional
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.forms.converter import (
@@ -101,6 +102,49 @@ def test_null_boolean_subclass_with_real_validation_stays_required():
     assert convert_form_field(field).required is True
     assert ProbeForm(data={}).is_valid() is False
     assert ProbeForm(data={}).errors["flag"] == ["This field is required."]
+
+
+def test_null_boolean_validating_subclass_generates_required_input():
+    """A validating subclass must not generate nullable-required SDL.
+
+    The converter preserves the subclass's real requiredness and emits a
+    non-null ``bool`` annotation. The generated input therefore rejects omission
+    during GraphQL coercion instead of exposing ``Boolean`` while its dataclass
+    constructor still requires ``flag`` (which previously surfaced as a resolver
+    ``TypeError``).
+    """
+
+    class RequiredNullableBoolean(forms.NullBooleanField):
+        validate = forms.Field.validate
+
+    class ProbeForm(forms.Form):
+        flag = RequiredNullableBoolean(required=True)
+
+    assert convert_form_field(ProbeForm.base_fields["flag"]).annotation is bool
+
+    from django_strawberry_framework.forms.inputs import build_form_input_class
+
+    input_cls, _ = build_form_input_class(ProbeForm, operation_kind="form")
+    field = input_cls.__strawberry_definition__.fields[0]
+    assert not isinstance(field.type, StrawberryOptional)
+
+    def resolve_probe(inp):
+        del inp
+        return 1
+
+    resolve_probe.__annotations__ = {"inp": input_cls, "return": int}
+
+    @strawberry.type
+    class Query:
+        probe = strawberry.field(resolver=resolve_probe)
+
+    schema = strawberry.Schema(query=Query)
+    assert "flag: Boolean!" in schema.as_str()
+
+    omitted = schema.execute_sync("{ probe(inp: {}) }")
+    assert omitted.errors is not None
+    assert "flag" in omitted.errors[0].message
+    assert schema.execute_sync("{ probe(inp: {flag: true}) }").errors is None
 
 
 def test_json_field_maps_to_json_scalar_not_charfield_str():

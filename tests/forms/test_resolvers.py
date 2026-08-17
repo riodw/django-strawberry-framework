@@ -35,7 +35,8 @@ from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
+from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -45,6 +46,7 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
+    ResourcePolicy,
     finalize_django_types,
 )
 from django_strawberry_framework.forms import resolvers as form_resolvers
@@ -1544,6 +1546,64 @@ def test_plain_form_perform_mutate_may_write_inside_the_write_phase():
     assert res.data["submit"]["ok"] is True
     assert len(created) == 1
     assert product_models.Category.objects.filter(name=created[0]).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
+    """An expired policy stops the model-less write before ``perform_mutate`` or SQL."""
+    created: list[str] = []
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = []
+
+        def perform_mutate(self, form, info):
+            del form, info
+            name = _uniq("ExpiredPlainForm")
+            product_models.Category.objects.create(name=name)
+            created.append(name)
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = DjangoSchema(
+        query=_Query,
+        mutation=Mutation,
+        resource_policy=ResourcePolicy(execution_deadline_seconds=0.000000000001),
+        error_policy={"enabled": False},
+    )
+    with CaptureQueriesContext(connection) as captured:
+        result = schema.execute_sync(
+            "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
+            variable_values={"d": {"message": "hi"}},
+            context_value={},
+        )
+
+    assert result.data is None
+    assert result.errors is not None
+    assert result.errors[0].extensions["code"] == "RESOURCE_LIMIT_EXCEEDED"
+    assert result.errors[0].extensions["bound"] == "execution_deadline_seconds"
+    assert created == []
+    assert not any(
+        query["sql"]
+        .lstrip()
+        .upper()
+        .startswith(
+            (
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+            ),
+        )
+        for query in captured.captured_queries
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -73,14 +73,18 @@ from ..utils.inputs import FieldConversionBase
 class FormFieldConversion(FieldConversionBase):
     """The model-less annotation + decode kind ``convert_form_field`` returns.
 
-    ``required`` is the form field's own ``field.required``, except
-    ``NullBooleanField`` which is always optional (Django's ``validate`` is a
-    no-op and GraphQL cannot express required-nullable inputs - graphene-django
-    parity). ``annotation`` is the resolved Strawberry annotation for a SCALAR
-    field; for a relation / file field the annotation is finalized at the
-    ``forms/inputs.py`` build site (where the backing column - if any - and the
-    related primary ``DjangoType`` are known, so the Relay-``GlobalID``-vs-raw-pk
-    id type can be resolved), so those kinds carry ``annotation=None`` here and
+    ``required`` is the form field's own ``field.required``, except the exact
+    built-in ``NullBooleanField`` which is always optional (Django's
+    ``validate`` is a no-op and GraphQL cannot express required-nullable inputs -
+    graphene-django parity). A validating ``NullBooleanField`` subclass keeps
+    its declared requiredness and therefore resolves to a non-null ``bool``
+    annotation, so GraphQL cannot permit omission while the generated dataclass
+    still requires the value. ``annotation`` is the resolved Strawberry
+    annotation for a SCALAR field; for a relation / file field the annotation is
+    finalized at the ``forms/inputs.py`` build site (where the backing model
+    column - if any - and the related primary ``DjangoType`` are known, so the
+    Relay-``GlobalID``-vs-raw-pk id type can be resolved), so those kinds carry
+    ``annotation=None`` here and
     only the ``kind`` is authoritative. The ``(annotation, kind, required)``
     value-object shape is the shared ``utils/inputs.py::FieldConversionBase``.
     """
@@ -115,6 +119,20 @@ def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
     if column is not None and not getattr(column, "null", True):
         return field.required
     return False
+
+
+def _null_boolean_converter(field: forms.NullBooleanField) -> FormFieldConversion:
+    """Convert ``NullBooleanField`` with an annotation matching requiredness.
+
+    The exact built-in field keeps ``bool | None`` + an optional input default
+    because its ``validate`` is a no-op. A subclass that restores real required
+    validation must instead produce ``bool`` + no default; otherwise the
+    generated GraphQL field is nullable while Strawberry's input dataclass still
+    requires the keyword, allowing omission to reach a constructor ``TypeError``.
+    """
+    required = form_field_required(field)
+    annotation = bool if required else bool | None
+    return FormFieldConversion(annotation=annotation, kind=SCALAR, required=required)
 
 
 def _scalar_converter(annotation: Any) -> Any:
@@ -164,7 +182,7 @@ _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
     forms.IntegerField: _scalar_converter(int),
     forms.FloatField: _scalar_converter(float),
     forms.DecimalField: _scalar_converter(decimal.Decimal),
-    forms.NullBooleanField: _scalar_converter(bool | None),
+    forms.NullBooleanField: _null_boolean_converter,
     forms.BooleanField: _scalar_converter(bool),
     forms.UUIDField: _scalar_converter(uuid.UUID),
     forms.JSONField: _scalar_converter(strawberry.scalars.JSON),

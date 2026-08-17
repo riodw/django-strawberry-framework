@@ -83,6 +83,7 @@ from .inputs import (
     guard_create_required_fields,
     guard_partial_required_column_less_fields,
     materialize_form_input_class,
+    normalize_form_field_basis,
     resolve_effective_form_fields,
 )
 from .inputs import (
@@ -156,6 +157,53 @@ _form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_form_shape_build_cache, owner="forms.shape_cache")
 
 
+def _default_mutation_get_form_fields(cls: type) -> dict[str, forms.Field]:
+    """Return the mutation's stable field basis from its declared ``form_class``.
+
+    Class validation runs before the metaclass stamps ``_mutation_meta``, so that
+    one validation window reads the live ``Meta`` declaration. Every later call
+    must use the concrete class's own frozen snapshot: a consumer can mutate the
+    nested ``Meta`` object after declaration, but that cannot change the input
+    shape or the form class the default constructor binds.
+    """
+    meta_snapshot = cls.__dict__.get("_mutation_meta")
+    if meta_snapshot is not None:
+        form_class = getattr(meta_snapshot, "form_class", None)
+    else:
+        form_meta = getattr(cls, "Meta", None)
+        form_class = getattr(form_meta, "form_class", None)
+    if form_class is None:
+        raise ConfigurationError(
+            f"{cls.__name__}.get_form_fields() cannot resolve Meta.form_class.",
+        )
+    return get_form_fields(form_class)
+
+
+def _mutation_form_fields(
+    mutation_cls: type,
+    form_class: type[forms.BaseForm],
+) -> dict[str, forms.Field]:
+    """Resolve a mutation's overridable form-field hook for one build pass."""
+    hook = getattr(mutation_cls, "get_form_fields", None)
+    if not callable(hook):
+        raise ConfigurationError(
+            f"{mutation_cls.__name__}.get_form_fields must be a callable classmethod "
+            "returning a mapping of form field names to forms.Field instances.",
+        )
+    return normalize_form_field_basis(form_class, hook())
+
+
+def _form_input_hook_identity(mutation_cls: type | None) -> object | None:
+    """Return a cache discriminator only for custom field-discovery hooks."""
+    if mutation_cls is None:
+        return None
+    hook = mutation_cls.get_form_fields
+    hook_function = getattr(hook, "__func__", hook)
+    if hook_function is _default_mutation_get_form_fields:
+        return None
+    return mutation_cls
+
+
 def _cached_build_form_input(
     form_class: type,
     *,
@@ -163,6 +211,8 @@ def _cached_build_form_input(
     fields: Any,
     exclude: Any,
     guard_required: bool,
+    mutation_cls: type | None = None,
+    form_fields: Any = None,
 ) -> tuple[type, list]:
     """Build the operation's form input once per shape; return ``(input_cls, field_specs)``.
 
@@ -184,7 +234,12 @@ def _cached_build_form_input(
     survive the per-shape dedupe and reach the bind's ``_input_field_specs`` stash
     (spec-038 - the P1 decode reverse map).
     """
-    effective = _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+    effective = _resolve_effective_form_field_names(
+        form_class,
+        fields=fields,
+        exclude=exclude,
+        form_fields=form_fields,
+    )
 
     # Run the create-required-narrowing guard PER declaration, BEFORE the per-shape
     # cache lookup (the load-bearing ordering ``cached_build_input`` enforces): the
@@ -202,9 +257,9 @@ def _cached_build_form_input(
         if not guard_required:
             return
         if operation_kind == PARTIAL:
-            guard_partial_required_column_less_fields(form_class, effective)
+            guard_partial_required_column_less_fields(form_class, effective, form_fields)
         else:
-            guard_create_required_fields(form_class, effective)
+            guard_create_required_fields(form_class, effective, form_fields)
 
     def _build() -> tuple[type, list]:
         if operation_kind == PARTIAL:
@@ -213,6 +268,7 @@ def _cached_build_form_input(
                 operation_kind=PARTIAL,
                 fields=fields,
                 exclude=exclude,
+                form_fields=form_fields,
             )
         # The guard already ran per-declaration above; ``build_form_inputs`` would
         # otherwise re-run it only on a cache MISS (the bypass this fix closes).
@@ -222,10 +278,16 @@ def _cached_build_form_input(
             fields=fields,
             exclude=exclude,
             guard_required=False,
+            form_fields=form_fields,
         )
         return input_cls, field_specs
 
-    cache_key = (form_class, operation_kind, frozenset(effective))
+    cache_key = (
+        form_class,
+        operation_kind,
+        frozenset(effective),
+        _form_input_hook_identity(mutation_cls),
+    )
     return cached_build_input(
         _form_shape_build_cache,
         cache_key,
@@ -239,6 +301,7 @@ def _resolve_effective_form_field_names(
     *,
     fields: Any,
     exclude: Any,
+    form_fields: Any = None,
 ) -> tuple[str, ...]:
     """Return the effective form-field names after ``Meta.fields`` / ``Meta.exclude``.
 
@@ -248,11 +311,21 @@ def _resolve_effective_form_field_names(
     the form ``_validate_meta`` does not re-spell that validation. Returns the
     ordered effective name tuple the snapshot's input-name derivation consults.
     """
-    effective = resolve_effective_form_fields(form_class, fields=fields, exclude=exclude)
+    effective = resolve_effective_form_fields(
+        form_class,
+        fields=fields,
+        exclude=exclude,
+        form_fields=form_fields,
+    )
     return tuple(effective)
 
 
-def _normalized_form_field_selection(meta: type, form_class: type) -> tuple[Any, Any]:
+def _normalized_form_field_selection(
+    meta: type,
+    form_class: type,
+    *,
+    form_fields: Any = None,
+) -> tuple[Any, Any]:
     """Normalize + fail-loud-validate ``Meta.fields`` / ``Meta.exclude`` for both form bases.
 
     Shape-normalize via the shared ``normalize_meta_field_selection``, then the
@@ -263,7 +336,12 @@ def _normalized_form_field_selection(meta: type, form_class: type) -> tuple[Any,
         meta,
         flavor="DjangoFormMutation / DjangoModelFormMutation",
     )
-    _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+    _resolve_effective_form_field_names(
+        form_class,
+        fields=fields,
+        exclude=exclude,
+        form_fields=form_fields,
+    )
     return fields, exclude
 
 
@@ -369,6 +447,7 @@ def _build_and_stash_form_input(
     serializer flavor) so a future change to the materialize-and-stash sequence
     touches one place.
     """
+    form_fields = _mutation_form_fields(cls, meta.form_class)
     return build_and_stash_input(
         cls,
         build=lambda: _cached_build_form_input(
@@ -377,13 +456,19 @@ def _build_and_stash_form_input(
             fields=meta.fields,
             exclude=meta.exclude,
             guard_required=not _form_kwargs_overridden(cls, base),
+            mutation_cls=cls,
+            form_fields=form_fields,
         ),
         materialize=materialize_form_input_class,
         specs_of=lambda field_specs: field_specs,
     )
 
 
-def _form_input_type_name_for(meta: _ValidatedMutationMeta, operation_kind: str) -> str:
+def _form_input_type_name_for(
+    mutation_cls: type,
+    meta: _ValidatedMutationMeta,
+    operation_kind: str,
+) -> str:
     """Derive a form input's generated class name (both flavors' ``input_type_name`` body).
 
     The shared name derivation the two bases' ``input_type_name`` seams differ in
@@ -394,12 +479,14 @@ def _form_input_type_name_for(meta: _ValidatedMutationMeta, operation_kind: str)
     narrowing). Single-sited with ``_build_and_stash_form_input`` so the bind's name
     choice and the field-factory's ``data:`` ref derive the name identically.
     """
+    form_fields = _mutation_form_fields(mutation_cls, meta.form_class)
     effective = _resolve_effective_form_field_names(
         meta.form_class,
         fields=meta.fields,
         exclude=meta.exclude,
+        form_fields=form_fields,
     )
-    full = tuple(get_form_fields(meta.form_class))
+    full = tuple(form_fields)
     return form_input_type_name(meta.form_class, operation_kind, effective, full_field_names=full)
 
 
@@ -419,6 +506,8 @@ class DjangoModelFormMutation(DjangoMutation):
     subclass) + ``Meta.operation in {"create", "update"}`` (plus optional
     ``Meta.fields`` / ``Meta.exclude`` / ``Meta.permission_classes``).
     """
+
+    get_form_fields = classmethod(_default_mutation_get_form_fields)
 
     @classmethod
     def _resolve_model(cls, meta: type) -> Any:
@@ -504,7 +593,11 @@ class DjangoModelFormMutation(DjangoMutation):
         # exclusion, bare-string / duplicate / unknown-name, empty-set guard); the
         # snapshot stores the normalized declarations (``build_input`` re-resolves
         # them).
-        fields, exclude = _normalized_form_field_selection(meta, form_class)
+        fields, exclude = _normalized_form_field_selection(
+            meta,
+            form_class,
+            form_fields=_mutation_form_fields(cls, form_class),
+        )
 
         permission_classes, select_for_update = model_backed_permission_and_lock(
             name,
@@ -581,7 +674,11 @@ class DjangoModelFormMutation(DjangoMutation):
         shape-derived name for a narrowing), single-sourced with the bind's name
         choice in ``build_input``.
         """
-        return _form_input_type_name_for(meta, NON_DELETE_OPERATION_INPUT_KIND[meta.operation])
+        return _form_input_type_name_for(
+            cls,
+            meta,
+            NON_DELETE_OPERATION_INPUT_KIND[meta.operation],
+        )
 
     # The sync / async ``ModelForm`` resolver seams (delegate to the form
     # pipeline), via the shared ``resolver_seams`` factory. The
@@ -623,6 +720,8 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     Its bind materializes the form-derived input + the pinned ``{ ok errors }``
     payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
+
+    get_form_fields = classmethod(_default_mutation_get_form_fields)
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
     # ``None`` on the abstract base (no ``Meta``).
@@ -742,7 +841,11 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             expected_label="forms.Form",
         )
 
-        fields, exclude = _normalized_form_field_selection(meta, form_class)
+        fields, exclude = _normalized_form_field_selection(
+            meta,
+            form_class,
+            form_fields=_mutation_form_fields(cls, form_class),
+        )
 
         # The plain flavor has no model, so it CANNOT inherit the
         # ``DjangoModelPermission`` default (that class reads the resolved model,
@@ -861,7 +964,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     @classmethod
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated form-input class name (the ``FORM``-sentinel create shape)."""
-        return _form_input_type_name_for(meta, FORM)
+        return _form_input_type_name_for(cls, meta, FORM)
 
     # The sync / async plain-form resolver seams (delegate to the form
     # pipeline), via the shared ``resolver_seams`` factory with ``with_id=False`` -

@@ -64,7 +64,10 @@ from django_strawberry_framework.rest_framework.inputs import (
 from django_strawberry_framework.rest_framework.inputs import (
     _materialized_names as serializer_materialized_names,
 )
-from django_strawberry_framework.rest_framework.sets import _validate_serializer_nested_fields
+from django_strawberry_framework.rest_framework.sets import (
+    _validate_schema_field_map,
+    _validate_serializer_nested_fields,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -429,6 +432,28 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace():
     # The generated reverse map is stashed for the decode (non-None).
     assert CreateItem._input_field_specs is not None
     assert len(CreateItem._input_field_specs) > 0
+
+
+def test_bind_materializes_one_shot_meta_field_selector():
+    """A one-shot Meta selector survives class validation and phase-2.5 bind."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()
+
+    class CreateItem(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            exclude = iter(("description",))
+
+    finalize_django_types()
+
+    assert CreateItem._input_type_name.startswith("ItemSerializer")
+    assert CreateItem._input_type_name.endswith("Input")
+    assert {spec.target_name for spec in CreateItem._input_field_specs or ()} == {
+        "name",
+        "category",
+        "is_private",
+    }
 
 
 def test_update_binds_partial_input():
@@ -877,6 +902,105 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
     field_names = set(_input_fields(CreateCtxItem._input_class))
     assert "name" in field_names
     assert "category_id" in field_names  # FK relation, the 036 <name>_id scheme
+
+
+@pytest.mark.parametrize(
+    ("map_factory", "message"),
+    [
+        (lambda _fields: None, "must return a mapping"),
+        (lambda _fields: [], "must return a mapping"),
+        (lambda _fields: {"name": object()}, "DRF serializers.Field"),
+        (lambda fields: {"alias": fields["name"]}, "field-map key"),
+        (lambda fields: {1: fields["name"]}, "key must be a string"),
+    ],
+)
+def test_schema_hook_rejects_invalid_field_map_at_class_creation(map_factory, message):
+    """The schema hook's mapping/field-name contract fails typed at class creation."""
+    serializer_cls = _item_serializer()
+    fields = dict(serializer_cls().fields)
+    field_map = map_factory(fields)
+
+    with pytest.raises(ConfigurationError, match=message):
+
+        class InvalidSchemaMapMutation(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                permission_classes = []
+
+            @classmethod
+            def get_serializer_for_schema(cls):
+                return field_map
+
+
+def test_schema_hook_rejects_mapping_that_cannot_be_materialized():
+    """A hostile Mapping implementation cannot leak its iteration error."""
+
+    class BrokenMapping(dict):
+        def items(self):
+            raise RuntimeError("mapping iteration exploded")
+
+    serializer_cls = _item_serializer()
+    with pytest.raises(ConfigurationError, match="could not be materialized"):
+
+        class InvalidSchemaMapMutation(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                permission_classes = []
+
+            @classmethod
+            def get_serializer_for_schema(cls):
+                return BrokenMapping()
+
+
+def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names():
+    """An unpackable-entry failure and an unreadable ``field_name`` both stay typed.
+
+    Neither the per-entry unpack nor the bound-name read trusts the hook's objects,
+    so a two-tuple that is not a pair and a field whose ``field_name`` descriptor
+    raises are reported as configuration errors rather than escaping raw.
+    """
+
+    class MalformedEntries(dict):
+        def items(self):
+            return [("name",), ("title", serializers.CharField())]
+
+    with pytest.raises(ConfigurationError, match="could not be unpacked"):
+        _validate_schema_field_map("BrokenEntries", MalformedEntries())
+
+    class HostileBoundName(serializers.CharField):
+        @property
+        def field_name(self):
+            raise RuntimeError("bound name unavailable")
+
+        @field_name.setter
+        def field_name(self, value):
+            self._field_name = value
+
+    with pytest.raises(ConfigurationError, match="field_name descriptor"):
+        _validate_schema_field_map("BrokenField", {"name": HostileBoundName()})
+
+
+def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
+    """A malformed hook value with a broken repr still reports a safe configuration error."""
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    serializer_cls = _item_serializer()
+    with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
+
+        class InvalidSchemaMapMutation(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                permission_classes = []
+
+            @classmethod
+            def get_serializer_for_schema(cls):
+                return HostileRepr()
 
 
 # NOTE: the same-serializer hook-shape collision (two mutations over one serializer whose
@@ -1330,6 +1454,20 @@ def test_validate_nested_fields_valid_returns_normalized_dict():
         {"items": config},
     )
     assert result == {"items": config}
+
+
+def test_validate_nested_fields_materializes_one_shot_selectors():
+    """Nested config selectors are reusable after class validation consumes them."""
+    serializer_cls, field_map = _category_field_map()
+    result = _validate_serializer_nested_fields(
+        "M",
+        serializer_cls,
+        "create",
+        field_map,
+        {"items": NestedSerializerConfig(fields=iter(("name",)))},
+    )
+    assert result is not None
+    assert result["items"].fields == ("name",)
 
 
 def test_nested_fields_stored_on_snapshot_and_builds():

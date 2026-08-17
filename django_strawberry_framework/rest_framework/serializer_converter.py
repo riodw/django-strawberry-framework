@@ -65,7 +65,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from rest_framework import serializers
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..mutations.inputs import (
     annotate_queryset_relation,
     model_column_write_annotation,
@@ -386,6 +386,46 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
     )
 
 
+def _finish_serializer_conversion(
+    result: Any,
+    field: serializers.Field,
+) -> SerializerFieldConversion:
+    """Finish one registry result and enforce the scalar-extension boundary.
+
+    Built-in kind prechecks return a finished conversion directly. Scalar registry entries,
+    including consumer registrations, return callables; a malformed extension must fail as a
+    typed configuration error rather than leaking ``AttributeError`` later from the input
+    builder. A registered scalar converter also cannot smuggle a relation / file kind through
+    the scalar registry, because those kinds require the framework-owned prechecks and build-site
+    metadata.
+    """
+    if isinstance(result, SerializerFieldConversion):
+        return result
+    try:
+        conversion = finish_field_conversion(result, field)
+    except ConfigurationError:
+        raise
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Registered serializer-field converter for {_safe_type_name(field)!r} on field "
+            f"{_safe_arg_repr(getattr(field, 'field_name', None))} raised "
+            f"{_safe_type_name(exc)} while converting the field.",
+        ) from exc
+    if not isinstance(conversion, SerializerFieldConversion):
+        raise ConfigurationError(
+            f"Registered serializer-field converter for {_safe_type_name(field)!r} on field "
+            f"{_safe_arg_repr(getattr(field, 'field_name', None))} must return "
+            f"SerializerFieldConversion; got {_safe_type_name(conversion)}.",
+        )
+    if conversion.kind != SCALAR:
+        raise ConfigurationError(
+            f"Registered serializer-field converter for {_safe_type_name(field)!r} on field "
+            f"{_safe_arg_repr(getattr(field, 'field_name', None))} must return a scalar "
+            f"conversion; got kind {conversion.kind!r}.",
+        )
+    return conversion
+
+
 def convert_serializer_field(
     field: serializers.Field,
     *,
@@ -470,7 +510,7 @@ def convert_serializer_field(
         scalar_registry=_SERIALIZER_FIELD_CONVERTERS,
         fallthrough_error_factory=_unsupported_serializer_field,
     )
-    return finish_field_conversion(result, field)
+    return _finish_serializer_conversion(result, field)
 
 
 def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationError:
@@ -488,6 +528,43 @@ def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationErro
         f"field {field.field_name!r}. convert_serializer_field has no mapping for it "
         "and no supported ancestor; register a supported base class, or drop it via "
         "Meta.fields / Meta.exclude.",
+    )
+
+
+def _relation_cardinality(field: serializers.Field) -> bool:
+    """Return whether a DRF relation field validates a collection of related objects."""
+    return isinstance(field, serializers.ManyRelatedField)
+
+
+def _model_relation_cardinality(field: models.Field) -> bool:
+    """Return whether a Django relation field exposes a collection-valued side."""
+    return bool(
+        getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False),
+    )
+
+
+def _reject_relation_cardinality_mismatch(field: serializers.Field, column: models.Field) -> None:
+    """Reject a serializer relation whose collection shape disagrees with its model relation.
+
+    ``resolve_serializer_field`` otherwise selected cardinality from the Django column while
+    DRF validated cardinality from the serializer field. A consumer can legally declare
+    ``PrimaryKeyRelatedField(many=True, source="category")`` over a foreign key; without this
+    guard the schema emits one scalar id while DRF requires a list (and the inverse mismatch
+    emits a list while DRF requires one id). The generated input must describe the same shape
+    the runtime serializer validates.
+    """
+    serializer_many = _relation_cardinality(field)
+    model_many = _model_relation_cardinality(column)
+    if serializer_many == model_many:
+        return
+    expected = "many=True" if model_many else "a single related object"
+    actual = "many=True" if serializer_many else "a single related object"
+    raise ConfigurationError(
+        f"Serializer relation field {field.field_name!r} has a cardinality mismatch: it declares "
+        f"{actual}, but its backing model relation {column.model.__name__}.{column.name} "
+        f"requires {expected}. Align the "
+        "serializer relation's many= shape with the model relation, or map the field to a "
+        "serializer-only target with an explicit queryset.",
     )
 
 
@@ -531,27 +608,37 @@ def serializer_field_description(field: serializers.Field) -> str | None:
     undescribed). Graphene-django threads only ``help_text``; this surfaces the DRF
     validation summary too without changing coercion semantics.
     """
-    parts: list[str] = []
-    help_text = getattr(field, "help_text", None)
-    if help_text:
-        parts.append(str(help_text))
-    facts: list[str] = []
-    for attr in (
-        "min_length",
-        "max_length",
-        "min_value",
-        "max_value",
-    ):
-        value = getattr(field, attr, None)
-        if value is not None:
-            facts.append(f"{attr}={value}")
-    if getattr(field, "allow_blank", False):
-        facts.append("allow_blank=true")
-    if getattr(field, "allow_empty", None) is False:
-        facts.append("allow_empty=false")
-    if facts:
-        parts.append("Constraints: " + ", ".join(facts) + ".")
-    return " ".join(parts) if parts else None
+    try:
+        parts: list[str] = []
+        help_text = getattr(field, "help_text", None)
+        if help_text:
+            parts.append(str(help_text))
+        facts: list[str] = []
+        for attr in (
+            "min_length",
+            "max_length",
+            "min_value",
+            "max_value",
+        ):
+            value = getattr(field, attr, None)
+            if value is not None:
+                facts.append(f"{attr}={value}")
+        if getattr(field, "allow_blank", False):
+            facts.append("allow_blank=true")
+        if getattr(field, "allow_empty", None) is False:
+            facts.append("allow_empty=false")
+        if facts:
+            parts.append("Constraints: " + ", ".join(facts) + ".")
+        return " ".join(parts) if parts else None
+    except BaseException as exc:
+        try:
+            field_name = _safe_arg_repr(getattr(field, "field_name", None))
+        except BaseException:
+            field_name = "<unavailable>"
+        raise ConfigurationError(
+            f"Serializer field {field_name} has metadata that cannot be rendered as a GraphQL "
+            "description.",
+        ) from exc
 
 
 def require_one_segment_source(
@@ -859,11 +946,13 @@ def resolve_serializer_field(
     serializer-only relation id-type are known); a column-less ``ChoiceField`` /
     ``MultipleChoiceField`` is upgraded to a generated GraphQL enum.
 
-    Returns the BASE (non-nullable) annotation; the create/partial requiredness +
-    ``allow_null`` widening is applied by the caller. The returned
-    ``InputFieldSpec`` records the reverse map the resolver consults -
-    ``target_name`` is the DECLARED serializer field name (the ``validated_data``
-    key), ``source`` the resolved one-segment source.
+    The GraphQL name is ALWAYS derived from the DECLARED serializer field name via
+    the id-like-suffix rule (never ``source``). Returns the BASE (non-nullable)
+    annotation; the create/partial requiredness + ``allow_null`` widening is
+    applied by the caller. The returned ``InputFieldSpec`` records the reverse map
+    the resolver consults - ``target_name`` is the DECLARED serializer
+    field name (the ``validated_data`` key), ``source`` the resolved one-segment
+    source.
     """
     # reject a nested serializer field FIRST, before the backing-column lookup - a
     # nested serializer over a reverse-relation column (``BranchSerializer.shelves``) would
@@ -899,6 +988,7 @@ def resolve_serializer_field(
             # field.
             _reject_unsupported_relation_field(field)
             related_model = column.related_model
+            _reject_relation_cardinality_mismatch(field, column)
             # M3: the serializer flavor requires a registered primary DjangoType for
             # the target (stricter than the model fallback). Resolve + validate it
             # via ``primary_of`` so the id type is the SAME Relay-vs-raw-pk decision

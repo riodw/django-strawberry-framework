@@ -523,6 +523,26 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     assert spec.related_model is product_models.Category
 
 
+def test_model_backed_relation_cardinality_mismatch_raises():
+    """A DRF ``many=True`` relation cannot masquerade as a scalar FK input."""
+    _register_products_types()
+
+    class MismatchedSer(serializers.ModelSerializer):
+        category_ids = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=product_models.Category.objects.all(),
+            source="category",
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("category_ids",)
+
+    field = MismatchedSer().fields["category_ids"]
+    with pytest.raises(ConfigurationError, match="cardinality"):
+        resolve_serializer_field(field, product_models.Item, "X")
+
+
 def test_model_backed_slug_related_field_raises():
     """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve.
 
@@ -755,6 +775,42 @@ def test_unregistered_custom_field_raises_then_registered_maps(_restore_converte
     conversion = convert_serializer_field(_bind(_CustomHexField(), "c"))
     assert conversion.annotation is str
     assert conversion.kind == SCALAR
+
+
+def test_registered_converter_malformed_return_is_configuration_error(
+    _restore_converter_registry,
+):
+    """A registered converter must return the typed scalar conversion value object."""
+    register_serializer_field_converter(_CustomHexField, lambda _field: None)
+    with pytest.raises(ConfigurationError, match="must return SerializerFieldConversion"):
+        convert_serializer_field(_bind(_CustomHexField(), "c"))
+
+
+def test_registered_converter_exception_is_wrapped_as_configuration_error(
+    _restore_converter_registry,
+):
+    """A converter that raises is reported against the registry, not as its own exception."""
+
+    def broken_converter(_field):
+        raise RuntimeError("converter failed")
+
+    register_serializer_field_converter(_CustomHexField, broken_converter)
+    with pytest.raises(ConfigurationError, match="raised RuntimeError"):
+        convert_serializer_field(_bind(_CustomHexField(), "c"))
+
+
+def test_registered_converter_relation_kind_is_configuration_error(_restore_converter_registry):
+    """A scalar registry extension cannot bypass framework-owned relation handling."""
+    register_serializer_field_converter(
+        _CustomHexField,
+        lambda field: SerializerFieldConversion(
+            annotation=None,
+            kind=RELATION_SINGLE,
+            required=field.required,
+        ),
+    )
+    with pytest.raises(ConfigurationError, match="must return a scalar conversion"):
+        convert_serializer_field(_bind(_CustomHexField(), "c"))
 
 
 def test_register_converter_resolves_unregistered_subclass_via_mro(_restore_converter_registry):
@@ -997,6 +1053,43 @@ def test_serializer_field_description_notes_allow_empty_false():
 
     field = _bind(serializers.ListField(child=serializers.CharField(), allow_empty=False), "tags")
     assert serializer_field_description(field) == "Constraints: allow_empty=false."
+
+
+def test_serializer_field_description_hostile_metadata_is_configuration_error():
+    """A hostile help-text descriptor cannot replace the typed schema error."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    class HostileText:
+        def __bool__(self):
+            raise KeyboardInterrupt("bool trap")
+
+        def __str__(self):
+            raise RuntimeError("str trap")
+
+    field = _bind(serializers.CharField(help_text=HostileText()), "name")
+    with pytest.raises(ConfigurationError, match="metadata that cannot be rendered"):
+        serializer_field_description(field)
+
+
+def test_serializer_field_description_handles_an_unreadable_field_name_in_diagnostic():
+    """The diagnostic names an unreadable field as ``<unavailable>`` rather than raising itself."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    class HostileField:
+        @property
+        def help_text(self):
+            raise RuntimeError("help unavailable")
+
+        @property
+        def field_name(self):
+            raise RuntimeError("name unavailable")
+
+    with pytest.raises(ConfigurationError, match="Serializer field <unavailable>"):
+        serializer_field_description(HostileField())  # type: ignore[arg-type]
 
 
 def test_declared_choicefield_over_model_column_emits_serializer_enum():

@@ -51,6 +51,7 @@ from django_strawberry_framework.rest_framework.inputs import (
     get_serializer_for_schema,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
+    normalize_nested_serializer_configs,
     resolve_effective_serializer_fields,
 )
 from django_strawberry_framework.rest_framework.serializer_converter import (
@@ -218,6 +219,24 @@ def test_schema_hook_stable_field_map_generates_input():
     stable = {"name": _bound(serializers.CharField(), "name")}
     cre, _shape, _par, _pshape = build_serializer_inputs(CtxSer, field_map=dict(stable))
     assert set(_field_map(cre)) == {"name"}
+
+
+@pytest.mark.parametrize(
+    ("selector", "expected"),
+    [("fields", {"name"}), ("exclude", {"name", "is_private"})],
+)
+def test_build_serializer_inputs_materializes_one_shot_narrowing(selector, expected):
+    """The create and partial builds both receive one-shot field selectors."""
+    _register_products_types()
+
+    names = ("name",) if selector == "fields" else ("category",)
+    create_cls, _, partial_cls, _ = build_serializer_inputs(
+        _item_serializer(),
+        guard_required=False,
+        **{selector: iter(names)},
+    )
+    assert set(_field_map(create_cls)) == expected
+    assert set(_field_map(partial_cls)) == expected
 
 
 def _bound(field: serializers.Field, name: str) -> serializers.Field:
@@ -642,9 +661,12 @@ def test_dedupe_serializer_input_shape_is_sole_cache_protocol():
     """Top-level and nested builds share one post-build get-or-store (folder DRY).
 
     ``dedupe_serializer_input_shape`` is the sole serializer caller of
-    ``get_or_store_shape_build`` on ``_serializer_shape_build_cache``; a second
-    build of an identical descriptor returns the same class object without a
-    second store.
+    ``get_or_store_shape_build`` on ``_serializer_shape_build_cache``:
+    ``build_serializer_input_class`` stores nothing, and a second build of the SAME
+    serializer declaration collapses onto the first stored ``(class, shape)`` pair.
+    The declaration has to be one class object -- ``serializer_class`` carries into
+    the frozen descriptor's identity, so two independently declared but textually
+    identical serializers are two distinct descriptors and never share a cache entry.
     """
     from django_strawberry_framework.rest_framework.inputs import (
         _serializer_shape_build_cache,
@@ -654,8 +676,9 @@ def test_dedupe_serializer_input_shape_is_sole_cache_protocol():
 
     _register_products_types()
     clear_serializer_shape_build_cache()
-    cre_a, shape_a = build_serializer_input_class(_item_serializer(), operation_kind="create")
-    cre_b, shape_b = build_serializer_input_class(_item_serializer(), operation_kind="create")
+    serializer_cls = _item_serializer()
+    cre_a, shape_a = build_serializer_input_class(serializer_cls, operation_kind="create")
+    cre_b, shape_b = build_serializer_input_class(serializer_cls, operation_kind="create")
     assert shape_a == shape_b
     assert shape_a.cache_key not in _serializer_shape_build_cache
 
@@ -1146,6 +1169,27 @@ def test_nested_serializer_config_defaults_and_root_import():
     assert config.nested_fields is None
 
 
+def test_nested_serializer_config_normalization_handles_cycles_and_passthrough_values():
+    """Normalization materializes one-shot selectors, leaves a self-referential map alone.
+
+    A ``nested_fields`` map that contains itself must not recurse forever, and a
+    non-``NestedSerializerConfig`` value the consumer parked in the map passes
+    through by identity.
+    """
+    nested: dict = {}
+    nested["child"] = NestedSerializerConfig(
+        fields=(name for name in ("name",)),
+        nested_fields=nested,
+    )
+    nested["consumer"] = object()
+
+    normalized = normalize_nested_serializer_configs(nested)
+
+    assert normalized["child"].fields == ("name",)
+    assert normalized["child"].nested_fields is nested
+    assert normalized["consumer"] is nested["consumer"]
+
+
 def test_nested_single_field_builds_recursive_input():
     """A single opted-in nested serializer field builds a nested input class + records nested_specs."""
     child = _nested_child_serializer()
@@ -1198,6 +1242,25 @@ def test_nested_config_narrows_nested_fields():
     )
     detail_spec = next(s for s in shape.field_specs if s.target_name == "detail")
     assert [s.target_name for s in detail_spec.nested_specs] == ["code"]
+
+
+def test_build_serializer_inputs_materializes_one_shot_nested_selectors():
+    """Nested create and partial builds both receive one-shot config selectors."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    config = NestedSerializerConfig(fields=iter(("code",)))
+    create_cls, create_shape, partial_cls, partial_shape = build_serializer_inputs(
+        Parent,
+        nested_configs={"detail": config},
+    )
+
+    for input_cls, shape in ((create_cls, create_shape), (partial_cls, partial_shape)):
+        assert set(_field_map(input_cls)) == {"detail"}
+        detail_spec = next(s for s in shape.field_specs if s.target_name == "detail")
+        assert [s.target_name for s in detail_spec.nested_specs] == ["code"]
 
 
 def test_nested_config_deeper_nesting_opts_in_grandchild():

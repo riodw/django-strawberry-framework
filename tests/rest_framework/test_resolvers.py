@@ -1330,6 +1330,34 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree():
 
 
 # ===========================================================================
+# _hook_mapping - the shared mapping-hook materialization boundary
+# ===========================================================================
+
+
+@pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
+def test_hook_mapping_wraps_a_mapping_that_cannot_be_materialized(escape):
+    """A mapping that explodes while being copied surfaces as the typed hook error.
+
+    The boundary catches ``BaseException``, so a hook mapping raising from outside
+    the ``Exception`` hierarchy still cannot escape the pipeline as itself.
+    """
+    from collections.abc import Mapping
+
+    class BrokenMapping(Mapping):
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+        def __iter__(self):
+            raise escape("iteration failed")
+
+        def __len__(self):
+            return 1
+
+    with pytest.raises(ConfigurationError, match="could not be materialized"):
+        serializer_resolvers._hook_mapping(type("Mutation", (), {}), "get_data", BrokenMapping())
+
+
+# ===========================================================================
 # Explicit injection contract runtime verification
 # ===========================================================================
 
@@ -1431,6 +1459,18 @@ def test_injected_data_hook_undeclared_extra_key_raises():
     """``get_serializer_injected_data`` returning an UNDECLARED key fails loud (hardened)."""
     fake = _hookable_injected_mut(None, {"topic": "smuggle"})
     with pytest.raises(ConfigurationError, match="EXACTLY the declared injected fields"):
+        serializer_resolvers._injected_serializer_data(
+            fake,
+            info=None,
+            frozen_provided=serializer_resolvers._frozen_hook_view({"code": "X"}),
+            hook_context=_hook_ctx(),
+        )
+
+
+def test_injected_data_hook_non_mapping_return_is_configuration_error():
+    """A malformed injection hook return fails at the typed hook boundary."""
+    fake = _hookable_injected_mut((), None)
+    with pytest.raises(ConfigurationError, match="must return a mapping"):
         serializer_resolvers._injected_serializer_data(
             fake,
             info=None,
@@ -2006,6 +2046,37 @@ def test_save_kwargs_hook_validation_error_maps_to_field_error_envelope():
     ]
 
 
+@pytest.mark.django_db
+def test_save_kwargs_hook_non_mapping_return_is_configuration_error():
+    """A malformed save hook return fails before serializer.save()."""
+
+    class PlainItemSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    def malformed_save_kwargs(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return None
+
+    mutation_cls = _bind_item_serializer_mutation(PlainItemSerializer)
+    mutation_cls.get_serializer_save_kwargs = malformed_save_kwargs
+    category = product_models.Category.objects.create(name="MalformedSaveKwargsCat")
+    with write_pipeline("default", lock=False):
+        with pytest.raises(ConfigurationError, match="must return a mapping"):
+            serializer_resolvers._serializer_write_step(
+                mutation_cls,
+                _info_with_request(),
+                None,
+                {"name": "MalformedSaveKwargsItem", "category": category.pk},
+            )
+
+
 # ===========================================================================
 # Framework-owned serializer kwargs + saved-result validation (hardening)
 # ===========================================================================
@@ -2227,6 +2298,30 @@ def test_merged_kwargs_hook_equal_but_not_identical_data_is_configuration_error(
 
     mutation_cls = _reserved_kwarg_mutation(hook)
     with pytest.raises(ConfigurationError, match="not the exact object the hook received"):
+        serializer_resolvers._merged_serializer_kwargs(
+            mutation_cls,
+            _info_with_request(),
+            final_data={"name": "X"},
+            instance=None,
+            alias="default",
+            hook_context=_hook_ctx(),
+        )
+
+
+def test_merged_kwargs_hook_non_mapping_return_is_configuration_error():
+    """A malformed constructor hook return fails before reserved-key handling."""
+
+    def hook(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return None
+
+    mutation_cls = _reserved_kwarg_mutation(hook)
+    with pytest.raises(ConfigurationError, match="must return a mapping"):
         serializer_resolvers._merged_serializer_kwargs(
             mutation_cls,
             _info_with_request(),

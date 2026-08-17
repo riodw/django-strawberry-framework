@@ -133,7 +133,7 @@ from django.db.models.signals import post_save, pre_save
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_type_name
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from ..mutations.resolvers import (
     make_resolver_entries,
@@ -589,6 +589,28 @@ def _upload_metadata(item: Any) -> UploadMetadata:
     )
 
 
+def _hook_mapping(mutation_cls: type, hook_name: str, value: Any) -> dict[str, Any]:
+    """Coerce one mapping-valued hook result or raise a typed configuration error.
+
+    The three serializer hooks that return keyword/data mappings are consumer extension points.
+    A malformed ``None`` / sequence / stateful mapping must not leak a raw ``TypeError`` from
+    ``dict(...)`` into GraphQL; reject it at the hook boundary with the same
+    ``ConfigurationError`` used for other reserved-key violations.
+    """
+    if not isinstance(value, Mapping):
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}.{hook_name} must return a mapping; "
+            f"got {_safe_type_name(value)}.",
+        )
+    try:
+        return dict(value)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping that "
+            "could not be materialized for the serializer pipeline.",
+        ) from exc
+
+
 # Leaf value types the frozen hook view may expose BY REFERENCE: each cannot be
 # mutated in place, so a hook holding one cannot alter the authoritative data.
 # Anything outside this allow-list (and not a frozen container or an upload) is an
@@ -775,7 +797,9 @@ def _injected_serializer_data(
     can never overwrite a client value.
     """
     declared = frozenset(mutation_cls._mutation_meta.injected_fields or ())
-    injected = dict(
+    injected = _hook_mapping(
+        mutation_cls,
+        "get_serializer_injected_data()",
         mutation_cls().get_serializer_injected_data(
             info,
             data=frozen_provided,
@@ -834,7 +858,9 @@ def _merged_serializer_kwargs(
       that queries or defers work can read the ONE alias the transaction covers.
     """
     frozen_data = _frozen_hook_view(final_data)
-    kwargs = dict(
+    kwargs = _hook_mapping(
+        mutation_cls,
+        "get_serializer_kwargs()",
         mutation_cls().get_serializer_kwargs(
             info,
             data=frozen_data,
@@ -2134,7 +2160,9 @@ def _guarded_serializer_write(
         # authoritative structures (whose nested containers DRF's ``validated_data``
         # can carry by identity) are unreachable from hook hands.
         nonlocal saved
-        save_kwargs = dict(
+        save_kwargs = _hook_mapping(
+            mutation_cls,
+            "get_serializer_save_kwargs()",
             mutation_cls().get_serializer_save_kwargs(
                 info,
                 data=frozen_provided,

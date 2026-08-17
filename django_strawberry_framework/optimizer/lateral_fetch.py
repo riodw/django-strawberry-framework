@@ -77,7 +77,6 @@ from django.core.exceptions import EmptyResultSet, FullResultSet
 from django.db import connections
 from django.db.models import QuerySet
 from django.db.models.expressions import Col, Window
-from django.db.models.query import ModelIterable
 from django.db.models.sql.where import AND, WhereNode
 
 from ..keyset import keyset_seek_sql
@@ -87,6 +86,7 @@ from .nested_fetch import (
     WINDOWED_STRATEGY,
     NestedConnectionRequest,
     attach_windowed_prefetch,
+    unwindowable_child_queryset_reason,
 )
 from .plans import (
     WINDOW_ROW_NUMBER,
@@ -210,13 +210,7 @@ class LateralWindowSpec:
         shared ``assert_window_fetch_mode_for`` so the raw-SQL backend cannot
         develop a different fetch-mode contract from the ORM window.
         """
-        assert_window_fetch_mode_for(
-            offset=self.offset,
-            limit=self.limit,
-            reverse=self.reverse,
-            with_total_count=self.with_total_count,
-            next_page_probe=self.next_page_probe,
-        )
+        assert_window_fetch_mode_for(self)
 
 
 def build_lateral_sql(
@@ -521,8 +515,6 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list | None:
     connection = connections[queryset.db]
     if connection.vendor != "postgresql":
         return None
-    if queryset._iterable_class is not ModelIterable:
-        return None
     recognized = _recognize_lateral_fetch(queryset, spec)
     if recognized is None:
         return None
@@ -617,16 +609,10 @@ def _recognize_lateral_fetch(
     here, never a fresh compile. Anything else - an unexpected filter, a second
     IN, an expression rhs, a slice - returns ``None`` (the windowed body runs).
     """
+    if unwindowable_child_queryset_reason(queryset) is not None:
+        return None
     query = queryset.query
-    if (
-        query.is_sliced
-        or query.distinct
-        or query.select_related
-        or query.select_for_update
-        or query.combinator
-        or query.extra_tables
-        or query.group_by is not None
-    ):
+    if query.select_related or query.extra_tables or query.group_by is not None:
         return None
     if tuple(query.order_by) != spec.query_order_by or not query.standard_ordering:
         return None

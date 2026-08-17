@@ -44,7 +44,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.db.models import QuerySet
-from django.db.models.query import ModelIterable
 
 from ..utils.connections import window_range_plan
 from . import logger
@@ -56,7 +55,7 @@ from .lateral_fetch import (
     _select_columns,
     window_predicate_signature,
 )
-from .nested_fetch import NestedConnectionRequest
+from .nested_fetch import NestedConnectionRequest, unwindowable_child_queryset_reason
 from .plans import WINDOW_ROW_NUMBER
 
 
@@ -270,18 +269,10 @@ def _fetch_single_parent_rows(queryset: SingleParentWindowQuerySet) -> list | No
 
     if not single_parent_fast_path_setting():
         return None
-    if queryset._iterable_class is not ModelIterable:
+    if unwindowable_child_queryset_reason(queryset) is not None:
         return None
     query = queryset.query
-    if (
-        query.is_sliced
-        or query.distinct
-        or query.select_for_update
-        or query.combinator
-        or query.extra
-        or query.extra_tables
-        or query.group_by is not None
-    ):
+    if query.extra or query.extra_tables or query.group_by is not None:
         return None
     if tuple(query.order_by) != tuple(spec.order_by) or not query.standard_ordering:
         return None

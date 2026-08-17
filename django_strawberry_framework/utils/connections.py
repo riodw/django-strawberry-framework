@@ -459,30 +459,24 @@ def assert_window_fetch_mode(range_plan: WindowRangePlan, *, with_total_count: b
         )
 
 
-def assert_window_fetch_mode_for(
-    *,
-    offset: int,
-    limit: int | None,
-    reverse: bool,
-    with_total_count: bool,
-    next_page_probe: bool,
-) -> None:
+def assert_window_fetch_mode_for(window: Any) -> None:
     """``assert_window_fetch_mode`` for callers holding RAW window arguments.
 
-    The request objects (``NestedConnectionRequest`` / ``LateralWindowSpec``)
-    carry ``(offset, limit, reverse, next_page_probe)`` rather than a resolved
-    ``WindowRangePlan``; this resolves the plan through the shared
-    ``window_range_plan`` and delegates, so the effective-state rule is spelled
-    exactly once.
+    ``NestedConnectionRequest`` and ``LateralWindowSpec`` carry
+    ``(offset, limit, reverse, next_page_probe, with_total_count)`` rather than a
+    resolved ``WindowRangePlan``; this reads those attributes, resolves the plan
+    through the shared ``window_range_plan``, and delegates, so the
+    effective-state rule is spelled exactly once. Both dataclasses pass
+    ``self`` from ``__post_init__``.
     """
     assert_window_fetch_mode(
         window_range_plan(
-            offset=offset,
-            limit=limit,
-            reverse=reverse,
-            next_page_probe=next_page_probe,
+            offset=window.offset,
+            limit=window.limit,
+            reverse=window.reverse,
+            next_page_probe=window.next_page_probe,
         ),
-        with_total_count=with_total_count,
+        with_total_count=window.with_total_count,
     )
 
 

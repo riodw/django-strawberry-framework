@@ -536,20 +536,24 @@ def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
     request flags.
     """
     assert_window_fetch_mode_for(
-        offset=2,
-        limit=None,
-        reverse=False,
-        with_total_count=True,
-        next_page_probe=True,
+        SimpleNamespace(
+            offset=2,
+            limit=None,
+            reverse=False,
+            with_total_count=True,
+            next_page_probe=True,
+        ),
     )
     # The same params on the bounded offset page DO engage the probe -> reject.
     with pytest.raises(OptimizerError, match="mutually exclusive"):
         assert_window_fetch_mode_for(
-            offset=2,
-            limit=3,
-            reverse=False,
-            with_total_count=True,
-            next_page_probe=True,
+            SimpleNamespace(
+                offset=2,
+                limit=3,
+                reverse=False,
+                with_total_count=True,
+                next_page_probe=True,
+            ),
         )
 
 

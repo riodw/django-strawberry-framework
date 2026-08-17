@@ -102,6 +102,11 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     so the per-parent resolution stays strictness-visible and any truly
     invalid consumer shape raises ITS OWN error at the field with normal
     error locality.
+
+    Fetch-time recognizers reuse this classifier as their first gate
+    (``lateral_fetch._recognize_lateral_fetch``,
+    ``single_parent_fetch._fetch_single_parent_rows``); they still degrade to
+    the windowed body rather than leaving the selection unplanned.
     """
     query = getattr(queryset, "query", None)
     if getattr(query, "is_sliced", False):
@@ -166,13 +171,7 @@ class NestedConnectionRequest:
         windowed and lateral backends alike against an engaged-probe window that
         also carries the partition count.
         """
-        assert_window_fetch_mode_for(
-            offset=self.offset,
-            limit=self.limit,
-            reverse=self.reverse,
-            with_total_count=self.with_total_count,
-            next_page_probe=self.next_page_probe,
-        )
+        assert_window_fetch_mode_for(self)
 
 
 class NestedConnectionStrategy(Protocol):

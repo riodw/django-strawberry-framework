@@ -200,25 +200,28 @@ def _baseline_python_paths(commit: str, package_dir: str) -> frozenset[str]:
     ``git ls-tree -r`` rather than per-file, so classifying every item costs one
     git call and never consults the working tree.
     """
-    output = _run_git(
-        [
-            "ls-tree",
-            "-r",
-            "--name-only",
-            commit,
-            "--",
-            package_dir,
-        ],
+    return frozenset(
+        path
+        for path in snapshot._tree_paths_at_commit(commit, package_dir)
+        if path.endswith(".py")
     )
-    return frozenset(line for line in output.splitlines() if line.endswith(".py"))
 
 
 def _shadow_inputs(
     repo_root: Path,
     current_dir: Path,
     source: str,
+    baseline_paths: frozenset[str],
 ) -> tuple[Path | None, Path | None]:
-    """Return repo-relative baseline shadow inputs when both exist."""
+    """Return trustworthy repo-relative baseline inputs when both exist.
+
+    Artifact presence cannot establish provenance by itself. A complete stale
+    pair must not be attached to a source that did not exist at the baseline or
+    whose path the snapshot excludes; incomplete pairs are likewise treated as
+    missing so the item reports the unexpected gap.
+    """
+    if source not in baseline_paths or snapshot.snapshot_excludes(source):
+        return None, None
     stem = Path(source).with_suffix("").as_posix().replace("/", "__")
     stripped = current_dir / f"{stem}.stripped.py"
     overview = current_dir / f"{stem}.overview.md"
@@ -338,8 +341,10 @@ def _read_dicta(dicta_path: Path) -> str:
     lost rather than as unasked. Whitespace-only counts as empty.
     """
     if dicta_path.is_file():
-        text = dicta_path.read_text(encoding="utf-8")
+        text = dicta_path.read_text(encoding="utf-8").removeprefix("\ufeff")
         if text.strip():
+            if re.search(r"(?m)^## Package questions[ \t]*$", text) is None:
+                text = f"## Package questions\n\n{text.lstrip()}"
             return text if text.endswith("\n") else text + "\n"
     return _FALLBACK_DICTA
 
@@ -415,6 +420,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    try:
+        package_dir = snapshot.normalize_package_dir(repo_root, args.package_dir)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     current_dir = (repo_root / SHADOW_DIR).resolve()
     dicta_path = (repo_root / args.dicta).resolve()
 
@@ -430,43 +440,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 3
+    source_paths = _live_python_sources(repo_root, package_dir)
+    if not source_paths:
+        print(
+            f"No live non-init Python files under {package_dir!r}.",
+            file=sys.stderr,
+        )
+        return 2
+    baseline_paths = _baseline_python_paths(head_sha, package_dir)
     try:
         _refresh_historical_package_snapshot(
             head_sha,
-            args.package_dir,
+            package_dir,
             current_dir,
         )
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 1
 
-    source_paths = _live_python_sources(repo_root, args.package_dir)
-    if not source_paths:
-        print(
-            f"No live non-init Python files under {args.package_dir!r}.",
-            file=sys.stderr,
-        )
-        return 2
-
     sections: list[str] = [
         _progress_header(head_sha, release),
         _read_dicta(dicta_path),
         _HOW_TO_REVIEW_ONE_FILE,
     ]
-    baseline_paths = _baseline_python_paths(head_sha, args.package_dir)
     for source in source_paths:
-        stripped, overview = _shadow_inputs(repo_root, current_dir, source)
+        stripped, overview = _shadow_inputs(
+            repo_root,
+            current_dir,
+            source,
+            baseline_paths,
+        )
         sections.append(_file_block(source, stripped, overview, baseline_paths))
     sections.extend([_integration_block(), _final_gate_block()])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(sections), encoding="utf-8")
 
-    rel_output = output_path.relative_to(repo_root)
+    try:
+        display_output = output_path.relative_to(repo_root)
+    except ValueError:
+        display_output = output_path
     print(
         f"Refreshed {SHADOW_DIR.as_posix()}/ from {head_sha} "
-        f"({args.package_dir}) and wrote {len(source_paths)} prompts to "
-        f"{rel_output.as_posix()}",
+        f"({package_dir}) and wrote {len(source_paths)} prompts to "
+        f"{display_output.as_posix()}",
     )
     return 0
 

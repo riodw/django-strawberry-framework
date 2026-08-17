@@ -11,7 +11,8 @@ empty. When this hunt was generated, `scripts/bug_hunt.py::_read_dicta` substitu
 `## Package questions` fallback only when that file was *missing*, so this run emitted an empty
 section rather than the fallback text, and this heading was reconstructed during the closeout. The
 generator has since been corrected to treat an empty or whitespace-only dicta the same as a missing
-one. Exploration was free across the live source; shadow inputs were orientation only.
+one and to place non-empty heading-less content under the canonical section. Exploration was free
+across the live source; shadow inputs were orientation only.
 
 ## How to hunt one file
 Each item uses one source file as its entry point into the live system. The
@@ -307,7 +308,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/forms/inputs.py
     - Status: verified
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `ae9b67706066c24c12265bbc7b54cb52145254b7b58808ecb95bc7a39ca48f07`; working-tree status digest `2b73e998ff33bf8999828bbfc266826d0df904b1e061e2b311e81860f8366695`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `ae9b67706066c24c12265bbc7b54cb52145254b7b58808ecb95bc7a39ca48f07`; working-tree status digest `2b73e998ff33bf8999828bbfc266826d0df904b1e061e2b311e81860f8366695`. Provenance correction: the stated cycle HEAD's target SHA-256 is `7d95cb87bb8fa95cfb8af4ea2007830e72e5e31074bc667c2763c26aa0ec3796`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__forms__inputs.stripped.py
     - docs/shadow/current/django_strawberry_framework__forms__inputs.overview.md
     - Prompt:
@@ -319,7 +320,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/forms/resolvers.py
     - Status: no-bugs
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `3ef9d9fb2fa0c313229e391a597f3d41b0b64f3cdcda3058158e3c89cd48abbe`; working-tree status digest `8179ed4e928f0fd1eeb3a8ae3cda0bb10b20d4035426fe06f4a17731c8016866`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `3ef9d9fb2fa0c313229e391a597f3d41b0b64f3cdcda3058158e3c89cd48abbe`; working-tree status digest `8179ed4e928f0fd1eeb3a8ae3cda0bb10b20d4035426fe06f4a17731c8016866`. Provenance correction: the stated cycle HEAD's target SHA-256 is `b1875677b8f0e3a306f0f34d52e8e5f934e8f78874c1958c9a6ee7a447d31a23`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__forms__resolvers.stripped.py
     - docs/shadow/current/django_strawberry_framework__forms__resolvers.overview.md
     - Prompt:
@@ -352,7 +353,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/list_field.py
     - Status: no-bugs
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `7e6b91116029a5fb0f22c1192fa45a6a0c8bc4fb28f68e4c8014f7306815af43`; working-tree status digest `aa4e5efceeeac0a3c066206bc5854912854859e489afd8bcfd8132140c696d51`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `7e6b91116029a5fb0f22c1192fa45a6a0c8bc4fb28f68e4c8014f7306815af43`; working-tree status digest `aa4e5efceeeac0a3c066206bc5854912854859e489afd8bcfd8132140c696d51`. Provenance correction: the stated cycle HEAD's target SHA-256 is `5603e5e17694cc8114bf5d701921dce333d0d919d408dda4fa12e34b89317edd`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__list_field.stripped.py
     - docs/shadow/current/django_strawberry_framework__list_field.overview.md
     - Result: No additional reachable defect found after the existing async-iterable/resource-bound fix. Audited validation, sync/async resolver dispatch, visibility sealing, lazy queryset limits, malformed awaitables, iterator closure, and live list-field queries. Independent verification: edge probes passed; `tests/test_list_field.py` 44 passed; live list-field selection 1 passed. The hostile metaclass diagnostic case was confirmed as an out-of-boundary raw exception under existing project precedent. Removed exact scratch directory after verification.
@@ -397,7 +398,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/middleware/request_body.py
     - Status: verified
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `af0ee4de619c74214b6cb14791d771b3a3019e2babe5b94e99838d62630d6fa2`; working-tree status digest `5269314036fcc6b7fdc1ebc804d745adb737f989bdc546c6b6df3f77335fdd02`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `af0ee4de619c74214b6cb14791d771b3a3019e2babe5b94e99838d62630d6fa2`; working-tree status digest `5269314036fcc6b7fdc1ebc804d745adb737f989bdc546c6b6df3f77335fdd02`. Provenance correction: the stated cycle HEAD's target SHA-256 is `eb77f024476165e87c851a3029f32452cbee3e0c9cae2d6ecec260ed9584762e`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__middleware__request_body.stripped.py
     - docs/shadow/current/django_strawberry_framework__middleware__request_body.overview.md
     - Result: Fixed a Medium lifecycle defect: duplicate boundary middleware entries re-ran setup/body-boundary side effects and overwrote the prepared view instance for one request. `process_view()` now returns when `_BOUNDARY_ENFORCED` is already present; permanent regression added. Independent verification: duplicate-entry probe changed from two runs to one; selected view/middleware tests 31 passed; live transport suite 77 passed. Removed exact scratch directory after verification.
@@ -415,7 +416,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/mutations/inputs.py
     - Status: verified
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `a79eb45b2603a24e235cfc4a5dab9327cf4344975cc03a84eca3b20caacf61c0`; working-tree status digest `a31897e63d8cd26d6704098f7dde461160fe4c6106321003814015d780c082a3`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `a79eb45b2603a24e235cfc4a5dab9327cf4344975cc03a84eca3b20caacf61c0`; working-tree status digest `a31897e63d8cd26d6704098f7dde461160fe4c6106321003814015d780c082a3`. Provenance correction: the stated cycle HEAD's target SHA-256 is `11d7e30ad5e33174cc2398a5ccdb2f311ad8762a9b2cadc43dfc557c6b5a21e7`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__mutations__inputs.stripped.py
     - docs/shadow/current/django_strawberry_framework__mutations__inputs.overview.md
     - Result: Fixed two Medium one-shot-iterator defects. `editable_input_fields()` now snapshots `fields`/`exclude` before validation and narrowing; `build_mutation_input()` snapshots `overrides` before repeated membership checks. Permanent package regressions added. Independent verification: mutation-input package suite 50 passed; live product mutation and custom-input selection 4 passed. Worker scratch was removed after its probe verification.
@@ -433,7 +434,7 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/mutations/resolvers.py
     - Status: verified
-    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `12a7af8a798738989b2a0b8a83b4451424af97293a8c7ed3e511d264e3be8f8d`; working-tree status digest `df823202586d41eef59bf463380905851957fa1eab35beb9c1162c882ca6aa26`. The target was clean at dispatch.
+    - Cycle baseline: HEAD `054de9dd37a2c4181fb2a91ded57f4823a1b5220`; live target SHA-256 `12a7af8a798738989b2a0b8a83b4451424af97293a8c7ed3e511d264e3be8f8d`; working-tree status digest `df823202586d41eef59bf463380905851957fa1eab35beb9c1162c882ca6aa26`. Provenance correction: the stated cycle HEAD's target SHA-256 is `bab6666991c79a0dcf94032a7a00d2426299fa9c79e5a075ed4f8f0d874ce1aa`, so the original "clean at dispatch" claim conflicts with this entry's live hash; the actual dispatch status is not recoverable.
     - docs/shadow/current/django_strawberry_framework__mutations__resolvers.stripped.py
     - docs/shadow/current/django_strawberry_framework__mutations__resolvers.overview.md
     - Result: Fixed a Medium drift-diagnostic defect: hostile primary-key representations from authorization/write hooks could escape as raw exceptions in update/delete diagnostics. Both paths now use `_safe_arg_repr`; permanent regressions added. Independent verification: hostile PK probe passed; resolver suite 69 passed; live create/update/delete product suite 49 passed. Removed exact scratch directory after verification.
@@ -867,15 +868,18 @@ Coverage of the hunt itself is complete: the 93 items map one-to-one onto the 93
 Python files in the live package, with no file unhunted and no item naming a file the package does
 not contain.
 
-- Confirmed fixes: 62 source files. One further item (`auth/sessions.py`) was a documentation-only
-  correction, and two items (`error_policy.py`, `apps.py`) placed their fixes entirely in connected
-  files rather than in the named target.
+- Confirmed production-code fixes: 62 source-file hunt items. One further source-file item
+  (`auth/sessions.py`) was a documentation-only correction, and two items (`error_policy.py`,
+  `apps.py`) placed their fixes entirely in connected files rather than in the named target. This is
+  an item count, not a count of distinct changed source files; many systemic fixes crossed files.
 - No-bug items: 31, counting the package-integration item now recorded as `no-bugs`.
-- Blockers: none. No item reached `blocked`, and no item closed at `revision-needed`.
-- Severity spread across the 62 code fixes: 52 Medium, 5 Low, one recording both a Medium and a Low
-  defect, and 4 (`optimizer/field_meta.py`, `optimizer/hints.py`, `optimizer/join_taxonomy.py`,
-  `testing/client.py`) recorded with no severity grade, deviating from the stock result line. No
-  fix was graded High or Critical.
+- Final statuses: 64 `verified` and 31 `no-bugs`; no item is finally recorded as `blocked` or
+  `revision-needed`. The committed record contains no intermediate progress snapshots, so transient
+  state history is not recoverable.
+- Severity spread across the 62 code fixes: 52 Medium, 5 Low, one item recording both Medium- and
+  Low-severity defects (`routers.py`), and 4 (`optimizer/field_meta.py`, `optimizer/hints.py`,
+  `optimizer/join_taxonomy.py`, `testing/client.py`) recorded with no severity grade, deviating from
+  the stock result line. No fix was graded High or Critical.
 - Final validation, re-confirmed on 2026-08-17 against the committed tree: `uv run pytest` gives
   6096 passed, 40 skipped, 0 xfailed, and 100% configured package coverage (15556 statements,
   0 missed). The higher counts than the gate recorded are the concurrently-committed review and DRY
@@ -884,17 +888,24 @@ not contain.
 - Item-owned scratch: confirmed gone. `docs/bug_hunt/temp-tests/` is empty.
 - Unrelated work left untouched: the concurrent review cycle (`docs/review/`), the DRY consolidation
   cycle, and the spec residual cycles all landed in the same working tree and were preserved, as
-  each item's cleanup line states. Spot-checked survival of a hunt fix through a later concurrent
-  refactor: `filters/factories.py`'s unhashable-cache discriminator now lives in
+  the available cleanup and result records state. Spot-checked survival of a hunt fix through a
+  later concurrent refactor: `filters/factories.py`'s unhashable-cache discriminator now lives in
   `utils/inputs.py::make_hashable_meta_value` after the DRY consolidation folded it into the shared
   normalizer, and the identity discriminator survived intact.
 
 Record fidelity, stated rather than back-filled, because the missing material cannot be reconstructed
 without inventing it:
 
-- 56 items carry no `Cycle baseline` line, which HUNT.md requires before dispatch. The field stops
-  after `optimizer/field_meta.py` and never resumes, so for those items the separation between
+- 56 entries carry no `Cycle baseline` line: the isolated `mutations/sets.py` source item, 53 source
+  items from `optimizer/hints.py` through `views.py`, Package integration, and Final test gate. The
+  first 55 are dispatchable entries for which HUNT.md requires a cycle baseline; Final test gate is
+  Worker-0-owned rather than dispatched. For the 55 dispatchable omissions, separation between
   item-owned and concurrent change is not recorded and is no longer recoverable.
+- Six earlier entries that do carry a `Cycle baseline` line (`forms/inputs.py`,
+  `forms/resolvers.py`, `list_field.py`, `middleware/request_body.py`, `mutations/inputs.py`, and
+  `mutations/resolvers.py`) originally claimed a clean target, but their recorded live SHA-256 does
+  not match the file at the stated cycle HEAD. Each item now records both hashes and marks the
+  dispatch provenance unrecoverable instead of retaining the false cleanliness claim.
 - 43 items carry no `Prompt` block, a contiguous run from `optimizer/field_meta.py` through
   `utils/imports.py`; the blocks resume afterwards.
 - 34 of the verified items carry no separate `Verification` / `Validation` / `Cleanup` lines. Their

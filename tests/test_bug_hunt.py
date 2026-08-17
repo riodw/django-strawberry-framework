@@ -1,7 +1,10 @@
 """Focused tests for the autonomous bug-hunt progress generator."""
 
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+
+import pytest
 
 from scripts import bug_hunt
 from scripts import review_historical_package_snapshot_at_commit as snapshot
@@ -26,6 +29,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     _write(package_root / "testing" / "client.py", "class Client:\n    pass\n")
     _write(package_root / "testing" / "fresh.py", "FRESH = None\n")
     _write(package_root / "added.py", "NEW = None\n")
+    _write(package_root / "orphaned.py", "ORPHANED = None\n")
     current_dir = tmp_path / bug_hunt.SHADOW_DIR
     stripped = _write(
         current_dir / "django_strawberry_framework__module.stripped.py",
@@ -41,23 +45,17 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     )
 
     pkg = bug_hunt.DEFAULT_PACKAGE_DIR
-    # The baseline holds ``module.py`` and ``testing/client.py`` but neither
-    # ``added.py`` nor ``testing/fresh.py``, so file age is established by the listing
-    # rather than assumed from the path.
-    baseline_listing = f"{pkg}/__init__.py\n{pkg}/module.py\n{pkg}/testing/client.py\n"
+    # The baseline holds ``module.py``, ``orphaned.py``, and
+    # ``testing/client.py`` but neither ``added.py`` nor ``testing/fresh.py``, so
+    # file age is established by the listing rather than assumed from the path.
+    baseline_listing = (
+        f"{pkg}/__init__.py\0{pkg}/module.py\0{pkg}/orphaned.py\0{pkg}/testing/client.py\0"
+    )
 
     def fake_run_git(args: Sequence[str]) -> str:
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): f"{full_sha}\n",
-            (
-                "ls-tree",
-                "-r",
-                "--name-only",
-                full_sha,
-                "--",
-                pkg,
-            ): baseline_listing,
         }
         return responses[tuple(args)]
 
@@ -67,6 +65,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
         refreshes.append((commit, package_dir, target_dir))
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
+    monkeypatch.setattr(snapshot, "_run_git", lambda args: baseline_listing)
     monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", fake_refresh)
 
     assert bug_hunt.main([]) == 0
@@ -98,6 +97,10 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
         "Baseline shadow: none (live file added since the hunt baseline; its path is also "
         "excluded by the snapshot's 'test' filter)" in report
     )
+    assert (
+        "Baseline shadow: none (file existed at the hunt baseline and is snapshot-eligible, "
+        "so this shadow is missing unexpectedly -- treat the snapshot as incomplete)" in report
+    )
     assert "- [ ] django_strawberry_framework/__init__.py" not in report
     assert "- [ ] Package integration" in report
     assert "including public exports and `__init__.py` files" in report
@@ -114,6 +117,10 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert bug_hunt.main(["--force"]) == 0
     assert "stale progress" not in output.read_text(encoding="utf-8")
     assert len(refreshes) == 2
+
+    outside_output = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    assert bug_hunt.main(["--output", str(outside_output)]) == 0
+    assert outside_output.is_file()
 
 
 def test_empty_dicta_still_renders_the_package_questions_section(
@@ -133,8 +140,6 @@ def test_empty_dicta_still_renders_the_package_questions_section(
     _write(tmp_path / bug_hunt.DICTA_PATH, "\n   \n")
 
     def fake_run_git(args: Sequence[str]) -> str:
-        if args[0] == "ls-tree":
-            return f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\n"
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
@@ -142,6 +147,11 @@ def test_empty_dicta_still_renders_the_package_questions_section(
         return responses[tuple(args)]
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
+    monkeypatch.setattr(
+        snapshot,
+        "_run_git",
+        lambda args: f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0",
+    )
     monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", lambda *args: None)
 
     assert bug_hunt.main([]) == 0
@@ -149,6 +159,31 @@ def test_empty_dicta_still_renders_the_package_questions_section(
 
     assert "## Package questions" in report
     assert "No maintainer-authored probing questions were supplied" in report
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (None, "No maintainer-authored probing questions were supplied"),
+        ("\ufeff \n", "No maintainer-authored probing questions were supplied"),
+        ("Probe hostile state.", "Probe hostile state."),
+        ("## Package questions\n\nAlready wrapped.", "Already wrapped."),
+    ],
+)
+def test_dicta_always_renders_one_package_questions_section(
+    tmp_path: Path,
+    content: str | None,
+    expected: str,
+) -> None:
+    dicta = tmp_path / "dicta.md"
+    if content is not None:
+        _write(dicta, content)
+
+    rendered = bug_hunt._read_dicta(dicta)
+
+    assert rendered.count("## Package questions") == 1
+    assert expected in rendered
+    assert rendered.endswith("\n")
 
 
 def test_snapshot_exclusion_rule_is_shared_with_the_snapshot_helper() -> None:
@@ -200,13 +235,13 @@ def test_baseline_python_paths_reads_the_commit_unfiltered(monkeypatch) -> None:
     def fake_run_git(args: Sequence[str]) -> str:
         calls.append(tuple(args))
         return (
-            "django_strawberry_framework/__init__.py\n"
-            "django_strawberry_framework/testing/client.py\n"
-            "django_strawberry_framework/views.py\n"
-            "django_strawberry_framework/py.typed\n"
+            "django_strawberry_framework/__init__.py\0"
+            "django_strawberry_framework/testing/client.py\0"
+            "django_strawberry_framework/views.py\0"
+            "django_strawberry_framework/py.typed\0"
         )
 
-    monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
+    monkeypatch.setattr(snapshot, "_run_git", fake_run_git)
     paths = bug_hunt._baseline_python_paths("abc123", "django_strawberry_framework")
 
     # Excluded-from-snapshot paths must still register as existing, or the classifier
@@ -218,12 +253,217 @@ def test_baseline_python_paths_reads_the_commit_unfiltered(monkeypatch) -> None:
         (
             "ls-tree",
             "-r",
+            "-z",
             "--name-only",
+            "--full-tree",
             "abc123",
             "--",
-            "django_strawberry_framework",
+            ":(top,literal)django_strawberry_framework",
         ),
     ]
+
+
+def test_shadow_inputs_require_baseline_eligibility_and_a_complete_pair(tmp_path: Path) -> None:
+    root = tmp_path
+    current = root / bug_hunt.SHADOW_DIR
+    old = "django_strawberry_framework/old.py"
+    new = "django_strawberry_framework/new.py"
+    excluded = "django_strawberry_framework/testing/client.py"
+    partial = "django_strawberry_framework/partial.py"
+    baseline = frozenset({old, excluded, partial})
+    for source in (old, new, excluded):
+        stem = Path(source).with_suffix("").as_posix().replace("/", "__")
+        _write(current / f"{stem}.stripped.py", "VALUE = None\n")
+        _write(current / f"{stem}.overview.md", "# Overview\n")
+    partial_stem = Path(partial).with_suffix("").as_posix().replace("/", "__")
+    _write(current / f"{partial_stem}.stripped.py", "VALUE = None\n")
+
+    stripped, overview = bug_hunt._shadow_inputs(root, current, old, baseline)
+
+    assert stripped is not None
+    assert overview is not None
+    assert bug_hunt._shadow_inputs(root, current, new, baseline) == (None, None)
+    assert bug_hunt._shadow_inputs(root, current, excluded, baseline) == (None, None)
+    assert bug_hunt._shadow_inputs(root, current, partial, baseline) == (None, None)
+
+
+def test_snapshot_empty_inventory_publishes_an_empty_owned_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    out_dir = tmp_path / snapshot.SHADOW_DIR
+    _write(out_dir / "stale.stripped.py", "stale\n")
+    _write(out_dir / "stale.overview.md", "stale\n")
+    monkeypatch.setattr(snapshot, "_validate_commit", lambda commit: None)
+
+    def fake_run_git(args: Sequence[str]) -> str:
+        if args[0] == "rev-parse":
+            return f"{tmp_path}\n"
+        return ""
+
+    monkeypatch.setattr(snapshot, "_run_git", fake_run_git)
+
+    assert snapshot.main(["abc123", "--package-dir", "testing"]) == 0
+    assert list(out_dir.iterdir()) == []
+
+
+def test_snapshot_failure_never_publishes_partial_staging(tmp_path: Path, monkeypatch) -> None:
+    out_dir = tmp_path / snapshot.SHADOW_DIR
+    _write(out_dir / "previous.stripped.py", "previous\n")
+    _write(out_dir / "previous.overview.md", "previous\n")
+    paths = ["package/one.py", "package/two.py"]
+    monkeypatch.setattr(snapshot, "_validate_commit", lambda commit: None)
+
+    def fake_run_git(args: Sequence[str]) -> str:
+        if args[0] == "rev-parse":
+            return f"{tmp_path}\n"
+        return "\0".join([*paths, ""])
+
+    def fake_materialize(commit: str, path: str, target: Path) -> None:
+        stem = snapshot._stem_for(path)
+        _write(target / f"{stem}.stripped.py", path)
+        if path == paths[1]:
+            raise RuntimeError("inspection failed")
+        _write(target / f"{stem}.overview.md", path)
+
+    monkeypatch.setattr(snapshot, "_run_git", fake_run_git)
+    monkeypatch.setattr(snapshot, "_materialize_and_inspect", fake_materialize)
+
+    with pytest.raises(RuntimeError, match="inspection failed"):
+        snapshot.main(["abc123", "--package-dir", "package"])
+
+    assert {path.name for path in out_dir.iterdir()} == {
+        "previous.overview.md",
+        "previous.stripped.py",
+    }
+
+
+def test_snapshot_validation_rejects_colliding_flat_artifact_names(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    stem = "package__a__b"
+    _write(staging / f"{stem}.stripped.py", "VALUE = None\n")
+    _write(staging / f"{stem}.overview.md", "# Overview\n")
+
+    with pytest.raises(RuntimeError, match="artifact names collide"):
+        snapshot._validate_staged_snapshot(
+            staging,
+            ["package/a/b.py", "package/a__b.py"],
+        )
+
+
+def test_snapshot_publish_failure_restores_the_previous_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "current"
+    staging = tmp_path / "staging"
+    _write(output / "previous", "previous\n")
+    _write(staging / "next", "next\n")
+    replace = Path.replace
+
+    def fail_staging_publish(source: Path, target: Path) -> Path:
+        if source == staging:
+            raise OSError("publish failed")
+        return replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_staging_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        snapshot._publish_staged_snapshot(staging, output)
+
+    assert (output / "previous").read_text() == "previous\n"
+    assert not list(tmp_path.glob(".current-backup-*"))
+
+
+def test_snapshot_rollback_failure_preserves_the_recovery_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "current"
+    staging = tmp_path / "staging"
+    _write(output / "previous", "previous\n")
+    _write(staging / "next", "next\n")
+    replace = Path.replace
+
+    def fail_publish_and_rollback(source: Path, target: Path) -> Path:
+        if source == staging:
+            raise OSError("publish failed")
+        if source.parent.name.startswith(".current-backup-") and target == output:
+            raise OSError("rollback failed")
+        return replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_publish_and_rollback)
+
+    with pytest.raises(RuntimeError, match="previous snapshot remains"):
+        snapshot._publish_staged_snapshot(staging, output)
+
+    backups = list(tmp_path.glob(".current-backup-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "current" / "previous").read_text() == "previous\n"
+
+
+def test_git_tree_inventory_is_rooted_literal_and_nul_framed(tmp_path: Path, monkeypatch) -> None:
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    sources = {
+        "package[scope]/caf\u00e9.py": "CAFE = None\n",
+        "package[scope]/line\nbreak.py": "BREAK = None\n",
+        "package[scope]/testing.py": "EXCLUDED = None\n",
+    }
+    for path, content in sources.items():
+        _write(tmp_path / path, content)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "add",
+            "--all",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Bug Hunt",
+            "-c",
+            "user.email=bug-hunt@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.chdir(nested)
+
+    baseline = bug_hunt._baseline_python_paths("HEAD", "package[scope]")
+    eligible = snapshot._package_python_files_at_commit("HEAD", "package[scope]")
+
+    assert baseline == frozenset(sources)
+    assert eligible == ["package[scope]/caf\u00e9.py", "package[scope]/line\nbreak.py"]
+
+
+def test_package_dir_normalization_rejects_paths_outside_the_repository(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-package"
+    outside.mkdir(exist_ok=True)
+    link = tmp_path / "linked-package"
+    link.symlink_to(outside, target_is_directory=True)
+
+    assert snapshot.normalize_package_dir(tmp_path, "package/../package") == "package"
+    with pytest.raises(ValueError, match="relative"):
+        snapshot.normalize_package_dir(tmp_path, str(outside))
+    with pytest.raises(ValueError, match="inside"):
+        snapshot.normalize_package_dir(tmp_path, "linked-package")
 
 
 def test_target_release_overrides_mismatched_package_versions(tmp_path: Path, monkeypatch) -> None:
@@ -233,8 +473,6 @@ def test_target_release_overrides_mismatched_package_versions(tmp_path: Path, mo
     _write(tmp_path / "pyproject.toml", '[project]\nversion = "0.0.13"\n')
 
     def fake_run_git(args: Sequence[str]) -> str:
-        if args[0] == "ls-tree":
-            return f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\n"
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
@@ -242,6 +480,11 @@ def test_target_release_overrides_mismatched_package_versions(tmp_path: Path, mo
         return responses[tuple(args)]
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
+    monkeypatch.setattr(
+        snapshot,
+        "_run_git",
+        lambda args: f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0",
+    )
     monkeypatch.setattr(
         bug_hunt,
         "_refresh_historical_package_snapshot",

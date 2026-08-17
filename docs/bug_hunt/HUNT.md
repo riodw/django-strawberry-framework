@@ -73,17 +73,24 @@ The generator:
 - refuses to overwrite an existing progress file unless the maintainer explicitly requests a
   restart with `--force`.
 
-`dicta.md` may be empty. Do not regenerate it from historical worker briefs or treat it as a list
-of expected findings. Questions in it guide exploration; current source and executable behavior
-decide the result.
+`dicta.md` may be missing or empty; either state produces an explicit `## Package questions`
+fallback saying that no maintainer questions were supplied. Non-empty content is newline-normalized
+and placed under that heading when it does not already carry one. Do not regenerate it from
+historical worker briefs or treat it as a list of expected findings. Questions in it guide
+exploration; current source and executable behavior decide the result.
 
-The snapshot remains fixed for the run even as earlier items change the working tree. Its stripped
-source and overview files help orient Worker 1 to the baseline structure when a matching snapshot
-exists. A live file may have no shadow for either of two reasons, and the item records which: the
-snapshot helper never snapshots paths containing `test`, so the whole `testing/` subpackage is
-absent from a snapshot no matter how old those files are; or the file genuinely did not exist at the
-baseline. Only the second makes the target new, and either way it is still a full hunt item. Worker
-1 must read the complete live target and connected live code before reaching a conclusion.
+The snapshot remains fixed for the run even as earlier items change the working tree. The helper
+stages and validates the complete artifact set before replacing its owned
+`docs/shadow/current/` directory, including when the correct snapshot is empty. Its stripped source
+and overview files help orient Worker 1 to the baseline structure when a trustworthy matching pair
+exists. A live file may have no shadow because the snapshot helper excludes its path, because it did
+not exist at the baseline, or because a baseline-eligible file's expected artifact pair is
+unexpectedly incomplete. The item records the applicable facts rather than inferring file age from
+artifact presence: paths containing `test` are excluded, so the whole `testing/` subpackage is
+absent no matter how old those files are; an excluded path may independently be old or new; and an
+eligible old file without a complete pair is reported as incomplete. Every case remains a full hunt
+item. Worker 1 must read the complete live target and connected live code before reaching a
+conclusion.
 
 Each progress item starts in this form:
 

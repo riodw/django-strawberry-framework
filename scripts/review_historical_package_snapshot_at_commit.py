@@ -5,10 +5,12 @@ commit and runs ``review_inspect`` against each file's content as it existed
 *at that commit* (the working tree is never read). Outputs land in
 ``docs/shadow/current/`` with the usual ``a__b__c`` stem scheme. This is a
 single flat folder (one snapshot, no old/new sides) and is this script's
-dedicated, fixed output location: its existing contents are cleared before
-each run, but the diff helper's sibling ``docs/shadow/{old,new,diff}/``
-folders are left untouched -- each script owns and clears only its own
-folder(s) under ``docs/shadow/``, so the two never clobber each other.
+dedicated, fixed output location: each run is rendered and validated in a
+temporary sibling, then published as one complete replacement (including an
+empty result), while the diff helper's sibling
+``docs/shadow/{old,new,diff}/`` folders are left untouched -- each script owns
+and replaces only its own folder(s) under ``docs/shadow/``, so the two never
+clobber each other.
 
 Use this when you want a static review snapshot of the entire package at
 some historical checkout, without actually checking that commit out and
@@ -49,6 +51,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,6 +65,25 @@ else:
 
 SHADOW_DIR = Path("docs/shadow/current")
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
+
+
+def normalize_package_dir(repo_root: Path, package_dir: str) -> str:
+    """Return a safe repo-relative package directory.
+
+    Resolve the filesystem directory once before it becomes a Git pathspec:
+    this rejects absolute/outside paths, follows existing symlinks so they
+    cannot escape the repository, and removes spellings that would make the
+    live and historical inventories disagree.
+    """
+    candidate = Path(package_dir)
+    if candidate.is_absolute():
+        raise ValueError("--package-dir must be relative to the repository root")
+    resolved = (repo_root / candidate).resolve()
+    try:
+        relative = resolved.relative_to(repo_root.resolve())
+    except ValueError as error:
+        raise ValueError("--package-dir must stay inside the repository root") from error
+    return relative.as_posix() if relative.parts else "."
 
 
 def _run_git(args: Sequence[str]) -> str:
@@ -107,23 +129,39 @@ def snapshot_excludes(path: str) -> bool:
     return not path.endswith(".py") or "test" in path or Path(path).name == "__init__.py"
 
 
+def _tree_paths_at_commit(commit: str, package_dir: str) -> list[str]:
+    """Return exact repo-relative paths below ``package_dir`` at ``commit``.
+
+    ``--full-tree`` plus a top-level literal pathspec makes the result
+    independent of the caller's current directory and prevents pathspec magic
+    in a directory name. NUL framing preserves Unicode and control characters
+    in tracked filenames without Git's quoting layer changing their spelling.
+    """
+    pathspec = ":(top,literal)" if package_dir == "." else f":(top,literal){package_dir}"
+    output = _run_git(
+        [
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            commit,
+            "--",
+            pathspec,
+        ],
+    )
+    return [path for path in output.split("\0") if path]
+
+
 def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
     """Return every snapshot-eligible ``.py`` path under ``package_dir`` at ``commit``.
 
     Uses ``git ls-tree -r`` so the working tree is never consulted; eligibility
     is :func:`snapshot_excludes`.
     """
-    output = _run_git(
-        [
-            "ls-tree",
-            "-r",
-            "--name-only",
-            commit,
-            "--",
-            package_dir,
-        ],
-    )
-    return [line for line in output.splitlines() if not snapshot_excludes(line)]
+    return [
+        path for path in _tree_paths_at_commit(commit, package_dir) if not snapshot_excludes(path)
+    ]
 
 
 def _stem_for(path: str) -> str:
@@ -188,6 +226,63 @@ def _clear_shadow_output(output_dir: Path) -> None:
             child.unlink()
 
 
+def _validate_staged_snapshot(output_dir: Path, paths: Sequence[str]) -> None:
+    """Require one complete stripped/overview pair for every eligible path."""
+    paths_by_stem: dict[str, list[str]] = {}
+    for path in paths:
+        paths_by_stem.setdefault(_stem_for(path), []).append(path)
+    collisions = {stem: collided for stem, collided in paths_by_stem.items() if len(collided) > 1}
+    if collisions:
+        raise RuntimeError(f"snapshot artifact names collide: {collisions!r}")
+    expected = {
+        name
+        for path in paths
+        for name in (f"{_stem_for(path)}.stripped.py", f"{_stem_for(path)}.overview.md")
+    }
+    actual = {entry.name for entry in output_dir.iterdir()}
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise RuntimeError(
+            "snapshot staging produced an incomplete artifact set: "
+            f"missing={missing!r}, extra={extra!r}",
+        )
+
+
+def _publish_staged_snapshot(staging_dir: Path, output_dir: Path) -> None:
+    """Replace ``output_dir`` with a complete staged snapshot, with rollback."""
+    backup_root: Path | None = None
+    backup_dir: Path | None = None
+    if output_dir.exists() or output_dir.is_symlink():
+        backup_root = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_dir.name}-backup-",
+                dir=output_dir.parent,
+            ),
+        )
+        backup_dir = backup_root / output_dir.name
+        output_dir.replace(backup_dir)
+    cleanup_backup = False
+    try:
+        staging_dir.replace(output_dir)
+    except BaseException as publish_error:
+        if backup_dir is not None:
+            try:
+                backup_dir.replace(output_dir)
+            except BaseException as restore_error:
+                raise RuntimeError(
+                    "snapshot publication and rollback both failed; "
+                    f"the previous snapshot remains at {backup_dir}: {restore_error}",
+                ) from publish_error
+        cleanup_backup = True
+        raise
+    else:
+        cleanup_backup = True
+    finally:
+        if backup_root is not None and cleanup_backup:
+            shutil.rmtree(backup_root)
+
+
 def _materialize_and_inspect(commit: str, path: str, out_dir: Path) -> None:
     """Render ``commit:path`` through ``review_inspect`` into ``out_dir``.
 
@@ -234,21 +329,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     _validate_commit(args.commit_hash)
 
-    repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip())
+    repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip()).resolve()
+    try:
+        package_dir = normalize_package_dir(repo_root, args.package_dir)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     out_dir = repo_root / SHADOW_DIR
 
-    paths = _package_python_files_at_commit(args.commit_hash, args.package_dir)
+    paths = _package_python_files_at_commit(args.commit_hash, package_dir)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{out_dir.name}-staging-",
+            dir=out_dir.parent,
+        ),
+    )
+    try:
+        for path in paths:
+            _materialize_and_inspect(args.commit_hash, path, staging_dir)
+        _validate_staged_snapshot(staging_dir, paths)
+        _publish_staged_snapshot(staging_dir, out_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
     if not paths:
         print(
-            f"No .py files under {args.package_dir!r} at {args.commit_hash} "
-            "(after excluding paths containing 'test').",
+            f"No snapshot-eligible .py files under {package_dir!r} at {args.commit_hash}; "
+            f"published an empty {SHADOW_DIR.as_posix()}/.",
             file=sys.stderr,
         )
         return 0
-
-    _clear_shadow_output(out_dir)
-    for path in paths:
-        _materialize_and_inspect(args.commit_hash, path, out_dir)
 
     print(
         f"Wrote {len(paths)} snapshots from {args.commit_hash} to {SHADOW_DIR.as_posix()}/",

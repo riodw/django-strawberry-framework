@@ -161,9 +161,11 @@ def masking_is_active(policy: ErrorPolicy) -> bool:
     Both seams ask this one question, so neither can drift on the ``DEBUG``
     gate. ``settings.DEBUG`` is read per operation rather than captured at schema
     construction: a schema object outlives a settings override, and the answer
-    that matters is the one true while the response is being built.
+    that matters is the one true while the response is being built. The gate opens
+    only for the exact boolean ``True``; a malformed truthy setting such as the
+    string ``"False"`` must not silently turn a deployment's fail-closed mask off.
     """
-    return policy.enabled and not settings.DEBUG
+    return policy.enabled and settings.DEBUG is not True
 
 
 def is_maskable_result(value: Any) -> bool:
@@ -278,17 +280,34 @@ class DjangoErrorPolicyExtension(SchemaExtension):
         return schema_error_policy(self.execution_context.schema)
 
     def _process_result(self, result: Any, policy: ErrorPolicy) -> None:
-        """Adopt the masked error list onto the result the transport will render.
+        """Adopt the masked result onto the value the transport will render.
 
         The masking itself belongs to ``mask_execution_result``, which the
         subscription seam shares; this method is only the assignment. Assigning
-        ``errors`` cannot fail for either shape reaching it - both are mutable
-        attribute holders and the caller's ``isinstance`` gate admits nothing
-        else - so there is no third degrade here.
+        the three result fields cannot fail for either stock shape reaching it -
+        both are mutable attribute holders and the caller's ``isinstance`` gate
+        admits nothing else. The complete assignment matters for the outer
+        fail-closed degrade: when an error list cannot be read, the replacement
+        deliberately drops ``data`` and ``extensions`` as well as the errors.
+        If a consumer-supplied result subclass makes one of those assignments
+        fail, replace the execution-context result itself with the safe stock
+        shape rather than leaving the original data on the wire.
         """
         masked = mask_execution_result(result, policy)
         if masked is not result:
-            result.errors = masked.errors
+            try:
+                result.data = masked.data
+                result.errors = masked.errors
+                result.extensions = masked.extensions
+            except Exception:
+                logger.exception(
+                    "The error policy could not adopt the safe execution result; the "
+                    "response is replaced with the policy message alone (fail closed).",
+                )
+                self.execution_context.result = StrawberryExecutionResult(
+                    data=None,
+                    errors=[_degraded(policy)],
+                )
 
     def on_operation(self) -> Iterator[None]:
         """Apply the policy to the completed result, once, at teardown.

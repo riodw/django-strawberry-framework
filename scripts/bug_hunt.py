@@ -63,7 +63,7 @@ _INIT_VERSION_PATTERN = re.compile(
     r"""(?m)^__version__\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
 )
 
-# Fallback dicta used when ``--dicta`` points at a missing file.
+# Fallback dicta used when ``--dicta`` points at a missing or question-less file.
 _FALLBACK_DICTA = (
     "## Package questions\n\n"
     "No maintainer-authored probing questions were supplied. Explore the live source freely; "
@@ -191,6 +191,28 @@ def _live_python_sources(repo_root: Path, package_dir: str) -> list[str]:
     ]
 
 
+def _baseline_python_paths(commit: str, package_dir: str) -> frozenset[str]:
+    """Return every ``.py`` path under ``package_dir`` at ``commit``, unfiltered.
+
+    Deliberately *not* the snapshot helper's eligible set: the question this
+    answers is "did this file exist at the baseline", which must stay independent
+    of whether the snapshot would have rendered it. Read once through
+    ``git ls-tree -r`` rather than per-file, so classifying every item costs one
+    git call and never consults the working tree.
+    """
+    output = _run_git(
+        [
+            "ls-tree",
+            "-r",
+            "--name-only",
+            commit,
+            "--",
+            package_dir,
+        ],
+    )
+    return frozenset(line for line in output.splitlines() if line.endswith(".py"))
+
+
 def _shadow_inputs(
     repo_root: Path,
     current_dir: Path,
@@ -221,7 +243,40 @@ def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_
         )
 
 
-def _file_block(source: str, stripped: Path | None, overview: Path | None) -> str:
+def _no_shadow_reason(source: str, baseline_paths: frozenset[str]) -> str:
+    """Explain why ``source`` has no baseline shadow.
+
+    Two independent facts produce a missing shadow -- whether the snapshot helper
+    would ever render this path, and whether the file existed at the hunt baseline
+    -- so both are read rather than inferred from each other. Neither implies the
+    other: a path-only answer calls every ``testing/`` file old, and a
+    baseline-only answer calls every excluded file new. All four combinations are
+    named, including the one that should be unreachable, because a silently-wrong
+    orientation line is worse than an admitted gap.
+    """
+    excluded = snapshot.snapshot_excludes(source)
+    existed = source in baseline_paths
+    if excluded and existed:
+        return "path excluded from the snapshot by its 'test' path filter, not new"
+    if excluded:
+        return (
+            "live file added since the hunt baseline; its path is also excluded by the "
+            "snapshot's 'test' filter"
+        )
+    if not existed:
+        return "live file added since the hunt baseline"
+    return (
+        "file existed at the hunt baseline and is snapshot-eligible, so this shadow is "
+        "missing unexpectedly -- treat the snapshot as incomplete"
+    )
+
+
+def _file_block(
+    source: str,
+    stripped: Path | None,
+    overview: Path | None,
+    baseline_paths: frozenset[str],
+) -> str:
     """Render one checkbox block for a single source file."""
     lines = [f"- [ ] {source}", "    - Status: pending"]
     if stripped is not None and overview is not None:
@@ -230,7 +285,7 @@ def _file_block(source: str, stripped: Path | None, overview: Path | None) -> st
             f"Read {stripped.as_posix()} and {overview.as_posix()} for baseline orientation, then "
         )
     else:
-        lines.append("    - Baseline shadow: none (live file added or absent at hunt baseline)")
+        lines.append(f"    - Baseline shadow: none ({_no_shadow_reason(source, baseline_paths)})")
         orientation = "No baseline shadow exists; "
     prompt = (
         f"Use {source} as the entry point. {orientation}hunt the connected live system and "
@@ -274,10 +329,18 @@ def _final_gate_block() -> str:
 
 
 def _read_dicta(dicta_path: Path) -> str:
-    """Return ``dicta_path`` contents (newline-terminated) or the fallback."""
+    """Return ``dicta_path`` contents (newline-terminated), else the fallback section.
+
+    An empty dicta is the resting state, not a missing one: the file is
+    maintainer-owned and stays in the tree between hunts. Both spellings of "no
+    questions" therefore resolve to the fallback, so the progress file always
+    carries a ``## Package questions`` heading -- an absent section would read as
+    lost rather than as unasked. Whitespace-only counts as empty.
+    """
     if dicta_path.is_file():
         text = dicta_path.read_text(encoding="utf-8")
-        return text if text.endswith("\n") else text + "\n"
+        if text.strip():
+            return text if text.endswith("\n") else text + "\n"
     return _FALLBACK_DICTA
 
 
@@ -390,9 +453,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         _read_dicta(dicta_path),
         _HOW_TO_REVIEW_ONE_FILE,
     ]
+    baseline_paths = _baseline_python_paths(head_sha, args.package_dir)
     for source in source_paths:
         stripped, overview = _shadow_inputs(repo_root, current_dir, source)
-        sections.append(_file_block(source, stripped, overview))
+        sections.append(_file_block(source, stripped, overview, baseline_paths))
     sections.extend([_integration_block(), _final_gate_block()])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

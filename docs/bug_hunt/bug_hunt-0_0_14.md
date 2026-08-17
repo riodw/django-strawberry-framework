@@ -4,7 +4,14 @@ Status: complete
 Mode: autonomous
 Baseline commit: `054de9dd37a2c4181fb2a91ded57f4823a1b5220`
 
+## Package questions
 
+No maintainer-authored probing questions were supplied: `docs/bug_hunt/dicta.md` exists but is
+empty. When this hunt was generated, `scripts/bug_hunt.py::_read_dicta` substituted its
+`## Package questions` fallback only when that file was *missing*, so this run emitted an empty
+section rather than the fallback text, and this heading was reconstructed during the closeout. The
+generator has since been corrected to treat an empty or whitespace-only dicta the same as a missing
+one. Exploration was free across the live source; shadow inputs were orientation only.
 
 ## How to hunt one file
 Each item uses one source file as its entry point into the live system. The
@@ -137,7 +144,7 @@ target is narrow; the investigation and root-cause fix may cross files.
     - docs/shadow/current/django_strawberry_framework__auth__sessions.overview.md
     - Prompt:
         - Use django_strawberry_framework/auth/sessions.py as the entry point. Read docs/shadow/current/django_strawberry_framework__auth__sessions.stripped.py and docs/shadow/current/django_strawberry_framework__auth__sessions.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
-    - Result: Fixed Low documentation defect; no production-code defect confirmed. The auth glossary incorrectly promised Django's own failure for missing sessions and made AuthenticationMiddleware a direct mutation prerequisite. It now states the owned `SessionMiddleware` configuration guard and AuthenticationMiddleware's later actor-loading role. Files changed: `docs/GLOSSARY.md`.
+    - Result: Fixed Low documentation defect; no production-code defect confirmed. The auth glossary incorrectly promised Django's own failure for missing sessions and made AuthenticationMiddleware a direct mutation prerequisite. It now states the owned `SessionMiddleware` configuration guard and AuthenticationMiddleware's later actor-loading role. Files changed: the `auth-mutations` term body in the fakeshop glossary app's database (`examples/fakeshop/db.sqlite3`), which is the source of truth, plus the `docs/GLOSSARY.md` render published by the cycle's doc-regeneration commit. Two record corrections on this item: the original entry named only the generated `docs/GLOSSARY.md`, which a re-render would have discarded had the database not also been corrected; and the database write bypassed `Model.save()`, so the term's `auto_now` `updated_date` still reads `2026-07-30` and does not reflect this change.
     - Verification: Passed. Worker 0 inspected the guard ownership and independently replayed hostile scope/session-lock probes plus permanent session and live auth tests; the implementation kept scope-owned session isolation, cancellation-safe lock identity, and supported transport semantics.
     - Validation: Worker 1 hostile/target selection 36 passed and target/live checks 46 passed; Worker 0 replay 48 passed; diff check and ruff passed.
     - Cleanup: Removed `docs/bug_hunt/temp-tests/auth_sessions/`; unrelated concurrent changes retained.
@@ -440,7 +447,7 @@ target is narrow; the investigation and root-cause fix may cross files.
     - Prompt:
         - Use django_strawberry_framework/mutations/sets.py as the entry point. Read docs/shadow/current/django_strawberry_framework__mutations__sets.stripped.py and docs/shadow/current/django_strawberry_framework__mutations__sets.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
     - Result: No confirmed production defect. Meta validation, declaration registration/finalization, input overrides, relation-shape checks, payload binding, and materialization/cache seams remained coherent under malformed configuration probes.
-    - Verification: Passed. Worker 0 ran mutation package coverage (209 passed) and live create/update/delete coverage (57 passed); Worker 1 independently ran the dedicated mutation-set suite (76 passed) and lint. Ruff format/check and diff check passed.
+    - Verification: Passed. Worker 1 ran the dedicated mutation-set suite (76 passed) and lint; Worker 0 independently ran mutation package coverage (209 passed) and live create/update/delete coverage (57 passed). Ruff format/check and diff check passed.
     - Cleanup: No item scratch remained; unrelated concurrent changes retained.
 
 - [x] django_strawberry_framework/optimizer/_context.py
@@ -632,17 +639,23 @@ target is narrow; the investigation and root-cause fix may cross files.
 
 - [x] django_strawberry_framework/testing/_wrap.py
     - Status: verified
-    - Baseline shadow: none (live file added or absent at hunt baseline)
+    - Baseline shadow: none. The file existed at the hunt baseline; the snapshot helper
+      (`scripts/review_historical_package_snapshot_at_commit.py`) filters out every path containing
+      `test`, so the whole `testing/` subpackage is excluded from `docs/shadow/current/`. This item
+      originally carried the generator's stock "live file added or absent at hunt baseline" reason,
+      which was false; the generator now distinguishes the two causes and reports the right one.
     - Result: Fixed a Low error-contract defect: a non-callable wrapper with hostile `__repr__` escaped the documented `TypeError` boundary. The helper now emits a stable TypeError without interpolating user-controlled repr. Independent scratch passed and the complete testing suite passed (45). Removed the exact disposable scratch directory after verification.
 
 - [x] django_strawberry_framework/testing/client.py
     - Status: verified
-    - Baseline shadow: none (live file added or absent at hunt baseline)
+    - Baseline shadow: none, for the same `testing/` snapshot exclusion recorded above; the file
+      existed at the hunt baseline.
     - Result: Fixed two testing-client edge defects: explicitly supplied falsy clients were replaced by defaults (`is not None` now selects them), and hostile multipart placeholder/path values could escape the documented `AssertionError` through raw repr. All multipart diagnostics now use safe representations. Independent scratch passed; package client/wrap/relay coverage passed (48), and live client acceptance passed (11 selected). Removed the exact disposable scratch directory after verification.
 
 - [x] django_strawberry_framework/testing/relay.py
     - Status: verified
-    - Baseline shadow: none (live file added or absent at hunt baseline)
+    - Baseline shadow: none, for the same `testing/` snapshot exclusion recorded above; the file
+      existed at the hunt baseline.
     - Result: Fixed a Low diagnostics defect: `global_id_for()` interpolated an unregistered input with raw repr, allowing hostile `__repr__` to escape its promised `ConfigurationError`. It now uses safe argument rendering. Independent malformed-ID scratch passed; Relay/DRF coverage passed (150), and live GlobalID/node coverage passed (20). Removed the exact disposable scratch directory after verification.
 
 - [x] django_strawberry_framework/types/base.py
@@ -828,11 +841,11 @@ target is narrow; the investigation and root-cause fix may cross files.
     - Cleanup: No item scratch remained; unrelated concurrent changes retained.
 
 - [x] Package integration
-    - Status: verified
+    - Status: no-bugs
     - Prompt:
         - Hunt the final live package across boundaries, including public exports and `__init__.py` files; implement every confirmed root-cause fix.
     - Result: No additional package defect. Public exports/version, lazy DRF names, AppConfig metadata and idempotent ready/reload patch dispatch remained coherent across fresh imports and reloads.
-    - Verification: Passed. Worker 0 ran package initialization, app lifecycle, URL, and schema-command coverage (19 passed); Worker 1 independently ran the core package initialization/app selection (13 passed). Ruff format/check and diff check passed.
+    - Verification: Passed. Worker 1 ran the core package initialization/app selection (13 passed); Worker 0 independently ran package initialization, app lifecycle, URL, and schema-command coverage (19 passed). Ruff format/check and diff check passed.
     - Cleanup: No item scratch remained; unrelated concurrent changes retained.
 
 - [x] Final test gate
@@ -841,6 +854,55 @@ target is narrow; the investigation and root-cause fix may cross files.
     - Prompt:
         - Run `uv run pytest`; require a passing suite and 100% configured package coverage.
     - Iteration: The first review run exposed teardown poisoning in a hostile model-name regression and then completed with incomplete coverage. The regression now restores immutable model metadata explicitly, reachable defensive behavior has permanent coverage, and impossible exact-built-in fallback branches were removed without changing valid or hostile-input behavior.
-    - Result: Passed. The authoritative suite completed with 6074 passed and 40 skipped, and configured package coverage reached exactly 100% (15524 statements, 0 missed).
+    - Result: Passed. The authoritative suite completed with 6074 passed, 40 skipped, and 0 xfailed, and configured package coverage reached exactly 100% (15524 statements, 0 missed).
     - Verification: Worker 0 independently reran the complete suite after the final revisions. Ruff formatting and lint, the hunt-scoped source-layout check, and diff whitespace validation passed.
     - Cleanup: Item scratch is empty; unrelated concurrent changes were retained.
+
+## Closeout (2026-08-17)
+
+Required by `docs/bug_hunt/HUNT.md`, omitted when the file was first set to `Status: complete`, and
+added here after an independent re-verification of every item against the committed tree.
+
+Coverage of the hunt itself is complete: the 93 items map one-to-one onto the 93 non-`__init__.py`
+Python files in the live package, with no file unhunted and no item naming a file the package does
+not contain.
+
+- Confirmed fixes: 62 source files. One further item (`auth/sessions.py`) was a documentation-only
+  correction, and two items (`error_policy.py`, `apps.py`) placed their fixes entirely in connected
+  files rather than in the named target.
+- No-bug items: 31, counting the package-integration item now recorded as `no-bugs`.
+- Blockers: none. No item reached `blocked`, and no item closed at `revision-needed`.
+- Severity spread across the 62 code fixes: 52 Medium, 5 Low, one recording both a Medium and a Low
+  defect, and 4 (`optimizer/field_meta.py`, `optimizer/hints.py`, `optimizer/join_taxonomy.py`,
+  `testing/client.py`) recorded with no severity grade, deviating from the stock result line. No
+  fix was graded High or Critical.
+- Final validation, re-confirmed on 2026-08-17 against the committed tree: `uv run pytest` gives
+  6096 passed, 40 skipped, 0 xfailed, and 100% configured package coverage (15556 statements,
+  0 missed). The higher counts than the gate recorded are the concurrently-committed review and DRY
+  cycles, not hunt work. `pragma: no cover` fell from 39 to 36 across the cycle, so the gate reached
+  100% without buying coverage with suppressions.
+- Item-owned scratch: confirmed gone. `docs/bug_hunt/temp-tests/` is empty.
+- Unrelated work left untouched: the concurrent review cycle (`docs/review/`), the DRY consolidation
+  cycle, and the spec residual cycles all landed in the same working tree and were preserved, as
+  each item's cleanup line states. Spot-checked survival of a hunt fix through a later concurrent
+  refactor: `filters/factories.py`'s unhashable-cache discriminator now lives in
+  `utils/inputs.py::make_hashable_meta_value` after the DRY consolidation folded it into the shared
+  normalizer, and the identity discriminator survived intact.
+
+Record fidelity, stated rather than back-filled, because the missing material cannot be reconstructed
+without inventing it:
+
+- 56 items carry no `Cycle baseline` line, which HUNT.md requires before dispatch. The field stops
+  after `optimizer/field_meta.py` and never resumes, so for those items the separation between
+  item-owned and concurrent change is not recorded and is no longer recoverable.
+- 43 items carry no `Prompt` block, a contiguous run from `optimizer/field_meta.py` through
+  `utils/imports.py`; the blocks resume afterwards.
+- 34 of the verified items carry no separate `Verification` / `Validation` / `Cleanup` lines. Their
+  evidence is present but compressed into the single `Result` line, so this is a formatting
+  deviation from the stock lines rather than missing evidence.
+- Seven items pin a `current target SHA-256`. Four still match the committed file; three no longer
+  do, because later commits legitimately touched those files after the item closed -
+  `connection.py` and `exceptions.py` through the review cycle's diagnostic-rendering guard, and
+  `extensions/resource_policy.py` through the review cycle's nested-operation policy-context fix.
+  The fingerprints are left as recorded, since they pin what was verified rather than what HEAD
+  holds; each of those three fixes was re-confirmed present on 2026-08-17 by inspection.

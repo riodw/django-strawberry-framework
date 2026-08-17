@@ -79,8 +79,11 @@ decide the result.
 
 The snapshot remains fixed for the run even as earlier items change the working tree. Its stripped
 source and overview files help orient Worker 1 to the baseline structure when a matching snapshot
-exists. A new live file may have no shadow and is still a full hunt item. Worker 1 must read the
-complete live target and connected live code before reaching a conclusion.
+exists. A live file may have no shadow for either of two reasons, and the item records which: the
+snapshot helper never snapshots paths containing `test`, so the whole `testing/` subpackage is
+absent from a snapshot no matter how old those files are; or the file genuinely did not exist at the
+baseline. Only the second makes the target new, and either way it is still a full hunt item. Worker
+1 must read the complete live target and connected live code before reaching a conclusion.
 
 Each progress item starts in this form:
 

@@ -13,8 +13,12 @@ folder(s) under ``docs/shadow/``, so the two never clobber each other.
 Use this when you want a static review snapshot of the entire package at
 some historical checkout, without actually checking that commit out and
 without limiting the file set to whatever happens to have changed since.
-Paths containing ``test`` are excluded (the package source tree shouldn't
-contain any, but the guard matches the diff helper's contract).
+Paths containing ``test`` are excluded to match the diff helper's contract,
+and that exclusion is real rather than theoretical: it removes the whole
+``django_strawberry_framework/testing/`` subpackage from every snapshot, so a
+consumer of this folder must not read a missing stem as a file that did not
+exist at the commit. :func:`snapshot_excludes` is the single source of that
+rule; ask it rather than re-deriving the predicate.
 
 ``review_inspect.main`` is imported and called in-process so the
 orchestrator does not pay Python / ``uv`` startup cost per file.
@@ -90,12 +94,24 @@ def _validate_commit(commit: str) -> None:
         sys.exit(2)
 
 
-def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
-    """Return every ``.py`` path under ``package_dir`` at ``commit``.
+def snapshot_excludes(path: str) -> bool:
+    """Return whether ``path`` is outside every snapshot this script writes.
 
-    Uses ``git ls-tree -r`` so the working tree is never consulted. Paths
-    that contain ``test`` are filtered out to match the diff helper's
-    exclusion contract.
+    The one home for the snapshot's inclusion rule, so a caller that needs to
+    explain a missing stem cannot drift from the rule that produced it. A path
+    is excluded when it is not Python, when it is an ``__init__.py``, or when it
+    contains ``test`` -- the last clause matches the diff helper's contract and
+    also drops ``django_strawberry_framework/testing/``, which is ordinary
+    package source rather than a test tree.
+    """
+    return not path.endswith(".py") or "test" in path or Path(path).name == "__init__.py"
+
+
+def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
+    """Return every snapshot-eligible ``.py`` path under ``package_dir`` at ``commit``.
+
+    Uses ``git ls-tree -r`` so the working tree is never consulted; eligibility
+    is :func:`snapshot_excludes`.
     """
     output = _run_git(
         [
@@ -107,11 +123,7 @@ def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
             package_dir,
         ],
     )
-    return [
-        line
-        for line in output.splitlines()
-        if line.endswith(".py") and "test" not in line and Path(line).name != "__init__.py"
-    ]
+    return [line for line in output.splitlines() if not snapshot_excludes(line)]
 
 
 def _stem_for(path: str) -> str:

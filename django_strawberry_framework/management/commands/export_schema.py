@@ -56,7 +56,7 @@ class Command(BaseCommand):
         if not isinstance(path, str) or not path.strip():
             raise CommandError("--path requires a non-empty value")
         try:
-            pathlib.Path(path).write_text(schema_output, encoding="utf-8")
-        except OSError as e:
+            pathlib.Path(path).write_text(schema_output, encoding="utf-8", newline="")
+        except (OSError, ValueError) as e:
             raise CommandError(str(e)) from e
         self.stdout.write(self.style.SUCCESS(f"Wrote schema to {path}"))

@@ -109,6 +109,36 @@ def test_export_schema_stdout_matches_path_file_and_print_schema(monkeypatch, tm
     assert path.read_text(encoding="utf-8") == expected
 
 
+def test_export_schema_file_write_disables_newline_translation(monkeypatch):
+    """File output preserves SDL LF bytes on platforms with different native newlines."""
+    schema = _make_schema()
+    _make_test_module(monkeypatch, schema=schema)
+    captured: dict[str, object] = {}
+
+    def write_text(
+        self,
+        data,
+        *,
+        encoding=None,
+        errors=None,
+        newline=None,
+    ):
+        captured.update(data=data, encoding=encoding, errors=errors, newline=newline)
+        return len(data)
+
+    monkeypatch.setattr("pathlib.Path.write_text", write_text)
+    call_command(
+        "export_schema",
+        "test_module:schema",
+        "--path",
+        "schema.graphql",
+        stdout=StringIO(),
+    )
+
+    assert captured["encoding"] == "utf-8"
+    assert captured["newline"] == ""
+
+
 def test_export_schema_raises_command_error_when_path_flag_is_whitespace_only(monkeypatch):
     _make_test_module(monkeypatch, schema=_make_schema())
     with pytest.raises(CommandError, match="--path requires a non-empty value"):

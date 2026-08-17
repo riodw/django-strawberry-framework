@@ -70,7 +70,7 @@ from ..utils.input_values import (
     iter_active_fields,
     iter_input_items,
 )
-from ..utils.inputs import FILTERSET_FIELDS_ALIAS, resolve_set_meta_fields
+from ..utils.inputs import FILTERSET_FIELDS_ALIAS, promote_set_meta_fields
 from ..utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
@@ -991,7 +991,8 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
     Expansion of related filters into per-lookup ORM paths is deferred to
     `FilterSet.get_filters` so circular `RelatedFilter` references
     declared in the same module are legal. ``Meta.filter_fields`` aliasing
-    is ``utils/inputs.py::resolve_set_meta_fields`` (shared with Layer 6).
+    is ``utils/inputs.py::promote_set_meta_fields`` (shared with Layer 6
+    and ``OrderSetMetaclass``).
     """
 
     def __new__(
@@ -1004,19 +1005,14 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         class_items = tuple(attrs.items())
 
         # ``filter_fields`` is the cookbook / graphene-django synonym for
-        # ``Meta.fields``. The promote-when-absent rule lives in
-        # ``utils/inputs.py::resolve_set_meta_fields`` so Layer-6 factory
-        # kwargs cannot drift from class-Meta aliasing. Write-back stays
-        # here: the consumer's ``filter_fields`` attribute is left in place
-        # (the factory dict path drops the alias so it cannot split a cache
-        # slot). Presence uses ``hasattr`` (inherited Meta attributes count).
-        meta_class = attrs.get("Meta")
-        resolved_fields, from_alias = resolve_set_meta_fields(
-            meta_class,
-            fields_alias=FILTERSET_FIELDS_ALIAS,
-        )
-        if from_alias:
-            meta_class.fields = resolved_fields
+        # ``Meta.fields``. Write-back is
+        # ``utils/inputs.py::promote_set_meta_fields`` so Layer-6 factory
+        # kwargs and ``OrderSetMetaclass`` cannot drift from class-Meta
+        # aliasing. The consumer's ``filter_fields`` attribute is left in
+        # place (the factory dict path drops the alias so it cannot split a
+        # cache slot). Presence uses ``hasattr`` (inherited Meta attributes
+        # count).
+        promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
 
         new_class = super().__new__(cls, name, bases, attrs)
 

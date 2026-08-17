@@ -50,7 +50,9 @@ _make_cache_key = make_set_meta_cache_key
 # see the module docstring; the cache is build-and-test-only. The hashing
 # / ``type(...)`` skeleton is shared with ``filters/factories.py`` via
 # ``make_dynamic_set_getter``; this dict stays family-owned so an order
-# clear cannot drop a filter class (and the reverse).
+# clear cannot drop a filter class (and the reverse). Class-Meta expansion
+# in ``orders/sets.py`` reads the same fingerprint through
+# ``utils/inputs.py::read_set_meta_fields``.
 #
 # Lifecycle: this cache has NO clear hook, matching the filter-side
 # Layer-6 dict. Keys embed the model identity, so a rebuilt model gets a

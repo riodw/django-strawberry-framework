@@ -256,6 +256,22 @@ def test_orderset_meta_fields_none_returns_only_related_orders():
     assert fields["shelf"] is BookOrder.related_orders["shelf"]
 
 
+def test_orderset_metaclass_and_expansion_share_factory_fields_owner():
+    """Class Meta write-back and Layer-4 expansion ride the shared fingerprint."""
+    from django_strawberry_framework.orders.sets import OrderSetMetaclass
+    from django_strawberry_framework.utils.inputs import (
+        promote_set_meta_fields,
+        read_set_meta_fields,
+    )
+
+    assert "promote_set_meta_fields" in OrderSetMetaclass.__new__.__code__.co_names
+    assert "read_set_meta_fields" in OrderSet._expand_meta_fields.__code__.co_names
+    assert (
+        OrderSetMetaclass.__new__.__globals__["promote_set_meta_fields"] is promote_set_meta_fields
+    )
+    assert OrderSet._expand_meta_fields.__globals__["read_set_meta_fields"] is read_set_meta_fields
+
+
 # ---------------------------------------------------------------------------
 # Additional cookbook-parity __all__ shapes
 # ---------------------------------------------------------------------------

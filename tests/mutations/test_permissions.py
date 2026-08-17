@@ -36,6 +36,7 @@ from django_strawberry_framework import (
     SyncMisuseError,
     finalize_django_types,
 )
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.permissions import _OPERATION_PERMISSION_ACTION
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
@@ -492,6 +493,44 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
     assert res.errors is not None
     assert isinstance(res.errors[0].original_error, SyncMisuseError)
     assert not product_models.Item.objects.filter(name="AwaitableBlocked").exists()
+
+
+@pytest.mark.django_db
+def test_hostile_non_bool_permission_result_keeps_configuration_error():
+    """A hostile ``__repr__`` cannot replace the typed non-bool auth failure."""
+
+    class Hostile:
+        def __repr__(self):
+            raise RuntimeError("repr escape")
+
+    class HostileResult:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            del info, mutation, operation, data, instance
+            return Hostile()
+
+    schema, (CategoryT, _ItemT) = _build_auth_schema(
+        create_permission_classes=[HostileResult],
+    )
+    cat = product_models.Category.objects.create(name="Cat-hostile-non-bool")
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "HostileBlocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+
+    assert res.errors is not None
+    assert isinstance(res.errors[0].original_error, ConfigurationError)
+    assert "must return a bool" in res.errors[0].message
+    assert "unprintable" in res.errors[0].message
+    assert not product_models.Item.objects.filter(name="HostileBlocked").exists()
 
 
 @pytest.mark.django_db

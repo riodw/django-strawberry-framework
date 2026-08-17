@@ -25,8 +25,10 @@ the sharded live-HTTP alias tests are ``examples/fakeshop/test_query/test_multi_
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import itertools
+import threading
 
 import pytest
 import strawberry
@@ -302,6 +304,132 @@ async def test_async_update_success_commits():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+async def test_concurrent_async_mutations_do_not_nest_transactions(monkeypatch):
+    """Concurrent async fields cannot share a nested savepoint on the worker connection."""
+    from asgiref.sync import sync_to_async
+    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
+
+    _declare_item_types()
+    UpdateItem = _declare_update_mutation()
+    schema = _mutation_schema(UpdateItem)
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+    release_second = asyncio.Event()
+    observations: list[tuple[bool, int]] = []
+    calls = 0
+
+    async def fake_execute_field(
+        self,
+        parent_type,
+        source,
+        field_nodes,
+        path,
+    ):
+        nonlocal calls
+        calls += 1
+        observations.append(
+            await sync_to_async(
+                lambda: (
+                    connections["default"].in_atomic_block,
+                    len(connections["default"].savepoint_ids),
+                ),
+                thread_sensitive=True,
+            )(),
+        )
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+            await release_second.wait()
+        return None
+
+    monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
+    variables = {"id": _item_gid(1), "d": {"name": "Concurrent"}}
+    first = asyncio.create_task(schema.execute(_UPDATE, variable_values=variables))
+    await asyncio.wait_for(first_started.wait(), timeout=2)
+    second = asyncio.create_task(schema.execute(_UPDATE, variable_values=variables))
+    await asyncio.sleep(0.05)
+    assert not second_started.is_set()
+    release_first.set()
+    await asyncio.wait_for(second_started.wait(), timeout=2)
+    release_second.set()
+    await asyncio.gather(first, second)
+
+    assert observations == [(True, 0), (True, 0)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_async_mutations_across_event_loops_do_not_nest_transactions(monkeypatch):
+    """Separate event loops still serialize on the shared thread-sensitive worker."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from asgiref.sync import sync_to_async
+    from graphql.execution.execute import ExecutionContext as CoreExecutionContext
+
+    _declare_item_types()
+    UpdateItem = _declare_update_mutation()
+    schema = _mutation_schema(UpdateItem)
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    release_second = threading.Event()
+    observations: list[tuple[bool, int]] = []
+    observation_lock = threading.Lock()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    async def fake_execute_field(
+        self,
+        parent_type,
+        source,
+        field_nodes,
+        path,
+    ):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            call_number = calls
+        observation = await sync_to_async(
+            lambda: (
+                connections["default"].in_atomic_block,
+                len(connections["default"].savepoint_ids),
+            ),
+            thread_sensitive=True,
+        )()
+        with observation_lock:
+            observations.append(observation)
+        if call_number == 1:
+            first_started.set()
+            await asyncio.to_thread(release_first.wait)
+        else:
+            second_started.set()
+            await asyncio.to_thread(release_second.wait)
+        return None
+
+    monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
+    variables = {"id": _item_gid(1), "d": {"name": "CrossLoop"}}
+
+    def execute() -> None:
+        asyncio.run(schema.execute(_UPDATE, variable_values=variables))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(execute)
+        assert first_started.wait(2)
+        second = executor.submit(execute)
+        assert not second_started.wait(0.05)
+        release_first.set()
+        assert second_started.wait(2)
+        release_second.set()
+        first.result()
+        second.result()
+
+    assert observations == [(True, 0), (True, 0)]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 async def test_async_execution_context_exits_transaction_on_raised_base_exception(monkeypatch):
     """A non-GraphQL exception escaping the field still exits the worker transaction."""
     from asgiref.sync import sync_to_async
@@ -388,6 +516,80 @@ def test_execution_errors_reads_both_graphql_core_error_shapes():
     del context.collected_errors
     context.errors = ["legacy"]
     assert context._execution_errors() == ["legacy"]
+
+
+# ===========================================================================
+# The async alias mutex: a cancelled acquisition must never leave it owned
+# ===========================================================================
+
+
+async def _hold_alias_lock_briefly(lock) -> None:
+    """Enter the alias lock and release it immediately (the window's shape)."""
+    async with lock:
+        pass
+
+
+async def test_async_alias_lock_releases_after_repeated_waiter_cancellation():
+    """A cancellation landing DURING cancellation recovery must not strand the mutex.
+
+    The lock is process-wide per write alias, so an acquisition left owned by a
+    window that no longer exists deadlocks every subsequent async generated
+    mutation on that alias for the life of the process. The recovery path
+    therefore keeps awaiting the hand-off across repeated cancellations instead
+    of escaping between the acquisition and its release.
+    """
+    from django_strawberry_framework.schema import _AsyncAliasLock
+
+    lock = _AsyncAliasLock()
+    assert lock._lock.acquire(timeout=5) is True  # another window owns the alias
+    waiter = asyncio.create_task(_hold_alias_lock_briefly(lock))
+    await asyncio.sleep(0.05)  # the waiter is parked in the executor thread
+
+    waiter.cancel()
+    await asyncio.sleep(0.05)
+    waiter.cancel()  # lands inside the cancellation-recovery await
+    await asyncio.sleep(0.05)
+
+    lock._lock.release()  # the holder finishes; the executor thread wins the mutex
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    # The abandoned acquisition was handed back rather than leaked.
+    assert lock._lock.acquire(timeout=5) is True
+    lock._lock.release()
+
+
+async def test_async_alias_lock_releases_when_the_acquisition_task_is_cancelled():
+    """Loop teardown cancelling the acquiring task cannot strand the mutex either.
+
+    ``asyncio.to_thread`` cannot stop a thread already blocked in
+    ``threading.Lock.acquire``: that thread WILL take the mutex once the current
+    holder releases, long after its task was cancelled and nothing is left to
+    release it. The hand-off makes the thread give the ownership straight back.
+    """
+    from django_strawberry_framework.schema import _AsyncAliasLock
+
+    lock = _AsyncAliasLock()
+    assert lock._lock.acquire(timeout=5) is True
+    waiter = asyncio.create_task(_hold_alias_lock_briefly(lock))
+    await asyncio.sleep(0.05)
+
+    # ``__aenter__`` parks the blocking acquire in its own ``asyncio.to_thread`` task;
+    # identify it by its coroutine so an unrelated task in the same window cannot be
+    # cancelled instead.
+    acquisitions = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "__qualname__", None) == "to_thread"
+    ]
+    assert len(acquisitions) == 1
+    acquisitions[0].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    lock._lock.release()  # the uncancellable thread now wins the mutex...
+    assert lock._lock.acquire(timeout=5) is True  # ...and hands it straight back
+    lock._lock.release()
 
 
 @pytest.mark.django_db

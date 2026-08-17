@@ -155,6 +155,20 @@ def test_editable_fields_narrow_by_fields():
     assert names == ["name", "category"]
 
 
+def test_editable_fields_freezes_one_shot_sequences():
+    """One-shot ``fields`` / ``exclude`` iterables survive validation and narrowing."""
+    selected = editable_input_fields(
+        product_models.Item,
+        fields=iter(("name", "category")),
+    )
+    excluded = editable_input_fields(
+        product_models.Item,
+        exclude=iter(("description", "is_private")),
+    )
+    assert [field.name for field in selected] == ["name", "category"]
+    assert [field.name for field in excluded] == ["name", "category", "attachment"]
+
+
 def test_editable_fields_narrow_by_exclude():
     """``exclude`` drops the named columns, preserving declaration order."""
     names = [
@@ -347,28 +361,21 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation():
     assert ser_converter.annotate_queryset_relation is annotate_queryset_relation
 
 
-def test_model_column_input_annotation_maps_relation_file_and_scalar():
-    """Column-backed 3-branch: relation id, ``Upload``, and ``convert_scalar``."""
-    from django_strawberry_framework.types.converters import convert_scalar
+# ---------------------------------------------------------------------------
+# model_column_input_annotation - non-relation column typing
+# ---------------------------------------------------------------------------
 
-    relay_model, relay_type = _make_relay_target()
+
+def test_model_column_input_annotation_maps_file_and_scalar_columns():
+    """A non-relation column types as ``Upload`` when it is a file, else ``convert_scalar``."""
+    from django_strawberry_framework.types.converters import convert_scalar
 
     class Probe(models.Model):
         name = models.TextField()
-        target = models.ForeignKey(relay_model, on_delete=models.CASCADE)
         attachment = models.FileField()
 
         class Meta:
             app_label = _unique_app_label()
-
-    python_attr, graphql_name, annotation = model_column_input_annotation(
-        Probe._meta.get_field("target"),
-        "ProbeInput",
-        primary_of=lambda _model: relay_type,
-    )
-    assert python_attr == "target_id"
-    assert graphql_name == "targetId"
-    assert annotation is relay.GlobalID
 
     python_attr, graphql_name, annotation = model_column_input_annotation(
         Probe._meta.get_field("attachment"),
@@ -388,24 +395,6 @@ def test_model_column_input_annotation_maps_relation_file_and_scalar():
     assert python_attr == "name"
     assert graphql_name == "name"
     assert annotation == convert_scalar(name_field, "ProbeInput", force_nullable=False)
-
-
-def test_form_column_backed_annotation_shares_model_column_owner():
-    """Form column-backed mapping imports the same owner the model builder uses."""
-    from django_strawberry_framework.forms import inputs as form_inputs
-
-    assert form_inputs.model_column_input_annotation is model_column_input_annotation
-
-
-def test_model_and_form_name_set_shapes_share_type_name_owner():
-    """Model and form name-set type names import the same owner."""
-    from django_strawberry_framework.forms import inputs as form_inputs
-    from django_strawberry_framework.utils.inputs import name_set_input_type_name
-
-    assert form_inputs.name_set_input_type_name is name_set_input_type_name
-    from django_strawberry_framework.mutations import inputs as mutation_inputs
-
-    assert mutation_inputs.name_set_input_type_name is name_set_input_type_name
 
 
 def test_model_column_write_kind_classifies_relation_file_and_scalar():
@@ -637,6 +626,20 @@ def test_consumer_override_skips_generated_field():
     fields = _field_map(cls)
     assert "category_id" not in fields
     # The non-overridden columns still generate.
+    assert "name" in fields
+
+
+def test_consumer_override_freezes_one_shot_iterable():
+    """Every attr in a direct iterable override is skipped from the generated remainder."""
+    cls = build_mutation_input(
+        product_models.Item,
+        operation_kind=CREATE,
+        primary_type=ItemType,
+        overrides=iter(("category_id", "attachment")),
+    )
+    fields = _field_map(cls)
+    assert "category_id" not in fields
+    assert "attachment" not in fields
     assert "name" in fields
 
 

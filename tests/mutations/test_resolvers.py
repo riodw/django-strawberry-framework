@@ -2586,6 +2586,44 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch):
         )
 
 
+def test_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch):
+    """A pk forged by a hook cannot replace the typed drift error while formatting it."""
+    from unittest.mock import patch
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+
+    class _HostilePk:
+        def __repr__(self):
+            raise RuntimeError("repr should never escape")
+
+    located = SimpleNamespace(
+        pk=7,
+        get_deferred_fields=lambda: set(),
+        _meta=SimpleNamespace(concrete_fields=[]),
+    )
+
+    def evil_authorize(*_args, **_kwargs):
+        located.pk = _HostilePk()
+
+    mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=evil_authorize)
+    monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
+
+    with (
+        patch.object(mutation_resolvers.transaction, "atomic"),
+        managed_write_transaction("default"),
+        pytest.raises(ConfigurationError, match="must write the row that was authorized"),
+    ):
+        mutation_resolvers.run_write_pipeline_sync(
+            mutation_cls,
+            info=None,
+            data=None,
+            id="ignored",
+            decode_step=lambda _instance: ("decoded",),
+            write_step=lambda instance, _decoded: instance,
+        )
+
+
 def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch):
     """The post-locate snapshot is published on the write-pipeline context for the flavors."""
     from types import SimpleNamespace
@@ -2640,7 +2678,44 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch):
     )
 
     def evil_authorize(*_args, **_kwargs):
-        located.pk = 999
+        located.pk = 999  # re-point at a hidden row AFTER authorization
+
+    mutation_cls, mutation_resolvers = _pipeline_harness(
+        monkeypatch,
+        operation="delete",
+        authorize=evil_authorize,
+    )
+    mutation_cls._mutation_meta.permission_classes = []
+    monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
+
+    with (
+        patch.object(mutation_resolvers.transaction, "atomic"),
+        managed_write_transaction("default"),
+        pytest.raises(ConfigurationError, match="pk changed"),
+    ):
+        mutation_resolvers._run_delete(mutation_cls, info=None, id="ignored")
+
+
+def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(monkeypatch):
+    """A delete-path pk forged by a hook cannot replace the typed drift error while formatting."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+
+    class _HostilePk:
+        def __repr__(self):
+            raise RuntimeError("repr should never escape")
+
+    located = SimpleNamespace(
+        pk=7,
+        get_deferred_fields=lambda: set(),
+        _meta=SimpleNamespace(concrete_fields=[]),
+    )
+
+    def evil_authorize(*_args, **_kwargs):
+        located.pk = _HostilePk()
 
     mutation_cls, mutation_resolvers = _pipeline_harness(
         monkeypatch,

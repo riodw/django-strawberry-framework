@@ -77,6 +77,7 @@ from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from graphql import GraphQLError
 
+from ..exceptions import _safe_arg_repr
 from ..optimizer.extension import (
     apply_connection_optimization,
     mutation_payload_child_selections,
@@ -297,8 +298,9 @@ def run_write_pipeline_sync(
                     authorized_pk,
                     message=(
                         f"{mutation_cls.__name__}: the write step returned "
-                        f"{model.__name__} pk={saved.pk!r}, but the located, authorized row is "
-                        f"pk={authorized_pk!r}; an update must write the row that was "
+                        f"{model.__name__} pk={_safe_arg_repr(saved.pk)}, but the located, "
+                        f"authorized row is pk={_safe_arg_repr(authorized_pk)}; an update must write "
+                        "the row that was "
                         "authorized, never a substituted one."
                     ),
                 )
@@ -1042,7 +1044,8 @@ def _delete_write_step(mutation_cls: type, info: Any, instance: Any) -> Any:
         authorized_pk,
         message=(
             f"{mutation_cls.__name__}: the located instance's pk changed from "
-            f"{authorized_pk!r} to {instance.pk!r} during authorization; a delete must "
+            f"{_safe_arg_repr(authorized_pk)} to {_safe_arg_repr(instance.pk)} during "
+            "authorization; a delete must "
             "remove the row that was located and authorized, never a substituted one."
         ),
     )

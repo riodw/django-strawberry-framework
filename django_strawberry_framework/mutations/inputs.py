@@ -230,6 +230,16 @@ def editable_input_fields(
     may be supplied; ``ConfigurationError`` names any unknown field so a typo
     fails loud rather than silently dropping a column).
     """
+    # Freeze caller-provided sequences before the validation walk. The normal
+    # metaclass path already snapshots ``Meta.fields`` / ``Meta.exclude`` as
+    # tuples, but this public generator is also used directly by the auth and
+    # form adapters. Reusing a one-shot iterator for the unknown-name check and
+    # the narrowing pass would otherwise consume it and silently select no
+    # fields (or exclude none).
+    if fields is not None:
+        fields = tuple(fields)
+    if exclude is not None:
+        exclude = tuple(exclude)
     if fields is not None and exclude is not None:
         raise ConfigurationError(
             f"DjangoMutation for {model.__name__} declares both `fields` and `exclude`; "
@@ -686,7 +696,11 @@ def build_mutation_input(
         shape = mutation_input_shape(model, operation_kind, fields=fields, exclude=exclude)
     selected = shape.selected
     type_name = shape.type_name
-    overrides = overrides or frozenset()
+    # Consumer callers normally pass the frozen set collected from a
+    # Strawberry input definition. Freeze any direct iterable as well: checking
+    # membership in a one-shot iterator once per model field would consume it,
+    # causing later overrides to be emitted and clobbered in the merged input.
+    overrides = frozenset(overrides or ())
 
     triples: list[tuple[str, Any, dict[str, Any]]] = []
     selected_names: list[_GeneratedInputFieldName] = []

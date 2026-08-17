@@ -26,21 +26,9 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..utils.inputs import (
-    GeneratedInputArgumentsFactory,
-    make_dynamic_set_getter,
-    make_hashable_meta_value,
-    make_set_meta_cache_key,
-    normalize_set_meta_for_factory,
-)
+from ..utils.inputs import GeneratedInputArgumentsFactory, make_dynamic_set_getter
 from .inputs import _build_input_fields
 from .sets import OrderSet
-
-# Test-addressed aliases: hashing lives in ``utils/inputs.py``; family tests
-# keep importing the spec-era private names from this module (parity with
-# ``filters/factories.py``).
-_make_hashable = make_hashable_meta_value
-_make_cache_key = make_set_meta_cache_key
 
 # Module-level dynamic-OrderSet cache per Layer 6. Keys are produced by
 # ``utils/inputs.py::make_set_meta_cache_key`` so dict / list / scalar
@@ -120,15 +108,6 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
 # ---------------------------------------------------------------------------
 # Layer 6 -- dynamic-OrderSet cache (filter-side twin; no cookbook counterpart)
 # ---------------------------------------------------------------------------
-
-
-def _normalize_meta_for_factory(meta: dict[str, Any]) -> dict[str, Any]:
-    """Normalize order Meta kwargs: strip reserved keys (no fields synonym)."""
-    return normalize_set_meta_for_factory(
-        meta,
-        reserved_keys=_RESERVED_FACTORY_KEYS,
-        fields_alias=None,
-    )
 
 
 _get_orderset_class = make_dynamic_set_getter(

@@ -55,7 +55,7 @@ from ..mutations.sets import (
     _hook_overridden,
     _validate_permission_classes,
     _ValidatedMutationMeta,
-    bind_mutation_outputs,
+    bind_write_declarations,
     build_and_stash_input,
     cached_build_input,
     construction_kwargs,
@@ -893,7 +893,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         )
 
     @classmethod
-    def build_input(cls, meta: _ValidatedMutationMeta) -> type:
+    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type | None = None) -> type:
         """Build + materialize the plain form's model-less input (the ``"form"`` sentinel shape).
 
         A plain form has ONE input (create-shaped, the ``FORM`` sentinel kind -
@@ -904,11 +904,17 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         effective set reuse one class object and dedupe idempotently at materialize
         (the ``"form"``-sentinel shape identity).
 
+        ``primary_type`` is the shared seam signature every flavor's
+        ``build_input`` carries so ONE drain (``bind_write_declarations``) can
+        call them all; a plain form is model-less, so the argument is always
+        ``None`` here and is deliberately unused.
+
         ``guard_required`` is waived when the concrete mutation overrides
         ``get_form_kwargs`` / ``get_form`` (spec-038 waiver). The
         reverse-map ``field_specs`` are stashed on the mutation for the
         decode (the P1 reverse map).
         """
+        del primary_type
         return _build_and_stash_form_input(
             cls,
             meta,
@@ -979,45 +985,29 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     )
 
 
-def _bind_form_mutation(mutation_cls: type) -> None:
-    """Bind one registered plain ``DjangoFormMutation`` at phase 2.5 (spec-038 Decision 6).
-
-    Materializes the form-derived input (via the ``build_input`` seam, into
-    ``forms.inputs``) + the pinned model-less ``{ ok errors }`` payload via
-    ``bind_mutation_outputs`` (the payload twin of ``build_and_stash_input``;
-    ``object_type=None`` selects the ``{ ok errors }`` shape and keeps
-    ``_primary_type`` ``None``). Payload classes still ride the SAME
-    ``materialize_mutation_input_class`` ledger as the model payloads so the
-    distinct-shape collision raise + the ``registry.clear()`` co-clear apply.
-    """
-    meta = mutation_cls._mutation_meta
-    bind_mutation_outputs(
-        mutation_cls,
-        input_cls=mutation_cls.build_input(meta),
-        object_type=None,
-    )
-
-
 def bind_form_mutations() -> None:
     """Bind every registered plain ``DjangoFormMutation`` (the finalizer phase-2.5 entry point).
 
-    The plain-form sibling of ``bind_mutations()``: ``types/finalizer.py`` calls it
-    in the phase-2.5 window (alongside ``bind_mutations()``), after primary-type
-    state is settled and before ``strawberry.type(...)`` freezes the schema
-    classes. Drains the disjoint plain-form declaration registry in registration
-    order; each ``_bind_form_mutation`` materializes that mutation's form-derived
-    input + its pinned ``{ ok errors }`` payload. The ``ModelForm`` flavor rides
-    ``bind_mutations()`` (it is a ``DjangoMutation`` subclass), so it is NOT bound
-    here - this drains only the model-less ledger.
+    The model-less rider of ``mutations/sets.py::bind_write_declarations``, and
+    the plain-form sibling of ``bind_mutations()``: ``types/finalizer.py`` calls
+    it in the phase-2.5 window (alongside ``bind_mutations()``), after
+    primary-type state is settled and before ``strawberry.type(...)`` freezes
+    the schema classes. Drains the disjoint plain-form declaration registry in
+    registration order, materializing each mutation's form-derived input (via
+    the ``build_input`` seam, into ``forms.inputs``) plus its pinned
+    ``{ ok errors }`` payload - ``object_type=None`` selects that shape and
+    keeps ``_primary_type`` ``None``. Payload classes still ride the SAME
+    ``materialize_mutation_input_class`` ledger as the model payloads so the
+    distinct-shape collision raise + the ``registry.clear()`` co-clear apply.
 
-    ``_form_shape_build_cache`` is this pass's own (per-pass) build cache, cleared at
-    the top so each form input is rebuilt fresh. The cross-pass materialization
-    ledgers (the form-input ledger here, plus the mutation ledger the plain ``{ ok
-    errors }`` payload rides) are reset ONCE by ``finalize_django_types`` before the
-    bind sequence so a recover-in-place re-finalize is retry-idempotent; they are NOT reset
-    here, where a per-pass clear would wipe the ``ModelForm``-flavor inputs
-    ``bind_mutations()`` already materialized into the form ledger.
+    The ``ModelForm`` flavor rides ``bind_mutations()`` (it is a
+    ``DjangoMutation`` subclass), so it is NOT bound here - this drains only the
+    model-less ledger. ``_form_shape_build_cache`` is this pass's own per-pass
+    build cache (the shared drain clears it; see there for why the cross-pass
+    materialization ledgers are NOT reset per pass).
     """
-    _form_shape_build_cache.clear()
-    for mutation_cls in iter_form_mutations():
-        _bind_form_mutation(mutation_cls)
+    bind_write_declarations(
+        cache=_form_shape_build_cache,
+        iterate=iter_form_mutations,
+        resolve_object_type=lambda _mutation_cls, _meta: None,
+    )

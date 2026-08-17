@@ -260,45 +260,29 @@ def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
         return None, None
 
 
-def _generic_object_id_attname(field: Any) -> str | None:
-    """The child ``object_id`` column attname a ``GenericRelation`` partitions by.
+def _generic_child_attname(field: Any, name_attr: str) -> str | None:
+    """The child column attname a ``GenericRelation`` names via ``name_attr``.
 
     A ``GenericForeignKey`` stores the parent id in an ordinary column
-    (``object_id`` by default) named on the ``GenericRelation`` via
-    ``object_id_field_name``; the windowed prefetch partitions by that
-    column's attname (the content type is a constant WHERE, not part of the
-    partition - Laravel morphMany precedent). ``None`` when the related model
-    or the field name is missing (synthetic doubles) - the classifier never
-    raises. ``get_field`` resolves for a genuine ``GenericRelation``, so no
-    defensive ``FieldDoesNotExist`` swallow is needed once both inputs exist.
+    (``object_id`` by default) and pairs it with a content-type FK; the
+    ``GenericRelation`` names both via ``object_id_field_name`` /
+    ``content_type_field_name``, and this resolves either name to the child
+    column's attname. The windowed prefetch partitions by the ``object_id``
+    attname (the content type is a constant WHERE, not part of the partition -
+    Laravel morphMany precedent) and constrains the ``content_type`` attname by
+    EQUALITY (Django's alias-late morph WHERE), so the content-type column
+    belongs ahead of ``object_id`` in a covering composite index even though it
+    is not part of the partition. ``None`` when the related model or the field
+    name is missing (synthetic doubles) - the classifier never raises.
+    ``get_field`` resolves for a genuine ``GenericRelation``, so no defensive
+    ``FieldDoesNotExist`` swallow is needed once both inputs exist.
     """
     related_model = _safe_getattr(field, "related_model")
-    object_id_field_name = _safe_getattr(field, "object_id_field_name")
-    if related_model is None or object_id_field_name is None:
+    child_field_name = _safe_getattr(field, name_attr)
+    if related_model is None or child_field_name is None:
         return None
     try:
-        return related_model._meta.get_field(object_id_field_name).attname
-    except BaseException:
-        return None
-
-
-def _generic_content_type_attname(field: Any) -> str | None:
-    """The child ``content_type_id`` column attname a ``GenericRelation`` morphs on.
-
-    A ``GenericForeignKey`` pairs the ``object_id`` column with a content-type
-    FK named on the ``GenericRelation`` via ``content_type_field_name``. The
-    windowed prefetch constrains that column by EQUALITY (Django's alias-late
-    morph WHERE), so it belongs ahead of ``object_id`` in a covering composite
-    index even though it is not part of the partition. ``None`` when the
-    related model or the field name is missing (synthetic doubles) - the
-    classifier never raises.
-    """
-    related_model = _safe_getattr(field, "related_model")
-    content_type_field_name = _safe_getattr(field, "content_type_field_name")
-    if related_model is None or content_type_field_name is None:
-        return None
-    try:
-        return related_model._meta.get_field(content_type_field_name).attname
+        return related_model._meta.get_field(child_field_name).attname
     except BaseException:
         return None
 
@@ -332,10 +316,10 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
         # STAYS None so the lateral backend refuses at ``_build_lateral_spec``
         # and the strategy degrades to the windowed body - no
         # ``LateralJoinShape.GENERIC`` arm exists (or is wanted).
-        object_id_attname = _generic_object_id_attname(field)
+        object_id_attname = _generic_child_attname(field, "object_id_field_name")
         partition = object_id_attname
         parent_join_column = object_id_attname
-        content_type_column = _generic_content_type_attname(field)
+        content_type_column = _generic_child_attname(field, "content_type_field_name")
         lateral_shape = LateralJoinShape.DIRECT_FK
         through = None
     else:

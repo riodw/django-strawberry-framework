@@ -1796,12 +1796,19 @@ def test_bind_mutation_outputs_stashes_model_less_payload_and_slots():
 
 
 def test_model_and_plain_form_binds_ride_bind_mutation_outputs():
-    """Both declaration-ledger binds stash payload + slots through one helper."""
-    from django_strawberry_framework.forms.sets import _bind_form_mutation
-    from django_strawberry_framework.mutations.sets import _bind_mutation
+    """Both declaration-ledger drains stash payload + slots through one shared drain."""
+    from django_strawberry_framework.forms.sets import bind_form_mutations
+    from django_strawberry_framework.mutations.sets import (
+        bind_mutations,
+        bind_write_declarations,
+    )
 
-    assert "bind_mutation_outputs" in _bind_mutation.__code__.co_names
-    assert "bind_mutation_outputs" in _bind_form_mutation.__code__.co_names
+    # Both public drains delegate to the one shared body ...
+    assert "bind_write_declarations" in bind_mutations.__code__.co_names
+    assert "bind_write_declarations" in bind_form_mutations.__code__.co_names
+    assert bind_form_mutations.__globals__["bind_write_declarations"] is bind_write_declarations
+    # ... which is the single site stashing payload + slots.
+    assert "bind_mutation_outputs" in bind_write_declarations.__code__.co_names
 
 
 def test_model_and_form_validate_ride_shared_meta_helpers():

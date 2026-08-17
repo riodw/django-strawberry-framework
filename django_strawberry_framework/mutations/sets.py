@@ -1565,45 +1565,67 @@ def bind_mutation_outputs(
     mutation_cls._payload_type_name = payload_cls.__name__
 
 
-def _bind_mutation(mutation_cls: type) -> None:
-    """Bind one registered mutation at phase 2.5 (spec-036 Decision 12).
+def bind_write_declarations(
+    *,
+    cache: dict,
+    iterate: Callable[[], tuple[type, ...]],
+    resolve_object_type: Callable[[type, Any], type | None],
+) -> None:
+    """Drain one write-declaration registry through the phase-2.5 bind.
 
-    Resolves the model primary type (raising for no-primary / ambiguous), builds +
-    materializes the operation's input class (``create`` / ``update``) and the
-    per-mutation ``<Name>Payload`` (every operation) as module globals of
-    ``mutations.inputs`` before ``strawberry.Schema(...)`` runs, and stashes the
-    resolved refs on the mutation class for the ``DjangoMutationField``.
+    The ONE drain both write-declaration ledgers ride - the model-backed
+    ``bind_mutations()`` (which the ``ModelForm`` and serializer flavors ride
+    too, being ``DjangoMutation`` subclasses) and the model-less
+    ``bind_form_mutations()``. ``finalize_django_types`` calls each in the
+    phase-2.5 window, after primary-type state is settled and before
+    ``strawberry.type(...)`` freezes the schema classes (spec-036 Decision 12).
+
+    Per registered class: resolve the payload's object type, route the input
+    materialization through the ``build_input`` seam (spec-038 Decision 13 - the
+    model flavor rebuilds the model-column input, the form / serializer flavors
+    build their own), and stash both through ``bind_mutation_outputs``.
+
+    ``resolve_object_type`` is the ONLY per-ledger divergence: the model-backed
+    drain resolves the primary ``DjangoType`` (raising for no-primary /
+    ambiguous), the model-less drain answers ``None`` (which selects the pinned
+    ``{ ok errors }`` payload and keeps ``_primary_type`` ``None``). Every
+    flavor's ``build_input`` carries the same ``(meta, primary_type)`` signature
+    so this one call reaches all of them.
+
+    ``cache`` is the caller's own PER-PASS build cache, cleared at the top so
+    each input is rebuilt fresh. The cross-pass materialization ledgers
+    (``mutations.inputs`` / ``forms.inputs`` - the ``ModelForm`` flavor rides
+    the model pass but writes the FORM ledger) are reset ONCE by
+    ``finalize_django_types`` before the bind sequence so a recover-in-place
+    re-finalize is retry-idempotent; they are NOT reset here, where a per-pass
+    clear would wipe the sibling pass's already-materialized entries.
     """
-    meta = mutation_cls._mutation_meta
-    primary_type = _resolve_primary_type(mutation_cls, meta.model)
-
-    # Route the input materialization through the ``build_input`` seam (spec-038
-    # Decision 13): the model flavor's default rebuilds the model-column input
-    # exactly as before, the form flavor builds the form-derived input instead.
-    bind_mutation_outputs(
-        mutation_cls,
-        input_cls=mutation_cls.build_input(meta, primary_type),
-        object_type=primary_type,
-    )
+    cache.clear()
+    for mutation_cls in iterate():
+        meta = mutation_cls._mutation_meta
+        object_type = resolve_object_type(mutation_cls, meta)
+        bind_mutation_outputs(
+            mutation_cls,
+            input_cls=mutation_cls.build_input(meta, object_type),
+            object_type=object_type,
+        )
 
 
 def bind_mutations() -> None:
     """Bind every registered ``DjangoMutation`` (the finalizer phase-2.5 entry point).
 
-    Called by ``finalize_django_types`` in the phase-2.5 window, after primary-type
-    state is settled and before ``strawberry.type(...)`` freezes the schema
-    classes (spec-036 Decision 12). Drains the declaration registry in
-    registration order; each ``_bind_mutation`` materializes that mutation's
-    generated classes.
-
-    ``_shape_build_cache`` is this pass's own (per-pass) build cache, cleared at the
-    top so each input is rebuilt fresh. The cross-pass materialization ledgers
-    (``mutations.inputs`` / ``forms.inputs`` - the ``ModelForm`` flavor rides this
-    pass but writes the FORM ledger) are reset ONCE by ``finalize_django_types``
-    before the bind sequence so a recover-in-place re-finalize is retry-idempotent; they are
-    NOT reset here, where a per-pass clear would wipe the sibling pass's already-materialized
-    entries.
+    The model-backed rider of ``bind_write_declarations``: each declaration's
+    payload object type is its resolved primary ``DjangoType``
+    (``_resolve_primary_type`` raises for no-primary / ambiguous), so the bind
+    materializes the operation's input class (``create`` / ``update``) and the
+    per-mutation ``<Name>Payload`` as module globals of ``mutations.inputs``
+    before ``strawberry.Schema(...)`` runs.
     """
-    _shape_build_cache.clear()
-    for mutation_cls in iter_mutations():
-        _bind_mutation(mutation_cls)
+    bind_write_declarations(
+        cache=_shape_build_cache,
+        iterate=iter_mutations,
+        resolve_object_type=lambda mutation_cls, meta: _resolve_primary_type(
+            mutation_cls,
+            meta.model,
+        ),
+    )

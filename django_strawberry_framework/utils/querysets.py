@@ -137,7 +137,14 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
 
 
 def _safe_class_name(value: Any) -> str:
-    """Render a class name without allowing hostile metaclass metadata to escape."""
+    """Render a class name without allowing hostile metaclass metadata to escape.
+
+    Deliberately STRICTER than the shared ``exceptions._safe_class_name``:
+    this module assembles sealed-boundary defect messages about consumer
+    querysets, so a non-string ``__name__`` degrades to ``_safe_type_name``
+    (the metaclass label) rather than ``repr(name)`` - the repr would
+    dispatch a hostile dunder on the very object the boundary is rejecting.
+    """
     try:
         name = value.__name__
     except BaseException:

@@ -55,7 +55,11 @@ from .lateral_fetch import (
     _select_columns,
     window_predicate_signature,
 )
-from .nested_fetch import NestedConnectionRequest, unwindowable_child_queryset_reason
+from .nested_fetch import (
+    NestedConnectionRequest,
+    RecognizedFetchQuerySet,
+    unwindowable_child_queryset_reason,
+)
 from .plans import WINDOW_ROW_NUMBER
 
 
@@ -156,46 +160,23 @@ def single_parent_spec(request: NestedConnectionRequest) -> SingleParentWindowSp
     )
 
 
-class SingleParentWindowQuerySet(QuerySet):
+class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
     """A windowed-prefetch queryset that runs the plain page query when it can.
 
     Constructed only by ``WindowedPrefetchStrategy`` (via
-    ``as_single_parent_queryset``): its ORM body IS the windowed queryset the
-    strategy would plan, and ``_dst_single_parent_spec`` rides alongside through
-    every clone (``.using()`` / ``_add_hints`` / the prefetch machinery's
-    ``.filter()`` all go through ``_clone``). ``_fetch_all`` swaps in the plain
-    filtered ``LIMIT`` execution only when ``_fetch_single_parent_rows``
-    recognizes the fetch-time query completely; any other shape executes the
-    windowed body via the superclass - Django-internals drift or a multi-parent
-    fetch degrades performance, never correctness.
+    ``as_single_parent_queryset``). The clone-surviving spec + the
+    recognized-rows-or-windowed-body ``_fetch_all`` contract is the shared
+    ``nested_fetch.py::RecognizedFetchQuerySet`` skeleton; this subclass
+    supplies the single-parent spec slot and the
+    ``_fetch_single_parent_rows`` recognizer (a multi-parent fetch is just
+    another unrecognized shape - the windowed body runs).
     """
 
+    _dst_spec_attr = "_dst_single_parent_spec"
     _dst_single_parent_spec: SingleParentWindowSpec | None = None
-    # The signature of the window-range quals the PLANNED windowed body carried
-    # when it was wrapped (``window_predicate_signature``), captured once so the
-    # fetch-time recognizer can prove the row-number range was not mutated before
-    # trusting the plain re-query. ``None`` means the planned window could not be
-    # normalized, so the fast path never engages (fail closed).
-    _dst_window_signature: tuple | None = None
 
-    def _clone(self) -> SingleParentWindowQuerySet:
-        clone = super()._clone()
-        clone._dst_single_parent_spec = self._dst_single_parent_spec
-        clone._dst_window_signature = self._dst_window_signature
-        return clone
-
-    def _fetch_all(self) -> None:
-        if self._result_cache is None:
-            rows = _fetch_single_parent_rows(self)
-            if rows is not None:
-                self._result_cache = rows
-        # The superclass call is a no-op on a populated cache except for the
-        # nested ``prefetch_related`` pass. Synthesized rows are usually already
-        # populated (the pristine child queryset carries the nested prefetches,
-        # so listing it ran them), in which case the pass skips them; the call
-        # stays load-bearing for the windowed-body fallback and mirrors
-        # ``lateral_fetch.py::LateralQuerySet._fetch_all``.
-        super()._fetch_all()
+    def _fetch_recognized_rows(self) -> list | None:
+        return _fetch_single_parent_rows(self)
 
 
 def as_single_parent_queryset(

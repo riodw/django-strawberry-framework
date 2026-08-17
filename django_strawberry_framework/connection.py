@@ -85,6 +85,7 @@ from .optimizer.plans import (
     order_entry_name_and_direction,
 )
 from .optimizer.selections import (
+    connection_field_names,
     connection_has_next_page_selected,
     connection_total_count_selected,
     prime_selected_fields,
@@ -116,11 +117,7 @@ from .utils.querysets import (
     reject_residual_async_source,
 )
 from .utils.relations import relation_kind
-from .utils.typing import (
-    is_async_callable,
-    is_async_generator_callable,
-    unwrap_container_type,
-)
+from .utils.typing import is_async_callable, unwrap_container_type
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -1134,9 +1131,14 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
 def _total_count_requested(info: Info) -> bool:
     """Return whether the query selects the connection's ``totalCount`` field.
 
-    Checks the connection field's DIRECT children (``totalCount`` is a sibling
-    of ``edges`` / ``pageInfo``); the GraphQL field name is camelCase
-    ``totalCount`` regardless of the Python ``total_count`` attribute.
+    Checks the connection field's DIRECT children (the count field is a sibling
+    of ``edges`` / the page-info field). The GraphQL name comes from the active
+    schema's ``NameConverter`` via
+    ``optimizer/selections.py::connection_field_names`` - the Python attribute is
+    ``total_count`` and it renders camelCase only under the DEFAULT converter, so
+    matching a ``"totalCount"`` literal made this predicate answer ``False`` for
+    every schema built with ``auto_camel_case=False`` (the count was then never
+    captured and the field raised for an unset attribute).
 
     Scoped to the direct children deliberately: unlike
     strawberry-django's ``_should_optimize_total_count``, which recurses through
@@ -1153,8 +1155,10 @@ def _total_count_requested(info: Info) -> bool:
     resolve-time count detection cannot drift from the optimizer's plan-time
     predicate (the conditional ``_dst_total_count`` contract's invariant).
     """
+    names = connection_field_names(info)
     return any(
-        connection_total_count_selected(selected_field) for selected_field in info.selected_fields
+        connection_total_count_selected(selected_field, names=names)
+        for selected_field in info.selected_fields
     )
 
 
@@ -1170,10 +1174,13 @@ def _has_next_page_requested(info: Info) -> bool:
     Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_has_next_page_selected`` - the same
     implementation the plan-time ``connection_count_required`` uses - so the
-    two halves cannot drift independently.
+    two halves cannot drift independently, and both read the page-info /
+    has-next-page GraphQL names from the active schema's converter rather than a
+    camelCase literal.
     """
+    names = connection_field_names(info)
     return any(
-        connection_has_next_page_selected(selected_field)
+        connection_has_next_page_selected(selected_field, names=names)
         for selected_field in info.selected_fields
     )
 
@@ -1898,20 +1905,23 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     awaiting; only ``resolve_async`` awaits). So a per-call coroutine return from
     a sync resolver (the ``DjangoListField`` shape) would NOT be awaited here:
 
-    - **Default branch** (``resolver is None``) and the **sync consumer-resolver**
-      branch are sync resolvers running ``_pipeline_sync``, which returns a LAZY
-      queryset. A lazy queryset works under BOTH ``execute_sync`` and
-      ``await execute`` - ``resolve_connection`` / ``ListConnection`` materialize
-      it with ``.count()`` (sync) or ``.acount()`` (async) per the runtime
-      context, so async counting still happens for the default field. A sync
-      pipeline meeting an async ``get_queryset`` raises ``SyncMisuseError`` (the
-      Relay-foundation contract); to drive an async ``get_queryset`` hook through
-      a connection, supply an ``async def`` ``resolver=`` (below).
-    - **Async-generator consumer-resolver** branch
-      (``is_async_generator_callable(resolver)``) is an ``AsyncIterable`` rather
-      than a coroutine: Strawberry already consumes that shape on its async
-      execution path, while this wrapper rejects it explicitly when a caller
-      incorrectly uses ``execute_sync``.
+    - **Sync branch** (everything ``is_async_callable`` rejects): the default
+      field (``resolver is None`` - the type's initial queryset), a plain
+      ``def`` consumer resolver, and a declared async-generator resolver
+      (``iscoroutinefunction`` is deliberately False for async-generator
+      functions) all share ONE sync resolver running ``_pipeline_sync``, which
+      returns a LAZY queryset. A lazy queryset works under BOTH
+      ``execute_sync`` and ``await execute`` - ``resolve_connection`` /
+      ``ListConnection`` materialize it with ``.count()`` (sync) or
+      ``.acount()`` (async) per the runtime context, so async counting still
+      happens for the default field. A sync pipeline meeting an async
+      ``get_queryset`` raises ``SyncMisuseError`` (the Relay-foundation
+      contract); to drive an async ``get_queryset`` hook through a connection,
+      supply an ``async def`` ``resolver=`` (below). An async generator's
+      return is an ``AsyncIterable`` rather than a coroutine: Strawberry
+      already consumes that shape on its async execution path, while the
+      wrapper's runtime guard rejects it explicitly when a caller incorrectly
+      uses ``execute_sync``.
     - **Async consumer-resolver** branch (``is_async_callable(resolver)``) is an
       ``async def`` resolver running ``_pipeline_async`` - being ``async def``
       makes the field async, so ``ConnectionExtension.resolve_async`` awaits
@@ -1944,36 +1954,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
                 "resolvers.",
             )
 
-    if resolver is None:
-
-        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
-            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
-            return _pipeline_sync(
-                target_type,
-                initial_queryset(target_type),
-                info,
-                filter_input=filter_input,
-                order_by_input=order_by_input,
-            )
-    elif is_async_generator_callable(resolver):
-
-        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
-            source = resolver(root, info)
-            _require_async_iterable_context(source)
-            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
-            # Strawberry's async ConnectionExtension accepts this AsyncIterable
-            # directly. The sync-shaped wrapper is intentional: it lets the
-            # native async executor consume the generator while the guard above
-            # turns execute_sync misuse into a typed package error.
-            return _pipeline_sync(
-                target_type,
-                source,
-                info,
-                filter_input=filter_input,
-                order_by_input=order_by_input,
-            )
-
-    elif is_async_callable(resolver):
+    if is_async_callable(resolver):
 
         async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
             source = await resolver(root, info)
@@ -1987,10 +1968,22 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
             )
 
     else:
+        # ONE sync body serves the remaining three shapes - the default field
+        # (no resolver: the type's initial queryset), a plain ``def`` resolver,
+        # and a declared async-generator resolver (``is_async_callable`` is
+        # deliberately False for async-generator functions). Strawberry's async
+        # ConnectionExtension accepts the generator's AsyncIterable directly;
+        # the sync-shaped wrapper is intentional, letting the native async
+        # executor consume it while the guard turns execute_sync misuse into a
+        # typed package error. The guard is a no-op for the default branch (a
+        # QuerySet is synchronously iterable).
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
-            source = resolver(root, info)
-            _require_async_iterable_context(source)
+            if resolver is None:
+                source = initial_queryset(target_type)
+            else:
+                source = resolver(root, info)
+                _require_async_iterable_context(source)
             filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,

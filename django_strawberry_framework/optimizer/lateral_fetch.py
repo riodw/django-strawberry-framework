@@ -85,6 +85,7 @@ from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
     WINDOWED_STRATEGY,
     NestedConnectionRequest,
+    RecognizedFetchQuerySet,
     attach_windowed_prefetch,
     unwindowable_child_queryset_reason,
 )
@@ -442,42 +443,21 @@ def _keyset_seek_sql(
     return keyset_seek_sql(refs, plan)
 
 
-class LateralQuerySet(QuerySet):
+class LateralQuerySet(RecognizedFetchQuerySet):
     """A windowed-prefetch queryset that executes lateral SQL when it can.
 
     Constructed only by ``LateralPrefetchStrategy`` (via
-    ``_as_lateral_queryset``): its ORM body IS the windowed queryset the
-    default strategy would plan, and ``_dst_lateral_spec`` rides alongside
-    through every clone (``.using()`` / ``_add_hints`` / the prefetch
-    machinery's ``.filter()`` all go through ``_clone``). ``_fetch_all``
-    swaps in the lateral execution only when ``_fetch_lateral_rows``
-    recognizes the fetch-time query completely; any other shape executes the
-    windowed body via the superclass - Django-internals drift degrades
-    performance, never correctness.
+    ``_as_lateral_queryset``). The clone-surviving spec + the
+    recognized-rows-or-windowed-body ``_fetch_all`` contract is the shared
+    ``nested_fetch.py::RecognizedFetchQuerySet`` skeleton; this subclass
+    supplies the lateral spec slot and the ``_fetch_lateral_rows`` recognizer.
     """
 
+    _dst_spec_attr = "_dst_lateral_spec"
     _dst_lateral_spec: LateralWindowSpec | None = None
-    # The signature of the window-range quals the PLANNED windowed body carried
-    # when it was wrapped (``window_predicate_signature``), captured once so the
-    # fetch-time recognizer can prove the row-number range was not mutated before
-    # trusting the raw SQL. ``None`` means the planned window could not be
-    # normalized, so the fast path never engages (fail closed).
-    _dst_window_signature: tuple | None = None
 
-    def _clone(self) -> LateralQuerySet:
-        clone = super()._clone()
-        clone._dst_lateral_spec = self._dst_lateral_spec
-        clone._dst_window_signature = self._dst_window_signature
-        return clone
-
-    def _fetch_all(self) -> None:
-        if self._result_cache is None:
-            rows = _fetch_lateral_rows(self)
-            if rows is not None:
-                self._result_cache = rows
-        # The superclass call is a no-op on a populated cache except for the
-        # nested ``prefetch_related`` pass - which the lateral rows need too.
-        super()._fetch_all()
+    def _fetch_recognized_rows(self) -> list | None:
+        return _fetch_lateral_rows(self)
 
 
 @dataclass(frozen=True)

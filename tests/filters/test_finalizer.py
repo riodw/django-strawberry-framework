@@ -544,7 +544,7 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
     The single-orphan branch is exercised by
     ``test_orphan_filter_input_type_reference_raises_at_finalize``; this
     test pins the multi-orphan arm of
-    ``_format_orphan_filtersets_error``: lead-in
+    ``_format_orphan_sets_error``: lead-in
     ``"FilterSets referenced via filter_input_type(...) but not wired to
     any DjangoType:"`` followed by ``__module__.__qualname__``-sorted
     offenders. Without this test the multi-orphan branch could silently

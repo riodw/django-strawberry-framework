@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import strawberry
@@ -58,7 +59,7 @@ from strawberry import relay
 from strawberry.types.field import StrawberryField
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
 from ..optimizer import logger
 from ..optimizer.field_meta import FieldMeta
 from ..registry import GLOBALID_SETTING_UNSET, registry
@@ -81,21 +82,6 @@ from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from .definition import DjangoTypeDefinition
-
-
-def _safe_class_name(value: object, *, qualified: bool = False) -> str:
-    """Return a class label without trusting hostile metaclass metadata."""
-    attribute = "__qualname__" if qualified else "__name__"
-    try:
-        name = getattr(value, attribute)
-    except BaseException:
-        return _safe_type_name(value)
-    if isinstance(name, str):
-        try:
-            return str(name)
-        except BaseException:
-            return _safe_type_name(value)
-    return _safe_arg_repr(name)
 
 
 def _safe_qualified_class_name(value: object) -> str:
@@ -1230,7 +1216,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
         format_model_mismatch=_format_owner_model_mismatch_error,
         before_second_owner_check=_check_filterset_owner_axes,
         related_attr="related_filters",
-        format_target_mismatch=_format_owner_mismatch_error,
+        format_target_mismatch=partial(_format_owner_target_mismatch_error, family="FilterSet"),
     )
 
 
@@ -1323,22 +1309,28 @@ def _check_filterset_owner_pk_identity(
         )
 
 
-def _format_owner_mismatch_error(
-    filterset_cls: type,
+def _format_owner_target_mismatch_error(
+    set_cls: type,
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     field_name: str,
     prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
     new_target: tuple[DjangoTypeDefinition, models.Field] | None,
+    *,
+    family: str,
+    suffix: str = "",
 ) -> str:
-    """Return the canonical multi-owner-mismatch message.
+    """Return the canonical multi-owner-mismatch message for either set family.
 
     Sibling of ``_format_unresolved_targets_error`` /
-    ``_format_ambiguity_error`` above; all three formatters live at the
-    top of this module so consumer error matching stays grep-stable.
-    Names both owners' qualified names, the offending FilterSet, the
-    offending field, and both resolved target type names per spec-027
-    #"owning `FilterSet`'s target `DjangoType`".
+    ``_format_ambiguity_error`` above; the formatters live at the top of
+    this module so consumer error matching stays grep-stable. Names both
+    owners' qualified names, the offending set class, the offending field,
+    and both resolved target type names per spec-027 #"owning `FilterSet`'s
+    target `DjangoType`". ``family`` is the family noun (``"FilterSet"`` /
+    ``"OrderSet"``); ``suffix`` is the order side's spec pointer (the family
+    words are the ONLY divergence, so the message logic is spelled once and
+    each ``_bind_*_owner`` passes its words via ``functools.partial``).
     """
     prev_name = (
         _safe_class_name(prev_target[0].origin, qualified=True)
@@ -1351,12 +1343,12 @@ def _format_owner_mismatch_error(
         else "<unresolved>"
     )
     return (
-        f"FilterSet {_safe_class_name(filterset_cls, qualified=True)} cannot bind to multiple owners with "
+        f"{family} {_safe_class_name(set_cls, qualified=True)} cannot bind to multiple owners with "
         f"diverging targets: {_safe_class_name(previous.origin, qualified=True)} resolves "
         f"{_safe_arg_repr(field_name)} to {prev_name}, but "
         f"{_safe_class_name(new.origin, qualified=True)} resolves it "
-        f"to {new_name}. Declare separate FilterSet subclasses for the diverging "
-        "owners."
+        f"to {new_name}. Declare separate {family} subclasses for the diverging "
+        f"owners{suffix}."
     )
 
 
@@ -1367,7 +1359,7 @@ def _format_owner_pk_mismatch_error(
 ) -> str:
     """Return the multi-owner own-PK Relay-identity mismatch message.
 
-    Sibling of ``_format_owner_mismatch_error``; names both owners and
+    Sibling of ``_format_owner_target_mismatch_error``; names both owners and
     their Relay-node-ness + ``graphql_type_name`` so the consumer can see
     why the shared filterset's own-PK GlobalID would resolve ambiguously.
     Grep-stable alongside the other ``_format_*`` finalize-error helpers.
@@ -1438,28 +1430,37 @@ def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDef
     )
 
 
-def _format_orphan_filtersets_error(orphans: list[type]) -> str:
-    """Return the canonical orphan-``filter_input_type`` error message.
+def _format_orphan_sets_error(
+    orphans: list[type],
+    *,
+    family: str,
+    helper: str,
+    meta_key: str,
+) -> str:
+    """Return the canonical orphan-``<helper>_input_type`` error message.
 
-    Sorted by qualified name for deterministic output. When more than
-    one orphan is present, the message uses the multi-orphan lead-in
-    mirroring ``_format_unresolved_targets_error``'s shape; the single-
-    orphan branch uses the spec-pinned actionable message from spec-027
-    #"Bind the owner.".
+    When more than one orphan is present, the message uses the multi-orphan
+    lead-in mirroring ``_format_unresolved_targets_error``'s shape; the
+    single-orphan branch uses the spec-pinned actionable message (spec-027
+    #"Bind the owner." on the filter side, spec-028's on the order side).
+    The family words (``family`` noun, ``helper`` function name, ``meta_key``
+    sidecar key) are the ONLY divergence between the two families, so the
+    branch / lead-in logic is spelled once and each ``_SidecarBindingSpec``
+    passes its words via ``functools.partial``.
     """
     if len(orphans) == 1:
         cls = orphans[0]
         return (
-            f"FilterSet '{_safe_class_name(cls)}' is referenced via filter_input_type(...) but "
-            f"never assigned to a DjangoType via Meta.filterset_class. Add "
-            f"'filterset_class = {_safe_class_name(cls)}' to the relevant DjangoType's Meta."
+            f"{family} '{_safe_class_name(cls)}' is referenced via {helper}(...) but "
+            f"never assigned to a DjangoType via Meta.{meta_key}. Add "
+            f"'{meta_key} = {_safe_class_name(cls)}' to the relevant DjangoType's Meta."
         )
     lines = [f"  - {_safe_qualified_class_name(cls)}" for cls in orphans]
     body = "\n".join(lines)
     return (
-        "FilterSets referenced via filter_input_type(...) but not wired to any "
+        f"{family}s referenced via {helper}(...) but not wired to any "
         f"DjangoType:\n{body}\n\n"
-        "Add 'filterset_class = <Name>' to the relevant DjangoType's Meta for each."
+        f"Add '{meta_key} = <Name>' to the relevant DjangoType's Meta for each."
     )
 
 
@@ -1470,8 +1471,8 @@ def _format_unregistered_related_target_error(
 ) -> str:
     """Return the canonical unregistered-``RelatedFilter``-target finalize message.
 
-    Sibling of ``_format_orphan_filtersets_error`` /
-    ``_format_owner_mismatch_error`` above; finalize-time formatters stay
+    Sibling of ``_format_orphan_sets_error`` /
+    ``_format_owner_target_mismatch_error`` above; finalize-time formatters stay
     grouped here so consumer error matching stays grep-stable. Mirrors the
     runtime message raised by ``FilterSet._iter_visibility_steps`` for the
     same misconfiguration so the two surfaces read as one contract.
@@ -1517,42 +1518,11 @@ def _bind_orderset_owner(orderset_cls: type, definition: DjangoTypeDefinition) -
         format_model_mismatch=_format_owner_orderset_model_mismatch_error,
         before_second_owner_check=None,
         related_attr="related_orders",
-        format_target_mismatch=_format_owner_ordersets_mismatch_error,
-    )
-
-
-def _format_owner_ordersets_mismatch_error(
-    orderset_cls: type,
-    previous: DjangoTypeDefinition,
-    new: DjangoTypeDefinition,
-    field_name: str,
-    prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
-    new_target: tuple[DjangoTypeDefinition, models.Field] | None,
-) -> str:
-    """Return the canonical multi-owner-mismatch message for ordersets.
-
-    Sibling of ``_format_owner_mismatch_error`` (filter side); the wording
-    names ``OrderSet`` / ``Meta.orderset_class`` so the consumer error
-    surface tells the schema author which sidecar is broken. Grep-stable
-    alongside the other ``_format_*`` finalize-error helpers.
-    """
-    prev_name = (
-        _safe_class_name(prev_target[0].origin, qualified=True)
-        if prev_target is not None
-        else "<unresolved>"
-    )
-    new_name = (
-        _safe_class_name(new_target[0].origin, qualified=True)
-        if new_target is not None
-        else "<unresolved>"
-    )
-    return (
-        f"OrderSet {_safe_class_name(orderset_cls, qualified=True)} cannot bind to multiple owners with "
-        f"diverging targets: {_safe_class_name(previous.origin, qualified=True)} resolves "
-        f"{_safe_arg_repr(field_name)} to {prev_name}, but "
-        f"{_safe_class_name(new.origin, qualified=True)} resolves it "
-        f"to {new_name}. Declare separate OrderSet subclasses for the diverging "
-        "owners (per spec-028 Decision 6)."
+        format_target_mismatch=partial(
+            _format_owner_target_mismatch_error,
+            family="OrderSet",
+            suffix=" (per spec-028 Decision 6)",
+        ),
     )
 
 
@@ -1585,30 +1555,6 @@ def _format_owner_orderset_model_mismatch_error(
         f"{_safe_class_name(orderset_cls, qualified=True)} on "
         f"{_safe_class_name(owner.model)}, or attach it to a "
         f"{orderset_model_name} type."
-    )
-
-
-def _format_orphan_ordersets_error(orphans: list[type]) -> str:
-    """Return the canonical orphan-``order_input_type`` error message.
-
-    Sorted by qualified name for deterministic output. When more than
-    one orphan is present, the message uses the multi-orphan lead-in
-    mirroring ``_format_orphan_filtersets_error``'s shape; the single-
-    orphan branch uses the spec-028 actionable message.
-    """
-    if len(orphans) == 1:
-        cls = orphans[0]
-        return (
-            f"OrderSet '{_safe_class_name(cls)}' is referenced via order_input_type(...) but "
-            f"never assigned to a DjangoType via Meta.orderset_class. Add "
-            f"'orderset_class = {_safe_class_name(cls)}' to the relevant DjangoType's Meta."
-        )
-    lines = [f"  - {_safe_qualified_class_name(cls)}" for cls in orphans]
-    body = "\n".join(lines)
-    return (
-        "OrderSets referenced via order_input_type(...) but not wired to any "
-        f"DjangoType:\n{body}\n\n"
-        "Add 'orderset_class = <Name>' to the relevant DjangoType's Meta for each."
     )
 
 
@@ -1823,7 +1769,12 @@ def _bind_ordersets() -> None:
             helper_ledger=_helper_referenced_ordersets,
             factory_cls=OrderArgumentsFactory,
             materialize=materialize_input_class,
-            format_orphans=_format_orphan_ordersets_error,
+            format_orphans=partial(
+                _format_orphan_sets_error,
+                family="OrderSet",
+                helper="order_input_type",
+                meta_key="orderset_class",
+            ),
             expand=_expand_orderset,
             post_expand_audit=None,
         ),
@@ -1965,7 +1916,12 @@ def _bind_filtersets() -> None:
             helper_ledger=_helper_referenced_filtersets,
             factory_cls=FilterArgumentsFactory,
             materialize=materialize_input_class,
-            format_orphans=_format_orphan_filtersets_error,
+            format_orphans=partial(
+                _format_orphan_sets_error,
+                family="FilterSet",
+                helper="filter_input_type",
+                meta_key="filterset_class",
+            ),
             expand=_expand_filterset,
             post_expand_audit=_audit_filterset_subpass_2_5,
         ),

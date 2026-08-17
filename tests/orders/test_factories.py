@@ -20,9 +20,9 @@ from django_strawberry_framework.orders import (
     RelatedOrder,
 )
 from django_strawberry_framework.orders.factories import (
+    _RESERVED_FACTORY_KEYS,
     OrderArgumentsFactory,
     _dynamic_orderset_cache,
-    _normalize_meta_for_factory,
     get_orderset_class,
 )
 from django_strawberry_framework.orders.inputs import (
@@ -30,6 +30,7 @@ from django_strawberry_framework.orders.inputs import (
     _field_specs,
     _materialized_names,
 )
+from django_strawberry_framework.utils.inputs import normalize_set_meta_for_factory
 
 
 @pytest.fixture(autouse=True)
@@ -481,12 +482,14 @@ def test_get_orderset_class_collapses_exclude_order():
 
 def test_normalize_meta_strips_reserved_and_canonicalizes_sets():
     """Order Meta has no fields synonym; reserved keys drop and sets sort."""
-    normalized = _normalize_meta_for_factory(
+    normalized = normalize_set_meta_for_factory(
         {
             "model": library_models.Book,
             "fields": {"title", "subtitle"},
             "orderset_base_class": OrderSet,
         },
+        reserved_keys=_RESERVED_FACTORY_KEYS,
+        fields_alias=None,
     )
     assert "orderset_base_class" not in normalized
     assert normalized["fields"] == sorted(["title", "subtitle"], key=repr)

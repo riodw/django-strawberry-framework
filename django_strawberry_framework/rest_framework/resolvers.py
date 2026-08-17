@@ -154,6 +154,7 @@ from ..utils.relations import is_forward_many_to_many
 from ..utils.write_transaction import (
     assert_no_target_drift,
     base_locked_queryset,
+    make_cross_alias_save_guard,
     pin_write_queryset,
     pipeline_write_phase,
     pks_match,
@@ -1855,17 +1856,15 @@ def _write_witness(
     owner = threading.get_ident()
     written: list[tuple[Any, Any, bool, str | None]] = []
 
-    def _block_cross_alias(sender: Any, using: Any, **kwargs: Any) -> None:
-        if threading.get_ident() != owner:
-            return
-        if using != alias:
-            raise ConfigurationError(
-                f"SerializerMutation {mutation_cls.__name__}: the serializer write phase "
-                f"attempted to save a {sender.__name__} row on database alias {using!r}, but "
-                f"the mutation's transaction is pinned to {alias!r}; a write outside the "
-                "pinned alias would escape the transaction (it could not be rolled back with "
-                "the mutation). Route the custom save through context['write_alias'].",
-            )
+    # The cross-alias ``pre_save`` blocker is the shared
+    # ``write_transaction.py::make_cross_alias_save_guard`` body; only the
+    # actor / recourse message halves are serializer-specific.
+    _block_cross_alias = make_cross_alias_save_guard(
+        alias,
+        actor=(f"SerializerMutation {mutation_cls.__name__}: the serializer write phase"),
+        recourse="context['write_alias']",
+        guard_thread=owner,
+    )
 
     def _record(sender: Any, instance: Any, created: bool, using: Any, **kwargs: Any) -> None:
         del sender, kwargs

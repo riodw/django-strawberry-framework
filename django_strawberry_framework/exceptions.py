@@ -52,6 +52,27 @@ def _safe_arg_repr(value: object) -> str:
         return f"<unprintable {_safe_type_name(value)}>"
 
 
+def _safe_class_name(value: object, *, qualified: bool = False) -> str:
+    """Return a class label without trusting hostile metaclass metadata.
+
+    The one class-label renderer error-message assembly shares (``types/relay.py``
+    and ``types/finalizer.py`` import it; the sealed-queryset boundary in
+    ``utils/querysets.py`` deliberately keeps a stricter local variant whose
+    non-string fallback never dispatches the name object at all). A ``str``
+    subclass ``__name__`` is read through the base ``str`` slot so its overridden
+    ``__str__`` never runs; an unreadable ``__name__`` degrades to
+    ``_safe_type_name``; a non-string one renders through the guarded repr.
+    """
+    attribute = "__qualname__" if qualified else "__name__"
+    try:
+        name = getattr(value, attribute)
+    except BaseException:
+        return _safe_type_name(value)
+    if isinstance(name, str):
+        return str.__str__(name)
+    return _safe_arg_repr(name)
+
+
 def _safe_model_label(model: object) -> str:
     """Return a model label without trusting consumer-supplied metadata."""
     try:

@@ -506,90 +506,53 @@ def _plain_form_write_step(
     return True
 
 
-def _run_modelform_pipeline_sync(
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-) -> Any:
-    """The ``ModelForm`` flavor body (locate -> authorize -> decode -> validate -> save -> refetch).
-
-    Rides the promoted shared ``run_write_pipeline_sync`` skeleton:
-    the ``transaction.atomic()`` boundary + the locate preamble + the
-    authorize-before-decode security ordering + the optimizer re-fetch tail are
-    single-sited there, and this flavor supplies only the form ``decode_step`` (form
-    decode + partial reconstruction) and ``write_step`` (``get_form`` ->
-    ``is_valid`` -> ``form.save``) callbacks.
-    """
-    return run_write_pipeline_sync(
-        mutation_cls,
-        info,
-        data,
-        id,
-        decode_step=lambda instance: _modelform_decode_step(
-            mutation_cls,
-            data,
-            info,
-            instance=instance,
-        ),
-        write_step=lambda instance, decoded: _modelform_write_step(
-            mutation_cls,
-            info,
-            instance,
-            decoded,
-        ),
-    )
-
-
-def _run_plain_form_pipeline_sync(
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-) -> Any:
-    """The plain ``DjangoFormMutation`` rider of ``run_write_pipeline_sync``.
-
-    No row to locate (``_primary_type is None``), no object slot, no re-fetch.
-    The skeleton owns the atomic / alias-guard / authorize-before-decode /
-    rollback-envelope orchestration and builds the ``{ ok, errors }`` payload;
-    this flavor supplies the shared form decode step and the ``perform_mutate``
-    write step.
-    """
-    return run_write_pipeline_sync(
-        mutation_cls,
-        info,
-        data,
-        id,
-        decode_step=lambda instance: _modelform_decode_step(
-            mutation_cls,
-            data,
-            info,
-            instance=instance,
-        ),
-        write_step=lambda _instance, decoded: _plain_form_write_step(
-            mutation_cls,
-            info,
-            decoded,
-        ),
-    )
-
-
 def _run_form_pipeline_sync(
     mutation_cls: type,
     info: Any,
     data: Any,
     id: Any,  # noqa: A002
 ) -> Any:
-    """Dispatch to the ``ModelForm`` vs plain-form sync body (both ride the shared skeleton).
+    """The form-flavor rider of ``run_write_pipeline_sync`` (both form bases).
 
-    Branches on ``mutation_cls._primary_type is None`` (the plain
-    ``DjangoFormMutation`` carries ``None``; the ``ModelForm`` flavor a real
-    primary type). The single sync body the async path wraps in one
+    ONE skeleton call serves both bases - the ``transaction.atomic()`` boundary
+    + the locate preamble + the authorize-before-decode security ordering + the
+    payload tail are single-sited in the skeleton, and the two form flavors
+    share the form ``decode_step`` (form decode + partial reconstruction)
+    verbatim. The ONLY divergence is the ``write_step``, picked on
+    ``mutation_cls._primary_type``:
+
+    - the ``ModelForm`` flavor (a real primary type) runs ``get_form`` ->
+      ``is_valid`` -> ``form.save`` and the skeleton's optimizer re-fetch tail;
+    - the plain ``DjangoFormMutation`` (``_primary_type is None``) has no row to
+      locate, no object slot, and no re-fetch - the skeleton skips the locate
+      and builds the ``{ ok, errors }`` payload while this flavor's write step
+      runs ``perform_mutate``.
+
+    This is the single sync body the async path wraps in one
     ``sync_to_async(thread_sensitive=True)`` call.
     """
     if mutation_cls._primary_type is None:
-        return _run_plain_form_pipeline_sync(mutation_cls, info, data, id)
-    return _run_modelform_pipeline_sync(mutation_cls, info, data, id)
+
+        def write_step(_instance: Any, decoded: Any) -> Any:
+            return _plain_form_write_step(mutation_cls, info, decoded)
+    else:
+
+        def write_step(instance: Any, decoded: Any) -> Any:
+            return _modelform_write_step(mutation_cls, info, instance, decoded)
+
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        data,
+        id,
+        decode_step=lambda instance: _modelform_decode_step(
+            mutation_cls,
+            data,
+            info,
+            instance=instance,
+        ),
+        write_step=write_step,
+    )
 
 
 # The form-flavor module entry points (spec-038 Decision 8), via the shared factory

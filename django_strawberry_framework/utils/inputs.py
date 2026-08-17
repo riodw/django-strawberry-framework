@@ -407,18 +407,11 @@ def make_set_input_namespace(
 
     Write flavors keep using ``make_input_namespace`` (light ``ledger.clear()``
     only): they have neither a BFS factory cache nor per-set lifecycle state.
+    The ledger + ``materialize_fn`` halves ARE that trio's - built here by
+    composing ``make_input_namespace`` and swapping in the heavy clear.
     """
-    ledger: dict[str, type] = {}
+    ledger, materialize_fn, _light_clear = make_input_namespace(module_path, family_label)
     field_specs: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
-
-    def materialize_fn(name: str, cls: type) -> None:
-        materialize_generated_input_class(
-            name,
-            cls,
-            module_path=module_path,
-            family_label=family_label,
-            ledger=ledger,
-        )
 
     def clear_fn() -> None:
         clear_generated_input_namespace(

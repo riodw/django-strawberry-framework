@@ -32,7 +32,7 @@ from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
 from strawberry.utils.inspect import in_async_context
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
 
 # ``SyncMisuseError`` moved to ``utils/querysets.py``; the
 # redundant ``as`` alias re-exports it from this module so ``from
@@ -48,17 +48,6 @@ from ..utils.querysets import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (quoted annotation).
     from .definition import DjangoTypeDefinition
-
-
-def _safe_class_name(value: object) -> str:
-    """Render a class name without allowing hostile metaclass metadata to escape."""
-    try:
-        name = value.__name__
-    except BaseException:
-        return _safe_type_name(value)
-    if isinstance(name, str):
-        return str.__str__(name)
-    return _safe_arg_repr(name)
 
 
 def implements_relay_node(type_cls: type) -> bool:

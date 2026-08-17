@@ -725,10 +725,15 @@ def test_filter_and_order_dynamic_caches_ride_make_dynamic_set_getter():
     from django_strawberry_framework.orders import factories as order_factories
     from django_strawberry_framework.orders.sets import OrderSet
 
-    assert filter_factories._make_hashable is make_hashable_meta_value
-    assert order_factories._make_hashable is make_hashable_meta_value
-    assert filter_factories._make_cache_key is make_set_meta_cache_key
-    assert order_factories._make_cache_key is make_set_meta_cache_key
+    # Neither family re-exports the hashing helpers under a private alias: the
+    # owner is ``utils/inputs.py`` and both getters reach it through the one
+    # shared ``make_dynamic_set_getter`` closure below.
+    for module in (filter_factories, order_factories):
+        assert not hasattr(module, "_make_hashable")
+        assert not hasattr(module, "_make_cache_key")
+        assert not hasattr(module, "_normalize_meta_for_factory")
+    assert make_hashable_meta_value is not None
+    assert make_set_meta_cache_key is not None
     assert (
         filter_factories._get_filterset_class.__code__
         is order_factories._get_orderset_class.__code__

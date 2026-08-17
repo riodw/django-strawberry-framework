@@ -447,6 +447,44 @@ def is_read_only_sql(sql: Any) -> bool:
     return _sql_statement_token(sql) in _READ_ONLY_SQL_PREFIXES
 
 
+def make_cross_alias_save_guard(
+    alias: str,
+    *,
+    actor: str,
+    recourse: str,
+    guard_thread: int | None = None,
+) -> Any:
+    """Build the thread-scoped ``pre_save`` receiver rejecting a cross-alias save.
+
+    The one body behind the two ``pre_save`` cross-alias blockers: the
+    pipeline-wide guard (``pipeline_alias_guard``) and the serializer write
+    witness (``rest_framework/resolvers.py``). ``Model.save()`` on a non-pinned
+    alias would escape the mutation's transaction (it could not be rolled back
+    with it), so both connect this receiver to give the save path a clearer,
+    earlier error than the connection-level statement guard. ``actor`` and
+    ``recourse`` are the per-site message halves (who attempted the save; where
+    to route it); the sentence between them is spelled once here. The receiver
+    is thread-scoped explicitly (``pre_save`` is a global signal) -
+    ``guard_thread`` defaults to the creating thread.
+    """
+    owner_thread = threading.get_ident() if guard_thread is None else guard_thread
+
+    def _block_cross_alias_save(sender: Any, using: Any, **kwargs: Any) -> None:
+        del kwargs
+        if threading.get_ident() != owner_thread:
+            return
+        if using != alias:
+            raise ConfigurationError(
+                f"{actor} attempted to save a {sender.__name__} row on "
+                f"database alias {using!r}, but the mutation's transaction is pinned to "
+                f"{alias!r}; a write outside the pinned alias would escape the transaction "
+                "(it could not be rolled back with the mutation). Route the custom save "
+                f"through {recourse}.",
+            )
+
+    return _block_cross_alias_save
+
+
 @contextmanager
 def pipeline_alias_guard(owner: str, alias: str) -> Any:
     """Police the pipeline's SQL by alias AND phase (fail closed).
@@ -558,18 +596,12 @@ def pipeline_alias_guard(owner: str, alias: str) -> Any:
 
         return _reject
 
-    def _block_cross_alias_save(sender: Any, using: Any, **kwargs: Any) -> None:
-        del kwargs
-        if threading.get_ident() != guard_thread:
-            return
-        if using != alias:
-            raise ConfigurationError(
-                f"{owner}: the mutation pipeline attempted to save a {sender.__name__} row on "
-                f"database alias {using!r}, but the mutation's transaction is pinned to "
-                f"{alias!r}; a write outside the pinned alias would escape the transaction "
-                "(it could not be rolled back with the mutation). Route the custom save "
-                "through the pinned write alias.",
-            )
+    _block_cross_alias_save = make_cross_alias_save_guard(
+        alias,
+        actor=f"{owner}: the mutation pipeline",
+        recourse="the pinned write alias",
+        guard_thread=guard_thread,
+    )
 
     with ExitStack() as stack:
         for name in connections:

@@ -62,9 +62,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 
 from ..exceptions import ConfigurationError
@@ -120,6 +120,56 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     if getattr(queryset, "_iterable_class", ModelIterable) is not ModelIterable:
         return "values"
     return None
+
+
+class RecognizedFetchQuerySet(QuerySet):
+    """Shared skeleton for a windowed-prefetch queryset with a recognized fast path.
+
+    ``lateral_fetch.py::LateralQuerySet`` and
+    ``single_parent_fetch.py::SingleParentWindowQuerySet`` are the two
+    subclasses: each queryset's ORM body IS the windowed queryset the default
+    strategy would plan, a per-strategy spec (the class attribute named by
+    ``_dst_spec_attr``) rides alongside through every clone (``.using()`` /
+    ``_add_hints`` / the prefetch machinery's ``.filter()`` all go through
+    ``_clone``), and ``_fetch_all`` swaps in the strategy's execution only when
+    ``_fetch_recognized_rows`` recognizes the fetch-time query completely; any
+    other shape executes the windowed body via the superclass - Django-internals
+    drift degrades performance, never correctness.
+
+    ``_dst_window_signature`` is the signature of the window-range quals the
+    PLANNED windowed body carried when it was wrapped
+    (``lateral_fetch.py::window_predicate_signature``), captured once so the
+    fetch-time recognizer can prove the row-number range was not mutated before
+    trusting the strategy's own query. ``None`` means the planned window could
+    not be normalized, so the fast path never engages (fail closed).
+    """
+
+    # Named by each subclass; ``_clone`` copies it alongside the signature.
+    _dst_spec_attr: ClassVar[str]
+    _dst_window_signature: tuple | None = None
+
+    def _clone(self) -> RecognizedFetchQuerySet:
+        clone = super()._clone()
+        setattr(clone, self._dst_spec_attr, getattr(self, self._dst_spec_attr))
+        clone._dst_window_signature = self._dst_window_signature
+        return clone
+
+    def _fetch_recognized_rows(self) -> list | None:
+        """Return the strategy's rows, or ``None`` for every unrecognized shape."""
+        raise NotImplementedError  # pragma: no cover - subclasses always override.
+
+    def _fetch_all(self) -> None:
+        if self._result_cache is None:
+            rows = self._fetch_recognized_rows()
+            if rows is not None:
+                self._result_cache = rows
+        # The superclass call is a no-op on a populated cache except for the
+        # nested ``prefetch_related`` pass - which recognized rows need too
+        # (single-parent rows are usually already populated because the
+        # pristine child queryset carries the nested prefetches, in which case
+        # the pass skips them; the call stays load-bearing for the
+        # windowed-body fallback either way).
+        super()._fetch_all()
 
 
 @dataclass(frozen=True)

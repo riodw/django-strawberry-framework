@@ -2,7 +2,7 @@
 
 Covers `FilterArgumentsFactory`'s BFS walk and per-class collision
 check, plus the Layer-6 `get_filterset_class` + `_dynamic_filterset_cache`
-+ `_make_cache_key` plumbing.
++ `make_set_meta_cache_key` plumbing.
 """
 
 from __future__ import annotations
@@ -23,16 +23,20 @@ from django_strawberry_framework.filters import (
     RelatedFilter,
 )
 from django_strawberry_framework.filters.factories import (
+    _RESERVED_FACTORY_KEYS,
     FilterArgumentsFactory,
     _dynamic_filterset_cache,
-    _make_cache_key,
-    _make_hashable,
-    _normalize_meta_for_factory,
     get_filterset_class,
 )
 from django_strawberry_framework.filters.inputs import _field_specs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
+from django_strawberry_framework.utils.inputs import (
+    FILTERSET_FIELDS_ALIAS,
+    make_hashable_meta_value,
+    make_set_meta_cache_key,
+    normalize_set_meta_for_factory,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -378,25 +382,25 @@ def test_get_filterset_class_distinct_meta_produces_distinct_classes():
 
 
 def test_make_cache_key_normalizes_dict_fields_shape():
-    key = _make_cache_key({"model": Category, "fields": {"name": ["exact", "icontains"]}})
+    key = make_set_meta_cache_key({"model": Category, "fields": {"name": ["exact", "icontains"]}})
     # `dict` shape produces the (model, ('dict', (sorted-tuples,)), extra) tuple.
     assert key[0] is Category
     assert key[1][0] == "dict"
 
 
 def test_make_cache_key_normalizes_list_fields_shape():
-    key = _make_cache_key({"model": Category, "fields": ["name", "is_private"]})
+    key = make_set_meta_cache_key({"model": Category, "fields": ["name", "is_private"]})
     assert key[1][0] == "seq"
     assert key[1][1] == ("name", "is_private")
 
 
 def test_make_cache_key_normalizes_set_fields_shape():
-    key = _make_cache_key({"model": Category, "fields": {"is_private", "name"}})
+    key = make_set_meta_cache_key({"model": Category, "fields": {"is_private", "name"}})
     assert key[1] == ("seq", ("is_private", "name"))
 
 
 def test_make_cache_key_normalizes_scalar_all_fields_shape():
-    key = _make_cache_key({"model": Category, "fields": "__all__"})
+    key = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
     assert key[1] == ("raw", "__all__")
 
 
@@ -411,7 +415,7 @@ def test_make_hashable_dict_branch_supports_mixed_key_types():
     """
     # Default tuple-sort would raise ``TypeError: '<' not supported between
     # instances of 'int' and 'str'`` on the ``(k, val)`` pairs below.
-    result = _make_hashable({"a": 1, 0: 2})
+    result = make_hashable_meta_value({"a": 1, 0: 2})
     assert isinstance(result, tuple)
     # Both members are preserved; canonical order is whatever ``repr`` sort
     # produces, so we assert by set-equality rather than positional order.
@@ -419,10 +423,10 @@ def test_make_hashable_dict_branch_supports_mixed_key_types():
 
 
 def test_make_cache_key_distinguishes_extra_meta_keys():
-    key_a = _make_cache_key(
+    key_a = make_set_meta_cache_key(
         {"model": Category, "fields": "__all__", "exclude": ("id",)},
     )
-    key_b = _make_cache_key({"model": Category, "fields": "__all__"})
+    key_b = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
     assert key_a != key_b
 
 
@@ -432,25 +436,33 @@ def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
     The cache key is the contract that lets connection fields with
     equivalent ``Meta`` declarations collapse onto a single generated
     ``FilterSet`` class. The keying logic walks: ``model`` identity +
-    ``fields`` normalized through ``_make_hashable`` (handles nested
+    ``fields`` normalized through ``make_hashable_meta_value`` (handles nested
     dicts / lists / sets) + sorted extras. Pinning the equivalence
     classes prevents a future "tweak the key shape" change from
     silently widening or narrowing what counts as the same slot.
     """
     # 1. ``fields`` dict with list values: tuple-vs-list lookups
     #    collapse onto the same key (lists normalize through
-    #    ``_make_hashable`` to tuples).
-    key_dict_a = _make_cache_key({"model": Category, "fields": {"name": ["exact", "icontains"]}})
-    key_dict_b = _make_cache_key({"model": Category, "fields": {"name": ("exact", "icontains")}})
+    #    ``make_hashable_meta_value`` to tuples).
+    key_dict_a = make_set_meta_cache_key(
+        {"model": Category, "fields": {"name": ["exact", "icontains"]}},
+    )
+    key_dict_b = make_set_meta_cache_key(
+        {"model": Category, "fields": {"name": ("exact", "icontains")}},
+    )
     assert key_dict_a == key_dict_b
 
     # 2. ``fields`` dict key order does not matter - sorted output.
-    key_order_a = _make_cache_key({"model": Category, "fields": {"a": ["exact"], "b": ["exact"]}})
-    key_order_b = _make_cache_key({"model": Category, "fields": {"b": ["exact"], "a": ["exact"]}})
+    key_order_a = make_set_meta_cache_key(
+        {"model": Category, "fields": {"a": ["exact"], "b": ["exact"]}},
+    )
+    key_order_b = make_set_meta_cache_key(
+        {"model": Category, "fields": {"b": ["exact"], "a": ["exact"]}},
+    )
     assert key_order_a == key_order_b
 
     # 3. ``extras`` insertion order does not matter - sorted output.
-    key_extra_a = _make_cache_key(
+    key_extra_a = make_set_meta_cache_key(
         {
             "model": Category,
             "fields": "__all__",
@@ -458,7 +470,7 @@ def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
             "form": "x",
         },
     )
-    key_extra_b = _make_cache_key(
+    key_extra_b = make_set_meta_cache_key(
         {
             "model": Category,
             "fields": "__all__",
@@ -471,14 +483,14 @@ def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
     # 4. Different ``model`` classes never collide even when fields match.
     from apps.products.models import Item
 
-    key_cat = _make_cache_key({"model": Category, "fields": "__all__"})
-    key_item = _make_cache_key({"model": Item, "fields": "__all__"})
+    key_cat = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
+    key_item = make_set_meta_cache_key({"model": Item, "fields": "__all__"})
     assert key_cat != key_item
 
     # 5. Sequence-shape ``fields`` collapses list and tuple inputs onto
     #    the same key (both normalize to a tuple under "seq").
-    key_seq_a = _make_cache_key({"model": Category, "fields": ["name", "is_private"]})
-    key_seq_b = _make_cache_key({"model": Category, "fields": ("name", "is_private")})
+    key_seq_a = make_set_meta_cache_key({"model": Category, "fields": ["name", "is_private"]})
+    key_seq_b = make_set_meta_cache_key({"model": Category, "fields": ("name", "is_private")})
     assert key_seq_a == key_seq_b
 
 
@@ -613,17 +625,19 @@ def test_get_filterset_class_collapses_set_and_frozenset_fields():
 
 def test_make_cache_key_dict_fields_mixed_key_types_sort_by_repr():
     """Dict-shaped fields with mixed key types must not TypeError on sort."""
-    key = _make_cache_key({"model": Category, "fields": {"name": ["exact"], 0: ["exact"]}})
+    key = make_set_meta_cache_key({"model": Category, "fields": {"name": ["exact"], 0: ["exact"]}})
     assert key[1][0] == "dict"
 
 
 def test_normalize_meta_promotes_filter_fields_and_canonicalizes_sets():
-    normalized = _normalize_meta_for_factory(
+    normalized = normalize_set_meta_for_factory(
         {
             "model": Category,
             "filter_fields": {"name", "is_private"},
             "filterset_base_class": FilterSet,
         },
+        reserved_keys=_RESERVED_FACTORY_KEYS,
+        fields_alias=FILTERSET_FIELDS_ALIAS,
     )
     assert "filter_fields" not in normalized
     assert "filterset_base_class" not in normalized
@@ -631,8 +645,10 @@ def test_normalize_meta_promotes_filter_fields_and_canonicalizes_sets():
 
 
 def test_normalize_meta_prefers_fields_over_filter_fields_alias():
-    normalized = _normalize_meta_for_factory(
+    normalized = normalize_set_meta_for_factory(
         {"model": Category, "fields": ["name"], "filter_fields": ["is_private"]},
+        reserved_keys=_RESERVED_FACTORY_KEYS,
+        fields_alias=FILTERSET_FIELDS_ALIAS,
     )
     assert normalized["fields"] == ["name"]
     assert "filter_fields" not in normalized
@@ -706,7 +722,7 @@ def test_make_cache_key_normalizes_opaque_unhashable_raw_fields():
     class OpaqueFields:
         __hash__ = None
 
-    key = _make_cache_key({"model": Category, "fields": OpaqueFields()})
+    key = make_set_meta_cache_key({"model": Category, "fields": OpaqueFields()})
     hash(key)
 
 

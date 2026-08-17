@@ -1366,8 +1366,8 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch):
         return "ridden"
 
     monkeypatch.setattr(form_resolvers, "run_write_pipeline_sync", fake_pipeline)
-    result = form_resolvers._run_plain_form_pipeline_sync(
-        mock.Mock(),
+    result = form_resolvers._run_form_pipeline_sync(
+        mock.Mock(_primary_type=None),
         info=None,
         data="data",
         id="unset-id",

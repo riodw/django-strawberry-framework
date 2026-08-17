@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
 
@@ -78,7 +78,7 @@ def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bo
     )
     if not isinstance(allowed, bool):
         raise ConfigurationError(
-            f"{owner}.{method} must return a bool; got {allowed!r}. "
+            f"{owner}.{method} must return a bool; got {_safe_arg_repr(allowed)}. "
             "Authorization results are never coerced from truthiness.",
         )
     return allowed

@@ -57,7 +57,7 @@ import strawberry
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from .inputs import INPUTS_MODULE_PATH
 
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
@@ -104,7 +104,7 @@ def _validate_mutation_target(mutation_cls: Any) -> None:
     if not isinstance(mutation_cls, type) or not _has_mutation_protocol(mutation_cls):
         raise ConfigurationError(
             f"DjangoMutationField requires a concrete DjangoMutation / DjangoFormMutation / "
-            f"DjangoModelFormMutation subclass; got {mutation_cls!r}.",
+            f"DjangoModelFormMutation subclass; got {_safe_arg_repr(mutation_cls)}.",
         )
     if mutation_cls.__dict__.get("_mutation_meta") is None:
         raise ConfigurationError(

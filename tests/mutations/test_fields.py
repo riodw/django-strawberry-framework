@@ -247,6 +247,18 @@ def test_non_class_target_raises_at_construction():
         DjangoMutationField(object())
 
 
+def test_hostile_non_class_target_repr_still_raises_configuration_error():
+    """A rejected target's repr cannot replace the construction-time configuration error."""
+
+    class HostileTarget:
+        def __repr__(self):
+            raise RuntimeError("repr boom")
+
+    with pytest.raises(ConfigurationError, match="DjangoMutationField") as exc:
+        DjangoMutationField(HostileTarget())
+    assert "unprintable" in str(exc.value)
+
+
 def test_abstract_base_target_raises_at_construction():
     """The abstract ``DjangoMutation`` base (no ``Meta`` -> no ``_mutation_meta``) is rejected."""
     with pytest.raises(ConfigurationError, match="abstract base"):

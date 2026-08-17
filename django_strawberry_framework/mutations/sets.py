@@ -869,7 +869,7 @@ def _validate_permission_classes(
         )
     try:
         classes = list(value)
-    except Exception as exc:
+    except BaseException as exc:
         raise ConfigurationError(
             f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
             f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",

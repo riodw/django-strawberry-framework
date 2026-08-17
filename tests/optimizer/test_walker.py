@@ -26,6 +26,7 @@ from graphql import OperationType
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.nested_planner import _connector_only_field
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
@@ -1760,6 +1761,18 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
 
     assert plan.only_fields == ("name",)
     assert any("could not resolve connector column" in r.message for r in caplog.records)
+
+
+def test_connector_only_field_projects_the_shared_join_descriptor():
+    """The nested-planner shim reports the classifier's ``parent_join_column``.
+
+    ``nested_planner.py::_connector_only_field`` and the writer above are the
+    two consumers of the same connector fact, so the shim must project
+    ``classify_relation_join``'s descriptor rather than re-deriving the column:
+    a reverse FK resolves to the child-side FK attname.
+    """
+    field = Category._meta.get_field("items")
+    assert _connector_only_field(field) == "category_id"
 
 
 def test_plan_prefetch_obj_hint_marks_plan_non_cacheable():

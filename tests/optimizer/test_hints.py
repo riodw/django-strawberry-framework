@@ -272,3 +272,42 @@ class TestInvalidStatesRejected:
             OptimizerHint.prefetch("entries__items")  # type: ignore[arg-type]
         with pytest.raises(ConfigurationError, match="Prefetch"):
             OptimizerHint(prefetch_obj="entries__items")  # type: ignore[arg-type]
+
+    def test_prefetch_obj_rejects_hostile_type_name_safely(self) -> None:
+        """A hostile metaclass cannot replace the typed Prefetch rejection."""
+
+        class HostileType(type):
+            @property
+            def __name__(cls):
+                raise RuntimeError("type name should never run")
+
+        class NotPrefetch(metaclass=HostileType):
+            pass
+
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Prefetch"):
+            OptimizerHint.prefetch(NotPrefetch())  # type: ignore[arg-type]
+
+
+class TestSkipPredicate:
+    """``hint_is_skip`` keeps schema-audit dispatch fail-closed."""
+
+    def test_hostile_skip_shapes_return_false(self) -> None:
+        """Unexpected hint objects cannot break a never-raise schema audit."""
+        from django_strawberry_framework.optimizer.hints import hint_is_skip
+
+        class HostileAttribute:
+            @property
+            def skip(self):
+                raise RuntimeError("skip should never run")
+
+        class HostileBoolean:
+            def __bool__(self):
+                raise RuntimeError("bool should never run")
+
+        class HostileValue:
+            skip = HostileBoolean()
+
+        assert hint_is_skip(HostileAttribute()) is False
+        assert hint_is_skip(HostileValue()) is False

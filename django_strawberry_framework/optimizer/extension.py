@@ -315,47 +315,64 @@ def _hashable_variable_value(value: Any) -> Any:
 
 def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
     """Recursive implementation for ``_hashable_variable_value``."""
+    value_type_id = id(type(value))
     try:
         hash(value)
-    except TypeError:
+    except Exception:
         pass
     else:
-        return ("scalar", type(value), value)
+        return ("scalar", value_type_id, value)
 
-    is_container = isinstance(
-        value,
-        (
-            Mapping,
-            list,
-            tuple,
-            Set,
-        ),
-    )
+    try:
+        is_container = isinstance(
+            value,
+            (
+                Mapping,
+                list,
+                tuple,
+                Set,
+            ),
+        )
+    except Exception:
+        return ("opaque", value_type_id, object())
     if not is_container:
-        return ("opaque", type(value), object())
+        return ("opaque", value_type_id, object())
 
     container_id = id(value)
     if container_id in active_containers:
-        return ("cycle", type(value), object())
+        return ("cycle", value_type_id, object())
     active_containers.add(container_id)
     try:
-        if isinstance(value, Mapping):
-            items = (
-                (
-                    _freeze_variable_value(key, active_containers),
-                    _freeze_variable_value(item, active_containers),
+        try:
+            if isinstance(value, Mapping):
+                return (
+                    "mapping",
+                    value_type_id,
+                    frozenset(
+                        (
+                            _freeze_variable_value(key, active_containers),
+                            _freeze_variable_value(item, active_containers),
+                        )
+                        for key, item in value.items()
+                    ),
                 )
-                for key, item in value.items()
+            if isinstance(value, Set):
+                return (
+                    "set",
+                    value_type_id,
+                    frozenset(_freeze_variable_value(item, active_containers) for item in value),
+                )
+            return (
+                "list" if isinstance(value, list) else "tuple",
+                value_type_id,
+                tuple(_freeze_variable_value(item, active_containers) for item in value),
             )
-            return ("mapping", type(value), tuple(sorted(items, key=repr)))
-        if isinstance(value, Set):
-            items = (_freeze_variable_value(item, active_containers) for item in value)
-            return ("set", type(value), tuple(sorted(items, key=repr)))
-        return (
-            "list" if isinstance(value, list) else "tuple",
-            type(value),
-            tuple(_freeze_variable_value(item, active_containers) for item in value),
-        )
+        except Exception:
+            # Custom scalar parsers may return hostile container subclasses.
+            # Their hash/iteration/repr behaviour is outside the optimizer's
+            # control; an opaque per-value token preserves cache safety without
+            # letting malformed user data abort an otherwise valid operation.
+            return ("opaque", value_type_id, object())
     finally:
         active_containers.remove(container_id)
 

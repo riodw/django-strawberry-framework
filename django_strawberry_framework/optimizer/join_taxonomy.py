@@ -80,6 +80,42 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 )
 
 
+def _safe_getattr(value: object, name: str, default: Any = None) -> Any:
+    """Read a descriptor attribute without letting malformed doubles escape."""
+    try:
+        return getattr(value, name, default)
+    except BaseException:
+        return default
+
+
+def _safe_truthy(value: object) -> bool:
+    """Ask a value for its truth, treating a raising truth test as false.
+
+    Containing the READ is only half the boundary: ``_safe_getattr`` hands back
+    whatever it found, so every ``if`` / ``or`` / ``not`` applied to that result
+    is a second escape route one frame later. A double whose ``__bool__`` raises
+    would otherwise break this module's never-raises contract after the read
+    itself was safely contained.
+    """
+    try:
+        return bool(value)
+    except BaseException:
+        return False
+
+
+def _safe_flag(value: object, name: str) -> bool:
+    """Read a boolean relation flag, guarding both the read and its truth test."""
+    return _safe_truthy(_safe_getattr(value, name, False))
+
+
+def _first_truthy(*values: Any) -> Any:
+    """The first value that tests true, a raising truth test counting as false."""
+    for value in values:
+        if _safe_truthy(value):
+            return value
+    return None
+
+
 @dataclass(frozen=True)
 class RelationJoinDescriptor:
     """Everything join-shaped one relation field implies for fetch planning.
@@ -153,8 +189,11 @@ def _partition_expr(field: Any) -> str | None:
     target's reverse query name for a forward M2M (``"books"`` - NOT the
     accessor when ``related_name`` is absent).
     """
-    remote_field = getattr(field, "remote_field", None)
-    return getattr(remote_field, "attname", None) or getattr(remote_field, "name", None)
+    remote_field = _safe_getattr(field, "remote_field")
+    return _first_truthy(
+        _safe_getattr(remote_field, "attname"),
+        _safe_getattr(remote_field, "name"),
+    )
 
 
 def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
@@ -167,30 +206,31 @@ def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
     for an M2M (the join table owns the attach, so the child only needs its
     pk). ``getattr`` fallbacks keep the synthetic test-double contract.
     """
-    if getattr(field, "one_to_many", False) or kind == "reverse_one_to_one":
-        return getattr(getattr(field, "field", None), "attname", None) or getattr(
-            field,
-            "reverse_connector_attname",
-            None,
+    if _safe_flag(field, "one_to_many") or kind == "reverse_one_to_one":
+        return _first_truthy(
+            _safe_getattr(_safe_getattr(field, "field"), "attname"),
+            _safe_getattr(field, "reverse_connector_attname"),
         )
-    if not getattr(field, "many_to_many", False):
-        return getattr(getattr(field, "target_field", None), "attname", None) or getattr(
-            field,
-            "target_field_attname",
-            None,
+    if not _safe_flag(field, "many_to_many"):
+        return _first_truthy(
+            _safe_getattr(_safe_getattr(field, "target_field"), "attname"),
+            _safe_getattr(field, "target_field_attname"),
         )
-    related_model = getattr(field, "related_model", None)
+    related_model = _safe_getattr(field, "related_model")
     if related_model is None:
         return None
-    return related_model._meta.pk.attname
+    try:
+        return related_model._meta.pk.attname
+    except BaseException:
+        return None
 
 
 def _through_model(field: Any) -> type | None:
     """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
-    through = getattr(field, "through", None)
+    through = _safe_getattr(field, "through")
     if through is not None:
         return through
-    return getattr(getattr(field, "remote_field", None), "through", None)
+    return _safe_getattr(_safe_getattr(field, "remote_field"), "through")
 
 
 def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
@@ -204,15 +244,20 @@ def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
     ``(None, None)`` when the through model or the naming API is missing
     (synthetic doubles) - the classifier never raises.
     """
-    forward_field = getattr(field, "field", None) or field
-    if through is None or not hasattr(forward_field, "m2m_field_name"):
+    forward_field = _safe_getattr(field, "field")
+    if not _safe_truthy(forward_field):
+        forward_field = field
+    if through is None or not callable(_safe_getattr(forward_field, "m2m_field_name")):
         return None, None
-    through_meta = through._meta
-    source_fk = through_meta.get_field(forward_field.m2m_field_name())
-    target_fk = through_meta.get_field(forward_field.m2m_reverse_field_name())
-    if forward_field is field:
-        return source_fk, target_fk  # forward: parent side is the source FK.
-    return target_fk, source_fk  # reverse: parent side is the target FK.
+    try:
+        through_meta = through._meta
+        source_fk = through_meta.get_field(forward_field.m2m_field_name())
+        target_fk = through_meta.get_field(forward_field.m2m_reverse_field_name())
+        if forward_field is field:
+            return source_fk, target_fk  # forward: parent side is the source FK.
+        return target_fk, source_fk  # reverse: parent side is the target FK.
+    except BaseException:
+        return None, None
 
 
 def _generic_object_id_attname(field: Any) -> str | None:
@@ -227,11 +272,14 @@ def _generic_object_id_attname(field: Any) -> str | None:
     raises. ``get_field`` resolves for a genuine ``GenericRelation``, so no
     defensive ``FieldDoesNotExist`` swallow is needed once both inputs exist.
     """
-    related_model = getattr(field, "related_model", None)
-    object_id_field_name = getattr(field, "object_id_field_name", None)
+    related_model = _safe_getattr(field, "related_model")
+    object_id_field_name = _safe_getattr(field, "object_id_field_name")
     if related_model is None or object_id_field_name is None:
         return None
-    return related_model._meta.get_field(object_id_field_name).attname
+    try:
+        return related_model._meta.get_field(object_id_field_name).attname
+    except BaseException:
+        return None
 
 
 def _generic_content_type_attname(field: Any) -> str | None:
@@ -245,11 +293,14 @@ def _generic_content_type_attname(field: Any) -> str | None:
     related model or the field name is missing (synthetic doubles) - the
     classifier never raises.
     """
-    related_model = getattr(field, "related_model", None)
-    content_type_field_name = getattr(field, "content_type_field_name", None)
+    related_model = _safe_getattr(field, "related_model")
+    content_type_field_name = _safe_getattr(field, "content_type_field_name")
     if related_model is None or content_type_field_name is None:
         return None
-    return related_model._meta.get_field(content_type_field_name).attname
+    try:
+        return related_model._meta.get_field(content_type_field_name).attname
+    except BaseException:
+        return None
 
 
 def classify_relation_join(field: Any) -> RelationJoinDescriptor:
@@ -262,8 +313,11 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     fallback posture (``window_partition_for_prefetch`` keeps its historical
     ``OptimizerError`` contract on top of this).
     """
-    kind = relation_kind(field)
-    is_m2m = bool(getattr(field, "many_to_many", False))
+    try:
+        kind = relation_kind(field)
+    except BaseException:
+        kind = "forward_single"
+    is_m2m = _safe_flag(field, "many_to_many")
     windowable = kind in WINDOWABLE_RELATION_KINDS
     parent_link_field = None
     through_child_field = None
@@ -296,7 +350,7 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
             through = None
             # The child-side FK carrying the parent id (a rel descriptor's
             # ``.field``); ``None`` on a synthetic double without one.
-            parent_link_field = getattr(field, "field", None)
+            parent_link_field = _safe_getattr(field, "field")
         else:
             lateral_shape = LateralJoinShape.UNSUPPORTED
             through = None

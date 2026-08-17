@@ -28,7 +28,7 @@ from typing import ClassVar
 
 from django.db.models import Prefetch
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_type_name
 
 # The shared public strategy-selection type (and the validator it feeds) are
 # owned by ``nested_fetch`` beside ``NestedConnectionStrategy``. They are
@@ -64,7 +64,7 @@ def _require_prefetch(obj: object) -> Prefetch:
     if not isinstance(obj, Prefetch):
         raise ConfigurationError(
             "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
-            f"instance; got {type(obj).__name__}.",
+            f"instance; got {_safe_type_name(obj)}.",
         )
     return obj
 
@@ -226,7 +226,10 @@ def hint_is_skip(hint: OptimizerHint | None) -> bool:
         return False
     if hint is OptimizerHint.SKIP:
         return True
-    return bool(getattr(hint, "skip", False))
+    try:
+        return bool(getattr(hint, "skip", False))
+    except BaseException:
+        return False
 
 
 # Sentinel instance - must be created after the class body so the

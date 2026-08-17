@@ -12,6 +12,7 @@ directly.
 
 from types import SimpleNamespace
 
+import pytest
 from apps.library.models import Book, Branch, Genre, TaggedItem
 from apps.products.models import Category, Item
 
@@ -216,3 +217,143 @@ def test_m2m_double_without_related_model_has_no_connector():
     # No through model -> no resolvable through-link FK pair either.
     assert descriptor.parent_link_field is None
     assert descriptor.through_child_field is None
+
+
+class _BrokenMeta:
+    """A model ``_meta`` whose every field lookup raises."""
+
+    def get_field(self, name):
+        raise RuntimeError(name)
+
+
+def test_classifier_fail_closes_when_m2m_target_model_has_no_meta():
+    """An M2M whose target model carries no ``_meta`` -> connector ``None``.
+
+    The M2M connector is the target's pk attname, so a target that cannot
+    report one leaves ``parent_join_column`` unresolved rather than raising
+    ``AttributeError`` out of plan building.
+    """
+
+    class MissingTargetMeta:
+        pass
+
+    m2m = SimpleNamespace(
+        name="tags",
+        many_to_many=True,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        remote_field=SimpleNamespace(attname=None, name="tags", through=None),
+        through=None,
+        related_model=MissingTargetMeta,
+    )
+    descriptor = classify_relation_join(m2m)
+    assert descriptor.parent_join_column is None
+
+
+def test_classifier_fail_closes_when_generic_target_field_lookup_raises():
+    """A generic relation whose target ``get_field`` raises -> both morph facts ``None``.
+
+    ``object_id`` and ``content_type_id`` are each resolved through the target
+    model's ``_meta.get_field``; a target that refuses both leaves the
+    partition and the morph column unresolved and the relation unwindowable.
+    """
+
+    class BrokenModel:
+        _meta = _BrokenMeta()
+
+    generic = SimpleNamespace(
+        name="tags",
+        many_to_many=False,
+        one_to_many=True,
+        one_to_one=False,
+        auto_created=False,
+        content_type_field_name="content_type",
+        object_id_field_name="object_id",
+        related_model=BrokenModel,
+    )
+    descriptor = classify_relation_join(generic)
+    assert descriptor.windowable is False
+    assert descriptor.partition_expr is None
+    assert descriptor.content_type_column is None
+
+
+def test_classifier_fail_closes_when_through_model_field_lookup_raises():
+    """A resolvable through model whose ``get_field`` raises -> no link-FK pair.
+
+    ``through_model`` still rides the descriptor (it resolved), but neither
+    side of the through table's FK pair does, so the lateral backend refuses
+    the shape instead of planning a join on half-resolved metadata.
+    """
+
+    class BrokenThrough:
+        _meta = _BrokenMeta()
+
+    class BrokenM2M:
+        name = "tags"
+        many_to_many = True
+        one_to_many = False
+        one_to_one = False
+        auto_created = False
+        related_model = None
+        remote_field = SimpleNamespace(attname=None, name="tags", through=BrokenThrough)
+        through = None
+
+        def m2m_field_name(self):
+            return "source"
+
+        def m2m_reverse_field_name(self):
+            return "target"
+
+    descriptor = classify_relation_join(BrokenM2M())
+    assert descriptor.through_model is BrokenThrough
+    assert descriptor.parent_link_field is None
+    assert descriptor.through_child_field is None
+
+
+class _AttributeReadRaises:
+    """A field whose ``many_to_many`` READ raises."""
+
+    @property
+    def many_to_many(self):
+        raise RuntimeError("many_to_many boom")
+
+
+class _TruthinessRaises:
+    """A field whose ``many_to_many`` VALUE raises on ``bool()``.
+
+    Hostile on EVERY read: each site that tests this flag's truth is its own
+    boundary, so a double that went benign after the first few reads would
+    silently stop covering the later ones.
+    """
+
+    class _HostileBool:
+        def __bool__(self):
+            raise RuntimeError("truth unavailable")
+
+    @property
+    def many_to_many(self):
+        return self._HostileBool()
+
+
+@pytest.mark.parametrize(
+    "field_factory",
+    [_AttributeReadRaises, _TruthinessRaises],
+    ids=["attribute_read_raises", "truthiness_raises"],
+)
+def test_classifier_fail_closes_on_hostile_many_to_many_metadata(field_factory):
+    """Hostile ``many_to_many`` metadata yields the fully unresolved descriptor.
+
+    Neither a raising attribute read nor a value whose ``bool()`` raises may
+    escape ``classify_relation_join``; both degrade to the single
+    nothing-resolved shape the callers treat as "do not plan this relation".
+    """
+    descriptor = classify_relation_join(field_factory())
+    assert descriptor == RelationJoinDescriptor(
+        kind="forward_single",
+        windowable=False,
+        partition_expr=None,
+        parent_join_column=None,
+        through_model=None,
+        lateral_shape=LateralJoinShape.UNSUPPORTED,
+    )

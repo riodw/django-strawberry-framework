@@ -262,6 +262,25 @@ def test_from_django_field_rejects_partial_shape():
         FieldMeta.from_django_field(PartialField())  # type: ignore[arg-type]
 
 
+def test_from_django_field_rejects_hostile_required_attributes_safely():
+    """Malformed field descriptors cannot replace the typed error with their own failure."""
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr should never run")
+
+    class HostileAttribute:
+        name = "field"
+
+        @property
+        def is_relation(self):
+            raise RuntimeError("attribute should be translated")
+
+    for field in (HostileRepr(), HostileAttribute()):
+        with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
+            FieldMeta.from_django_field(field)  # type: ignore[arg-type]
+
+
 def test_field_meta_is_frozen():
     """FieldMeta instances are immutable."""
     fm = FieldMeta(name="test")

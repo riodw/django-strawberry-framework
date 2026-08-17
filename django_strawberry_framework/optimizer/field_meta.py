@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ..exceptions import OptimizerError
+from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
     has_composite_pk,
     instance_accessor,
@@ -176,15 +176,28 @@ class FieldMeta:
                 ``AttributeError`` deep inside the optimizer walker
                 into a typed, call-site failure naming the bad input.
         """
-        if not hasattr(field, "name") or not hasattr(field, "is_relation"):
+        try:
+            field_name = field.name
+            # Inside the guard: reading ``is_relation`` and asking it for its
+            # truth value are one operation from the caller's side, and a
+            # descriptor whose ``__bool__`` raises is as malformed as one whose
+            # attribute access does.
+            is_relation = bool(field.is_relation)
+        except BaseException as exc:
             raise OptimizerError(
                 f"FieldMeta.from_django_field expected a Django field descriptor "
-                f"exposing 'name' and 'is_relation'; got {field!r}",
-            )
-        return cls._from_field_shape(field, is_relation=bool(field.is_relation))
+                f"exposing 'name' and 'is_relation'; got {_safe_type_name(field)}.",
+            ) from exc
+        return cls._from_field_shape(field, is_relation=is_relation, field_name=field_name)
 
     @classmethod
-    def _from_field_shape(cls, field: Any, *, is_relation: bool) -> FieldMeta:
+    def _from_field_shape(
+        cls,
+        field: Any,
+        *,
+        is_relation: bool,
+        field_name: str | None = None,
+    ) -> FieldMeta:
         """Build a ``FieldMeta`` from a guard-cleared field-shaped descriptor.
 
         Internal helper shared by the canonical ``from_django_field``
@@ -205,6 +218,8 @@ class FieldMeta:
         """
         # Read ``target_field`` once - it is consulted twice below to
         # extract both ``name`` and ``attname``.
+        if field_name is None:
+            field_name = field.name
         target_field = getattr(field, "target_field", None)
         related_model = getattr(field, "related_model", None)
         target_pk_name = _target_pk_name(related_model)
@@ -222,7 +237,7 @@ class FieldMeta:
                 getattr(field, "null", False),
             )
         return cls(
-            name=field.name,
+            name=field_name,
             is_relation=is_relation,
             many_to_many=is_m2m,
             one_to_many=is_o2m,

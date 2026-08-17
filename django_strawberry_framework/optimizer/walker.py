@@ -304,14 +304,19 @@ def _resolve_field_map(
     DUAL CONTRACT (read before consuming the returned map): the values
     are ``FieldMeta`` when the model has a registered ``DjangoType``, but
     raw Django field objects (from ``model._meta.get_fields()``) on the
-    fallback path when it does not. Both shapes are read via
-    ``getattr(..., default)`` downstream -- that defensive access is the
-    ONLY reason the two coexist safely, so never read a ``FieldMeta``-only
-    attribute without a ``getattr`` default. Treat the values as
-    ``FieldMeta | Any`` until the registry-coverage gate lands. The same
-    divergence (and the same ``getattr``-defensive fallback) lives in
-    ``optimizer/resolvers.py::_field_meta_for_resolver``; keep the two in
-    sync.
+    fallback path when it does not. ``name`` and ``is_relation`` are
+    guaranteed on both shapes (``field_meta.py::_DjangoFieldLike``) and are
+    read directly; any other attribute is read directly only where both
+    shapes carry it, and a ``FieldMeta``-only attribute must never be read
+    off this map without a ``getattr(..., default)``. That rule, not a
+    blanket ``getattr`` discipline, is what lets the two shapes coexist
+    safely. Treat the values as ``FieldMeta | Any`` until the
+    registry-coverage gate lands.
+    ``types/resolvers.py::_field_meta_for_resolver`` shares the policy --
+    prefer the canonical definition-backed metadata, fall back when it is
+    unreachable -- but not this dual return shape: it returns a
+    ``FieldMeta`` unconditionally, so its callers read every attribute
+    directly. Keep the policy in sync; the shapes differ by design.
     """
     type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None

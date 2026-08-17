@@ -154,6 +154,29 @@ class RecognizedFetchQuerySet(QuerySet):
         clone._dst_window_signature = self._dst_window_signature
         return clone
 
+    @classmethod
+    def rebind(cls, queryset: Any, spec: Any) -> RecognizedFetchQuerySet:
+        """Rebind ``queryset`` (a plain windowed ``QuerySet``) as this class.
+
+        A chain-then-reclass: a subclass adds no construction-time state beyond
+        the spec attribute ``_dst_spec_attr`` names, so the class swap on a
+        fresh clone is safe and keeps the windowed body verbatim. The planned
+        window-range signature is captured here - read off the windowed body
+        BEFORE Django's prefetch machinery appends the parent ``__in`` - so the
+        subclass's ``_fetch_recognized_rows`` can later prove the fetch-time
+        range is byte-for-byte the one planned.
+        """
+        # Lazy: ``lateral_fetch`` imports this module, so the signature helper
+        # cannot be reached at module scope - the same cycle the strategies
+        # break the same way.
+        from .lateral_fetch import window_predicate_signature
+
+        clone = queryset._chain()
+        clone.__class__ = cls
+        setattr(clone, cls._dst_spec_attr, spec)
+        clone._dst_window_signature = window_predicate_signature(queryset.query)
+        return clone
+
     def _fetch_recognized_rows(self) -> list | None:
         """Return the strategy's rows, or ``None`` for every unrecognized shape."""
         raise NotImplementedError  # pragma: no cover - subclasses always override.
@@ -324,7 +347,7 @@ class WindowedPrefetchStrategy:
         """Window the child queryset and carry it as a ``to_attr`` Prefetch."""
         # Lazy import: single_parent_fetch imports lateral_fetch which imports
         # this module (the same cycle the auto strategy breaks lazily).
-        from .single_parent_fetch import as_single_parent_queryset, single_parent_spec
+        from .single_parent_fetch import SingleParentWindowQuerySet, single_parent_spec
 
         spec = single_parent_spec(request)
         if spec is None:
@@ -332,7 +355,7 @@ class WindowedPrefetchStrategy:
         return attach_windowed_prefetch(
             request,
             plan,
-            wrap=lambda queryset: as_single_parent_queryset(queryset, spec),
+            wrap=lambda queryset: SingleParentWindowQuerySet.rebind(queryset, spec),
         )
 
 

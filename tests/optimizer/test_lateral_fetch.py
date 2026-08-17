@@ -1305,7 +1305,7 @@ def test_auto_fallback_executes_the_windowed_body_end_to_end():
 def test_spec_downgrades_for_custom_queryset_subclasses():
     """A custom ``QuerySet`` subclass keeps the windowed strategy.
 
-    ``_as_lateral_queryset`` rebinds the queryset class, which would erase a
+    ``RecognizedFetchQuerySet.rebind`` swaps the queryset class, which would erase a
     manager/visibility subclass's ``_clone`` state and iterator behavior.
     The lateral spec refuses anything but a plain ``QuerySet``; the windowed
     downgrade preserves the subclass AND its clone-carried state through the

@@ -218,7 +218,7 @@ def prime_selected_fields(info: Any) -> None:
 
     Must run BEFORE any ``info.selected_fields`` read on the connection path - the
     cached property computes once on first read, so priming only wins if it lands
-    first. ``connection.py::_resolve_connection_fast_path`` calls this immediately
+    first. ``connection.py::DjangoConnection.resolve_connection`` calls this immediately
     after the ``first`` + ``last`` guard, ahead of both the ``_total_count_requested``
     inspection and ``super().resolve_connection``.
 

@@ -694,7 +694,7 @@ def _deadline_rejection(payload):
 
 @pytest.mark.django_db
 def test_a_passed_deadline_stops_a_connection_before_it_reaches_the_database():
-    """The connection seam: the head both ``resolve_connection`` entry points share."""
+    """The connection seam: the head every ``resolve_connection`` shape passes through."""
     seed_data(1)
     with CaptureQueriesContext(connection) as captured:
         payload = _post(

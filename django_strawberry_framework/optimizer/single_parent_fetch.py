@@ -164,7 +164,7 @@ class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
     """A windowed-prefetch queryset that runs the plain page query when it can.
 
     Constructed only by ``WindowedPrefetchStrategy`` (via
-    ``as_single_parent_queryset``). The clone-surviving spec + the
+    ``RecognizedFetchQuerySet.rebind``). The clone-surviving spec + the
     recognized-rows-or-windowed-body ``_fetch_all`` contract is the shared
     ``nested_fetch.py::RecognizedFetchQuerySet`` skeleton; this subclass
     supplies the single-parent spec slot and the
@@ -177,27 +177,6 @@ class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
 
     def _fetch_recognized_rows(self) -> list | None:
         return _fetch_single_parent_rows(self)
-
-
-def as_single_parent_queryset(
-    queryset: Any,
-    spec: SingleParentWindowSpec,
-) -> SingleParentWindowQuerySet:
-    """Rebind ``queryset`` (a plain windowed ``QuerySet``) as the fast-path class.
-
-    A chain-then-reclass mirroring ``_as_lateral_queryset``:
-    ``SingleParentWindowQuerySet`` adds no construction-time state beyond the spec
-    attribute, so the class swap on a fresh clone is safe and keeps the windowed
-    body verbatim. The planned window-range signature is captured here (from the
-    windowed body BEFORE Django's prefetch machinery appends the parent ``__in``)
-    so ``_fetch_single_parent_rows`` can later prove the fetch-time range is the
-    one planned.
-    """
-    clone = queryset._chain()
-    clone.__class__ = SingleParentWindowQuerySet
-    clone._dst_single_parent_spec = spec
-    clone._dst_window_signature = window_predicate_signature(queryset.query)
-    return clone
 
 
 def _single_parent_where_ids(where: Any, spec: SingleParentWindowSpec) -> list | None:

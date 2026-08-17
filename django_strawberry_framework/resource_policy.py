@@ -215,8 +215,8 @@ class ResourcePolicy:
         Optional wall-clock budget for the operation. Cooperative: every seam
         that is about to hand work to the database calls ``check_deadline``
         first - ``bounded_rows`` (both raw-list spellings),
-        ``connection.py::_resolve_connection_fast_path`` (the head both
-        connection entry points share), the Relay refetch fields
+        ``connection.py::DjangoConnection.resolve_connection`` (the head every
+        connection shape passes through), the Relay refetch fields
         (``relay.py::DjangoNodeField`` / ``DjangoNodesField``), and the write
         pipelines (``mutations/resolvers.py::run_write_pipeline_sync``) before
         their transaction opens. It is not a preemptive

@@ -447,7 +447,7 @@ class LateralQuerySet(RecognizedFetchQuerySet):
     """A windowed-prefetch queryset that executes lateral SQL when it can.
 
     Constructed only by ``LateralPrefetchStrategy`` (via
-    ``_as_lateral_queryset``). The clone-surviving spec + the
+    ``RecognizedFetchQuerySet.rebind``). The clone-surviving spec + the
     recognized-rows-or-windowed-body ``_fetch_all`` contract is the shared
     ``nested_fetch.py::RecognizedFetchQuerySet`` skeleton; this subclass
     supplies the lateral spec slot and the ``_fetch_lateral_rows`` recognizer.
@@ -931,29 +931,12 @@ class LateralPrefetchStrategy:
         return attach_windowed_prefetch(
             request,
             plan,
-            wrap=lambda queryset: _as_lateral_queryset(queryset, spec),
+            wrap=lambda queryset: LateralQuerySet.rebind(queryset, spec),
         )
 
 
 #: The shared lateral-strategy singleton (stateless, like the windowed one).
 LATERAL_STRATEGY = LateralPrefetchStrategy()
-
-
-def _as_lateral_queryset(queryset: Any, spec: LateralWindowSpec) -> LateralQuerySet:
-    """Rebind ``queryset`` (a plain windowed ``QuerySet``) as a ``LateralQuerySet``.
-
-    A chain-then-reclass: ``LateralQuerySet`` adds no construction-time state
-    beyond the spec attribute, so the class swap on a fresh clone is safe and
-    keeps the windowed body verbatim. The planned window-range signature is
-    captured here (from the windowed body BEFORE Django's prefetch machinery
-    appends the parent ``__in``) so ``_recognize_lateral_fetch`` can later prove
-    the fetch-time range is byte-for-byte the one planned.
-    """
-    clone = queryset._chain()
-    clone.__class__ = LateralQuerySet
-    clone._dst_lateral_spec = spec
-    clone._dst_window_signature = window_predicate_signature(queryset.query)
-    return clone
 
 
 def _plain_single_table_where(node: Any, base_table: str) -> bool:
@@ -988,7 +971,7 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
     ``None`` for every plan-time shape the lateral SQL cannot express:
 
     - a custom ``QuerySet`` subclass (a manager or visibility hook's own
-      class) - ``_as_lateral_queryset``'s class rebind would erase subclass
+      class) - ``RecognizedFetchQuerySet.rebind``'s class swap would erase subclass
       ``_clone`` state and iterator behavior, so anything but a plain
       ``QuerySet`` keeps the windowed strategy, which preserves the class;
     - a child queryset carrying ``select_related``, annotations, or ``extra``

@@ -3511,7 +3511,7 @@ def test_anonymous_inline_fragment_with_total_count_resolves():
     ``totalCount`` fast path reads ``info.selected_fields`` (Strawberry's crashing
     ``convert_selections``) via ``_total_count_requested``, and Strawberry's own
     ``should_resolve_list_connection_edges`` reads it too. The single prime of
-    ``info.selected_fields`` in ``_resolve_connection_fast_path`` routes BOTH
+    ``info.selected_fields`` in ``DjangoConnection.resolve_connection`` routes BOTH
     reads through the anonymous-safe conversion, so a connection query carrying an
     anonymous inline fragment AND ``totalCount`` resolves: the count still fires
     (== 3) and the edges still resolve.

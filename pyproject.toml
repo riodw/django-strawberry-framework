@@ -49,10 +49,10 @@ dev = [
     # needs AES-SIV. The dev group installs it so keyset tests exercise the
     # present path while ordinary consumers avoid a compiled dependency.
     "cryptography>=44.0.0",
-    "djangorestframework>=3.17.0",
-    "faker>=33.0.0",
+    "djangorestframework>=3.18.0",
+    "faker>=40.36.0",
     "pillow>=10.0.0",
-    "pytest>=9.0.2",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.0.0",
     # channels is a SOFT dependency of the package ([project].dependencies is
     # untouched); the dev group installs it (with Channels' own [daphne] extra,
@@ -64,9 +64,9 @@ dev = [
     # can exercise the toolbar-present path (spec-042 Decision 5). The >=7.0.0 floor is
     # deliberately above upstream's >=6.0.0: 7.0.0 is the first release carrying the
     # Framework :: Django :: 6.0 classifier the package itself advertises.
-    "django-debug-toolbar>=7.0.0",
+    "django-debug-toolbar>=7.1.0",
     "pytest-cov>=7.0.0",
-    "pytest-django>=4.5.2",
+    "pytest-django>=4.14.0",
     "pytest-xdist>=3.8.0",
     # PyYAML is a test-only dependency, and NOT a dependency of the package
     # ([project].dependencies is untouched): tests/test_ci_governance.py parses
@@ -74,7 +74,7 @@ dev = [
     # scopes, immutable action/image pins, and per-job timeouts are asserted
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
-    "ruff>=0.15.0",
+    "ruff>=0.16.3",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the

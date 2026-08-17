@@ -54,3 +54,9 @@ def test_export_schema_raises_command_error_when_path_flag_is_empty_string():
     """An explicit empty ``--path ""`` is rejected against the configured schema."""
     with pytest.raises(CommandError, match="--path requires a non-empty value"):
         call_command("export_schema", "config.schema", "--path", "")
+
+
+def test_export_schema_raises_command_error_when_path_contains_embedded_null():
+    """A path rejected by ``pathlib`` is reported as a normal command failure."""
+    with pytest.raises(CommandError, match="embedded null byte"):
+        call_command("export_schema", "config.schema", "--path", "schema\x00.graphql")

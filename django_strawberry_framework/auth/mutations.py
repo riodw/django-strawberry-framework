@@ -540,7 +540,7 @@ def _django_http_login_establish(request: Any, user: Any) -> None:
         try:
             request.user = AnonymousUser()
             request.session.flush()
-        except Exception:
+        except BaseException:
             raise primary  # noqa: B904 - cleanup failure chains via __context__ (PEP 3134)
         raise
 
@@ -575,7 +575,7 @@ async def _channels_http_login_establish(request: Any, session: Any, user: Any) 
             try:
                 request.scope["user"] = AnonymousUser()
                 await session.aflush()
-            except Exception:
+            except BaseException:
                 raise primary  # noqa: B904 - cleanup chains via __context__ (PEP 3134)
             raise
 

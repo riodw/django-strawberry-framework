@@ -29,7 +29,10 @@ Execution-mode split (spec plan "Implementation Changes"):
   ``thread_sensitive`` call from one async context onto the SAME thread - so the
   context opens the transaction in one such worker, awaits the field's
   completion, and closes it in another; open, pipeline, and close all share one
-  thread and therefore one Django connection.
+  thread and therefore one Django connection. Because the default
+  thread-sensitive executor is process-wide, a process-wide lock per write alias
+  serializes these completion-spanning windows across event loops; concurrent
+  requests cannot accidentally nest savepoints on that shared connection.
 
 Mutation root fields execute serially (the GraphQL spec's mutation semantics,
 graphql-core's ``execute_fields_serially``), so consecutive top-level mutation
@@ -43,6 +46,8 @@ executes exactly as stock graphql-core.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Mapping
 from typing import Any
 
@@ -58,6 +63,102 @@ from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import ResourcePolicy, resolve_resource_policy
 from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
+
+
+class _AcquireHandoff:
+    """Ownership hand-off between an executor thread and the task awaiting it.
+
+    ``asyncio.to_thread`` cannot stop a thread already blocked in
+    ``threading.Lock.acquire``, so a CANCELLED acquisition has two possible
+    orderings and both must end with the mutex unowned rather than held by a
+    transaction window that no longer exists: the thread may take the mutex
+    after the awaiting task gave up, or the task may give up after the thread
+    already took it. Each side records itself here under one guard, so exactly
+    one of them observes the other and performs the release.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._acquired = False
+        self._abandoned = False
+
+    def acquired(self) -> bool:
+        """Record the thread's acquisition; ``True`` when the waiter already left."""
+        with self._guard:
+            self._acquired = True
+            return self._abandoned
+
+    def abandon(self) -> bool:
+        """Record the waiter's cancellation; ``True`` when the thread already acquired."""
+        with self._guard:
+            self._abandoned = True
+            return self._acquired
+
+
+class _AsyncAliasLock:
+    """An async context manager for a process-wide, cross-event-loop mutex."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def _acquire_for(self, handoff: _AcquireHandoff) -> None:
+        """Take the mutex on the executor thread, releasing it if nobody is left."""
+        self._lock.acquire()
+        if handoff.acquired():
+            self._lock.release()
+
+    async def __aenter__(self) -> _AsyncAliasLock:
+        handoff = _AcquireHandoff()
+        acquire = asyncio.create_task(asyncio.to_thread(self._acquire_for, handoff))
+        cancelled: asyncio.CancelledError | None = None
+        while not acquire.done():
+            try:
+                await asyncio.shield(acquire)
+            except asyncio.CancelledError as exc:  # noqa: PERF203 - repeated cancellation hand-off loop
+                # The executor thread cannot be cancelled while it waits on the
+                # mutex, so keep awaiting the hand-off across REPEATED
+                # cancellations - returning here would leave the acquisition
+                # ownerless. A cancellation of the acquiring task itself (loop
+                # teardown) ends the loop through ``acquire.done()`` instead of
+                # spinning, and the hand-off still disposes of the ownership
+                # that uncancellable thread is about to take.
+                cancelled = exc
+        if cancelled is not None:
+            if handoff.abandon():
+                self._lock.release()
+            # Preserve cancellation so the next operation cannot inherit
+            # ownership of a window this task never entered.
+            raise cancelled
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Any,
+        exc: Any,
+        traceback: Any,
+    ) -> None:
+        del exc_type, exc, traceback
+        self._lock.release()
+
+
+_ASYNC_MUTATION_LOCKS: dict[str, _AsyncAliasLock] = {}
+_ASYNC_MUTATION_LOCKS_GUARD = threading.Lock()
+
+
+def _async_mutation_lock(alias: str) -> _AsyncAliasLock:
+    """Return the process/alias lock guarding one async transaction window.
+
+    ``thread_sensitive=True`` uses one process-wide worker when no explicit
+    ``ThreadSensitiveContext`` exists. An outer transaction that spans an
+    ``await`` would therefore let a concurrent mutation enter a nested savepoint
+    on the same connection. Serializing only mutation windows for the same
+    effective alias preserves one-connection atomicity without creating a
+    short-lived worker (and leaking in-memory SQLite connections); distinct
+    aliases retain independent concurrency. The mutex is process-wide because
+    separate event loops still share that worker.
+    """
+    with _ASYNC_MUTATION_LOCKS_GUARD:
+        return _ASYNC_MUTATION_LOCKS.setdefault(alias, _AsyncAliasLock())
 
 
 class DjangoMutationExecutionContext(ExecutionContext):
@@ -172,33 +273,41 @@ class DjangoMutationExecutionContext(ExecutionContext):
         happens between them on the event loop; the transaction stays open on the
         worker's (idle) connection meanwhile.
         """
-        errors_before = len(self._execution_errors())
-        atomic = transaction.atomic(using=alias)
-        await run_in_one_sync_boundary(atomic.__enter__)
-        try:
-            with managed_write_transaction(alias):
-                result = super().execute_field(parent_type, source, field_nodes, path)
-                if self.is_awaitable(result):
-                    result = await result
-        except BaseException as exc:
-            # Bind the exception explicitly: the ``except`` name is cleared when
-            # the block exits, so the worker-thread closure must not capture it.
-            captured = exc
+        # ``thread_sensitive=True`` otherwise falls back to asgiref's one
+        # process-wide worker. Keeping a transaction open across the completion
+        # await there would let a second concurrent operation enter a nested
+        # savepoint on the same connection, coupling its commit/rollback to the
+        # first request. The lock is process-wide per effective write alias, so
+        # the existing worker/connection stays reusable while concurrent
+        # transactions on different aliases remain independent.
+        async with _async_mutation_lock(alias):
+            errors_before = len(self._execution_errors())
+            atomic = transaction.atomic(using=alias)
+            await run_in_one_sync_boundary(atomic.__enter__)
+            try:
+                with managed_write_transaction(alias):
+                    result = super().execute_field(parent_type, source, field_nodes, path)
+                    if self.is_awaitable(result):
+                        result = await result
+            except BaseException as exc:
+                # Bind the exception explicitly: the ``except`` name is cleared when
+                # the block exits, so the worker-thread closure must not capture it.
+                captured = exc
 
-            def _exit_with_error() -> bool:
-                return bool(atomic.__exit__(type(captured), captured, captured.__traceback__))
+                def _exit_with_error() -> bool:
+                    return bool(atomic.__exit__(type(captured), captured, captured.__traceback__))
 
-            if not await run_in_one_sync_boundary(_exit_with_error):
-                raise
-            return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
+                if not await run_in_one_sync_boundary(_exit_with_error):
+                    raise
+                return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
 
-        def _exit_clean() -> None:
-            if len(self._execution_errors()) > errors_before:
-                transaction.set_rollback(True, using=alias)
-            atomic.__exit__(None, None, None)
+            def _exit_clean() -> None:
+                if len(self._execution_errors()) > errors_before:
+                    transaction.set_rollback(True, using=alias)
+                atomic.__exit__(None, None, None)
 
-        await run_in_one_sync_boundary(_exit_clean)
-        return result
+            await run_in_one_sync_boundary(_exit_clean)
+            return result
 
 
 class DjangoSchema(strawberry.Schema):
@@ -248,8 +357,38 @@ class DjangoSchema(strawberry.Schema):
         self.error_policy = resolve_error_policy(error_policy)
         kwargs.setdefault("execution_context_class", DjangoMutationExecutionContext)
         extensions = _with_resource_policy_extension(kwargs.get("extensions"))
+        self._auto_error_policy_extension = not any(
+            _extension_entry_matches(extension, DjangoErrorPolicyExtension)
+            for extension in extensions
+        )
         kwargs["extensions"] = _with_error_policy_extension(extensions)
         super().__init__(*args, **kwargs)
+
+    def get_extensions(self, sync: bool = False) -> list[Any]:
+        """Resolve extensions and remove only a duplicate auto policy instance.
+
+        Strawberry accepts classes, instances, and zero-argument factories. A
+        factory cannot be identified by type without calling it, and calling it
+        during schema construction would violate its fresh-per-operation
+        lifecycle. When the constructor had to add the automatic error-policy
+        class because the consumer supplied only opaque entries, runtime
+        resolution is the first safe point to see whether one of those entries
+        produced an explicit error-policy extension. If so, the first resolved
+        policy is the automatic entry; remove that one and preserve every
+        consumer entry and its order.
+        """
+        resolved = super().get_extensions(sync=sync)
+        if not self._auto_error_policy_extension:
+            return resolved
+        policy_indexes = [
+            index
+            for index, extension in enumerate(resolved)
+            if isinstance(extension, DjangoErrorPolicyExtension)
+        ]
+        if len(policy_indexes) <= 1:
+            return resolved
+        automatic_index = policy_indexes[0]
+        return [extension for index, extension in enumerate(resolved) if index != automatic_index]
 
 
 def _with_resource_policy_extension(extensions: Any) -> list[Any]:
@@ -269,10 +408,13 @@ def _with_resource_policy_extension(extensions: Any) -> list[Any]:
     (``lambda: DjangoResourcePolicyExtension(...)``) is opaque to this check by
     construction, so a consumer using one should not also rely on suppression.
     """
-    installed = list(extensions or [])
+    # Do not use truthiness to normalize the consumer's iterable.  A list
+    # subclass can override ``__bool__`` (or be stateful), and extension
+    # installation must not invoke that arbitrary hook before Strawberry sees
+    # the actual entries.  ``None`` is the only omitted-value spelling.
+    installed = [] if extensions is None else list(extensions)
     for extension in installed:
-        candidate = extension if isinstance(extension, type) else type(extension)
-        if issubclass(candidate, DjangoResourcePolicyExtension):
+        if _extension_entry_matches(extension, DjangoResourcePolicyExtension):
             return installed
     installed.append(DjangoResourcePolicyExtension)
     return installed
@@ -297,7 +439,12 @@ def _with_error_policy_extension(extensions: list[Any]) -> list[Any]:
     already-masked error and mint a second correlation id for it.
     """
     for extension in extensions:
-        candidate = extension if isinstance(extension, type) else type(extension)
-        if issubclass(candidate, DjangoErrorPolicyExtension):
+        if _extension_entry_matches(extension, DjangoErrorPolicyExtension):
             return extensions
     return [DjangoErrorPolicyExtension, *extensions]
+
+
+def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
+    """Match a class or instance entry without invoking opaque factories."""
+    candidate = extension if isinstance(extension, type) else type(extension)
+    return issubclass(candidate, extension_type)

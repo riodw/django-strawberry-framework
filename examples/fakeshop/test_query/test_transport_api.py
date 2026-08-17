@@ -46,7 +46,10 @@ somewhere ungated. Its last rows take the switch off entirely
 in which the sync transport used to answer ``500``. It is now the same controlled
 ``400``, and one row reads all four answers across two mounts
 and two patch states so that constancy is attributable to the package view rather
-than to a patch that was quietly still installed.
+than to a patch that was quietly still installed. One further row moves the
+``cross_web`` member of that switch alone, against Strawberry's own mount, which is
+the only place the patch this package ships for that mount still has an observable
+value - and is therefore its standing retirement diagnostic.
 
 Three of those rows need a body shape neither ``Client`` nor ``AsyncClient`` can
 present, so they drive Django's own ``ASGIHandler`` in-process through
@@ -68,6 +71,7 @@ import contextlib
 import json
 
 import pytest
+import strawberry
 from apps.products import models
 from apps.products.services import create_users, seed_data
 from cross_web import DjangoHTTPRequestAdapter
@@ -76,7 +80,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadhandler import MemoryFileUploadHandler
 from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpResponseForbidden
-from django.middleware.csrf import get_token
+from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
 from django.urls import include, path, resolve
 from graphql import NoSchemaIntrospectionCustomRule
@@ -271,6 +275,31 @@ class _ParseSpyView(DjangoGraphQLView):
         return super().parse_json(data)
 
 
+@strawberry.type
+class _SetupProbeQuery:
+    """The smallest executable schema for the setup-lifecycle boundary probe."""
+
+    @strawberry.field
+    def ping(self) -> str:
+        return "pong"
+
+
+_SETUP_PROBE_SCHEMA = strawberry.Schema(query=_SetupProbeQuery)
+_SETUP_CALLS: list[str] = []
+
+
+class _SetupLimitedView(DjangoGraphQLView):
+    """Derive the mount's request cap from Django's per-request setup lifecycle."""
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        _SETUP_CALLS.append(request.path)
+        self.max_request_body_bytes = kwargs["limit"]
+
+
+_SETUP_LIMITED_CALLBACK = _SetupLimitedView.as_view(schema=_SETUP_PROBE_SCHEMA)
+
+
 def _carrying_the_packages_csrf_mark(view_class):
     """Copy the package view's ``csrf_exempt`` mark - and only that one - onto a probe wrapper.
 
@@ -417,6 +446,7 @@ urlpatterns = [
     path("async-multipart-tiny/", _async_cap_tiny_multipart_view),
     path("async-multipart/", _async_capped_multipart_view),
     path("async-cap-tiny/", _async_cap_tiny_view),
+    path("setup-limited/<int:limit>/", _SETUP_LIMITED_CALLBACK),
     path("upstream-graphql/", _upstream_graphql_view),
 ]
 
@@ -1786,6 +1816,118 @@ def test_only_the_package_mount_answers_the_same_way_in_both_patch_states():
     assert package_patched.status_code == 400
 
 
+@contextlib.contextmanager
+def _cross_web_patch_opted_out():
+    """Run the block in the state ``{"cross_web": False}`` produces - that half alone.
+
+    The mirror image of :func:`_strawberry_patch_opted_out`: this one takes the
+    ``cross_web`` half out and deliberately leaves the Strawberry half installed,
+    which is the only state that isolates what ``_cross_web_patches.py`` itself
+    buys - upstream's sync ``DjangoHTTPRequestAdapter.body`` decoding inside its own
+    *property* again, with the widened ``except`` still waiting in ``parse_json``
+    for bytes that no longer arrive.
+
+    Setting the switch alone would prove nothing (the patch installs from
+    ``AppConfig.ready()``, long before any test runs), so upstream's property is
+    restored by identity and BOTH ``_patch_is_installed`` probes are asserted
+    inside the block - the half under test genuinely off, its companion genuinely
+    on - so the row cannot pass for either wrong reason.
+    """
+    saved_body = DjangoHTTPRequestAdapter.__dict__["body"]
+    override = override_settings(
+        ROOT_URLCONF=__name__,
+        DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": {"cross_web": False}},
+    )
+    try:
+        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)
+        assert cross_web_patches._patch_is_installed() is False
+        assert strawberry_patches._patch_is_installed() is True
+        with override:
+            yield
+    finally:
+        DjangoHTTPRequestAdapter.body = saved_body
+
+
+#: The two bodies that DISCRIMINATE: upstream's property decode rejects each (the
+#: un-installed ``500``) and the raw-bytes JSON path accepts neither (the
+#: installed ``400``). Their installed ``400``s travel DIFFERENT routes, measured
+#: rather than assumed: ``json.loads`` decodes ``bytes`` with
+#: ``errors="surrogatepass"``, so the invalid-UTF-8 body (detected ``utf-8``,
+#: where ``surrogatepass`` cannot represent ``0xFF``) raises ``UnicodeDecodeError``
+#: and is translated by the Strawberry half, while the raw-binary body *decodes*
+#: under its detected ``utf-16-be`` and is refused as JSON by upstream's OWN
+#: ``except json.JSONDecodeError``. Covering both routes is the point of the pair.
+#: The excluded shapes each invert the retirement verdict if read as one: a BOM'd
+#: UTF-16 body is *accepted* (``200``) once the patch hands over the raw bytes,
+#: and a BOM-less multi-byte or UTF-8-BOM body answers ``400`` UN-installed - a
+#: false "retirable", because upstream's decode succeeded rather than stopped.
+_UNDECODABLE_BODIES = (
+    pytest.param(b'{"query":"{ __typename }","pad":"\xff\xfe\xfa"}', id="invalid-utf8-in-json"),
+    pytest.param(bytes(range(256)) * 4, id="raw-binary"),
+)
+
+
+@pytest.mark.parametrize("body", _UNDECODABLE_BODIES)
+@pytest.mark.django_db
+def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body):
+    """What the ``cross_web`` patch buys, on the only mount that can show it.
+
+    The rows above prove the package mount is indifferent to this switch, which is
+    exactly why they cannot also prove the patch is worth shipping: a package view
+    owns its own body source, so the patch's whole remaining audience is a consumer
+    who mounts **Strawberry's own** view. This row is that audience. One
+    undecodable body, one mount, one switch member moved:
+
+    * half un-installed -> ``500``. Upstream's property UTF-8-decodes the body and
+      the ``UnicodeDecodeError`` raises inside a *property*, where no ``except
+      HTTPException`` can reach it. The Strawberry half is still installed, so the
+      ``500`` is attributable to this half alone.
+    * half installed -> ``400``. The raw bytes reach ``json.loads`` inside
+      ``parse_json`` - a scope that can answer with a response - and the two
+      parameters take the two routes out of it: the invalid-UTF-8 body raises
+      ``UnicodeDecodeError`` one frame later, which
+      ``_strawberry_patches.py::_patched_parse_json`` translates, while the
+      raw-binary body *decodes* under ``surrogatepass`` and is refused as JSON
+      by upstream's own ``except json.JSONDecodeError``. Both routes exist only
+      because the bytes arrived undecoded, so the 500 -> 400 delta is this
+      half's either way (verified with the Strawberry half alone restored:
+      raw-binary still 400, invalid-UTF-8 500).
+
+    So the patch does not decode anything and does not widen any success set; it
+    moves the raise into a scope that can answer with a response, and this row is
+    the live measurement of that move. It is also the module's standing retirement
+    diagnostic: a ``400`` from the un-installed state would mean upstream stopped
+    decoding eagerly and the module can be deleted.
+
+    The valid-UTF-8 control in the un-installed state is what keeps the ``500``
+    from being a broken mount, and ``raise_request_exception=False`` is what lets
+    the unhandled case be observed as the ``500`` a deployment would return instead
+    of being re-raised into the test.
+    """
+    seed_data(1)
+    document = json.dumps({"query": _TYPENAME})
+
+    with _cross_web_patch_opted_out():
+        client = Client(raise_request_exception=False)
+        unpatched = _post_bytes(client, body, path="/upstream-graphql/")
+        control = _post_bytes(client, document, path="/upstream-graphql/")
+
+    with override_settings(ROOT_URLCONF=__name__):
+        assert cross_web_patches._patch_is_installed() is True
+        patched = _post_bytes(
+            Client(raise_request_exception=False),
+            body,
+            path="/upstream-graphql/",
+        )
+
+    assert unpatched.status_code == 500
+    assert patched.status_code == 400
+    _assert_no_graphql_envelope(patched)
+
+    assert control.status_code == 200
+    assert control.json()["data"] == {"__typename": "Query"}
+
+
 @pytest.mark.django_db
 def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
     """The other half of the ownership split: what the switch DOES still turn off.
@@ -1850,6 +1992,45 @@ def _multipart_fields(field, raw):
     documents = {"operations": _operations_bytes(), "map": b"{}"}
     documents[field] = raw
     return list(documents.items())
+
+
+@pytest.mark.django_db
+def test_a_multipart_map_must_be_an_object_not_a_batched_body():
+    """A JSON list in ``map`` is a controlled 400 rather than an unhandled 500.
+
+    The general JSON guard permits a list of objects because an HTTP request body
+    may be a valid GraphQL batch. Multipart's ``map`` is not a request body: the
+    upload utility consumes it as a mapping and calls ``.items()``. A list of
+    objects therefore used to pass the generic guard, then escape from the
+    utility as ``AttributeError``. This live mount pins that the multipart
+    wrapper owns the narrower field contract while ordinary batched
+    ``operations`` remain Strawberry's concern.
+    """
+    seed_data(1)
+
+    response = _post_multipart(
+        Client(raise_request_exception=False),
+        "/graphql/",
+        _multipart_fields("map", b"[{}]"),
+    )
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse the multipart body"
+    _assert_no_graphql_envelope(response)
+
+
+async def test_the_async_view_rejects_the_same_multipart_map_shape():
+    """The async multipart parser gets the same malformed-map boundary."""
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_multipart(
+            AsyncClient(),
+            "/async-multipart/",
+            _multipart_fields("map", b"[{}]"),
+        )
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse the multipart body"
+    _assert_no_graphql_envelope(response)
 
 
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
@@ -2555,6 +2736,125 @@ def test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount():
     )
     assert _package_view_instance(callback) is not None, (
         "the middleware no longer recognizes the real mount"
+    )
+
+
+@pytest.mark.django_db
+def test_the_chain_applies_boundary_state_derived_during_view_setup():
+    """The middleware instance follows the same setup lifecycle as the real view.
+
+    ``View.as_view`` calls ``setup(request, *args, **kwargs)`` before dispatch, and
+    consumer subclasses may derive request-local state there. This mount takes its
+    body cap from the resolved route keyword, so a pre-setup boundary sees no cap at
+    all: it accepts and stamps the request, then the real instance sets the eight-byte
+    cap but skips it because of that stamp. Before the fix this valid GraphQL document
+    therefore executed and answered ``200``; the ``413`` proves the chain applied the
+    setup-derived limit before it claimed the boundary had run.
+    """
+    seed_data(1)
+    _SETUP_CALLS.clear()
+
+    with override_settings(ROOT_URLCONF=__name__):
+        client = Client()
+        refused = _post(client, "{ ping }", path="/setup-limited/8/")
+        accepted = _post(client, "{ ping }", path="/setup-limited/1024/")
+
+    _assert_body_limit_response(refused)
+    assert accepted.status_code == 200
+    assert accepted.json()["data"] == {"ping": "pong"}
+    assert _SETUP_CALLS == ["/setup-limited/8/", "/setup-limited/1024/"], (
+        "the middleware and callback must share one prepared view lifecycle"
+    )
+
+
+#: The methods RFC 9110 calls safe, verbatim the tuple
+#: ``CsrfViewMiddleware.process_view`` returns early for. Named so the recorder below
+#: defers on exactly the requests the base class does not check.
+_SAFE_METHODS = (
+    "GET",
+    "HEAD",
+    "OPTIONS",
+    "TRACE",
+)
+
+
+class _RecordingCsrfMiddleware(CsrfViewMiddleware):
+    """The project's own CSRF class, standing in fakeshop's chain and recording its work.
+
+    A subclass rather than a mock because the question is which class the chain hands
+    the request to, and only a class of the project's own can answer it: Django's base
+    implementation accepts a test-client request and is indistinguishable from one it
+    never saw. It records and then delegates, so the endpoint keeps behaving exactly
+    as it does in the shipped chain - the row's second half depends on that.
+
+    Both deferrals are honoured for the same reason
+    ``tests/test_views.py::_RejectingCsrfMiddleware`` honours them: a safe method is
+    not something ``CsrfViewMiddleware`` checks and an exempt callback is one it
+    declines, so recording only what is left is what turns ``calls`` into evidence
+    about the exemption having withdrawn itself.
+    """
+
+    calls: list[str] = []
+
+    def process_view(
+        self,
+        request,
+        callback,
+        callback_args,
+        callback_kwargs,
+    ):
+        """Record a checkable callback, then let the base class decide the request."""
+        if request.method not in _SAFE_METHODS and not getattr(callback, "csrf_exempt", False):
+            type(self).calls.append(request.path)
+        return super().process_view(request, callback, callback_args, callback_kwargs)
+
+
+def _with_the_projects_own_csrf_class():
+    """``override_settings`` swapping fakeshop's CSRF entry for the recording subclass.
+
+    Derived from the project's real ``MIDDLEWARE`` the same way
+    :func:`_without_the_global_csrf_middleware` is, so the row changes exactly one
+    entry and keeps the boundary middleware where the shipped chain puts it - which is
+    the whole subject of the row below.
+    """
+    entry = f"{__name__}._RecordingCsrfMiddleware"
+    swapped = [
+        entry if "CsrfViewMiddleware" in candidate else candidate
+        for candidate in settings.MIDDLEWARE
+    ]
+    assert swapped.count(entry) == 1, settings.MIDDLEWARE
+    return override_settings(MIDDLEWARE=swapped)
+
+
+@pytest.mark.django_db
+def test_the_configured_csrf_class_checks_fakeshops_real_mount_behind_the_boundary():
+    """The behavioral half of the row above: the exemption really does withdraw itself.
+
+    ``test_the_shipped_chain_supplies_the_ordering_for_fakeshops_real_mount`` proves
+    the preconditions - the entry is installed, it precedes CSRF, the callback is
+    recognized - and a request is what turns them into the property they exist for:
+    the project's *configured* CSRF class is handed this endpoint's callback in a
+    checkable state, which happens only because ``process_view`` stamped the request
+    and ``_boundary_ordering.py::_CsrfOrderingExemption`` therefore answered false for
+    it. Nothing else here can fail if that stops happening: the callback would simply
+    be skipped again, the view's own continuation would supply the check, and every
+    status code in this file would stay exactly as it is.
+
+    So the empty-or-not call log is the whole witness, and the ``200`` is what keeps
+    it honest - a chain that recorded the callback while refusing the request would
+    prove the class ran and nothing about the endpoint still working behind it.
+    """
+    seed_data(1)
+    _RecordingCsrfMiddleware.calls = []
+
+    with _with_the_projects_own_csrf_class():
+        response = _post(Client(), _TYPENAME)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+    assert _RecordingCsrfMiddleware.calls == ["/graphql/"], (
+        "the configured CSRF class never saw the real mount's callback, so the "
+        "exemption did not withdraw itself and the chain is not supplying the ordering"
     )
 
 

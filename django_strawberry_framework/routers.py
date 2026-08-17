@@ -42,6 +42,8 @@ WSGI-only project adopts the GraphQL view without the soft dependency.
 from __future__ import annotations
 
 import inspect
+import re
+import threading
 from typing import TYPE_CHECKING, Any
 
 from .consumers import (
@@ -154,10 +156,39 @@ _WINDOW_WITH_INJECTED_CONSUMER_HINT = (
     "package consumer."
 )
 
+_INVALID_WEBSOCKET_URL_PATTERN_HINT = (
+    "websocket_url_pattern must be a valid regular-expression string used only for the "
+    "WebSocket URLRouter branch; got "
+)
+
 # The built router class, cached by ``_build_router_class()``. A module global so
 # evicting this module from ``sys.modules`` drops the cache with it - the property
 # the eviction-simulated absence and degraded-install tests rely on.
 _ROUTER_CLASS: type[Any] | None = None
+_ROUTER_CLASS_LOCK = threading.Lock()
+
+
+def _validated_websocket_url_pattern(value: object) -> str:
+    """Validate the WebSocket URL regex before Django installs a route.
+
+    Django's ``re_path`` stringifies non-string values when it lazily compiles a
+    ``RegexPattern``.  That makes ``None``, a number, or an arbitrary object silently
+    install a route that never matches (and lets a hostile ``__str__`` fail later during
+    the first handshake).  The router's public annotation is a string, so reject every
+    other type at construction and compile the string now to turn malformed regexes into
+    the same typed configuration boundary.
+    """
+    if type(value) is not str:
+        raise ConfigurationError(
+            f"{_INVALID_WEBSOCKET_URL_PATTERN_HINT}{describe_value(value)}.",
+        )
+    try:
+        re.compile(value)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{_INVALID_WEBSOCKET_URL_PATTERN_HINT}{describe_value(value)}.",
+        ) from exc
+    return value
 
 
 def require_channels() -> Any:
@@ -177,13 +208,14 @@ def _require_factory_calling_convention(factory: Any, *, schema: BaseSchema) -> 
 
     See ``_factory_application`` rejection 1 for why the binding is pre-checked
     rather than caught. An un-introspectable callable is deliberately allowed
-    through: ``inspect.signature`` raises ``TypeError`` for a lying
-    ``__signature__`` and ``ValueError`` for a callable it cannot describe, and
-    neither is evidence that the CALL would fail.
+    through: ``inspect.signature`` raises ``TypeError`` / ``ValueError`` for the
+    standard un-introspectable shapes, and a consumer-defined ``__signature__``
+    descriptor may raise another ordinary exception; none is evidence that the
+    CALL would fail.
     """
     try:
         signature = inspect.signature(factory)
-    except (TypeError, ValueError):
+    except Exception:
         return
     try:
         signature.bind(schema=schema)
@@ -294,6 +326,17 @@ def _websocket_application(
 
 
 def _build_router_class() -> type[Any]:
+    """Return the one lazily-built router class, serializing its first construction."""
+    global _ROUTER_CLASS
+    if _ROUTER_CLASS is not None:
+        return _ROUTER_CLASS
+    with _ROUTER_CLASS_LOCK:
+        if _ROUTER_CLASS is not None:
+            return _ROUTER_CLASS
+        return _build_router_class_uncached()
+
+
+def _build_router_class_uncached() -> type[Any]:
     """Materialize and cache ``DjangoGraphQLProtocolRouter`` behind the soft guard.
 
     ``require_channels()`` runs FIRST so every true-absence path routes through
@@ -304,8 +347,6 @@ def _build_router_class() -> type[Any]:
     (spec-041 Error shapes).
     """
     global _ROUTER_CLASS
-    if _ROUTER_CLASS is not None:
-        return _ROUTER_CLASS
 
     require_channels()
 
@@ -437,6 +478,8 @@ def _build_router_class() -> type[Any]:
             # here rather than on a bare ``TypeError``.
             if not callable(django_application):
                 raise ConfigurationError(_MISSING_DJANGO_APPLICATION_HINT)
+
+            websocket_url_pattern = _validated_websocket_url_pattern(websocket_url_pattern)
 
             # Validated on its own terms first, so a bad value is a bad value
             # whatever else was passed; only then is the combination judged.

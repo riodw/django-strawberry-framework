@@ -129,9 +129,29 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     _DatabaseFailure = None  # type: ignore[assignment,misc]
 
 
-_original_remove_databases_failures = SimpleTestCase.__dict__.get(
-    "_remove_databases_failures",
-)
+_PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
+_PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
+_PATCH_OWNER = "django_strawberry_framework._django_patches"
+
+
+def _captured_upstream_descriptor() -> object:
+    """Return Django's descriptor, retaining it across an in-process reload.
+
+    ``importlib.reload()`` retains the module dictionary but re-executes this
+    module while ``SimpleTestCase`` still points at the previous replacement.
+    Reading that replacement as the original turns the next ``ready()`` into a
+    false upstream-drift error. The replacement carries its exact captured
+    descriptor, so reload can recover and revalidate that upstream contract
+    rather than treating this package's own prior function as Django code.
+    """
+    descriptor = SimpleTestCase.__dict__.get("_remove_databases_failures")
+    function = getattr(descriptor, "__func__", None)
+    if getattr(function, _PATCH_OWNER_ATTRIBUTE, None) == _PATCH_OWNER:
+        return getattr(function, _PATCH_ORIGINAL_ATTRIBUTE, None)
+    return descriptor
+
+
+_original_remove_databases_failures = _captured_upstream_descriptor()
 
 
 # Every upstream body this module supersedes, verbatim and dedented. Because
@@ -156,9 +176,8 @@ _original_remove_databases_failures = SimpleTestCase.__dict__.get(
 # * 6.1 - that class attribute is gone; the same four ``(name, operation)``
 #   tuples are read per connection from
 #   ``connection.features.disallowed_simple_test_case_connection_methods``.
-_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
-    textwrap.dedent(
-        """\
+_CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE = textwrap.dedent(
+    """\
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
@@ -168,10 +187,10 @@ _AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
                 for name, _ in cls._disallowed_connection_methods:
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
-        """,
-    ),
-    textwrap.dedent(
-        """\
+    """,
+)
+_CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE = textwrap.dedent(
+    """\
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
@@ -184,12 +203,16 @@ _AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
                 for name, _ in disallowed_methods:
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
-        """,
-    ),
+    """,
 )
+_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
+    _CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
+    _CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
+)
+_validated_remove_databases_failures_source: str | None = None
 
 
-def _validate_upstream_shape() -> None:
+def _validate_upstream_shape() -> str:
     """Fail loudly when Django no longer matches the private shape this patch supersedes.
 
     Three tiers: the private symbols exist (``_DatabaseFailure`` plus the
@@ -234,6 +257,7 @@ def _validate_upstream_shape() -> None:
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"django": False} '
             "or use a supported Django version.",
         )
+    return source
 
 
 def _is_database_failure(method: object) -> bool:
@@ -247,16 +271,28 @@ def _disallowed_connection_methods(cls: type, connection: object) -> object:
     One read for both audited upstream shapes (see
     ``_AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``). Django 5.2.16-6.0.x
     carry the pairs as the ``SimpleTestCase._disallowed_connection_methods``
-    class attribute; Django 6.1 dropped that attribute and moved the same
-    four pairs onto the connection feature flag
-    ``disallowed_simple_test_case_connection_methods``. The presence of
-    the class attribute is therefore the discriminator, read off ``cls``
-    rather than off a Django version number so a subclass that still
-    declares its own list keeps being honoured.
+    class attribute; Django 6.1 dropped that read and moved the same four
+    pairs onto the connection feature flag
+    ``disallowed_simple_test_case_connection_methods``. The validated
+    upstream body is the discriminator. Looking for the legacy attribute
+    on ``cls`` is not equivalent: a Django 6.1 subclass may still declare
+    one, but ``_add_databases_failures`` ignores it and wraps the feature
+    list, so cleanup must read that same feature list to remain symmetric.
     """
-    if hasattr(cls, "_disallowed_connection_methods"):
+    if (
+        _validated_remove_databases_failures_source
+        == _CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE
+    ):
         return cls._disallowed_connection_methods
-    return connection.features.disallowed_simple_test_case_connection_methods
+    if (
+        _validated_remove_databases_failures_source
+        == _CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE
+    ):
+        return connection.features.disallowed_simple_test_case_connection_methods
+    raise RuntimeError(
+        "django-strawberry-framework's Django patch ran without a validated upstream "
+        "_remove_databases_failures body.",
+    )
 
 
 def _patched_remove_databases_failures(cls: type) -> None:
@@ -306,6 +342,14 @@ def _patched_remove_databases_failures(cls: type) -> None:
                 setattr(connection, name, method.wrapped)
 
 
+setattr(_patched_remove_databases_failures, _PATCH_OWNER_ATTRIBUTE, _PATCH_OWNER)
+setattr(
+    _patched_remove_databases_failures,
+    _PATCH_ORIGINAL_ATTRIBUTE,
+    _original_remove_databases_failures,
+)
+
+
 def _patch_is_installed() -> bool:
     """Return ``True`` iff ``SimpleTestCase._remove_databases_failures`` currently points at our patch.
 
@@ -352,7 +396,9 @@ def apply() -> None:
     """
     if not upstream_patches_enabled("django"):
         return
-    _validate_upstream_shape()
+    source = _validate_upstream_shape()
+    global _validated_remove_databases_failures_source
+    _validated_remove_databases_failures_source = source
     if _patch_is_installed():
         return
     SimpleTestCase._remove_databases_failures = classmethod(

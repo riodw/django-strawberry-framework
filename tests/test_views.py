@@ -81,10 +81,13 @@ from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
     _BOUNDARY_MARKER,
     _BOUNDARY_METHOD,
+    _BOUNDARY_MOUNT,
+    _BOUNDARY_PREPARED_VIEW,
 )
 from django_strawberry_framework._request_body import (
     _CORRUPTED_PROBE_LOG_MESSAGE,
     _UNREADABLE_STREAM_LOG_MESSAGE,
+    _position_restored,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.middleware.request_body import (
@@ -259,6 +262,46 @@ def test_async_view_as_view_is_marked_as_a_coroutine_function():
     """
     assert iscoroutinefunction(AsyncDjangoGraphQLView.as_view(schema=SCHEMA)) is True
     assert iscoroutinefunction(DjangoGraphQLView.as_view(schema=SCHEMA)) is False
+
+
+async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances():
+    """The async ``as_view`` branch hands a middleware-prepared instance the dispatch.
+
+    The branch is reachable only through a consumer subclass that declares async
+    HTTP handlers: neither package view defines ``get`` / ``post``, so Django's
+    ``view_is_async`` computes ``False`` for both and the package's own
+    ``as_view`` takes its sync arm - which is why the async handler below is a
+    real one rather than a hard-coded ``view_is_async``. Whichever arm runs, an
+    instance the boundary middleware already constructed and set up must be the
+    instance that dispatches, and the request stamp must be consumed exactly
+    once so a second callback cannot inherit it.
+    """
+
+    class RecordingAsyncView(AsyncDjangoGraphQLView):
+        async def get(self, request, *args, **kwargs):
+            return HttpResponse("handler")
+
+        async def dispatch(self, request, *args, **kwargs):
+            return HttpResponse(getattr(self, "marker", "fresh"))
+
+    callback = RecordingAsyncView.as_view(schema=SCHEMA)
+
+    fresh_request = RequestFactory().get("/graphql/")
+    fresh_response = await callback(fresh_request)
+    assert fresh_response.content == b"fresh"
+
+    prepared_request = RequestFactory().get("/graphql/")
+    prepared = callback.view_class(**callback.view_initkwargs)
+    prepared.marker = "prepared"
+    prepared.setup(prepared_request)
+    setattr(
+        prepared_request,
+        _BOUNDARY_PREPARED_VIEW,
+        (getattr(callback, _BOUNDARY_MOUNT), prepared),
+    )
+    prepared_response = await callback(prepared_request)
+    assert prepared_response.content == b"prepared"
+    assert not hasattr(prepared_request, _BOUNDARY_PREPARED_VIEW)
 
 
 def test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_root():
@@ -737,6 +780,12 @@ class _UndeclaredSeekableStream(_RecordingNonSeekableStream):
         return self._buffer.seek(offset, whence)
 
 
+class _NonCallableSeekableMarkerStream(_UndeclaredSeekableStream):
+    """A stream with a non-callable ``seekable`` marker, so it must be read-bounded."""
+
+    seekable = False
+
+
 class _UnmeasurableStream(_RecordingNonSeekableStream):
     """Neither declares seekability nor can report its position.
 
@@ -783,6 +832,57 @@ class _OverReportingPositionStream(_UndeclaredSeekableStream):
         return super().tell() + _PROBE_CAP * 64
 
 
+class _LyingRestoredPosition(int):
+    """An ``int`` subclass whose equality lies about a failed restoration."""
+
+    def __eq__(self, other):
+        return True
+
+
+class _LyingRestoredPositionStream(_UndeclaredSeekableStream):
+    """Leaves the stream at EOF while reporting a matching foreign position."""
+
+    def __init__(self, raw):
+        super().__init__(raw)
+        self._tell_calls = 0
+
+    def tell(self):
+        self._tell_calls += 1
+        if self._tell_calls == 2:
+            return _LyingRestoredPosition(0)
+        return super().tell()
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_END:
+            return super().seek(offset, whence)
+        self._buffer.seek(0, io.SEEK_END)
+        return 0
+
+
+class _ForeignInitialPositionStream(_UndeclaredSeekableStream):
+    """Reports a foreign initial position, so the probe must not seek at all.
+
+    ``seeks`` records every ``seek`` because "without seeking" is the whole claim:
+    the initial position is refused BEFORE the end-seek, not after it. Order is
+    what makes the guard load-bearing - a foreign position that reaches the
+    restore is only ever verified through its own ``__eq__``, so a lying one
+    passes and the bounded read that follows starts wherever the probe left the
+    stream. The inherited ``seek`` is honest, so nothing but the recorder
+    distinguishes "never seeked" from "seeked and got away with it".
+    """
+
+    def __init__(self, raw):
+        super().__init__(raw)
+        self.seeks = []
+
+    def tell(self):
+        return _LyingRestoredPosition(super().tell())
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        self.seeks.append((offset, whence))
+        return super().seek(offset, whence)
+
+
 class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
     """``seekable()`` itself raises - the first probe-failure stand-in.
 
@@ -796,6 +896,14 @@ class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
 
     def seekable(self):
         raise OSError("this stream refuses to answer capability queries")
+
+
+class _SeekableAttributeRaisingStream(_UndeclaredSeekableStream):
+    """A descriptor that raises before the probe can call ``seekable()``."""
+
+    @property
+    def seekable(self):
+        raise RuntimeError("this stream refuses attribute inspection")
 
 
 class _UnseekableToEndStream(_UndeclaredSeekableStream):
@@ -929,6 +1037,36 @@ class _ReadRaisingAfterPrefixStream(_RecordingNonSeekableStream):
         chunk = self._buffer.read(min(size, _PROBE_CAP // 4))
         self.delivered += len(chunk)
         return chunk
+
+
+class _TruthyZeroLengthChunk:
+    """A foreign read result whose truth and length protocols disagree."""
+
+    def __init__(self):
+        self.truth_checks = 0
+        self.length_checks = 0
+
+    def __bool__(self):
+        self.truth_checks += 1
+        return True
+
+    def __len__(self):
+        self.length_checks += 1
+        return 0
+
+
+class _NonAdvancingChunkStream(_RecordingNonSeekableStream):
+    """Returns one truthy zero-length object, then stops a non-advancing retry."""
+
+    def __init__(self, raw):
+        super().__init__(raw)
+        self.chunk = _TruthyZeroLengthChunk()
+
+    def read(self, size=-1):
+        self.requested.append(size)
+        if len(self.requested) > 1:
+            raise AssertionError("the bounded read retried without advancing")
+        return self.chunk
 
 
 @contextlib.contextmanager
@@ -1310,10 +1448,64 @@ def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
     _assert_the_corrupted_probe_was_recorded(caplog, stream)
 
 
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_foreign_initial_position_uses_the_bounded_read_without_seeking(view_class):
+    """A foreign initial position is rejected before the probe can move the stream."""
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _ForeignInitialPositionStream(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with pytest.raises(HTTPException, match="request-body limit"):
+        view._enforce_request_body_limit(request)
+
+    assert stream.seeks == []
+    assert stream.delivered == _PROBE_CAP + 1
+    assert stream.unread > 0
+
+
+def test_position_restored_rejects_a_foreign_position_before_calling_the_stream():
+    """The restoration helper never executes a foreign position protocol."""
+    stream = _LyingRestoredPositionStream(b"body")
+
+    assert _position_restored(stream, _LyingRestoredPosition(0)) is False
+    assert stream._tell_calls == 0
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_foreign_restored_position_is_not_allowed_to_lie_about_the_stream(view_class, caplog):
+    """A foreign equality result cannot turn a failed restore into a valid size probe."""
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _LyingRestoredPositionStream(b"x" * 4)
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException, match="request-body limit"):
+            view._enforce_request_body_limit(request)
+
+    assert stream.requested == []
+    assert request._stream is stream
+    _assert_the_corrupted_probe_was_recorded(caplog, stream)
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_non_callable_seekable_marker_uses_the_bounded_read(view_class):
+    """A non-callable ``seekable`` marker is not treated as an omitted method."""
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _NonCallableSeekableMarkerStream(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with pytest.raises(HTTPException, match="request-body limit"):
+        view._enforce_request_body_limit(request)
+
+    assert stream.delivered == _PROBE_CAP + 1
+    assert stream.unread > 0
+
+
 @pytest.mark.parametrize(
     "stream_class",
     [
         pytest.param(_CapabilityQueryRaisingStream, id="seekable-raises"),
+        pytest.param(_SeekableAttributeRaisingStream, id="seekable-attribute-raises"),
         pytest.param(_UnseekableToEndStream, id="seek-to-end-raises"),
         pytest.param(_UnnumberedSeekStream, id="unnumbered-end-position"),
     ],
@@ -1325,11 +1517,12 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
 ):
     """A failed probe is a ``413`` from a bounded read, never a ``500``.
 
-    Three failure sites, one classification. ``seekable()`` raising and an
-    unnumbered end position both leave the stream untouched; the seek to the end
-    raising leaves it unknown until the restore proves otherwise - and here the
-    restore does. In all three the position is provably where the request started,
-    so the bounded read is licensed and supplies the bound.
+    Four failure sites, one classification. A raising ``seekable`` attribute,
+    ``seekable()`` raising, and an unnumbered end position leave the stream
+    untouched; the seek to the end raising leaves it unknown until the restore
+    proves otherwise - and here the restore does. In all four the position is
+    provably where the request started, so the bounded read is licensed and
+    supplies the bound.
 
     The old implementation called ``seekable()`` and both ``seek``s unguarded, so
     each of these streams turned a request into an unhandled ``500``. The bound is
@@ -1537,6 +1730,50 @@ def test_a_request_stream_that_cannot_be_read_is_refused_rather_than_escaping(
     with pytest.raises(RawPostDataException):
         request.body  # the raise IS the assertion
     _assert_the_unreadable_stream_was_recorded(caplog, stream)
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_non_bytes_chunk_cannot_stall_or_run_protocols_inside_the_bounded_read(
+    view_class,
+    caplog,
+):
+    """A foreign read result is rejected before its truth or length protocol runs.
+
+    ``request.read`` delegates directly to the installed stream and does not
+    enforce a return type. The old loop trusted that result twice: ``if not
+    chunk`` executed its truth protocol, and ``len(chunk)`` decided whether the
+    byte counter advanced. A stream returning one truthy object whose length was
+    zero therefore left ``read_so_far`` unchanged and retried forever if the
+    stream kept returning it. This stand-in raises on a second read so the
+    regression fails finitely, while the protocol counters prove the boundary
+    rejected the object before running either piece of foreign code.
+
+    The rejection is the bounded-read branch's existing fail-closed ``413`` and
+    operator warning: no partial body is installed, the stream is not closed, and
+    both the sync and async package views see the same boundary behavior.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _NonAdvancingChunkStream(b"unused")
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException) as excinfo:
+            view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.requested == [_PROBE_CAP + 1]
+    assert stream.chunk.truth_checks == 0
+    assert stream.chunk.length_checks == 0
+    assert request._stream is stream
+    assert hasattr(request, "_body") is False
+    assert stream.closed is False
+    _assert_one_unmeasurable_body_was_recorded(
+        caplog,
+        stream,
+        _UNREADABLE_STREAM_LOG_MESSAGE,
+        exc_type=TypeError,
+    )
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
@@ -2492,6 +2729,25 @@ class _DerivedBoundaryMiddleware(GraphQLRequestBodyBoundaryMiddleware):
     """
 
 
+class _NonCallableSetupView(DjangoGraphQLView):
+    """A package view shadowing Django's setup hook with a non-callable value."""
+
+    setup = None
+
+
+_NON_CALLABLE_SETUP_CALLBACK = _NonCallableSetupView.as_view(schema=SCHEMA)
+
+
+class _SetupWithoutRequestView(DjangoGraphQLView):
+    """A package view whose setup forgets Django's required ``super()`` call."""
+
+    def setup(self, request, *args, **kwargs):
+        pass
+
+
+_SETUP_WITHOUT_REQUEST_CALLBACK = _SetupWithoutRequestView.as_view(schema=SCHEMA)
+
+
 def _wrapper_copying_only_csrf_exempt(view):
     """A hand-written wrapper of the shape ``as_view``'s docstring names as live.
 
@@ -2716,6 +2972,42 @@ def _marked_callback_with_a_raising_boundary_descriptor(request):
     return HttpResponse("marked, descriptor read raises")
 
 
+#: Every boundary run the minimal view class below received, so a row can assert
+#: the middleware ran the boundary it probed the class for.
+_MINIMAL_BOUNDARY_RUNS = []
+
+
+class _MinimalBoundaryViewClass:
+    """A class that is a package view in exactly the one respect the protocol names.
+
+    Buildable from the keywords its bookkeeping names and carrying a callable under
+    ``_BOUNDARY_METHOD`` - installed below with ``setattr`` from the constant, never
+    spelled out - so the only thing recognition can accept it for is the protocol's
+    name. That is what lets it answer whether the name the probe accepted is the name
+    ``process_view`` runs.
+    """
+
+    def __init__(self, **initkwargs):
+        self.initkwargs = initkwargs
+
+
+def _record_the_boundary_run(self, request):
+    """The boundary the class above carries: it records the request and refuses nothing."""
+    _MINIMAL_BOUNDARY_RUNS.append(request)
+
+
+setattr(_MinimalBoundaryViewClass, _BOUNDARY_METHOD, _record_the_boundary_run)
+
+
+def _marked_callback_with_a_minimal_boundary_view_class(request):
+    """A callback whose ``view_class`` carries the probed boundary and nothing else.
+
+    Unmounted on purpose: its subject is which name ``process_view`` invokes, which is
+    asked of the hook directly rather than through a route.
+    """
+    return HttpResponse("marked, minimal boundary")
+
+
 setattr(_marked_callback_without_a_view_class, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_unusable_initkwargs, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_initkwargs_the_class_rejects, _BOUNDARY_MARKER, True)
@@ -2723,6 +3015,7 @@ setattr(_marked_callback_with_a_callable_view_class, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_foreign_view_class, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_metaclass, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_boundary_descriptor, _BOUNDARY_MARKER, True)
+setattr(_marked_callback_with_a_minimal_boundary_view_class, _BOUNDARY_MARKER, True)
 _marked_callback_with_unusable_initkwargs.view_class = DjangoGraphQLView
 _marked_callback_with_unusable_initkwargs.view_initkwargs = [("schema", SCHEMA)]
 _marked_callback_with_initkwargs_the_class_rejects.view_class = DjangoGraphQLView
@@ -2737,6 +3030,8 @@ _marked_callback_with_a_raising_boundary_descriptor.view_class = (
     _ViewClassWhoseBoundaryDescriptorRaises
 )
 _marked_callback_with_a_raising_boundary_descriptor.view_initkwargs = {}
+_marked_callback_with_a_minimal_boundary_view_class.view_class = _MinimalBoundaryViewClass
+_marked_callback_with_a_minimal_boundary_view_class.view_initkwargs = {}
 
 #: The callback-side read failure, built once: the marker is in the instance's
 #: ``__dict__`` so recognition gets past the first clause and fails on the next read.
@@ -2964,8 +3259,9 @@ async def test_the_middleware_passes_a_non_package_view_through_untouched():
     The middleware is a project-wide chain entry, and it holds no opinion about any
     view but the package's. Recognition is by the marker attribute
     ``_RequestBodyBoundaryMixin.as_view`` stamps rather than by an ``issubclass``
-    check, which is also what keeps the dependency one-way: ``views.py`` imports the
-    middleware module, never the reverse.
+    check, which is also what keeps the two modules independent of each other:
+    neither ``views.py`` nor the middleware module imports the other, and both reach
+    the marker through ``_boundary_ordering.py``.
     """
     with _chain(_ORDERED_CHAIN):
         response = Client().get("/plain/")
@@ -3007,6 +3303,93 @@ async def test_the_view_does_not_measure_a_body_the_chain_already_measured(under
         view(request)
 
     assert seen == [(True, body)]
+
+
+def test_middleware_ignores_an_unreadable_optional_mount_handoff():
+    """A mount lookup that raises cannot turn a boundary the middleware already ran into a 500.
+
+    The mount handoff is an OPTIMIZATION - it lets ``as_view``'s wrapper dispatch
+    the very instance whose boundary just ran instead of building a second one -
+    and it is read after the boundary has already passed. So the read is guarded:
+    the callback is whatever the deployment's decorators produced, its attribute
+    access is consumer code, and a raising one must cost the request its handoff,
+    never its response. Without the guard the request would 500 having already
+    been checked, which is the one outcome the boundary exists to prevent.
+    """
+
+    class BoundaryView:
+        def _enforce_request_boundary(self, request):
+            return None
+
+    class Callback:
+        graphql_request_body_boundary = True
+        view_class = BoundaryView
+        view_initkwargs = {}
+
+        def __getattribute__(self, name):
+            if name == _BOUNDARY_MOUNT:
+                raise RuntimeError("mount unavailable")
+            return super().__getattribute__(name)
+
+        def __call__(self, request):
+            return HttpResponse()
+
+    request = RequestFactory().get("/graphql/")
+    with _chain(_ORDERED_CHAIN):
+        middleware = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        assert middleware.process_view(request, Callback(), (), {}) is None
+
+    assert getattr(request, _BOUNDARY_ENFORCED) is True
+    assert not hasattr(request, _BOUNDARY_PREPARED_VIEW)
+
+
+def test_the_middleware_preserves_djangos_non_callable_setup_failure():
+    """Preparing the shared instance cannot bypass ``View.as_view``'s setup call.
+
+    An absent ``setup`` remains valid for the protocol's minimal boundary-only
+    foreign callback, but an existing non-callable attribute is a different state:
+    Django calls it and raises. The package callback without the chain and the
+    middleware preparation must therefore fail the same way, before either can
+    dispatch or stamp the request.
+    """
+
+    def request():
+        return RequestFactory().generic(
+            "POST",
+            "/graphql/",
+            data=json.dumps({"query": "{ ping }"}).encode(),
+            content_type="application/json",
+        )
+
+    with pytest.raises(TypeError, match="not callable"):
+        _NON_CALLABLE_SETUP_CALLBACK(request())
+
+    with _chain(_ORDERED_CHAIN):
+        middleware = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        prepared_request = request()
+        with pytest.raises(TypeError, match="not callable"):
+            middleware.process_view(prepared_request, _NON_CALLABLE_SETUP_CALLBACK, (), {})
+
+    assert getattr(prepared_request, _BOUNDARY_ENFORCED, False) is False
+
+
+def test_the_middleware_preserves_djangos_setup_super_call_invariant():
+    """A prepared view must establish ``self.request`` before dispatch, just like Django."""
+
+    def request():
+        return RequestFactory().get("/graphql/")
+
+    message = "Did you override setup"
+    with pytest.raises(AttributeError, match=message):
+        _SETUP_WITHOUT_REQUEST_CALLBACK(request())
+
+    with _chain(_ORDERED_CHAIN):
+        middleware = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        prepared_request = request()
+        with pytest.raises(AttributeError, match=message):
+            middleware.process_view(prepared_request, _SETUP_WITHOUT_REQUEST_CALLBACK, (), {})
+
+    assert getattr(prepared_request, _BOUNDARY_ENFORCED, False) is False
 
 
 def test_a_chain_that_lists_the_boundary_after_csrf_is_refused_at_startup():
@@ -3398,3 +3781,84 @@ def test_the_probed_boundary_method_is_the_one_the_package_views_define():
     assert getattr(mixin, _BOUNDARY_METHOD) is mixin._enforce_request_boundary
     assert callable(getattr(DjangoGraphQLView, _BOUNDARY_METHOD, None))
     assert callable(getattr(AsyncDjangoGraphQLView, _BOUNDARY_METHOD, None))
+
+
+def test_the_middleware_runs_the_boundary_it_probed_the_class_for():
+    """The probed name and the invoked name are one fact, held in one place.
+
+    ``_BOUNDARY_METHOD`` is what makes :func:`_package_view_instance` accept a class,
+    and the whole reason to accept one is that ``process_view`` then runs that
+    boundary. Reaching it by a literal attribute access would state the name a second
+    time, and the drift two statements permit is the failure the probe exists to
+    remove: a hook that accepted a class for one name and called another would answer
+    an unhandled ``AttributeError`` for exactly the input it had just vouched for.
+    The row above pins the constant against ``views.py``; this one pins it against the
+    call site, so the three sites cannot come apart in either direction.
+
+    The class is a package view in one respect only - it carries a callable installed
+    under ``_BOUNDARY_METHOD`` and defines nothing else - and the row never spells the
+    name, so the recorded run is evidence about the protocol's name rather than about
+    the method ``views.py`` happens to define. Asserting the stamp as well is what
+    makes it a statement about ``process_view``'s whole promise to the view: the
+    boundary ran, and the request now says so.
+    """
+    _MINIMAL_BOUNDARY_RUNS.clear()
+    request = RequestFactory().generic(
+        "POST",
+        "/graphql/",
+        data=json.dumps({"query": "{ ping }"}).encode(),
+        content_type="application/json",
+    )
+
+    with _chain(_ORDERED_CHAIN):
+        middleware = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        answer = middleware.process_view(
+            request,
+            _marked_callback_with_a_minimal_boundary_view_class,
+            (),
+            {},
+        )
+
+    assert answer is None
+    assert [request] == _MINIMAL_BOUNDARY_RUNS
+    assert getattr(request, _BOUNDARY_ENFORCED, False) is True
+
+
+def test_duplicate_boundary_entries_do_not_run_the_request_boundary_twice():
+    """Repeated chain entries are idempotent after the first one measures a request.
+
+    Django invokes every middleware's ``process_view`` hook for the same callback.
+    A project can accidentally list this entry twice, or intentionally place a
+    subclass beside it, and the ordering audit accepts both entries when they are
+    ahead of CSRF. Running the boundary twice would repeat setup side effects and
+    replace the prepared instance the first hook handed to the view. The request
+    stamp is the completion record, so a later entry must leave the first result
+    intact.
+    """
+    _MINIMAL_BOUNDARY_RUNS.clear()
+    request = RequestFactory().get("/graphql/")
+
+    with _chain([_BOUNDARY_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH]):
+        first = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+        second = GraphQLRequestBodyBoundaryMiddleware(lambda _request: HttpResponse())
+
+        assert (
+            first.process_view(
+                request,
+                _marked_callback_with_a_minimal_boundary_view_class,
+                (),
+                {},
+            )
+            is None
+        )
+        assert (
+            second.process_view(
+                request,
+                _marked_callback_with_a_minimal_boundary_view_class,
+                (),
+                {},
+            )
+            is None
+        )
+
+    assert [request] == _MINIMAL_BOUNDARY_RUNS

@@ -73,8 +73,11 @@ subclass of the class patched here) and decodes strictly in its own
 not. What the patch decides is what the *other* mount gets:
 
 - installed - the raw bytes reach ``json.loads``, so gap (1)'s
-  undecodable bodies become the controlled ``400`` the Strawberry patch
-  translates, and every other shape keeps upstream's own RFC 8259
+  undecodable bodies become a controlled ``400`` (through the Strawberry
+  patch's ``UnicodeDecodeError`` translation when the detected-encoding
+  decode raises, or through upstream's own ``json.JSONDecodeError``
+  handling when ``surrogatepass`` lets the decode succeed into non-JSON),
+  and every other shape keeps upstream's own RFC 8259
   auto-detection (its documented behavior, which the package deliberately
   does not narrow on someone else's view);
 - not installed - an undecodable body raises inside the property and is
@@ -113,29 +116,54 @@ Re-checking whether upstream fixed this
 The same two checks as
 :mod:`django_strawberry_framework._strawberry_patches`:
 
-1. End-to-end (definitive). Set ``DJANGO_STRAWBERRY_FRAMEWORK =
-   {"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}`` - this module off,
-   the Strawberry patch left **on** - and run the *undecodable*-body
-   rows, which are the only ones that discriminate::
+1. End-to-end, and only on a mount of **Strawberry's own** view. A row
+   that posts to a *package* mount cannot diagnose this module at all:
+   the package view supplies its own body source
+   (``views.py::_RawBodyRequestAdapter``) and its own strict decode, so
+   every shape below answers the same ``400`` there in every state of
+   this setting. Fakeshop keeps the mount that does discriminate
+   (``/upstream-graphql/``) and the standing row that reads it,
+   ``test_transport_api.py::test_the_cross_web_half_turns_upstreams_own_500_into_a_400``::
 
-       uv run pytest examples/fakeshop/test_query/test_products_api.py \
-           -k "invalid_utf8 or raw_binary or utf16_json"
+       uv run pytest examples/fakeshop/test_query/test_transport_api.py \
+           -k cross_web_half
 
-   Those three bodies cannot be UTF-8-decoded at all, so with this module
-   off upstream's property decode raises before ``parse_json`` is
-   entered: the rows fail (an unhandled ``500`` that
-   ``django.test.Client`` re-raises) and the patch is still needed. If
-   they answer their ``400``, upstream stopped decoding eagerly and this
-   module can be deleted.
+   That row posts an undecodable body to that mount in both states: with
+   this module's half un-installed upstream's property decode raises
+   before ``parse_json`` is entered and the answer is the unhandled
+   ``500`` that IS the upstream defect; with it installed the same bytes
+   reach ``json.loads`` inside ``parse_json`` and become a controlled
+   ``400``. A ``500`` therefore means the patch is still needed, and a
+   ``400`` in the *un-installed* state is what says upstream stopped
+   decoding eagerly and this module can be deleted.
 
-   The ``utf16_le`` and ``bom`` rows deliberately do **not** appear in
-   that selector any more. Under the wire contract they answer ``400``
-   whether or not this patch is installed - upstream's property decode
-   succeeds into a ``str`` that ``json.loads`` refuses, and the view
-   boundary's strict decode succeeds into the same ``str`` that
-   ``json.loads`` refuses - so they diagnose nothing about upstream.
-   Selecting them and reading a ``400`` as "still needed" inverts the
-   verdict.
+   Two readings of that row invert the verdict, so both are pinned by the
+   row rather than left to the reader. First, **setting the switch is not
+   a simulation**: every patch installs from ``AppConfig.ready()``, long
+   before any test runs, so a run that only overrides
+   ``DJANGO_STRAWBERRY_FRAMEWORK`` still executes with this module
+   installed and reports the installed answer - which is why the row
+   restores upstream's property by identity and asserts
+   ``_patch_is_installed()`` in both directions inside the block. Second,
+   **only a body that upstream's property decode rejects AND the
+   raw-bytes JSON path does not accept discriminates** - i.e. only a
+   body whose un-installed answer is the ``500``. A BOM'd UTF-16 /
+   UTF-32 body fails the first half: auto-detected and *accepted*
+   (``200``) on that mount once this patch hands over the raw bytes. A
+   BOM-less UTF-16 / UTF-32 body or a UTF-8-BOM body fails the first
+   half too, and its un-installed answer is the trap: upstream's
+   property decode *succeeds* (NUL-padded ASCII and a UTF-8 BOM are
+   valid UTF-8) into a ``str`` that ``json.loads`` refuses, so it
+   measures ``400`` un-installed and ``200`` installed - an un-installed
+   ``400`` that reads as "retirable" while upstream is still decoding
+   eagerly. And the criterion is deliberately not "a body ``json.loads``
+   cannot decode": ``json.loads`` decodes ``bytes`` with
+   ``errors="surrogatepass"``, so even arbitrary binary usually decodes
+   under the detected encoding and is then refused as JSON by upstream's
+   own ``except`` - the installed ``400`` has two mechanisms (the
+   Strawberry patch's ``UnicodeDecodeError`` translation, and upstream's
+   own ``json.JSONDecodeError`` handling), and the row's two parameters
+   cover one each.
 
 2. Quick probe of the *installed* version, via the captured upstream
    getter::
@@ -181,18 +209,36 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]
 
 
-# Capture the genuine upstream ``body`` getter once, at import time,
-# before ``apply()`` can replace it. Retirement probes and shape
-# validation still need the bare ``.decode()`` getter; the installed
-# property does not call it (see :func:`_patched_body`). Stays ``None``
-# (the same missing-shape sentinel the sibling patch modules use) when the
-# adapter symbol or the readable ``body`` property is absent at import, so
+_PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
+_PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
+_PATCH_OWNER = "django_strawberry_framework._cross_web_patches"
+
+
+def _captured_upstream_body_getter() -> Any:
+    """Return cross_web's getter, retaining it across an in-process reload.
+
+    ``importlib.reload()`` leaves the old property installed while this module
+    re-executes. Its replacement retains the genuine getter, so recover that
+    value for validation rather than accepting the old package getter as
+    cross_web's current upstream shape.
+    """
+    if DjangoHTTPRequestAdapter is None:
+        return None
+    descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
+    if not isinstance(descriptor, property) or descriptor.fget is None:
+        return None
+    if getattr(descriptor.fget, _PATCH_OWNER_ATTRIBUTE, None) == _PATCH_OWNER:
+        return getattr(descriptor.fget, _PATCH_ORIGINAL_ATTRIBUTE, None)
+    return descriptor.fget
+
+
+# Capture the genuine upstream ``body`` getter once, at import time, before
+# ``apply()`` can replace it. The capture also survives an in-process reload,
+# so retirement probes and shape validation never inspect the previous package
+# getter. Stays ``None`` (the same missing-shape sentinel the sibling patch
+# modules use) when the adapter symbol or readable property is absent, so
 # ``apply()`` refuses to install over an unexpected shape.
-_original_body_fget = None
-if DjangoHTTPRequestAdapter is not None:
-    _descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
-    if isinstance(_descriptor, property) and _descriptor.fget is not None:
-        _original_body_fget = _descriptor.fget
+_original_body_fget = _captured_upstream_body_getter()
 
 
 def _validate_upstream_shape() -> None:
@@ -269,6 +315,10 @@ def _patched_body(self: Any) -> bytes:
     anything the split raises this patch's importance.
     """
     return self.request.body
+
+
+setattr(_patched_body, _PATCH_OWNER_ATTRIBUTE, _PATCH_OWNER)
+setattr(_patched_body, _PATCH_ORIGINAL_ATTRIBUTE, _original_body_fget)
 
 
 def _patch_is_installed() -> bool:

@@ -138,7 +138,7 @@ def safe_wrap_connection_method(
     """
     if not callable(wrapper):
         raise TypeError(
-            f"safe_wrap_connection_method() received a non-callable wrapper: {wrapper!r}",
+            "safe_wrap_connection_method() received a non-callable wrapper",
         )
     current = getattr(connection, method_name)
     if _is_database_failure(current):

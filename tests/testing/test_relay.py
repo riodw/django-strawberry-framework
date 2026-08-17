@@ -202,6 +202,17 @@ def test_global_id_for_non_node_raises():
     assert "not a registered DjangoType subclass" in str(excinfo.value)
 
 
+def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary():
+    """A malformed input's broken ``repr`` cannot replace the typed rejection."""
+
+    class _HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
+        global_id_for(_HostileRepr(), 1)
+
+
 def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
     """A Phase-3 failure leaves the strategy stamped but ``finalized=False`` -> raise.
 

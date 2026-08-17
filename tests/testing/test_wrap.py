@@ -174,14 +174,29 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
     traceback pointing at the consumer's call.
     """
     connection = connections["default"]
-    original_cursor = connection.cursor
+    # The helper installs by ``setattr``, so "untouched" means the instance
+    # ``__dict__`` slot is exactly as the guard found it. Comparing
+    # ``connection.cursor`` instead would compare freshly-bound methods and
+    # pass or fail on whether a NEIGHBOURING test left an instance attribute
+    # behind. No try/finally: the guard raises before any mutation.
+    installed_before = connection.__dict__.get("cursor")
 
-    try:
-        with pytest.raises(TypeError, match="non-callable wrapper"):
-            safe_wrap_connection_method(connection, "cursor", 42)
+    with pytest.raises(TypeError, match="non-callable wrapper"):
+        safe_wrap_connection_method(connection, "cursor", 42)
 
-        # Connection method untouched - the early-validate raise must
-        # not mutate connection state before raising.
-        assert connection.cursor is original_cursor
-    finally:
-        connection.cursor = original_cursor
+    assert connection.__dict__.get("cursor") is installed_before
+
+
+def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr():
+    """A broken ``repr`` must not replace the documented non-callable ``TypeError``."""
+    connection = connections["default"]
+    installed_before = connection.__dict__.get("cursor")
+
+    class _HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(TypeError, match="non-callable wrapper"):
+        safe_wrap_connection_method(connection, "cursor", _HostileRepr())
+
+    assert connection.__dict__.get("cursor") is installed_before

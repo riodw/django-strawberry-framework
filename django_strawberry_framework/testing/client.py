@@ -40,6 +40,7 @@ from strawberry.test import BaseGraphQLTestClient
 from strawberry.test.client import Response as _EngineResponse
 
 from django_strawberry_framework.conf import testing_endpoint_setting
+from django_strawberry_framework.exceptions import _safe_arg_repr
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import AsyncIterator, Iterator
@@ -110,7 +111,7 @@ class TestClient(BaseGraphQLTestClient):
         # Forward the resolved endpoint as the base's ``url`` too, so the
         # inherited attribute never reads the base default while ``path``
         # reads the real endpoint. ``path`` stays the documented surface.
-        super().__init__(client or Client(), resolved)
+        super().__init__(client if client is not None else Client(), resolved)
 
     @property
     def client(self) -> Client:
@@ -300,7 +301,7 @@ class TestClient(BaseGraphQLTestClient):
         if reserved:
             raise AssertionError(
                 f"files= keys may not use the reserved multipart envelope field "
-                f"name(s) {sorted(reserved)!r}; the 'operations' / 'map' fields "
+                f"name(s) {_safe_arg_repr(sorted(reserved))}; the 'operations' / 'map' fields "
                 f"are built by this client - rename the variable path.",
             )
 
@@ -341,16 +342,16 @@ class TestClient(BaseGraphQLTestClient):
                         or index >= len(current)
                     ):
                         raise AssertionError(
-                            f"files= path {key!r} has no matching placeholder in "
-                            f"variables: {segment!r} is not a valid index into a "
+                            f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
+                            f"variables: {_safe_arg_repr(segment)} is not a valid index into a "
                             f"{len(current)}-item list.",
                         )
                     current = current[index]
                 elif isinstance(current, dict):
                     if segment not in current:
                         raise AssertionError(
-                            f"files= path {key!r} has no matching placeholder in "
-                            f"variables: no key {segment!r} at that level.",
+                            f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
+                            f"variables: no key {_safe_arg_repr(segment)} at that level.",
                         )
                     current = current[segment]
                 else:
@@ -359,14 +360,14 @@ class TestClient(BaseGraphQLTestClient):
                     # test call, raised as the same type as the sibling guards so
                     # ``pytest.raises(AssertionError)`` catches every bad shape.
                     raise AssertionError(  # noqa: TRY004 - uniform guard type, not a runtime TypeError
-                        f"files= path {key!r} has no matching placeholder in "
-                        f"variables: cannot descend into {segment!r} (the value "
+                        f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
+                        f"variables: cannot descend into {_safe_arg_repr(segment)} (the value "
                         f"there is not a dict or list).",
                     )
             if current is not None:
                 raise AssertionError(
-                    f"files= path {key!r} must point at a None placeholder in "
-                    f"variables, but the value there is {current!r}.",
+                    f"files= path {_safe_arg_repr(key)} must point at a None placeholder in "
+                    f"variables, but the value there is {_safe_arg_repr(current)}.",
                 )
 
     @contextlib.contextmanager
@@ -396,7 +397,7 @@ class AsyncTestClient(TestClient):
     """
 
     def __init__(self, path: str | None = None, client: AsyncClient | None = None) -> None:
-        super().__init__(path, client or AsyncClient())
+        super().__init__(path, client if client is not None else AsyncClient())
 
     @property
     def client(self) -> AsyncClient:

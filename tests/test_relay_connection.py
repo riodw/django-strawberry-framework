@@ -2983,3 +2983,42 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
         want_count=False,
     )
     assert conn.edges == []
+
+
+@pytest.mark.django_db
+def test_consume_window_offset_unwindowable_shape_propagates():
+    """An OFFSET connection never recovers from ``UnwindowableConnection``.
+
+    The two bounds derivations share one ``try``, but not one outcome. A keyset
+    connection treats the refusal as the defensive backward-shape handoff and
+    recovers the per-parent queryset; an offset connection has no such shape --
+    the walker never plans one -- so a wrapper that reaches here alongside a
+    refused window is real pagination drift and must surface, not silently
+    degrade to the fallback and serve a differently-paginated page.
+    """
+    from types import SimpleNamespace
+
+    from strawberry.relay.utils import to_base64
+
+    from django_strawberry_framework.connection import (
+        _consume_window,
+        _WindowedConnectionRows,
+    )
+    from django_strawberry_framework.utils.connections import UnwindowableConnection
+
+    connection_cls = _windowed_book_connection_class()
+    window = _WindowedConnectionRows(rows=[], fallback=lambda: Book.objects.none())
+    with pytest.raises(UnwindowableConnection):
+        _consume_window(
+            connection_cls,
+            window,
+            info=SimpleNamespace(selected_fields=[]),
+            before=None,
+            # ``after`` + ``last`` with no ``first`` / ``before`` is the
+            # offset-bearing backward window the derivation refuses.
+            after=to_base64("arrayconnection", 0),
+            first=None,
+            last=2,
+            max_results=100,
+            want_count=False,
+        )

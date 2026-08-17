@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from rest_framework import serializers
@@ -759,7 +759,7 @@ def resolve_injected_field_specs(
             model,
             provisional_name,
         )
-        specs.append(spec)
+        specs.append(replace(spec, annotation_repr=repr(_annotation)))
     return specs
 
 
@@ -1241,7 +1241,6 @@ def _walk_serializer_fields(
             # name) and keep walking so the aggregate names every bad field at once.
             field_errors.append(f"{name}: {exc}")
             continue
-        field_specs.append(spec)
 
         required = False if is_partial else (field.required and name not in optional_fields)
         required_state.append(required)
@@ -1277,7 +1276,15 @@ def _walk_serializer_fields(
         # mutation the other's nullability. Folding the widened annotation in is what the
         # descriptor cache key + ``_shape_token`` need; ``required_state`` records
         # requiredness, which is orthogonal (it does not move with ``allow_null`` here).
-        annotation_reprs.append(repr(annotation))
+        annotation_repr = repr(annotation)
+        annotation_reprs.append(annotation_repr)
+        field_specs.append(
+            replace(
+                spec,
+                annotation_repr=annotation_repr,
+                required=required,
+            ),
+        )
         triples.append((python_attr, annotation, field_kwargs))
 
     # fold the collision messages (over the fields that DID resolve) in with the

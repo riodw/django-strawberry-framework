@@ -30,7 +30,13 @@ from django.db.models import F
 from django.db.models.expressions import OrderBy
 
 from ..registry import register_subsystem_clear
-from ..utils.input_values import RELATED, SetInputTraversal, iter_active_fields
+from ..utils.input_values import (
+    RELATED,
+    SetInputTraversal,
+    is_inactive_value,
+    iter_active_fields,
+    iter_input_items,
+)
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
@@ -161,12 +167,11 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     per spec-028 Decision 3 line 452. The
     cookbook's ``get_concrete_field_names`` at
     ``django_graphene_filters/mixins.py`` uses ``hasattr(f, "column")``
-    alone, but empirically against Django 6.0.5 ``ManyToManyField``
-    exposes ``.column = None`` so ``hasattr`` returns ``True`` -- the M2M
-    field would slip in. The extra ``not f.many_to_many`` clause is a
-    deliberate divergence from the cookbook's empirical code that aligns
-    with the cookbook's documented intent ("excludes reverse relations,
-    many-to-many managers, and other virtual fields").
+    alone, but Django's virtual ``GenericRelation`` and
+    ``GenericForeignKey`` descriptors also expose ``column = None``.
+    Checking that the column is a real database column (rather than merely
+    an attribute) keeps those virtual fields out alongside reverse
+    relations and many-to-many managers.
 
     Returned list includes forward ``ForeignKey`` / ``OneToOneField``
     columns (their ``<field>_id`` column is on the model's own table)
@@ -175,7 +180,7 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     return [
         f.name
         for f in model._meta.get_fields()
-        if hasattr(f, "column") and not getattr(f, "many_to_many", False)
+        if getattr(f, "column", None) is not None and not getattr(f, "many_to_many", False)
     ]
 
 
@@ -297,6 +302,13 @@ def normalize_input_value(
     ``handle_top_level_list`` is set because the resolver-facing order argument shape
     is ``list[<T>OrderInputType] | None``.
     """
+    # Direct callers may provide the mapping shape without first constructing
+    # an ``OrderArgumentsFactory`` input class. Build the provenance entries
+    # lazily so path-shorthand fields (``shelf_code`` -> ``shelf__code``)
+    # and related branches still normalize correctly instead of being
+    # silently discarded when ``field.spec`` is absent.
+    _ensure_field_specs(orderset_cls, input_value)
+
     config = SetInputTraversal(
         field_specs=_field_specs,
         related_attr="related_orders",
@@ -320,6 +332,28 @@ def normalize_input_value(
             # already skipped as inactive by the classifier).
             result.append((field.spec.django_source_path, field.raw_value))
     return result
+
+
+def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: Any) -> None:
+    """Populate provenance before direct normalization or permission checks."""
+
+    def _has_active_fields(value: Any) -> bool:
+        if is_inactive_value(value):
+            return False
+        if isinstance(value, list):
+            return any(_has_active_fields(element) for element in value)
+        items = iter_input_items(value)
+        if items is None:
+            return False
+        return any(not is_inactive_value(raw_value) for _, raw_value in items)
+
+    if not _has_active_fields(input_value):
+        return
+    meta = getattr(orderset_cls, "Meta", None)
+    if getattr(meta, "model", None) is not None and not any(
+        owner is orderset_cls for owner, _ in _field_specs
+    ):
+        _build_input_fields(orderset_cls)
 
 
 def materialize_input_class(name: str, input_cls: type) -> None:

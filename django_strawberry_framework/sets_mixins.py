@@ -548,6 +548,17 @@ class ActiveInputPermissionMixin:
         return
 
     @classmethod
+    def _prepare_permission_input(cls, _input_value: Any) -> None:
+        """Populate family-specific provenance before traversal. Default no-op.
+
+        A direct ``apply`` / permission call can reach the facade before the
+        family's field-spec ledger has been built for this class, so the
+        traversal would read empty provenance. Families that build their specs
+        lazily populate them here; the facade itself stays single-sourced.
+        """
+        return
+
+    @classmethod
     def _run_permission_checks(
         cls,
         input_value: Any,
@@ -563,8 +574,11 @@ class ActiveInputPermissionMixin:
         by this call leaves the queryset untouched. Recurses into each
         active related branch so the cookbook's nested-permission contract
         holds. Filter-only logical ``and`` / ``or`` / ``not`` recursion is
-        the ``_run_logic_permission_checks`` hook.
+        the ``_run_logic_permission_checks`` hook. Family provenance that the
+        traversal depends on is populated first via
+        ``_prepare_permission_input``.
         """
+        cls._prepare_permission_input(input_value)
         if is_inactive_value(input_value, unset_sentinel=cls._permission.unset_sentinel):
             return
         cls._check_permission_depth(_depth)

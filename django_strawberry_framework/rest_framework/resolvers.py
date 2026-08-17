@@ -145,6 +145,7 @@ from ..utils.errors import (
     join_error_path,
     validation_error_to_field_errors,
 )
+from ..utils.inputs import optional_input_field
 from ..utils.permissions import request_from_info
 from ..utils.querysets import (
     related_visibility_queryset,
@@ -179,6 +180,7 @@ from .serializer_converter import (
     RELATION_MULTI,
     RELATION_SINGLE,
     nested_serializer_child,
+    resolve_serializer_field,
 )
 
 # The omission sentinel the reserved serializer-kwarg checks use: it keeps an
@@ -1084,6 +1086,69 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
             f"schema but a relation / file / nested serializer ({type(runtime).__name__}) at "
             "runtime; the kind moved. Align the runtime serializer field with "
             "get_serializer_for_schema().",
+        )
+    if spec.required is None and spec.annotation_repr is None:
+        return
+    meta = getattr(mutation_cls, "_mutation_meta", None)
+    if meta is None:
+        return
+    operation = getattr(meta, "operation", "create")
+    optional_fields = frozenset(getattr(meta, "optional_fields", None) or ())
+    runtime_required = (
+        False
+        if operation == "update"
+        else bool(
+            runtime.required and target not in optional_fields,
+        )
+    )
+    if spec.required is not None and runtime_required != spec.required:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: field {target!r} is "
+            f"{'required' if runtime_required else 'optional'} at runtime but "
+            f"{'required' if spec.required else 'optional'} in the schema input. Align "
+            "the runtime serializer's required/default declaration with "
+            "get_serializer_for_schema().",
+        )
+    if spec.annotation_repr is None:
+        return
+    if spec.kind in (NESTED_SINGLE, NESTED_MULTI):
+        # An opted-in nested field's annotation is the RECURSIVELY generated nested
+        # input type, which ``resolve_serializer_field`` cannot re-derive: it rejects
+        # every nested serializer by contract (nesting is opt-in only, and the input
+        # build routes an opted-in field to the recursive nested build instead of the
+        # flat converter). ``_assert_nested_agreement`` already held this field to the
+        # schema's nested shape and recursed into every child spec - each child's own
+        # annotation is checked there - so the container's annotation is covered by
+        # that walk plus the requiredness check above.
+        return
+    try:
+        _python_attr, runtime_annotation, _runtime_spec = resolve_serializer_field(
+            runtime,
+            meta.model,
+            f"{type(serializer).__name__}{'PartialInput' if operation == 'update' else 'Input'}",
+        )
+        runtime_annotation, _field_kwargs = optional_input_field(
+            runtime_annotation,
+            python_attr=spec.input_attr,
+            graphql_name=spec.graphql_name,
+            widen=(
+                bool(runtime.allow_null or not runtime_required)
+                if spec.required is not None
+                else False
+            ),
+        )
+    except ConfigurationError as exc:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: runtime field {target!r} "
+            "could not be resolved to the schema's generated input annotation; align "
+            "the runtime serializer with get_serializer_for_schema().",
+        ) from exc
+    if repr(runtime_annotation) != spec.annotation_repr:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: runtime field {target!r} "
+            f"resolves to annotation {runtime_annotation!r}, but the schema input "
+            f"resolves to {spec.annotation_repr}; align the runtime serializer field "
+            "with get_serializer_for_schema().",
         )
 
 

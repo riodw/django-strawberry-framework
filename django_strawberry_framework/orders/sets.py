@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, PathResolutionError
 from ..sets_mixins import (
     ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
@@ -40,11 +40,17 @@ from ..sets_mixins import (
 )
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.querysets import run_in_one_sync_boundary
-from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
+from ..utils.relations import (
+    classify_path,
+)
+from ..utils.relations import (
+    path_traverses_to_many as _path_traverses_to_many,
+)
 from ..utils.strings import flatten_lookup_path
 from .base import RelatedOrder
 from .inputs import (
     Ordering,
+    _ensure_field_specs,
     _field_specs,
     _get_concrete_field_names_for_order,
     normalize_input_value,
@@ -251,8 +257,17 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         # list/tuple (iterates values)." Order's ``Meta.fields`` is
         # list-only per spec-028 Decision 3 Layer 4, but the iteration
         # pattern works either way.
-        for k in meta_fields:
-            fields[k] = None
+        model = getattr(meta, "model", None)
+        for field_path in meta_fields:
+            if model is not None:
+                try:
+                    classify_path(model, field_path)
+                except PathResolutionError as exc:
+                    raise ConfigurationError(
+                        f"OrderSet {cls.__qualname__}.Meta.fields contains invalid "
+                        f"order path {field_path!r} for model {model.__name__}: {exc}",
+                    ) from exc
+            fields[field_path] = None
         return fields
 
     # ------------------------------------------------------------------
@@ -272,6 +287,17 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         machinery.
         """
         return normalize_input_value(cls, input_value)
+
+    @classmethod
+    def _prepare_permission_input(cls, _input_value: Any) -> None:
+        """Initialize direct-call provenance before active permission traversal.
+
+        The order family builds its field specs lazily, so a direct call can
+        reach the shared facade before this class has any. Implemented as the
+        mixin's family hook rather than an override so the facade itself stays
+        single-sourced on ``ActiveInputPermissionMixin``.
+        """
+        _ensure_field_specs(cls, _input_value)
 
     @classmethod
     def get_flat_orders(
@@ -358,6 +384,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
+            try:
+                classify_path(model, field_path)
+            except PathResolutionError as exc:
+                raise ConfigurationError(
+                    f"OrderSet {cls.__qualname__} received invalid order path "
+                    f"{field_path!r} for model {model.__name__}: {exc}",
+                ) from exc
             if _path_traverses_to_many(model, field_path):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
                 # generated alias (one owner for the mangle).

@@ -317,6 +317,8 @@ class InputFieldSpec:
     source: str | None = None
     related_model: type | None = None
     nested_specs: tuple[InputFieldSpec, ...] | None = None
+    annotation_repr: str | None = None
+    required: bool | None = None
 
 
 def make_input_namespace(

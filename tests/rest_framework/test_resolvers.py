@@ -1299,6 +1299,89 @@ def test_agreement_guard_raises_when_relation_shape_wrong():
         serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
 
 
+def _agreement_specs_with_meta(meta, **overrides):
+    """``_agreement_specs`` plus a ``_mutation_meta``, for the requiredness/annotation tail."""
+    fake = _agreement_specs(**overrides)
+    fake._mutation_meta = meta
+    return fake
+
+
+def test_agreement_guard_stops_when_mutation_meta_absent():
+    """No ``_mutation_meta`` means no requiredness or annotation axis to compare.
+
+    The kind/source/writability half of the contract has already been enforced
+    above; the tail needs the mutation's operation and model to say anything at
+    all, so it stops instead of guessing an operation.
+    """
+    fake = _agreement_specs(required=True)
+    assert not hasattr(fake, "_mutation_meta")
+
+    serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_raises_on_requiredness_drift():
+    """A field required at runtime but optional in the schema fails loud.
+
+    GraphQL would let the client omit it, then DRF would raise its own required
+    error -- an in-band validation failure for a field the schema advertised as
+    omittable. The boundary catches the drift instead.
+    """
+    fake = _agreement_specs_with_meta(
+        SimpleNamespace(operation="create", model=library_models.Shelf),
+        required=False,  # runtime ``Shelf.code`` is required.
+    )
+    with pytest.raises(ConfigurationError, match="required at runtime but optional"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_stops_when_no_annotation_recorded():
+    """A spec carrying requiredness but no annotation stops after the requiredness check.
+
+    ``Meta.injected_fields`` specs and the nested reverse map record only part
+    of the axis set; an absent ``annotation_repr`` means "nothing to compare",
+    not "compare against None".
+    """
+    fake = _agreement_specs_with_meta(
+        SimpleNamespace(operation="create", model=library_models.Shelf),
+        required=True,  # matches the runtime field, so the check above passes.
+        annotation_repr=None,
+    )
+
+    serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_wraps_an_unresolvable_runtime_field():
+    """A runtime field the converter cannot type is reported against the schema build.
+
+    ``resolve_serializer_field`` raises its own field-level error; rethrowing it
+    verbatim would name the converter's vocabulary rather than the actual
+    problem, which is that the runtime serializer drifted from
+    ``get_serializer_for_schema()``.
+    """
+
+    class _UnconvertibleField(serializers.Field):
+        def to_internal_value(self, data):
+            return data
+
+        def to_representation(self, value):
+            return value
+
+    class MysterySer(serializers.Serializer):
+        # Not a Shelf column, so the converter falls through to the
+        # model-less table - which has no entry for this field type.
+        mystery = _UnconvertibleField()
+
+    fake = _agreement_specs_with_meta(
+        SimpleNamespace(operation="create", model=library_models.Shelf),
+        input_attr="mystery",
+        graphql_name="mystery",
+        target_name="mystery",
+        annotation_repr="str",
+    )
+    with pytest.raises(ConfigurationError, match="could not be resolved"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, MysterySer(data={}))
+
+
 def test_agreement_guard_passes_when_schema_and_runtime_agree():
     """The happy path: matching scalar + relation specs pass (no raise) (#1)."""
     from django_strawberry_framework.utils.inputs import InputFieldSpec
@@ -1327,6 +1410,72 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree():
     )
     # No raise.
     serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_rejects_scalar_annotation_drift():
+    """A scalar schema annotation that changes at runtime fails before validation."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class RuntimeSer(serializers.Serializer):
+        code = serializers.IntegerField()
+
+    fake = type(
+        "ScalarDriftMut",
+        (),
+        {
+            "_mutation_meta": SimpleNamespace(
+                model=None,
+                operation="create",
+                optional_fields=(),
+            ),
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="code",
+                    graphql_name="code",
+                    target_name="code",
+                    kind=SCALAR,
+                    annotation_repr=repr(str),
+                    required=True,
+                ),
+            ],
+            "_injected_field_specs": [],
+        },
+    )
+    with pytest.raises(ConfigurationError, match="annotation"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, RuntimeSer(data={}))
+
+
+def test_agreement_guard_rejects_injected_scalar_annotation_drift():
+    """Injected fields use the same runtime scalar contract as generated inputs."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class RuntimeSer(serializers.Serializer):
+        stamp = serializers.IntegerField()
+
+    fake = type(
+        "InjectedScalarDriftMut",
+        (),
+        {
+            "_mutation_meta": SimpleNamespace(
+                model=None,
+                operation="create",
+                optional_fields=(),
+                injected_fields=("stamp",),
+            ),
+            "_input_field_specs": [],
+            "_injected_field_specs": [
+                InputFieldSpec(
+                    input_attr="stamp",
+                    graphql_name="stamp",
+                    target_name="stamp",
+                    kind=SCALAR,
+                    annotation_repr=repr(str),
+                ),
+            ],
+        },
+    )
+    with pytest.raises(ConfigurationError, match="annotation"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, RuntimeSer(data={}))
 
 
 # ===========================================================================

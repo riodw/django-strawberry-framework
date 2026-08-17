@@ -289,6 +289,53 @@ def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model()
     assert "Meta.model" in str(exc_info.value)
 
 
+def test_orderset_meta_fields_rejects_unknown_order_path():
+    """Unknown explicit paths fail before a query can raise Django FieldError."""
+
+    class InvalidPathOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["does_not_exist"]
+
+    with pytest.raises(ConfigurationError, match="invalid order path"):
+        InvalidPathOrder.get_fields()
+
+
+def test_orderset_resolve_order_expressions_rejects_unknown_order_path():
+    """The expression builder re-validates rather than trusting its caller.
+
+    ``Meta.fields`` validation catches a bad path at declaration, but the
+    builder is reachable directly and runs against the concrete
+    ``queryset.model`` -- which may be a descendant of ``Meta.model``, so a
+    path valid at declaration is not proven valid here. Failing loud keeps the
+    error a framework ``ConfigurationError`` instead of a Django ``FieldError``
+    raised from deep inside query compilation.
+    """
+
+    class ValidPathOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="invalid order path"):
+        ValidPathOrder._resolve_order_expressions(
+            [("does_not_exist", Ordering.ASC)],
+            model=Book,
+        )
+
+
+def test_orderset_all_excludes_virtual_generic_fields():
+    """``__all__`` contains database columns, not GenericRelation/GFK descriptors."""
+    from apps.library.models import Branch, TaggedItem
+
+    from django_strawberry_framework.orders.inputs import (
+        _get_concrete_field_names_for_order,
+    )
+
+    assert "tags" not in _get_concrete_field_names_for_order(Branch)
+    assert "content_object" not in _get_concrete_field_names_for_order(TaggedItem)
+
+
 # ---------------------------------------------------------------------------
 # apply_sync / apply_async / permissions fixtures
 # ---------------------------------------------------------------------------
@@ -486,6 +533,49 @@ def test_orderset_normalize_input_delegates_to_module_helper():
     input_value = [BookInput(title=Ordering.ASC)]
     result = BookOrderNormalize._normalize_input(input_value)
     assert result == [("title", Ordering.ASC)]
+
+
+@pytest.mark.django_db
+def test_orderset_direct_mapping_initializes_specs_before_permissions():
+    """Flat mappings must not bypass nested target permission gates."""
+
+    class ShelfOrderDirectMapping(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+        def check_code_permission(self, request):
+            raise GraphQLError("code gate fired")
+
+    class BookOrderDirectMapping(OrderSet):
+        shelf = RelatedOrder(ShelfOrderDirectMapping, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["shelf__code"]
+
+    with pytest.raises(GraphQLError, match="code gate fired"):
+        BookOrderDirectMapping.apply_sync(
+            {"shelf_code": Ordering.ASC},
+            Book.objects.all(),
+            _make_info(),
+        )
+
+
+def test_orderset_inactive_input_does_not_resolve_lazy_related_target():
+    """None and empty-list order inputs remain no-ops before lazy resolution."""
+
+    class NoOpOrder(OrderSet):
+        shelf = RelatedOrder("MissingOrderForNoOp", field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    queryset = Book.objects.all()
+    assert NoOpOrder.apply_sync(None, queryset, _make_info()) is queryset
+    assert NoOpOrder.apply_sync([], queryset, _make_info()) is queryset
+    assert NoOpOrder.apply_sync({}, queryset, _make_info()) is queryset
 
 
 # ---------------------------------------------------------------------------

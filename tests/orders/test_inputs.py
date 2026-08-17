@@ -304,6 +304,23 @@ def test_normalize_input_value_returns_empty_for_none_input():
     assert normalize_input_value(OrderSet, None) == []
 
 
+def test_normalize_input_value_builds_field_specs_for_direct_mapping_input():
+    """Direct mapping callers must not silently lose an active order field."""
+    from apps.library.models import Book
+
+    from django_strawberry_framework.orders import Ordering, OrderSet
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    class DirectBookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    assert normalize_input_value(DirectBookOrder, {"title": Ordering.ASC}) == [
+        ("title", Ordering.ASC),
+    ]
+
+
 def test_normalize_input_value_raw_dict_matches_dataclass_form():
     """A raw-dict order input flattens identically to the dataclass form.
 

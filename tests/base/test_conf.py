@@ -129,6 +129,14 @@ def test_settings_reload_replaces_cached_mapping():
     assert s.user_settings == {"B": 2}
 
 
+def test_settings_reload_replaces_django_backed_mapping():
+    """A direct reload must not be discarded by the live Django setting on read."""
+    s = Settings()
+    s.reload({"B": 2})
+    assert s.user_settings == {"B": 2}
+    assert s._django_backed is False
+
+
 def test_settings_reload_with_none_restores_lazy_load():
     s = Settings({"A": 1})
     s.reload(None)

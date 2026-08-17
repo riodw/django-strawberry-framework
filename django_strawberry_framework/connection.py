@@ -81,6 +81,7 @@ from .optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     deterministic_order,
     ends_in_unique_column,
+    order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
 from .optimizer.selections import (
@@ -95,6 +96,7 @@ from .utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
     UnwindowableConnection,
+    assert_relay_pagination_bound,
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
@@ -104,6 +106,7 @@ from .utils.connections import (
     window_range_plan,
 )
 from .utils.querysets import (
+    SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
@@ -113,7 +116,11 @@ from .utils.querysets import (
     reject_residual_async_source,
 )
 from .utils.relations import relation_kind
-from .utils.typing import is_async_callable, unwrap_container_type
+from .utils.typing import (
+    is_async_callable,
+    is_async_generator_callable,
+    unwrap_container_type,
+)
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -774,11 +781,10 @@ def _keyset_order_ref(entry: Any) -> tuple[str, str, bool] | None:
     ``order_entry_name_and_direction`` parses; rejects (``None``) entries a
     value cursor cannot anchor: unresolvable expressions (aggregates,
     transforms) and explicit ``nulls_first`` / ``nulls_last`` positioning
-    (the nullable domain the v1 column contract excludes).
+    (the nullable domain the v1 column contract excludes --
+    ``order_entry_has_explicit_nulls``).
     """
-    if not isinstance(entry, str) and (
-        getattr(entry, "nulls_first", None) or getattr(entry, "nulls_last", None)
-    ):
+    if order_entry_has_explicit_nulls(entry):
         return None
     parsed = order_entry_name_and_direction(entry)
     if parsed is None:
@@ -1011,14 +1017,13 @@ def _resolve_keyset_connection(
         cursor = decode_keyset_cursor(before, columns, fingerprint=fingerprint, argument="before")
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor, flip=True).q())
     cap = resolve_relay_max_results(info, max_results)
+    # SliceMetadata-parity bound check (shared with derive_keyset_window_bounds)
+    # so a keyset connection's pagination errors do not fork from the offset
+    # vocabulary or from the windowed keyset path. The slicer also validates
+    # ``last`` because it serves backward pages; the window helper only sees
+    # forward shapes (backward raises UnwindowableConnection upstream).
     for argument, value in (("first", first), ("last", last)):
-        if isinstance(value, int):
-            # SliceMetadata's exact validation text, so a keyset connection's
-            # pagination errors do not fork from the offset vocabulary's.
-            if value < 0:
-                raise ValueError(f"Argument '{argument}' must be a non-negative integer.")
-            if value > cap:
-                raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
+        assert_relay_pagination_bound(argument, value, cap=cap)
     last_zero_quirk = (
         isinstance(last, int) and last == 0 and not isinstance(first, int) and before is None
     )
@@ -1902,12 +1907,43 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
       pipeline meeting an async ``get_queryset`` raises ``SyncMisuseError`` (the
       Relay-foundation contract); to drive an async ``get_queryset`` hook through
       a connection, supply an ``async def`` ``resolver=`` (below).
+    - **Async-generator consumer-resolver** branch
+      (``is_async_generator_callable(resolver)``) is an ``AsyncIterable`` rather
+      than a coroutine: Strawberry already consumes that shape on its async
+      execution path, while this wrapper rejects it explicitly when a caller
+      incorrectly uses ``execute_sync``.
     - **Async consumer-resolver** branch (``is_async_callable(resolver)``) is an
       ``async def`` resolver running ``_pipeline_async`` - being ``async def``
-      makes the field async, so ``ConnectionExtension.resolve_async`` awaits its
-      return and the async ``get_queryset`` / ``apply_async`` hooks run on the
-      async path.
+      makes the field async, so ``ConnectionExtension.resolve_async`` awaits
+      its return and the async ``get_queryset`` / ``apply_async`` hooks run on
+      the async path.
     """
+
+    def _require_async_iterable_context(source: Any) -> None:
+        """Reject an async-only source before the synchronous Relay slicer sees it.
+
+        A declared async-generator resolver takes its own construction-time
+        branch below, but a plain ``def`` can return the exact same
+        ``AsyncIterable`` at runtime. Strawberry's sync ``ConnectionExtension``
+        routes that value to ``ListConnection``'s sync slicer, which first tries
+        subscripting and then asserts that it is a synchronous iterable - an
+        internal blank ``AssertionError``. Guard the actual returned source,
+        rather than only the callable's declaration, so every async-only source
+        gets the public sync-misuse error while async execution still hands it to
+        Strawberry's native async completion path. A Django ``QuerySet`` is both
+        sync and async iterable, so the ``not Iterable`` half is essential.
+        """
+        if (
+            isinstance(source, AsyncIterable)
+            and not isinstance(source, Iterable)
+            and not in_async_context()
+        ):
+            raise SyncMisuseError(
+                "A connection resolver returned an AsyncIterable in a sync execution "
+                "context. Use `await schema.execute(...)` for async-generator "
+                "resolvers.",
+            )
+
     if resolver is None:
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
@@ -1915,6 +1951,23 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
             return _pipeline_sync(
                 target_type,
                 initial_queryset(target_type),
+                info,
+                filter_input=filter_input,
+                order_by_input=order_by_input,
+            )
+    elif is_async_generator_callable(resolver):
+
+        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+            source = resolver(root, info)
+            _require_async_iterable_context(source)
+            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
+            # Strawberry's async ConnectionExtension accepts this AsyncIterable
+            # directly. The sync-shaped wrapper is intentional: it lets the
+            # native async executor consume the generator while the guard above
+            # turns execute_sync misuse into a typed package error.
+            return _pipeline_sync(
+                target_type,
+                source,
                 info,
                 filter_input=filter_input,
                 order_by_input=order_by_input,
@@ -1936,10 +1989,12 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     else:
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+            source = resolver(root, info)
+            _require_async_iterable_context(source)
             filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,
-                resolver(root, info),
+                source,
                 info,
                 filter_input=filter_input,
                 order_by_input=order_by_input,

@@ -58,6 +58,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
+from django_strawberry_framework.utils.typing import is_async_generator_callable
 
 
 @pytest.fixture(autouse=True)
@@ -798,6 +799,249 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
         "expected an 'a'-prefixed row to survive when async consumer returned a list "
         "(get_queryset would have filtered it from a QuerySet return)"
     )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_consumer_resolver_async_iterable_is_bounded(
+    monkeypatch,
+) -> None:
+    """An async iterable return is capped before graphql-core materializes it.
+
+    ``graphql-core`` accepts ``AsyncIterable`` list results, but the synchronous
+    ``bounded_rows`` helper cannot slice an async generator. The async wrapper
+    must consume only the effective prefix and close the iterator so the field's
+    mandatory raw-list bound applies without a ``TypeError`` or unbounded
+    materialization.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
+    assert len(rows) > 1
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class _Rows:
+        """Async iterable that records both how far it was consumed and its close."""
+
+        def __init__(self):
+            self.consumed = 0
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.consumed >= len(rows):
+                raise StopAsyncIteration
+            row = rows[self.consumed]
+            self.consumed += 1
+            return row
+
+        async def aclose(self):
+            self.closed = True
+
+    source = _Rows()
+
+    async def _resolver(root: Any, info: Info) -> Any:
+        return source
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_resolver,
+            max_rows=1,
+        )
+
+    finalize_django_types()
+    result = await strawberry.Schema(query=Query).execute("{ allCategories { id name } }")
+
+    assert result.errors is None
+    assert len(result.data["allCategories"]) == 1
+    assert source.consumed == 1
+    assert source.closed is True
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_generator_resolver_is_bounded(monkeypatch) -> None:
+    """An async-generator resolver is dispatched on the async path and capped.
+
+    The wrapper resolves the generator through the async bound, so GraphQL receives
+    an already-materialized list of at most ``max_rows`` rows, not the generator.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
+    assert len(rows) > 1
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    async def _resolver(root: Any, info: Info):
+        for row in rows:
+            yield row
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_resolver,
+            max_rows=1,
+        )
+
+    finalize_django_types()
+    result = await strawberry.Schema(query=Query).execute("{ allCategories { id name } }")
+
+    assert result.errors is None
+    assert len(result.data["allCategories"]) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_sync_resolver_returning_async_iterable_is_bounded(
+    monkeypatch,
+) -> None:
+    """A sync resolver returning an async-only iterable uses the async cap."""
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
+    assert len(rows) > 1
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _resolver(root: Any, info: Info):
+        async def _rows():
+            for row in rows:
+                yield row
+
+        return _rows()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_resolver,
+            max_rows=1,
+        )
+
+    finalize_django_types()
+    result = await strawberry.Schema(query=Query).execute("{ allCategories { id name } }")
+
+    assert result.errors is None
+    assert len(result.data["allCategories"]) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_partial_async_generator_resolver_is_bounded(monkeypatch) -> None:
+    """A partial-wrapped async-generator callable instance keeps async dispatch.
+
+    Two halves. ``is_async_generator_callable`` sees through the ``partial`` to the
+    instance's ``async def __call__``, and the field dispatches on that
+    classification so the async cap -- not the sync path -- bounds the rows.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
+    assert len(rows) > 1
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class _Resolver:
+        async def __call__(
+            self,
+            prefix: str,
+            root: Any,
+            info: Info,
+        ):
+            for row in rows:
+                yield row
+
+    resolver = functools.partial(_Resolver(), "ignored")
+    assert is_async_generator_callable(resolver) is True
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=resolver,
+            max_rows=1,
+        )
+
+    finalize_django_types()
+    result = await strawberry.Schema(query=Query).execute("{ allCategories { id name } }")
+
+    assert result.errors is None
+    assert len(result.data["allCategories"]) == 1
+
+
+@pytest.mark.django_db
+def test_djangolistfield_sync_async_generator_resolver_raises_sync_misuse() -> None:
+    """Sync execution rejects an async-generator resolver before GraphQL slices it."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    async def _resolver(root: Any, info: Info):
+        if False:
+            yield None
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    result = strawberry.Schema(query=Query).execute_sync("{ allCategories { id name } }")
+
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned an AsyncIterable in a sync execution context" in str(result.errors[0])
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_consumer_resolver_async_iterable_can_exhaust_before_bound(
+    monkeypatch,
+) -> None:
+    """An async iterable shorter than its cap completes without a close error."""
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    row = await sync_to_async(lambda: Category.objects.order_by("id").first())()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    async def _resolver(root: Any, info: Info) -> Any:
+        async def _rows():
+            yield row
+
+        return _rows()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_resolver,
+            max_rows=2,
+        )
+
+    finalize_django_types()
+    result = await strawberry.Schema(query=Query).execute("{ allCategories { id name } }")
+
+    assert result.errors is None
+    assert len(result.data["allCategories"]) == 1
 
 
 @pytest.mark.django_db(transaction=True)

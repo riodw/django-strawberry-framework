@@ -13,6 +13,7 @@ integration tests pin the post-migration ``BigInt`` round trip end-to-end
 
 import subprocess
 import sys
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import NewType
 
@@ -23,7 +24,12 @@ from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
 from django_strawberry_framework import BigInt, strawberry_config
-from django_strawberry_framework.scalars import Upload, _parse_bigint, _serialize_bigint
+from django_strawberry_framework.scalars import (
+    Upload,
+    _parse_bigint,
+    _safe_scalar_map_key_label,
+    _serialize_bigint,
+)
 
 # ---------------------------------------------------------------------------
 # Strict serializer - positive cases
@@ -51,6 +57,23 @@ def test_bigint_serializes_signed_int64_min():
 def test_bigint_serializes_signed_int64_max():
     """Pin the int64-max boundary value."""
     assert _serialize_bigint(2**63 - 1) == "9223372036854775807"
+
+
+def test_bigint_int_subclasses_are_normalized_before_serialization():
+    """Subclass dunders cannot forge or break the canonical decimal wire value."""
+
+    class _HostileInt(int):
+        def __int__(self):
+            raise RuntimeError("int exploded")
+
+        def __str__(self):
+            return "forged"
+
+    value = _HostileInt(7)
+    parsed = _parse_bigint(value)
+    assert parsed == 7
+    assert type(parsed) is int
+    assert _serialize_bigint(value) == "7"
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +242,37 @@ def test_bigint_rejects_none():
         _parse_bigint(None)
 
 
+def test_bigint_rejection_messages_survive_hostile_values():
+    """Malformed scalar values cannot replace typed errors while formatting a message."""
+
+    class _HostileTypeMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("type name exploded")
+            return super().__getattribute__(name)
+
+    class _HostileObject(metaclass=_HostileTypeMeta):
+        pass
+
+    class _HostileString(str):
+        def __int__(self):
+            raise RuntimeError("int exploded")
+
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+        def __str__(self):
+            raise RuntimeError("str exploded")
+
+    assert _parse_bigint(_HostileString("7")) == 7
+    with pytest.raises(ValueError, match="BigInt cannot parse object"):
+        _parse_bigint(_HostileObject())
+    with pytest.raises(TypeError, match="BigInt cannot serialize object"):
+        _serialize_bigint(_HostileObject())
+    with pytest.raises(ValueError, match="unprintable _HostileString"):
+        _parse_bigint(_HostileString("bad"))
+
+
 # ---------------------------------------------------------------------------
 # Public-export smoke
 # ---------------------------------------------------------------------------
@@ -299,6 +353,26 @@ def test_strawberry_config_accepts_empty_extra_scalar_map():
     assert BigInt in cfg.scalar_map
 
 
+def test_strawberry_config_rejects_unmaterializable_extra_scalar_map():
+    """A mapping failure is reported as the helper's typed configuration error."""
+
+    class _BrokenMapping(Mapping):
+        def __getitem__(self, key):
+            raise RuntimeError("getitem exploded")
+
+        def __iter__(self):
+            return iter(("custom",))
+
+        def __len__(self):
+            return 1
+
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(ValueError, match="must be materializable.*unprintable _BrokenMapping"):
+        strawberry_config(extra_scalar_map=_BrokenMapping())
+
+
 def test_strawberry_config_merges_extra_scalar_map():
     """Consumer-supplied ``extra_scalar_map`` entries merge over the package defaults."""
     CustomScalar = NewType("CustomScalar", str)
@@ -320,6 +394,30 @@ def test_strawberry_config_extra_scalar_map_does_not_mutate_caller_dict():
     assert caller_dict == before
 
 
+def test_scalar_collision_label_falls_back_when_class_name_metadata_is_unreadable():
+    """A key whose ``__name__`` read raises is labelled by its guarded ``repr``.
+
+    ``_safe_scalar_map_key_label`` prefers ``__name__`` because a ``NewType`` /
+    scalar class reads best by name, but consumer metadata is never trusted to
+    be readable: an unreadable ``__name__`` falls back to the guarded repr
+    rather than propagating the consumer's exception out of the collision
+    message.
+    """
+
+    class _HostileNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                raise RuntimeError("name unavailable")
+            return super().__getattribute__(name)
+
+    class _HostileName(metaclass=_HostileNameMeta):
+        pass
+
+    label = _safe_scalar_map_key_label(_HostileName)
+    assert label.startswith("<class '")
+    assert "_HostileName" in label
+
+
 def test_strawberry_config_collision_with_package_scalar_raises_value_error():
     """Collision with a package-defined scalar key raises ``ValueError`` (Decision 4)."""
     alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)
@@ -328,6 +426,35 @@ def test_strawberry_config_collision_with_package_scalar_raises_value_error():
     message = str(excinfo.value)
     assert "BigInt" in message
     assert "cannot redeclare" in message
+
+
+def test_strawberry_config_collision_message_survives_hostile_key():
+    """A key that aliases a package scalar cannot break collision reporting.
+
+    Which of the two aliasing keys survives the key-set intersection is a
+    CPython set-implementation detail, so the guarded label is pinned directly
+    on ``_safe_scalar_map_key_label`` and the factory assertion stays
+    order-independent: the alias is detected as a collision and the message
+    renders, instead of the hostile ``__repr__`` escaping the factory.
+    """
+
+    class _HostileKey:
+        def __hash__(self):
+            return hash(BigInt)
+
+        def __eq__(self, other):
+            return True
+
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    hostile = _HostileKey()
+    assert _safe_scalar_map_key_label(hostile) == "<unprintable _HostileKey>"
+
+    custom_def = strawberry.scalar(name="HostileKey", serialize=str, parse_value=str)
+    with pytest.raises(ValueError) as excinfo:
+        strawberry_config(extra_scalar_map={hostile: custom_def})
+    assert "cannot redeclare" in str(excinfo.value)
 
 
 def test_strawberry_config_independent_call_returns_independent_instance():

@@ -12,6 +12,9 @@ from django_strawberry_framework.exceptions import (
     LookupValidationError,
     OptimizerError,
     PathResolutionError,
+    _safe_model_label,
+    _safe_terminal_label,
+    _safe_type_name,
 )
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
@@ -87,6 +90,24 @@ class _HostileMetadata:
         if name in {"_meta", "name"}:
             raise RuntimeError(f"{name} unavailable")
         return super().__getattribute__(name)
+
+
+class _NonStringTypeNameMeta(type):
+    """Metaclass exposing malformed, non-string class-name metadata."""
+
+    def __getattribute__(cls, name: str):
+        if name == "__name__":
+            return 42
+        return super().__getattribute__(name)
+
+
+class _NonStringTypeName(metaclass=_NonStringTypeNameMeta):
+    pass
+
+
+class _HostileString(str):
+    def __str__(self) -> str:
+        raise RuntimeError("string normalization failed")
 
 
 def _execute_raising(exc_factory):
@@ -211,6 +232,25 @@ def test_hostile_metaclass_type_name_is_guarded_too():
     err = ConfigurationError(_UnprintableTypeName())
     assert str(err) == "<unprintable object>"
     assert repr(err) == "ConfigurationError(<unprintable object>)"
+
+
+def test_diagnostic_metadata_helpers_fall_back_for_malformed_consumer_metadata():
+    """Typed diagnostics survive non-string names and hostile string-valued labels.
+
+    The fallback still has to NAME something. A model is a class, so it names
+    itself: reporting ``type(model).__name__`` would print the metaclass
+    (``ModelBase`` for every Django model) and identify nothing.
+    """
+
+    class _Model:
+        _meta = type("Meta", (), {"label": _HostileString("catalog.Item")})()
+
+    class _Terminal:
+        name = _HostileString("category")
+
+    assert _safe_type_name(_NonStringTypeName()) == "object"
+    assert _safe_model_label(_Model) == "_Model"
+    assert _safe_terminal_label(_Terminal()) == "_Terminal"
 
 
 def test_syncmisuse_error_renders_safely_and_keeps_identity():

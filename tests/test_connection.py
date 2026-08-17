@@ -59,6 +59,7 @@ from django_strawberry_framework.orders import OrderSet, _helper_referenced_orde
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
+from django_strawberry_framework.utils.typing import is_async_generator_callable
 
 
 @pytest.fixture(autouse=True)
@@ -1022,6 +1023,118 @@ async def test_connection_resolver_async_dispatch():
     assert result.errors is None
     assert len(result.data["items"]["edges"]) == 1
     assert result.data["items"]["totalCount"] == expected
+
+
+@pytest.mark.django_db
+def test_connection_sync_async_generator_resolver_raises_sync_misuse():
+    """Sync execution rejects an async-generator resolver with a typed error."""
+    services.seed_data(1)
+    rows = list(Category.objects.all())
+
+    async def resolver(root, info):
+        for row in rows:
+            yield row
+
+    schema = _field_schema(
+        _make_sidecar_node_type("AsyncGeneratorNode"),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "AsyncIterable in a sync execution context" in str(result.errors[0])
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_async_generator_resolver_executes_on_async_path():
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(2)
+    rows = await sync_to_async(list)(Category.objects.order_by("pk"))
+
+    async def resolver(root, info):
+        for row in rows:
+            yield row
+
+    schema = await sync_to_async(_field_schema)(
+        _make_sidecar_node_type("AsyncGeneratorExecutionNode"),
+        resolver=resolver,
+    )
+    result = await schema.execute("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None, result.errors
+    assert len(result.data["items"]["edges"]) == 1
+
+
+@pytest.mark.django_db
+def test_connection_partial_async_generator_resolver_raises_sync_misuse():
+    """``partial`` around an async-gen callable instance still takes the async-gen branch.
+
+    Two halves. ``is_async_generator_callable`` sees through the ``partial`` to the
+    instance's ``async def __call__`` -- the wrapper shape a bare
+    ``inspect.isasyncgenfunction`` misses. Downstream, the connection field routes
+    that classification to its async-generator branch, which a sync execution
+    rejects with ``SyncMisuseError`` instead of falling through to the sync path.
+    """
+    import functools
+
+    services.seed_data(1)
+    rows = list(Category.objects.all())
+
+    class _Resolver:
+        async def __call__(
+            self,
+            prefix,
+            root,
+            info,
+        ):
+            for row in rows:
+                yield row
+
+    resolver = functools.partial(_Resolver(), "ignored")
+    assert is_async_generator_callable(resolver) is True
+
+    schema = _field_schema(
+        _make_sidecar_node_type("PartialAsyncGeneratorNode"),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "AsyncIterable in a sync execution context" in str(result.errors[0])
+
+
+@pytest.mark.django_db
+def test_connection_sync_resolver_returning_async_iterable_raises_sync_misuse():
+    """A plain resolver's async-only return is rejected before Relay's sync slicer crashes.
+
+    Resolver classification cannot see this shape at schema construction: the
+    callable is ordinary ``def`` and only its runtime result is an async
+    generator. Without the source-level guard, Strawberry first subscripts it,
+    then raises a blank internal ``AssertionError`` instead of the package's
+    actionable sync-misuse error.
+    """
+    services.seed_data(1)
+    rows = list(Category.objects.order_by("pk"))
+
+    def resolver(root, info):
+        async def stream():
+            for row in rows:
+                yield row
+
+        return stream()
+
+    schema = _field_schema(
+        _make_sidecar_node_type("SyncReturnAsyncIterableNode"),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "AsyncIterable in a sync execution context" in str(result.errors[0])
 
 
 @pytest.mark.django_db

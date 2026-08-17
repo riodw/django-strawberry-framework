@@ -175,6 +175,20 @@ _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
 # ---------------------------------------------------------------------------
 
 
+def _safe_repr(value: Any) -> str:
+    """Render a diagnostic value without allowing a hostile ``__repr__`` to escape."""
+    try:
+        return repr(value)
+    except BaseException:
+        try:
+            type_name = type(value).__name__
+        except BaseException:
+            type_name = "object"
+        if not isinstance(type_name, str):
+            type_name = "object"
+        return f"<unprintable {type_name}>"
+
+
 # Pascal-case helper for input-class names. The conversion AND the
 # no-word-character emptiness check both live in the shared
 # ``utils.strings.pascal_case_or_raise`` (single-sited, shared with
@@ -197,7 +211,7 @@ def _pascal_case(name: str) -> str:
     return pascal_case_or_raise(
         name,
         make_error=lambda bad: ConfigurationError(
-            f"_pascal_case received {bad!r} which contains no word "
+            f"_pascal_case received {_safe_repr(bad)} which contains no word "
             "characters; rename the RangeFilter's `field_name=` so its "
             "name has at least one alphanumeric token.",
         ),
@@ -293,7 +307,7 @@ def _choice_enum_from_filter(
 
     if model_field is None or not getattr(model_field, "choices", None):
         raise ConfigurationError(
-            f"ChoiceFilter on {filter_instance!r} is not backed by a Django "
+            f"ChoiceFilter on {_safe_repr(filter_instance)} is not backed by a Django "
             "`Choices`-derived enum; wrap the choices through "
             "`django.db.models.TextChoices` / `IntegerChoices` or register a "
             "custom scalar via `SCALAR_MAP`.",
@@ -401,7 +415,7 @@ def convert_filter_to_input_annotation(
         method = getattr(filter_instance, "method", None)
         if method is not None and form_field is None:
             raise ConfigurationError(
-                f"Filter(method={method!r}) on {filter_instance!r} exposes no "
+                f"Filter(method={_safe_repr(method)}) on {_safe_repr(filter_instance)} exposes no "
                 "form field; declare an explicit `Filter(method=..., field_class=...)` "
                 "or wrap the method on a typed filter primitive.",
             )
@@ -677,6 +691,7 @@ def _build_input_fields(
 
     all_filters = filterset_cls.get_filters()
     related_filters = getattr(filterset_cls, "related_filters", OrderedDict())
+    declared_filters = getattr(filterset_cls, "declared_filters", {})
     grouped: OrderedDict[str, OrderedDict[str, Filter]] = OrderedDict()
     for filter_name, filter_instance in all_filters.items():
         # Skip expanded RelatedFilter entries (e.g., `self_link__self_link`
@@ -693,7 +708,15 @@ def _build_input_fields(
         # follows. ``django-filter`` expansion produces flat keys like
         # ``galaxy__name`` (no lookup suffix when only ``exact``) -- we
         # still group them under ``galaxy_name`` flattened.
-        if "__" in filter_name:
+        if filter_name in declared_filters:
+            # A declared filter's class attribute is also the form-field key.
+            # Keep the complete name even when it happens to end in its own
+            # lookup token (e.g. ``name__exact``). Treating that suffix as an
+            # auto-generated lookup collapses the input onto ``name`` and the
+            # normalizer then emits ``name`` instead of the declared form key
+            # ``name__exact``; django-filter silently ignores the value.
+            head, lookup_token = filter_name, filter_instance.lookup_expr
+        elif "__" in filter_name:
             head, _, lookup_token = filter_name.rpartition("__")
             # If the trailing token is not the filter's actual lookup expression,
             # it belongs to the path.
@@ -777,10 +800,7 @@ def _build_input_fields(
         # form key is the explicit class-attribute name (e.g.
         # ``email_must_have_at_sign``) we use ``top_name`` so the
         # downstream form receives the correct key.
-        if top_name in getattr(filterset_cls, "declared_filters", {}):
-            django_source_path = top_name
-        else:
-            django_source_path = sample_filter.field_name
+        django_source_path = top_name if top_name in declared_filters else sample_filter.field_name
         return bag_class | None, django_source_path
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->

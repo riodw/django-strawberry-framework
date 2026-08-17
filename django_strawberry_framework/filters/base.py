@@ -170,6 +170,26 @@ def _match_none_queryset(filter_instance: Any, qs: Any) -> Any:
     return qs if filter_instance.exclude else qs.none()
 
 
+def _globalid_multiple_choice_values(value: Any) -> list[Any]:
+    """Validate and normalize a multi-value GlobalID input container.
+
+    Django's ``MultipleChoiceField`` normally supplies a list, but callers can
+    invoke a filter directly (and a malformed raw filter mapping can bypass
+    form coercion) with an arbitrary object.  The old ``len(value)`` call in
+    ``GlobalIDMultipleChoiceFilter.filter`` leaked ``TypeError`` for an
+    iterator or scalar before it could produce the package's coded GraphQL
+    error.  Only the list/tuple shapes accepted by the form contract are
+    meaningful here; all other shapes fail closed with the same invalid-ID
+    code used for malformed members.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise GraphQLError(
+            "Invalid GlobalID list: expected a list of GlobalIDs.",
+            extensions={"code": "GLOBALID_INVALID"},
+        )
+    return list(value)
+
+
 # Private instance-attribute slot a generated GlobalID RELATION filter carries a
 # BOOLEAN flag under, set ``True`` when, and only when, its forward FK/O2O binds
 # on a NON-pk ``to_field``. ``filter_for_field`` stamps the flag via
@@ -527,8 +547,8 @@ def _decode_and_validate_global_id(
     filter_instance: Filter,
     *,
     index: int | None = None,
-) -> str:
-    """Decode `value` to a node id and validate its `type_name` per strategy.
+) -> Any:
+    """Decode `value` to a node id and validate its type and target PK per strategy.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
     spec-027 #"accept both raw". The accepted `type_name` payload(s) are
@@ -566,7 +586,12 @@ def _decode_and_validate_global_id(
     `GlobalIDMultipleChoiceFilter`) remain non-error paths.
     `GlobalIDMultipleChoiceFilter` passes `index` so the rejected list element is
     named in the mismatch, malformed, and empty-id messages per spec-027
-    #"validates every element of the list independently".
+    #"validates every element of the list independently". A resolved target's
+    ``models.Field`` primary key also owns the final coercion: an ID with a
+    correctly typed wire payload but an invalid integer / UUID / range value is
+    rejected as ``GLOBALID_INVALID`` before Django can raise while compiling the
+    queryset. Unbound unit-test filters retain the node-id-only fallback because
+    they have no model field against which to coerce.
     """
     if isinstance(value, relay.GlobalID):
         decoded = value
@@ -639,6 +664,18 @@ def _decode_and_validate_global_id(
             f"valid resource identifier{suffix}.",
             extensions={"code": "GLOBALID_INVALID"},
         )
+    target_model = getattr(definition, "model", None) if definition is not None else None
+    target_pk = getattr(getattr(target_model, "_meta", None), "pk", None)
+    if isinstance(target_pk, models.Field):
+        coerced_node_id = coerce_field_value_or_none(target_pk, decoded.node_id)
+        if coerced_node_id is None:
+            suffix = "" if index is None else f" at index {index}"
+            raise GraphQLError(
+                f"Invalid GlobalID: {value!r} carries a node id that is not a valid "
+                f"{target_model.__name__} primary-key value{suffix}.",
+                extensions={"code": "GLOBALID_INVALID"},
+            )
+        return coerced_node_id
     return decoded.node_id
 
 
@@ -803,6 +840,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         """
         if value is None:
             return super().filter(qs, None)
+        value = _globalid_multiple_choice_values(value)
         if len(value) == 0:
             return _match_none_queryset(self, qs)
         node_ids = [

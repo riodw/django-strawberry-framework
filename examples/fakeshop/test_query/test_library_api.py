@@ -1189,6 +1189,39 @@ def test_library_genres_filter_malformed_own_pk_global_id_raises_globalid_invali
 
 
 @pytest.mark.django_db
+def test_library_genres_filter_typed_global_id_with_invalid_pk_raises_globalid_invalid():
+    """A correctly typed GlobalID still rejects a node id invalid for the target PK field.
+
+    The wire payload is valid and names ``library.genre``, but ``not-an-int`` cannot
+    be prepared for Genre's integer primary key. The filter must fail at its
+    GlobalID boundary with ``GLOBALID_INVALID`` rather than leaking Django's raw
+    ``Field 'id' expected a number`` ``ValueError`` from queryset evaluation.
+    """
+    models.Genre.objects.create(name="SciFi")
+    invalid_pk_gid = str(
+        relay.GlobalID(
+            type_name=models.Genre._meta.label_lower,
+            node_id="not-an-int",
+        ),
+    )
+    response = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ exact: "{invalid_pk_gid}" }} }}) {{
+            name
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "not a valid Genre primary-key value" in error["message"], payload
+
+
+@pytest.mark.django_db
 def test_library_genres_filter_malformed_own_pk_global_id_in_names_index():
     """A malformed element inside an own-PK ``id { in: [...] }`` list names its index.
 

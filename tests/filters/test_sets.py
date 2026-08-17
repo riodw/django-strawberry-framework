@@ -2857,7 +2857,9 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
         request=HttpRequest(),
     ).qs
     assert [n for n in overridden.query.annotations if n.startswith("_dst_predicate_")] == []
-    assert list(overridden.order_by("id").values_list("pk", flat=True)) == [book.pk]
+    # The extra-only override owns the filter and does not opt into distinct;
+    # both matching loan occurrences remain visible.
+    assert list(overridden.order_by("id").values_list("pk", flat=True)) == [book.pk, book.pk]
 
 
 # ---------------------------------------------------------------------------
@@ -5532,6 +5534,22 @@ def test_normalize_input_rejects_scalar_logical_elements():
         CategoryFilter._normalize_input({"and_": [42]})
 
 
+def test_normalize_input_rejects_scalar_logical_element_with_hostile_repr():
+    """A malformed logical element cannot replace its typed error via ``__repr__``."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr should never escape")
+
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        CategoryFilter._normalize_input({"or_": [HostileRepr()]})
+
+
 @pytest.mark.django_db
 def test_evaluate_logic_tree_rejects_scalar_logical_elements():
     """Scalar logical elements fail loud at query build too (Defect 4, second seam)."""
@@ -6511,6 +6529,120 @@ def test_capability_gate_filter_for_field_override_super_mutate_fails_closed():
     ).qs
     assert _reserved_aliases(result) == []
     assert list(result.order_by("id").values_list("pk", flat=True)) == [other_pk]
+
+
+@pytest.mark.django_db
+def test_filter_override_distinct_is_preserved_on_to_many_path():
+    """A consumer ``distinct=True`` override reaches the leaf without a framework stamp.
+
+    The override owns the selection, so the to-many path grants no framework
+    ``distinct``: the ``True`` on the leaf can only have come from the consumer's
+    ``extra`` provider, and the provenance record records no framework stamp.
+    """
+    from django.db import models as django_models
+
+    class OverrideFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+            filter_overrides = {
+                django_models.TextField: {
+                    "filter_class": CharFilter,
+                    "extra": lambda _field: {"distinct": True},
+                },
+            }
+
+    leaf = OverrideFilter.get_filters()["loans__note__icontains"]
+    assert leaf.distinct is True
+    provenance = filter_generation_provenance(leaf)
+    assert provenance is not None
+    assert provenance.origin == "override_generated"
+    assert provenance.framework_added_distinct is False
+
+
+def test_filter_for_lookup_override_own_relay_pk_is_preserved():
+    """A consumer ``filter_for_lookup`` override is not replaced with GlobalID."""
+    import strawberry
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
+
+    class OverrideFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"id": ["exact"]}
+
+        @classmethod
+        def filter_for_lookup(cls, field, lookup_type):
+            return CharFilter, {}
+
+    OverrideFilter._owner_definition = CategoryType.__django_strawberry_definition__
+    leaf = OverrideFilter.get_filters()["id"]
+    assert isinstance(leaf, CharFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+    provenance = filter_generation_provenance(leaf)
+    assert provenance is not None
+    assert provenance.origin == "override_generated"
+    assert provenance.framework_added_distinct is False
+
+
+def test_filter_override_extra_only_does_not_add_distinct_on_to_many_path():
+    """An extra-only consumer override keeps the default distinct value."""
+    from django.db import models as django_models
+
+    class OverrideFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"loans__note": ["icontains"]}
+            filter_overrides = {
+                django_models.TextField: {"filter_class": CharFilter, "extra": lambda _field: {}},
+            }
+
+    leaf = OverrideFilter.get_filters()["loans__note__icontains"]
+    assert leaf.distinct is False
+    provenance = filter_generation_provenance(leaf)
+    assert provenance is not None
+    assert provenance.origin == "override_generated"
+    assert provenance.framework_added_distinct is False
+    snapshot = OverrideFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert "loans__note__icontains" not in snapshot.candidates
+
+
+def test_filter_override_own_relay_pk_is_preserved():
+    """A consumer own-PK override is not replaced with a GlobalID filter."""
+    import strawberry
+    from django.db import models as django_models
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
+
+    class OverrideFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"id": ["exact"]}
+            filter_overrides = {
+                django_models.BigAutoField: {
+                    "filter_class": CharFilter,
+                    "extra": lambda _field: {},
+                },
+            }
+
+    OverrideFilter._owner_definition = CategoryType.__django_strawberry_definition__
+    leaf = OverrideFilter.get_filters()["id"]
+    assert isinstance(leaf, CharFilter)
+    assert not isinstance(leaf, GlobalIDFilter)
+    provenance = filter_generation_provenance(leaf)
+    assert provenance is not None
+    assert provenance.origin == "override_generated"
 
 
 @pytest.mark.django_db

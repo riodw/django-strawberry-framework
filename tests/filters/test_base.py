@@ -320,6 +320,17 @@ def test_global_id_multiple_choice_filter_passes_through_none():
     assert isinstance(result, _Qs)
 
 
+@pytest.mark.parametrize("value", [iter(["not-a-global-id"]), object(), "not-a-list"])
+def test_global_id_multiple_choice_filter_rejects_malformed_container(value):
+    """Malformed direct inputs fail as coded GraphQL errors, not leaked ``TypeError``."""
+    f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
+
+    with pytest.raises(GraphQLError, match="expected a list of GlobalIDs") as exc_info:
+        f.filter(object(), value)
+
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+
+
 def test_global_id_multiple_choice_field_distinguishes_absent_from_explicit_empty():
     """Form cleaning keeps omission as ``None`` and a supplied empty list as ``[]``."""
     field = GlobalIDMultipleChoiceFilter(field_name="id").field

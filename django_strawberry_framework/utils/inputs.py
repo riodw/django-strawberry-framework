@@ -20,9 +20,11 @@ them on the family module. Set-family Decision-9 ledgers ride
 ``make_set_input_namespace`` (heavy clear); write flavors ride
 ``make_input_namespace`` (light clear). Layer-6 dynamic-set caches ride
 ``make_dynamic_set_getter`` (hashing / normalize / ``type(...)`` skeleton);
-each family keeps its own cache dict and base class. The ``filter_fields``
-synonym ``FilterSetMetaclass`` and the filter factory share is
-``resolve_set_meta_fields`` -- class Meta and kwargs dicts apply one rule.
+each family keeps its own cache dict and base class. Set-family ``Meta.fields``
+fingerprints ride ``resolve_set_meta_fields`` (synonym rule),
+``promote_set_meta_fields`` (class-Meta write-back), ``read_set_meta_fields``
+(expansion / apply read), and ``canonicalize_set_meta_fields`` (unordered
+shapes). FilterSet uses ``FILTERSET_FIELDS_ALIAS``; OrderSet has no synonym.
 
 This module depends on neither family package, so both can import it without a
 cycle (same contract as ``utils/connections.py``).
@@ -544,13 +546,13 @@ def resolve_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> 
     OrderSet) is the cookbook / graphene-django synonym. ``from_alias`` is True
     only when the caller should populate ``fields`` from the synonym.
 
-    This is the one fingerprint ``FilterSetMetaclass`` (class Meta) and
-    ``normalize_set_meta_for_factory`` (kwargs dict) both apply so a
-    ``filter_fields=`` declaration cannot mean one thing at class creation and
-    another in the Layer-6 cache key. Write-backs stay at the call sites: the
-    metaclass copies onto ``Meta.fields`` and leaves the consumer's alias
-    attribute in place; the factory DROPS the alias from the dict so it cannot
-    split a cache slot via extras.
+    This is the one fingerprint both set families apply so a fields
+    declaration cannot mean one thing at class creation and another in the
+    Layer-6 cache key. Write-back is ``promote_set_meta_fields`` (class Meta
+    copies onto ``.fields`` and leaves the consumer alias in place). Dict
+    alias dropping stays in ``normalize_set_meta_for_factory`` so the synonym
+    cannot split a cache slot via extras. Expansion reads
+    ``read_set_meta_fields`` (resolve + canonicalize, no mutation).
     """
     if source is None:
         return None, False
@@ -559,6 +561,55 @@ def resolve_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> 
     if fields_alias is not None and _set_meta_has(source, fields_alias):
         return _set_meta_get(source, fields_alias), True
     return None, False
+
+
+def canonicalize_set_meta_fields(fields: Any) -> Any:
+    """Return unordered ``Meta.fields`` shapes in the Layer-6 cache-stable form.
+
+    ``set`` / ``frozenset`` become ``repr``-sorted lists so class-Meta expansion
+    and factory cache keys agree across ``PYTHONHASHSEED``. Dict-shaped lookup
+    bags keep key insertion order and sort set-valued lookup lists. Ordered
+    ``list`` / ``tuple`` and scalar ``"__all__"`` pass through unchanged.
+    """
+    if isinstance(fields, (set, frozenset)):
+        return _sorted_meta_values(fields)
+    if isinstance(fields, dict):
+        return {
+            key: (_sorted_meta_values(value) if isinstance(value, (set, frozenset)) else value)
+            for key, value in dict.items(fields)
+        }
+    return fields
+
+
+def promote_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> Any:
+    """Resolve ``fields`` and copy an alias onto class Meta when needed.
+
+    Returns the resolved fields value. A class Meta that supplied only
+    ``fields_alias`` gets ``.fields`` written so django-filter / OrderSet
+    expansion see one key; the consumer alias attribute stays in place.
+    Dict sources are not mutated -- ``normalize_set_meta_for_factory`` owns
+    dict promotion and alias dropping for cache keys.
+
+    ``FilterSetMetaclass`` and ``OrderSetMetaclass`` both call this so the
+    write-back rule cannot drift. OrderSet passes ``fields_alias=None`` (no
+    cookbook synonym); the call is then a pure read.
+    """
+    fields, from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
+    if from_alias and not isinstance(source, dict):
+        source.fields = fields
+    return fields
+
+
+def read_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> Any:
+    """Return resolved, cache-stable ``Meta.fields`` without mutating ``source``.
+
+    The expansion / apply reader: ``resolve_set_meta_fields`` then
+    ``canonicalize_set_meta_fields``. Class-declared ``set``-shaped fields
+    therefore expand in the same order Layer-6 factory kwargs hash and store
+    onto a generated Meta.
+    """
+    fields, _from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
+    return canonicalize_set_meta_fields(fields)
 
 
 def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
@@ -624,7 +675,9 @@ def normalize_set_meta_for_factory(
     - ``fields_alias`` (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
       on orders) is the metaclass synonym for ``fields``. Promotion is
       ``resolve_set_meta_fields``; this helper then drops the alias so it is
-      not an extras discriminator.
+      not an extras discriminator. Unordered ``fields`` shapes then ride
+      ``canonicalize_set_meta_fields`` (the same helper OrderSet expansion
+      reads).
     - Top-level ``set`` / ``frozenset`` ``fields`` (and set-valued lookup bags
       under a dict-shaped ``fields``) are unordered; canonicalize them to
       ``repr``-sorted lists so cache keys and generated field order are stable
@@ -653,18 +706,9 @@ def normalize_set_meta_for_factory(
         # cannot split an otherwise-identical cache slot via extras.
         safe_meta.pop(fields_alias, None)
     fields = safe_meta.get("fields")
-    if isinstance(fields, (set, frozenset)):
-        safe_meta["fields"] = _sorted_meta_values(fields)
-    elif isinstance(fields, dict):
-        try:
-            safe_meta["fields"] = {
-                key: (_sorted_meta_values(value) if isinstance(value, (set, frozenset)) else value)
-                for key, value in dict.items(fields)
-            }
-        except BaseException as exc:
-            raise ConfigurationError(
-                "Generated set metadata field lookups could not be read.",
-            ) from exc
+    canonical_fields = canonicalize_set_meta_fields(fields)
+    if canonical_fields is not fields:
+        safe_meta["fields"] = canonical_fields
     exclude = safe_meta.get("exclude")
     if isinstance(
         exclude,

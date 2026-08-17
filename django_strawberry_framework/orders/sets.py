@@ -38,6 +38,7 @@ from ..sets_mixins import (
     expanded_once,
     should_cache_expansion,
 )
+from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
 from ..utils.strings import flatten_lookup_path
@@ -61,7 +62,9 @@ class OrderSetMetaclass(type):
     ``related_orders`` are collected in MRO order with the current class's
     own declarations overriding same-named inherited ones (standard Python
     MRO semantics); every collected ``RelatedOrder`` is bound back to the
-    new class via ``bind_orderset``.
+    new class via ``bind_orderset``. ``Meta.fields`` resolution is
+    ``utils/inputs.py::promote_set_meta_fields`` (no cookbook synonym;
+    shared write-back with ``FilterSetMetaclass``).
     """
 
     def __new__(
@@ -71,6 +74,10 @@ class OrderSetMetaclass(type):
         attrs: dict,
     ) -> OrderSetMetaclass:
         """Build the class, collect ``RelatedOrder`` declarations, bind owner."""
+        # No cookbook ``order_fields`` synonym (``fields_alias=None``); the
+        # call still goes through the shared write-back so FilterSet / OrderSet
+        # class Meta cannot grow divergent field-fingerprint rules.
+        promote_set_meta_fields(attrs.get("Meta"))
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Collect the ``RelatedOrder`` declarations and bind each to the new
@@ -213,13 +220,16 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         Supports list / tuple form (``["title", "subtitle"]``) and the
         ``"__all__"`` shorthand (every column-backed model field name
         per spec-028 -- forward FK columns are included,
-        M2M managers and reverse FKs are excluded).
+        M2M managers and reverse FKs are excluded). Unordered ``set`` /
+        ``frozenset`` declarations expand in the same ``repr``-sorted order
+        Layer-6 factory kwargs hash (``read_set_meta_fields``).
         """
         fields: OrderedDict = OrderedDict()
         meta = getattr(cls, "Meta", None)
-        if meta is None:
-            return fields
-        meta_fields = getattr(meta, "fields", None)
+        # Shared reader with Layer-6 factory kwargs: synonym resolve + unordered
+        # ``set`` / ``frozenset`` canonicalization. No write-back here -- the
+        # metaclass owns alias promotion; expansion must not mutate class Meta.
+        meta_fields = read_set_meta_fields(meta)
         if meta_fields is None:
             return fields
         if meta_fields == "__all__":

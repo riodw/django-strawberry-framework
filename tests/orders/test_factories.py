@@ -492,6 +492,25 @@ def test_normalize_meta_strips_reserved_and_canonicalizes_sets():
     assert normalized["fields"] == sorted(["title", "subtitle"], key=repr)
 
 
+def test_orderset_class_meta_and_factory_kwargs_share_set_fields_order():
+    """Class-declared set-shaped ``Meta.fields`` expand in Layer-6 canonical order."""
+
+    class BookOrderSetFields(OrderSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title", "subtitle"}
+
+    generated = get_orderset_class(
+        None,
+        model=library_models.Book,
+        fields={"title", "subtitle"},
+    )
+    expected = sorted(["title", "subtitle"], key=repr)
+    assert list(BookOrderSetFields.get_fields()) == expected
+    assert list(generated.get_fields()) == expected
+    assert BookOrderSetFields.Meta.fields == {"title", "subtitle"}
+
+
 def test_get_orderset_class_requires_model_when_dynamic():
     """Without an explicit class AND without ``model``, the dynamic factory raises."""
     with pytest.raises(ConfigurationError, match="get_orderset_class requires `model`"):

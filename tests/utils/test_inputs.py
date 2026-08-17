@@ -36,6 +36,8 @@ from django_strawberry_framework.utils.inputs import (
     name_set_input_type_name,
     normalize_set_meta_for_factory,
     pascalize_token,
+    promote_set_meta_fields,
+    read_set_meta_fields,
     resolve_set_meta_fields,
     set_input_type_name,
 )
@@ -567,11 +569,49 @@ def test_filterset_metaclass_and_factory_share_fields_alias_owner():
     """Class-Meta promotion and Layer-6 kwargs canonicalize through one rule."""
     from django_strawberry_framework.filters import factories as filter_factories
     from django_strawberry_framework.filters import sets as filter_sets
+    from django_strawberry_framework.orders import sets as order_sets
 
-    assert filter_sets.resolve_set_meta_fields is resolve_set_meta_fields
     assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
     assert filter_factories.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
+    assert filter_sets.promote_set_meta_fields is promote_set_meta_fields
+    assert order_sets.promote_set_meta_fields is promote_set_meta_fields
+    assert order_sets.read_set_meta_fields is read_set_meta_fields
+    assert "promote_set_meta_fields" in filter_sets.FilterSetMetaclass.__new__.__code__.co_names
+    assert "promote_set_meta_fields" in order_sets.OrderSetMetaclass.__new__.__code__.co_names
+    assert "read_set_meta_fields" in order_sets.OrderSet._expand_meta_fields.__code__.co_names
     assert "resolve_set_meta_fields" in normalize_set_meta_for_factory.__code__.co_names
+    assert "canonicalize_set_meta_fields" in normalize_set_meta_for_factory.__code__.co_names
+
+
+def test_promote_set_meta_fields_writes_alias_on_class_meta_not_dict():
+    """Class Meta gets ``.fields``; kwargs dicts stay untouched for the factory."""
+
+    class Meta:
+        filter_fields = ["code"]
+
+    assert promote_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == ["code"]
+    assert Meta.fields == ["code"]
+    assert Meta.filter_fields == ["code"]
+
+    payload = {"filter_fields": ["name"]}
+    assert promote_set_meta_fields(payload, fields_alias=FILTERSET_FIELDS_ALIAS) == ["name"]
+    assert "fields" not in payload
+
+
+def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
+    """Expansion reads cache-stable order; class Meta keeps the original set."""
+    names = {"title", "subtitle"}
+
+    class Meta:
+        fields = names
+
+    assert read_set_meta_fields(Meta) == sorted(["title", "subtitle"], key=repr)
+    assert Meta.fields is names
+    assert read_set_meta_fields({"fields": names}) == sorted(["title", "subtitle"], key=repr)
+    assert read_set_meta_fields({"fields": {"name": {"exact", "contains"}}}) == {
+        "name": sorted(["contains", "exact"], key=repr),
+    }
+    assert read_set_meta_fields(None) is None
 
 
 def test_create_dynamic_set_class_requires_model():

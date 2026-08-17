@@ -27,8 +27,9 @@ plain ``type(...)`` products cached below, never materialized as module
 globals.) Hashing, Meta canonicalize, and the ``type(...)`` skeleton live
 in ``utils/inputs.py::make_dynamic_set_getter``; this module keeps the
 family cache and passes ``FILTERSET_FIELDS_ALIAS``. The synonym rule itself
-is ``utils/inputs.py::resolve_set_meta_fields`` (shared with
-``FilterSetMetaclass``).
+is ``utils/inputs.py::resolve_set_meta_fields``; class-Meta write-back is
+``promote_set_meta_fields`` (shared with ``FilterSetMetaclass`` /
+``OrderSetMetaclass``).
 """
 
 from __future__ import annotations

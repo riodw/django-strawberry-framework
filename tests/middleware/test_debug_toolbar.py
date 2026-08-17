@@ -281,6 +281,48 @@ def test_streaming_response_gets_no_package_mutation(middleware):
     assert b"".join(result.streaming_content) == b'{"data": 1}'
 
 
+@pytest.mark.parametrize(
+    ("request_factory", "content", "content_type"),
+    [
+        (lambda: RequestFactory().get("/graphql/"), b"\x1f\x8bencoded-html", "text/html"),
+        (
+            lambda: RequestFactory().post(
+                "/graphql/",
+                data='{"query": "query Q { x }"}',
+                content_type="application/json",
+            ),
+            b"\x1f\x8bencoded-json",
+            "application/json",
+        ),
+    ],
+    ids=["graphiql_html_append", "operation_json_injection"],
+)
+def test_encoded_response_gets_no_package_mutation(
+    middleware,
+    request_factory,
+    content,
+    content_type,
+):
+    """An already-encoded body reaches BOTH mutation sites and is written by neither.
+
+    The encoding guard sits ahead of the GraphiQL HTML append AND the tagged
+    ``application/json`` payload re-encode, so a tagged request that would
+    otherwise take either path leaves the compressed bytes byte-identical -
+    writing unencoded assets or an unencoded JSON dump into a gzip body would
+    corrupt the response rather than merely fail to instrument it.
+    """
+    request = request_factory()
+    request._is_graphiql = True
+    response = HttpResponse(content, content_type=content_type)
+    response["Content-Encoding"] = "gzip"
+
+    result = middleware._postprocess(request, response, _FakeToolbar(request_id="encoded"))
+
+    assert result is response
+    assert result.content == content
+    assert b"debugToolbar" not in result.content
+
+
 def test_unrelated_json_view_body_is_never_mutated(middleware):
     """An untagged JSON response passes through unmutated - the leak guard (unit).
 

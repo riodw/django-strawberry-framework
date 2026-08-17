@@ -90,6 +90,8 @@ from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
     _BOUNDARY_MARKER,
     _BOUNDARY_METHOD,
+    _BOUNDARY_MOUNT,
+    _BOUNDARY_PREPARED_VIEW,
     _boundary_middleware_request,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -109,6 +111,12 @@ _MISORDERED_MIDDLEWARE_MESSAGE = (
     "request-body boundary listed after it can no longer run before the parse it exists to "
     "prevent."
 )
+
+#: Sentinel separating a foreign marked class with no Django setup lifecycle from
+#: a class that explicitly shadows ``setup`` with a non-callable value. The former
+#: retains the boundary-only recognition contract; the latter must fail exactly as
+#: ``View.as_view`` would when it tries to call the existing attribute.
+_NO_SETUP = object()
 
 
 class GraphQLRequestBodyBoundaryMiddleware:
@@ -175,35 +183,63 @@ class GraphQLRequestBodyBoundaryMiddleware:
         self,
         request: HttpRequest,
         view_func: Callable[..., Any],
-        view_args: tuple[Any, ...],  # noqa: ARG002 - Django's own process_view signature
-        view_kwargs: dict[str, Any],  # noqa: ARG002 - Django's own process_view signature
+        view_args: tuple[Any, ...],
+        view_kwargs: dict[str, Any],
     ) -> HttpResponseBase | None:
         """Run a package view's body boundary here, before any later ``process_view``.
 
-        The boundary itself is the view's, reached through an instance built the
-        way ``View.as_view`` builds one - and built only from a class
-        :func:`_package_view_instance` has established carries that boundary - so
-        the limit that applies is the mount's own ``max_request_body_bytes`` and
-        this module states no policy. A refusal
+        The boundary itself is the view's, reached through an instance built and
+        set up the way ``View.as_view`` builds and sets one up - and built only
+        from a class :func:`_package_view_instance` has established carries that
+        boundary - so the limit that applies is the mount's own
+        ``max_request_body_bytes`` and this module states no policy. Running
+        ``setup`` before the boundary is load-bearing: a consumer subclass may
+        derive request-local boundary state there, and stamping a request after
+        checking the pre-setup instance would make the real view skip that state.
+        A refusal
         becomes the same ``text/plain`` response upstream's ``dispatch`` produces
         for the identical ``HTTPException``, so a client cannot tell from the
         response which side of the CSRF check refused it.
+
+        It is invoked under the name the recognition probed for - reached through
+        ``_boundary_ordering.py::_BOUNDARY_METHOD``, not spelled again here - so the
+        boundary this hook runs cannot come to differ from the boundary it accepted
+        the class for. A literal attribute access would state that name a second
+        time, and the drift it permits is exactly the failure the probe exists to
+        remove: an ``AttributeError`` out of this hook, on the one class of input the
+        recognition had just vouched for.
 
         A callback :func:`_package_view_instance` declines is left entirely alone:
         no boundary run here, and therefore no stamp, which is what leaves that
         request on the view-local arrangement rather than on neither.
         """
+        if getattr(request, _BOUNDARY_ENFORCED, False):
+            return None
         view = _package_view_instance(view_func)
         if view is None:
             return None
+        setup = getattr(view, "setup", _NO_SETUP)
+        if setup is not _NO_SETUP:
+            setup(request, *view_args, **view_kwargs)
+            if not hasattr(view, "request"):
+                raise AttributeError(
+                    f"{type(view).__name__} instance has no 'request' attribute. "
+                    "Did you override setup() and forget to call super()?",
+                )
         try:
-            view._enforce_request_boundary(request)
+            getattr(view, _BOUNDARY_METHOD)(request)
         except HTTPException as exc:
             return HttpResponse(
                 content=exc.reason,
                 status=exc.status_code,
                 content_type="text/plain",
             )
+        try:
+            mount = getattr(view_func, _BOUNDARY_MOUNT, None)
+        except Exception:  # an optional handoff cannot turn a completed boundary into a 500
+            mount = None
+        if mount is not None:
+            setattr(request, _BOUNDARY_PREPARED_VIEW, (mount, view))
         setattr(request, _BOUNDARY_ENFORCED, True)
         return None
 

@@ -70,6 +70,7 @@ from ..mutations.sets import (
     _ValidatedMutationMeta,
     build_and_stash_input,
     construction_kwargs,
+    normalize_meta_field_selection,
     reject_unknown_meta_keys,
     require_backing_class,
     require_model_class,
@@ -91,6 +92,7 @@ from .inputs import (
     dedupe_serializer_input_shape,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
+    normalize_nested_serializer_configs,
     raise_writable_source_ownership_errors,
     resolve_effective_serializer_fields,
     resolve_injected_field_specs,
@@ -132,6 +134,76 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
 # ``<Serializer>PartialInput`` (``PARTIAL``).
 
 
+def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serializers.Field]:
+    """Validate and snapshot the map returned by ``get_serializer_for_schema``.
+
+    The hook is a public classmethod seam, so its result is an untrusted boundary even though
+    the default implementation returns a normal DRF ``.fields`` dict.  The input machinery
+    assumes a mapping whose keys are the bound field names and whose values are DRF fields;
+    validating that contract here turns malformed hook values into the package's typed
+    configuration error instead of leaking ``AttributeError`` / ``TypeError`` during class
+    creation or finalization.
+    """
+    if not isinstance(field_map, Mapping):
+        raise ConfigurationError(
+            f"SerializerMutation {name}.get_serializer_for_schema() must return a mapping of "
+            f"field name -> DRF serializers.Field; got {_safe_arg_repr(field_map)}.",
+        )
+    try:
+        entries = tuple(field_map.items())
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"SerializerMutation {name}.get_serializer_for_schema() returned a mapping that "
+            "could not be materialized; return a stable mapping of field name -> DRF "
+            "serializers.Field.",
+        ) from exc
+
+    normalized: dict[str, serializers.Field] = {}
+    errors: list[str] = []
+    for entry in entries:
+        try:
+            field_name, field = entry
+        except BaseException:
+            errors.append(
+                "an entry could not be unpacked as (field_name, serializers.Field) "
+                f"({_safe_arg_repr(entry)})",
+            )
+            continue
+        if not isinstance(field_name, str):
+            errors.append(
+                f"a field-map key must be a string; got {_safe_arg_repr(field_name)}",
+            )
+            continue
+        if not isinstance(field, serializers.Field):
+            errors.append(
+                f"field {field_name!r} must be a DRF serializers.Field; got "
+                f"{_safe_arg_repr(field)}",
+            )
+            continue
+        try:
+            bound_name = field.field_name
+        except BaseException:
+            errors.append(
+                f"field {field_name!r} has a field_name descriptor that could not be read",
+            )
+            continue
+        if bound_name != field_name:
+            errors.append(
+                f"field-map key {field_name!r} does not match the DRF field's bound name "
+                f"{_safe_arg_repr(bound_name)}",
+            )
+            continue
+        normalized[field_name] = field
+
+    if errors:
+        details = "; ".join(errors)
+        raise ConfigurationError(
+            f"SerializerMutation {name}.get_serializer_for_schema() returned an invalid field "
+            f"map: {details}. Return a mapping of bound field name -> DRF serializers.Field.",
+        )
+    return normalized
+
+
 def _checked_schema_field_map(
     cls: type,
     meta: _ValidatedMutationMeta,
@@ -152,7 +224,7 @@ def _checked_schema_field_map(
     passed at class validation, so both windows fingerprint the identical opt-in structure and an
     unopted nested field is never descended into.
     """
-    field_map = cls.get_serializer_for_schema()
+    field_map = _validate_schema_field_map(cls.__name__, cls.get_serializer_for_schema())
     if meta.schema_fingerprint is not None:
         effective = resolve_effective_serializer_fields(
             meta.serializer_class,
@@ -277,7 +349,7 @@ def _validate_serializer_nested_fields(
             "framework decodes + validates the nested data but never auto-saves the relation), or "
             "remove Meta.nested_fields.",
         )
-    return normalized
+    return normalize_nested_serializer_configs(normalized)
 
 
 def _assert_schema_source_ownership(
@@ -390,7 +462,7 @@ class SerializerMutation(DjangoMutation):
           guard over ``_ALLOWED_SERIALIZER_META_KEYS``.
         - **missing ``serializer_class``** - a clean error naming the key.
         - **``serializer_class`` not a DRF ``serializers.Serializer``** - the broad
-          type gate.
+          type gate via ``require_subclass``.
         - **``serializer_class`` not a ``serializers.ModelSerializer``** - the
           ``ModelSerializer``-driven contract (Decision 6); a plain ``Serializer``
           (incl. model-less) is rejected naming the requirement.
@@ -474,24 +546,24 @@ class SerializerMutation(DjangoMutation):
 
         operation = require_non_delete_operation("SerializerMutation", name, meta)
 
-        fields = getattr(meta, "fields", None)
-        exclude = getattr(meta, "exclude", None)
+        # Materialize selectors once before any validation/bind phase can reuse
+        # them.  A public Meta declaration may provide a one-shot iterable; the
+        # validated snapshot must hold tuples, not an exhausted iterator.
+        fields, exclude = normalize_meta_field_selection(meta, flavor="SerializerMutation")
         # Discover the schema-time field set ONCE through the OVERRIDABLE
         # ``get_serializer_for_schema()`` classmethod hook (spec-039
         # Decision 7), so a serializer whose ``.fields`` cannot be materialized no-arg
         # is validated through the consumer's override - not the default discovery.
         # ``cls._mutation_meta`` is not yet assigned at class creation, so the default
         # hook reads ``cls.Meta.serializer_class`` (the same serializer just validated).
-        field_map = cls.get_serializer_for_schema()
+        field_map = _validate_schema_field_map(name, cls.get_serializer_for_schema())
         # Validate the narrowing fail-loud via the shared machinery (mutual
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
         # empty-set guard), which calls the shared
-        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY
-        # (P2.7 promotes the typo-guard / field-sequence MECHANICS). All three flavors
-        # call that shared helper directly (spec-039 inlined the former model /
-        # form re-binding wrappers), so there is no per-flavor wrapper on any side. The
-        # snapshot stores the RAW declarations; ``build_input`` re-resolves them (D1 -
-        # the form flavor's validate-then-store-raw precedent).
+        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` is
+        # single-sited by ``normalize_meta_field_selection`` above (P2.7). The
+        # snapshot stores the normalized tuples so the bind cannot consume a
+        # one-shot declaration a second time.
         effective = resolve_effective_serializer_fields(
             serializer_class,
             fields=fields,

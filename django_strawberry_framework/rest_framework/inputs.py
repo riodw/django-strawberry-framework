@@ -217,6 +217,59 @@ class NestedSerializerConfig:
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None
 
 
+def normalize_nested_serializer_configs(
+    nested_configs: Mapping[str, NestedSerializerConfig] | None,
+    *,
+    _mapping_path: frozenset[int] = frozenset(),
+) -> Mapping[str, NestedSerializerConfig] | None:
+    """Materialize every selector in a nested-config tree exactly once.
+
+    ``NestedSerializerConfig`` deliberately accepts the same flexible selector values as the
+    public ``Meta.fields`` / ``Meta.exclude`` keys.  The serializer input builder constructs both
+    create and partial shapes, and the mutation bind also fingerprints / validates nested maps
+    before building them.  A generator in a nested config would otherwise be consumed by the
+    first phase and make the second phase report a false empty input.  Rebuild each frozen config
+    with tuple selectors so every downstream phase sees the same declaration.
+
+    The mapping-path guard prevents a malicious self-referential mapping from making this
+    normalization recurse forever; ordinary repeated config mappings on separate branches are
+    still normalized independently.
+    """
+    if nested_configs is None:
+        return None
+    mapping_id = id(nested_configs)
+    if mapping_id in _mapping_path:
+        return nested_configs
+    normalized: dict[str, NestedSerializerConfig] = {}
+    next_path = _mapping_path | {mapping_id}
+    for field_name, config in nested_configs.items():
+        if not isinstance(config, NestedSerializerConfig):
+            normalized[field_name] = config
+            continue
+        normalized[field_name] = NestedSerializerConfig(
+            fields=normalize_field_name_sequence(
+                config.fields,
+                label="fields",
+                flavor="SerializerMutation",
+            ),
+            exclude=normalize_field_name_sequence(
+                config.exclude,
+                label="exclude",
+                flavor="SerializerMutation",
+            ),
+            optional_fields=normalize_field_name_sequence(
+                config.optional_fields,
+                label="optional_fields",
+                flavor="SerializerMutation",
+            ),
+            nested_fields=normalize_nested_serializer_configs(
+                config.nested_fields,
+                _mapping_path=next_path,
+            ),
+        )
+    return normalized
+
+
 def get_serializer_for_schema(
     serializer_class: type[serializers.BaseSerializer],
 ) -> dict[str, serializers.Field]:
@@ -1639,10 +1692,26 @@ def build_serializer_inputs(
     always runs there, with ``Meta.injected_fields`` as the only per-field
     subtraction.
     """
+    # ``fields`` / ``exclude`` may be supplied as any sequence accepted by the
+    # public Meta contract, including a one-shot iterator.  The preliminary
+    # effective-field resolution below validates and materializes that value;
+    # pass the normalized tuples to BOTH shape builds so the create pass cannot
+    # exhaust an iterator before the partial pass sees it.
+    normalized_fields = normalize_field_name_sequence(
+        fields,
+        label="fields",
+        flavor="SerializerMutation",
+    )
+    normalized_exclude = normalize_field_name_sequence(
+        exclude,
+        label="exclude",
+        flavor="SerializerMutation",
+    )
+    normalized_nested_configs = normalize_nested_serializer_configs(nested_configs)
     effective = resolve_effective_serializer_fields(
         serializer_class,
-        fields=fields,
-        exclude=exclude,
+        fields=normalized_fields,
+        exclude=normalized_exclude,
         field_map=field_map,
     )
     if guard_required:
@@ -1651,20 +1720,20 @@ def build_serializer_inputs(
     create_cls, create_shape = build_serializer_input_class(
         serializer_class,
         operation_kind=CREATE,
-        fields=fields,
-        exclude=exclude,
+        fields=normalized_fields,
+        exclude=normalized_exclude,
         optional_fields=optional_fields,
         field_map=field_map,
-        nested_configs=nested_configs,
+        nested_configs=normalized_nested_configs,
     )
     partial_cls, partial_shape = build_serializer_input_class(
         serializer_class,
         operation_kind=PARTIAL,
-        fields=fields,
-        exclude=exclude,
+        fields=normalized_fields,
+        exclude=normalized_exclude,
         optional_fields=optional_fields,
         field_map=field_map,
-        nested_configs=nested_configs,
+        nested_configs=normalized_nested_configs,
     )
     return create_cls, create_shape, partial_cls, partial_shape
 

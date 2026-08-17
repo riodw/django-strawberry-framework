@@ -37,6 +37,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..exceptions import ConfigurationError, _safe_type_name
+
 # ``ActiveField.kind`` markers. A supplied top-level field is exactly one of:
 # a logical operator key (filter ``and_`` / ``or_`` / ``not_``), a related
 # branch (a ``RelatedFilter`` / ``RelatedOrder`` declaration), or a leaf. The
@@ -47,6 +49,23 @@ from typing import Any
 LOGIC = "logic"
 RELATED = "related"
 LEAF = "leaf"
+
+
+def _field_name(value: Any, *, input_value: Any) -> str:
+    """Normalize one input key or reject it before lookup/permission dispatch."""
+    if not isinstance(value, str):
+        raise ConfigurationError(
+            "Set input field names must be strings; received an invalid field name in an "
+            f"input of type {_safe_type_name(input_value)}.",
+        )
+    return str.__str__(value)
+
+
+def _walk_error(input_value: Any, detail: str) -> ConfigurationError:
+    """Build a typed, safe traversal error for malformed consumer input."""
+    return ConfigurationError(
+        f"Could not traverse set input of type {_safe_type_name(input_value)}: {detail}.",
+    )
 
 
 def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
@@ -63,11 +82,32 @@ def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
     ``from ..utils.permissions import iter_input_items`` consumers keep working.
     """
     if isinstance(input_value, dict):
-        return list(input_value.items())
-    dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
+        pairs = dict.items(input_value)
+        return [(_field_name(name, input_value=input_value), value) for name, value in pairs]
+    try:
+        dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
+    except BaseException as exc:
+        raise _walk_error(input_value, "its dataclass metadata could not be read") from exc
     if dataclass_fields is None:
         return None
-    return [(name, getattr(input_value, name)) for name in dataclass_fields]
+    if not isinstance(dataclass_fields, Mapping):
+        raise ConfigurationError(
+            "Could not traverse set input of type "
+            f"{_safe_type_name(input_value)}: its dataclass metadata is not a mapping.",
+        )
+    try:
+        names = tuple(dataclass_fields)
+    except BaseException as exc:
+        raise _walk_error(input_value, "its dataclass fields could not be enumerated") from exc
+    items: list[tuple[str, Any]] = []
+    for name in names:
+        field_name = _field_name(name, input_value=input_value)
+        try:
+            value = getattr(input_value, field_name)
+        except BaseException as exc:
+            raise _walk_error(input_value, "a dataclass field value could not be read") from exc
+        items.append((field_name, value))
+    return items
 
 
 def input_field_value(input_value: Any, name: str) -> Any:
@@ -79,9 +119,13 @@ def input_field_value(input_value: Any, name: str) -> Any:
     needs one branch value (``utils/permissions.py::extract_branch_value``)
     composes this with ``is_inactive_value`` instead of re-spelling the sniff.
     """
+    field_name = _field_name(name, input_value=input_value)
     if isinstance(input_value, dict):
-        return input_value.get(name)
-    return getattr(input_value, name, None)
+        return dict.get(input_value, field_name)
+    try:
+        return getattr(input_value, field_name, None)
+    except BaseException as exc:
+        raise _walk_error(input_value, "a field value could not be read") from exc
 
 
 def is_inactive_value(value: Any, *, unset_sentinel: Any = None) -> bool:
@@ -175,21 +219,62 @@ def iter_active_fields(
     """
     if is_inactive_value(input_value, unset_sentinel=config.unset_sentinel):
         return
-    if config.handle_top_level_list and isinstance(input_value, list):
-        for element in input_value:
+    try:
+        handle_top_level_list = config.handle_top_level_list
+    except BaseException as exc:
+        raise _walk_error(input_value, "the traversal configuration could not be read") from exc
+    if handle_top_level_list and isinstance(input_value, list):
+        elements = list.__iter__(input_value)
+        for element in elements:
+            if is_inactive_value(element, unset_sentinel=config.unset_sentinel):
+                continue
+            if isinstance(element, list) or iter_input_items(element) is None:
+                raise ConfigurationError(
+                    "Order input list elements must be mapping or dataclass values; "
+                    f"received {_safe_type_name(element)}.",
+                )
             yield from iter_active_fields(set_cls, element, config)
         return
     items = iter_input_items(input_value)
     if items is None:
         return
-    related = getattr(set_cls, config.related_attr, {}) or {}
+    try:
+        related = getattr(set_cls, config.related_attr, {})
+    except BaseException as exc:
+        raise _walk_error(input_value, "the related-field declarations could not be read") from exc
+    if related is None:
+        related = {}
+    if not isinstance(related, Mapping):
+        raise ConfigurationError(
+            "Could not traverse set input of type "
+            f"{_safe_type_name(input_value)}: related-field declarations are not a mapping.",
+        )
     for python_attr, raw_value in items:
         if is_inactive_value(raw_value, unset_sentinel=config.unset_sentinel):
             continue
-        spec = config.field_specs.get((set_cls, python_attr))
-        if python_attr in config.logic_keys:
+        try:
+            spec = config.field_specs.get((set_cls, python_attr))
+            is_logic = python_attr in config.logic_keys
+        except BaseException as exc:
+            raise _walk_error(input_value, "field provenance could not be resolved") from exc
+        if is_logic:
             yield ActiveField(python_attr, raw_value, spec, LOGIC)
-        elif python_attr in related:
-            yield ActiveField(python_attr, raw_value, spec, RELATED, related[python_attr])
         else:
-            yield ActiveField(python_attr, raw_value, spec, LEAF)
+            try:
+                is_related = python_attr in related
+            except BaseException as exc:
+                raise _walk_error(
+                    input_value,
+                    "related-field declarations could not be checked",
+                ) from exc
+            if not is_related:
+                yield ActiveField(python_attr, raw_value, spec, LEAF)
+                continue
+            try:
+                related_obj = related[python_attr]
+            except BaseException as exc:
+                raise _walk_error(
+                    input_value,
+                    "a related-field declaration could not be read",
+                ) from exc
+            yield ActiveField(python_attr, raw_value, spec, RELATED, related_obj)

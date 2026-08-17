@@ -44,6 +44,8 @@ from django_strawberry_framework.utils.querysets import (
     _RETAINED_TYPES,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
+    _base_table_defect,
+    _coerced_manager_queryset,
     _concrete_or_none,
     _deferred_value_defect,
     _expr_graph_defect,
@@ -53,6 +55,7 @@ from django_strawberry_framework.utils.querysets import (
     _join_defect,
     _query_container_defect,
     _query_genuineness_defect,
+    _safe_class_name,
     _seal_or_defect,
     _sealed_prefetch_related_lookups,
     _type_is_genuinely_django,
@@ -68,6 +71,21 @@ from django_strawberry_framework.utils.querysets import (
     visible_related_objects,
 )
 from django_strawberry_framework.utils.write_transaction import write_pipeline
+
+
+def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
+    """A non-string ``__name__`` degrades to the metaclass name instead of a raw label."""
+
+    class _NonStringNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                return 42
+            return super().__getattribute__(name)
+
+    class _MalformedName(metaclass=_NonStringNameMeta):
+        pass
+
+    assert _safe_class_name(_MalformedName) == "_NonStringNameMeta"
 
 
 class _QsBoundaryBase(models.Model):
@@ -994,6 +1012,41 @@ def test_manager_result_alias_drift_fails_closed_sync():
     manager = _alias_drift_manager("other")
     with pytest.raises(ConfigurationError, match="preserve the manager's explicit routing"):
         apply_type_visibility_sync(_sync_hook_type(manager), Category.objects.all(), info=None)
+
+
+def test_hostile_foreign_query_type_name_cannot_escape_typed_defect():
+    """A foreign query metaclass cannot replace the typed boundary error with a raw one."""
+    from django.db.models import sql
+
+    class _ExplodingMeta(type):
+        def __getattribute__(cls, name):
+            if name in {"__name__", "__qualname__", "__module__"}:
+                raise RuntimeError("hostile type-name read")
+            return super().__getattribute__(name)
+
+    class _HostileQuery(sql.Query, metaclass=_ExplodingMeta):
+        pass
+
+    source = Category.objects.all()
+    source._query = _HostileQuery(Category)
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet.query is object")
+
+
+def test_hostile_manager_routing_metadata_cannot_escape_coercion_boundary():
+    """Manager routing failures become a typed coercion error, not a raw exception."""
+
+    class _HostileManager(models.Manager):
+        def __getattribute__(self, name):
+            if name == "_db":
+                raise RuntimeError("hostile manager routing read")
+            return super().__getattribute__(name)
+
+    manager = _HostileManager()
+    manager.model = Category
+    with pytest.raises(ConfigurationError, match="could not produce a QuerySet"):
+        normalize_query_source(manager)
 
 
 def test_unrouted_manager_result_self_routing_fails_closed():
@@ -4205,3 +4258,45 @@ def test_query_container_non_set_attr_fails_closed():
     query = Category.objects.all().query
     query.__dict__["used_aliases"] = ["not", "a", "set"]
     assert _query_container_defect(query) == ("untrusted", "query used_aliases is a list")
+
+
+def test_base_table_defect_labels_a_non_string_table_name():
+    """A non-string base table is reported as a defect naming the offending type."""
+    table_name = object()
+    query = SimpleNamespace(
+        alias_map={"base": SimpleNamespace(table_name=table_name)},
+    )
+
+    assert _base_table_defect(query, Category) == "object"
+
+
+def test_manager_coercion_rejects_unreadable_routing_state():
+    """A manager without routing state is refused by the coercion boundary."""
+
+    class _NoRoutingState:
+        __slots__ = ()
+
+    with pytest.raises(ConfigurationError, match="could not read the manager's routing state"):
+        _coerced_manager_queryset(_NoRoutingState())  # type: ignore[arg-type]
+
+
+def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeypatch):
+    """A model whose ``_meta`` cannot be read resolves to no concrete model."""
+    model_base = type(models.Model)
+
+    class _HostileModelBase(model_base):
+        def __getattribute__(self, name):
+            if name == "_meta" and type.__getattribute__(self, "_hostile_meta"):
+                raise RuntimeError("model metadata exploded")
+            return super().__getattribute__(name)
+
+    class _HostileModel(models.Model, metaclass=_HostileModelBase):
+        _hostile_meta = False
+
+        class Meta:
+            app_label = "test_querysets_hostile_meta"
+            managed = False
+
+    monkeypatch.setattr(_HostileModel, "_hostile_meta", True)
+
+    assert _concrete_or_none(_HostileModel) is None

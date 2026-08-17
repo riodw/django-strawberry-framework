@@ -105,7 +105,7 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     PROHIBITED_FILTER_KWARGS = frozenset({"_connector", "_negated"})
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_type_name
 from .write_transaction import (
     current_write_pipeline,
     pin_write_queryset,
@@ -134,6 +134,17 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
     ``django_strawberry_framework.types.relay`` for back-compat) so it
     can be imported without reaching into this private ``utils`` module.
     """
+
+
+def _safe_class_name(value: Any) -> str:
+    """Render a class name without allowing hostile metaclass metadata to escape."""
+    try:
+        name = value.__name__
+    except BaseException:
+        return _safe_type_name(value)
+    if isinstance(name, str):
+        return str.__str__(name)
+    return _safe_type_name(value)
 
 
 def reject_async_in_sync_context(
@@ -343,12 +354,15 @@ def _concrete_or_none(candidate: Any) -> type[models.Model] | None:
     ancestry are proven BEFORE any metadata is read, which also means a consumer
     ``_meta`` property / ``concrete_model`` descriptor on such an object never runs.
     """
-    if not isinstance(candidate, type) or not issubclass(candidate, models.Model):
+    try:
+        if not isinstance(candidate, type) or not issubclass(candidate, models.Model):
+            return None
+        meta = getattr(candidate, "_meta", None)
+        if meta is None:
+            return None
+        return getattr(meta, "concrete_model", None)
+    except BaseException:
         return None
-    meta = getattr(candidate, "_meta", None)
-    if meta is None:
-        return None
-    return getattr(meta, "concrete_model", None)
 
 
 def _base_table_defect(query: Any, concrete: type[models.Model]) -> str | None:
@@ -389,6 +403,8 @@ def _base_table_defect(query: Any, concrete: type[models.Model]) -> str | None:
     # exact value ``Query.base_table`` recomputes after ``clone`` drops its cache.
     first_alias = next(iter(alias_map))
     table = alias_map[first_alias].table_name
+    if type(table) is not str:
+        return _safe_type_name(table)
     if table != concrete._meta.db_table:
         return table
     return None
@@ -522,7 +538,7 @@ def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
     try:
         node_dict = object.__getattribute__(node, "__dict__")
     except AttributeError:
-        return ("untrusted", f"{label} is a {type(node).__name__} with no instance state")
+        return ("untrusted", f"{label} is a {_safe_type_name(node)} with no instance state")
     node_type = type(node)
     for key in node_dict:
         if type(key) is not str:
@@ -587,12 +603,12 @@ def _template_params_defect(node_dict: dict[Any, Any], label: str) -> tuple[str,
         return None
     extra = node_dict["extra"]
     if type(extra) is not dict:
-        return ("untrusted", f"{label} extra is a {type(extra).__name__}")
+        return ("untrusted", f"{label} extra is a {_safe_type_name(extra)}")
     for key, value in extra.items():
         if type(key) is not str:
             return ("untrusted", f"{label} extra has a non-string key")
         if value is not None and type(value) not in _TEMPLATE_PARAM_VALUE_TYPES:
-            return ("untrusted", f"{label} extra[{key!r}] is a {type(value).__name__}")
+            return ("untrusted", f"{label} extra[{key!r}] is a {_safe_type_name(value)}")
     return None
 
 
@@ -625,7 +641,7 @@ def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
     node_dict = object.__getattribute__(node, "__dict__")
     for attr in _SQL_TEMPLATE_ATTRS:
         if attr in node_dict and type(node_dict[attr]) is not str:
-            return ("untrusted", f"{label} {attr} is a {type(node_dict[attr]).__name__}")
+            return ("untrusted", f"{label} {attr} is a {_safe_type_name(node_dict[attr])}")
     return _template_params_defect(node_dict, label)
 
 
@@ -639,10 +655,10 @@ def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
     expression-graph proof accepts.
     """
     if type(params) not in (list, tuple):
-        return ("untrusted", f"{label} params is a {type(params).__name__}")
+        return ("untrusted", f"{label} params is a {_safe_type_name(params)}")
     for param in params:
         if not _is_inert_value(param):
-            return ("untrusted", f"{label} params carries a {type(param).__name__}")
+            return ("untrusted", f"{label} params carries a {_safe_type_name(param)}")
     return None
 
 
@@ -653,10 +669,10 @@ def _raw_sql_node_defect(node: Any, label: str) -> tuple[str, str] | None:
     if type(node) is ExtraWhere:
         sqls = node.sqls
         if type(sqls) not in (list, tuple):
-            return ("untrusted", f"{label} sqls is a {type(sqls).__name__}")
+            return ("untrusted", f"{label} sqls is a {_safe_type_name(sqls)}")
         for statement in sqls:
             if type(statement) is not str:
-                return ("untrusted", f"{label} sqls carries a {type(statement).__name__}")
+                return ("untrusted", f"{label} sqls carries a {_safe_type_name(statement)}")
         return _raw_sql_params_defect(node.params, label)
     return None
 
@@ -775,7 +791,7 @@ def _expression_state_defect(node: Any, label: str) -> tuple[str, str] | None:
     node_dict = object.__getattribute__(node, "__dict__")
     for attr in _EXPRESSION_SEQUENCE_STATE_ATTRS:
         if attr in node_dict and type(node_dict[attr]) not in (list, tuple):
-            return ("untrusted", f"{label} {attr} is a {type(node_dict[attr]).__name__}")
+            return ("untrusted", f"{label} {attr} is a {_safe_type_name(node_dict[attr])}")
     return None
 
 
@@ -801,7 +817,7 @@ def _genuine_node_defect(
     """
     node_type = type(node)
     if not _type_is_genuinely_django(node_type):
-        return ("untrusted", f"{label} {phrase} {node_type.__name__}{suffix}")
+        return ("untrusted", f"{label} {phrase} {_safe_type_name(node)}{suffix}")
     return _shadow_defect(node, label)
 
 
@@ -827,7 +843,7 @@ def _expr_mapping_key_detail(label: str, key: Any) -> str:  # noqa: ARG001 - sha
 
 def _deferred_mapping_key_detail(label: str, key: Any) -> str:
     """Non-string mapping-key detail for the deferred-filter value walk."""
-    return f"{label} mapping key is a {type(key).__name__}"
+    return f"{label} mapping key is a {_safe_type_name(key)}"
 
 
 def _container_defect(
@@ -962,7 +978,7 @@ def _direct_rhs_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, s
     if hook_defect is not None:
         return hook_defect
     if not issubclass(value_type, _DIRECT_RHS_DATA_BASES):
-        return ("untrusted", f"{label} lookup rhs is a {value_type.__name__}")
+        return ("untrusted", f"{label} lookup rhs is a {_safe_type_name(value)}")
     return None
 
 
@@ -1081,7 +1097,7 @@ def _expr_sequence_defect(holder: Any, walk: _GraphWalk, label: str) -> tuple[st
     if holder is None or type(holder) is bool:
         return None
     if type(holder) not in (list, tuple):
-        return ("untrusted", f"query {label} is a {type(holder).__name__}")
+        return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is str:
             continue
@@ -1105,10 +1121,10 @@ def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
     if holder is None:
         return None
     if type(holder) not in (tuple, list):
-        return ("untrusted", f"query {label} is a {type(holder).__name__}")
+        return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is not str:
-            return ("untrusted", f"query {label} carries a {type(item).__name__}")
+            return ("untrusted", f"query {label} carries a {_safe_type_name(item)}")
     return None
 
 
@@ -1177,10 +1193,10 @@ def _where_tree_defect(node: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     # run its ``__str__`` at compile time (spec-045 Decision 2).
     connector = node_dict.get("connector")
     if connector is not None and type(connector) is not str:
-        return ("untrusted", f"where node connector is a {type(connector).__name__}")
+        return ("untrusted", f"where node connector is a {_safe_type_name(connector)}")
     children = node_dict.get("children")
     if children is not None and type(children) not in (list, tuple):
-        return ("untrusted", f"where node children is a {type(children).__name__}")
+        return ("untrusted", f"where node children is a {_safe_type_name(children)}")
     for child in children or ():
         child_defect = _where_tree_defect(child, walk)
         if child_defect is not None:
@@ -1201,10 +1217,10 @@ def _select_related_defect(select_related: Any) -> tuple[str, str] | None:
     if isinstance(select_related, bool):
         return None
     if type(select_related) is not dict:
-        return ("untrusted", f"select_related is a {type(select_related).__name__}")
+        return ("untrusted", f"select_related is a {_safe_type_name(select_related)}")
     for key, value in select_related.items():
         if type(key) is not str:
-            return ("untrusted", f"select_related key is a {type(key).__name__}")
+            return ("untrusted", f"select_related key is a {_safe_type_name(key)}")
         nested_defect = _select_related_defect(value)
         if nested_defect is not None:
             return nested_defect
@@ -1255,20 +1271,20 @@ def _query_payload_defect(query: Any) -> tuple[str, str] | None:
     refcount = getattr(query, "alias_refcount", None) or {}
     for alias, count in refcount.items():
         if type(count) is not int:
-            return ("untrusted", f"query alias_refcount[{alias!r}] is a {type(count).__name__}")
+            return ("untrusted", f"query alias_refcount[{alias!r}] is a {_safe_type_name(count)}")
     external = getattr(query, "external_aliases", None) or {}
     for alias, flag in external.items():
         if type(flag) is not bool:
-            return ("untrusted", f"query external_aliases[{alias!r}] is a {type(flag).__name__}")
+            return ("untrusted", f"query external_aliases[{alias!r}] is a {_safe_type_name(flag)}")
     table_map = getattr(query, "table_map", None) or {}
     for table, aliases in table_map.items():
         if type(aliases) is not list:
-            return ("untrusted", f"query table_map[{table!r}] is a {type(aliases).__name__}")
+            return ("untrusted", f"query table_map[{table!r}] is a {_safe_type_name(aliases)}")
         for alias in aliases:
             if type(alias) is not str:
                 return (
                     "untrusted",
-                    f"query table_map[{table!r}] carries a {type(alias).__name__}",
+                    f"query table_map[{table!r}] carries a {_safe_type_name(alias)}",
                 )
     for alias, relation in (getattr(query, "_filtered_relations", None) or {}).items():
         relation_defect = _genuine_node_defect(relation, f"query _filtered_relations[{alias!r}]")
@@ -1549,11 +1565,11 @@ def _normalized_bound_value(value: Any) -> Any:
         if issubclass(value_type, _RETAINED_SCHEMA_BASES):
             return value
         if not issubclass(value_type, enum.Enum):
-            raise _UntrustedBoundValueError(f"binds a {value_type.__name__} bound value")
+            raise _UntrustedBoundValueError(f"binds a {_safe_type_name(value)} bound value")
         member_state = object.__getattribute__(value, "__dict__")
         normalized = _normalized_bound_value(member_state["_value_"])
     if not _is_inert_value(normalized):
-        raise _UntrustedBoundValueError(f"binds a {value_type.__name__} bound value")
+        raise _UntrustedBoundValueError(f"binds a {_safe_type_name(value)} bound value")
     return normalized
 
 
@@ -1836,7 +1852,7 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
         if value is None:
             continue
         if type(value) is not dict:
-            return ("untrusted", f"query {attr} is a {type(value).__name__}")
+            return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for key in value:
             if type(key) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
@@ -1848,16 +1864,16 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
         if value is None:
             continue
         if type(value) not in (set, frozenset):
-            return ("untrusted", f"query {attr} is a {type(value).__name__}")
+            return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for member in value:
             if type(member) is not str:
-                return ("untrusted", f"query {attr} carries a {type(member).__name__}")
+                return ("untrusted", f"query {attr} carries a {_safe_type_name(member)}")
     for attr in ("extra", "_extra_select_cache"):
         extra = getattr(query, attr, None)
         if extra is None:
             continue
         if type(extra) is not dict:
-            return ("untrusted", f"query {attr} is a {type(extra).__name__}")
+            return ("untrusted", f"query {attr} is a {_safe_type_name(extra)}")
         for alias, payload in extra.items():
             if type(alias) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
@@ -1867,14 +1883,14 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
             if type(statement) is not str:
                 return (
                     "untrusted",
-                    f"query {attr}[{alias!r}] SQL is a {type(statement).__name__}",
+                    f"query {attr}[{alias!r}] SQL is a {_safe_type_name(statement)}",
                 )
             params_defect = _raw_sql_params_defect(params, f"query {attr}[{alias!r}]")
             if params_defect is not None:
                 return params_defect
     combined = getattr(query, "combined_queries", None)
     if combined is not None and type(combined) is not tuple:
-        return ("untrusted", f"query combined_queries is a {type(combined).__name__}")
+        return ("untrusted", f"query combined_queries is a {_safe_type_name(combined)}")
     return None
 
 
@@ -1941,7 +1957,7 @@ def _query_genuineness_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] |
     branches under the same rule.
     """
     if type(query) is not sql.Query:
-        return ("untrusted", f"embedded query is a {type(query).__name__}")
+        return ("untrusted", f"embedded query is a {_safe_type_name(query)}")
     query_id = id(query)
     state = walk.begin(query_id)
     if state is not _WalkState.ENTERED:
@@ -2027,7 +2043,7 @@ def _combined_query_table_defect(
         return _walk_short_circuit(state, "combined-query branches contain a reference cycle")
     query_model = getattr(query, "model", None)
     if _concrete_or_none(query_model) is not concrete:
-        return ("table", getattr(query_model, "__name__", type(query_model).__name__))
+        return ("table", _safe_class_name(query_model))
     shadow_defect = _shadow_defect(query, "query instance")
     if shadow_defect is not None:
         return shadow_defect
@@ -2045,7 +2061,7 @@ def _combined_query_table_defect(
         return ("table", base_defect)
     for branch in getattr(query, "combined_queries", ()) or ():
         if type(branch) is not sql.Query:
-            return ("untrusted", f"combined-query branch is {type(branch).__name__}")
+            return ("untrusted", f"combined-query branch is {_safe_type_name(branch)}")
         defect = _combined_query_table_defect(branch, concrete, branches)
         if defect is not None:
             return defect
@@ -2146,7 +2162,7 @@ def _sealed_prefetch_related_lookups(
     if lookups is None:
         return (), None
     if type(lookups) not in (tuple, list):
-        return None, ("untrusted", f"{cls_name} prefetch lookups is a {type(lookups).__name__}")
+        return None, ("untrusted", f"{cls_name} prefetch lookups is a {_safe_type_name(lookups)}")
     sealed_entries: list[Any] = []
     for entry in lookups:
         if not isinstance(entry, Prefetch):
@@ -2156,7 +2172,7 @@ def _sealed_prefetch_related_lookups(
             if type(entry) is not str:
                 return None, (
                     "untrusted",
-                    f"{cls_name} prefetch lookup is a {type(entry).__name__}",
+                    f"{cls_name} prefetch lookup is a {_safe_type_name(entry)}",
                 )
             sealed_entries.append(entry)
             continue
@@ -2254,7 +2270,7 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
             elif type(child) is tuple and len(child) == 2 and type(child[0]) is str:
                 child_defect = _deferred_value_defect(child[1], walk, label)
             else:
-                return ("untrusted", f"{label} Q child is a {type(child).__name__}")
+                return ("untrusted", f"{label} Q child is a {_safe_type_name(child)}")
             if child_defect is not None:
                 return child_defect
         walk.leave(value_id)
@@ -2277,7 +2293,7 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
         if "resolve_expression" in object.__getattribute__(value, "__dict__"):
             return ("untrusted", f"{label} model instance shadows resolve_expression")
         return None
-    return ("untrusted", f"{label} is a {value_type.__name__}")
+    return ("untrusted", f"{label} is a {_safe_type_name(value)}")
 
 
 def _bake_deferred_filter_or_defect(
@@ -2306,9 +2322,9 @@ def _bake_deferred_filter_or_defect(
         return ("untrusted", f"{cls_name} deferred filter is malformed")
     negate, args, kwargs = deferred
     if type(kwargs) is not dict:
-        return ("untrusted", f"{cls_name} deferred filter kwargs is a {type(kwargs).__name__}")
+        return ("untrusted", f"{cls_name} deferred filter kwargs is a {_safe_type_name(kwargs)}")
     if type(args) not in (tuple, list):
-        return ("untrusted", f"{cls_name} deferred filter args is a {type(args).__name__}")
+        return ("untrusted", f"{cls_name} deferred filter args is a {_safe_type_name(args)}")
     if PROHIBITED_FILTER_KWARGS.intersection(kwargs):
         return ("untrusted", f"{cls_name} deferred filter carries prohibited kwargs")
     walk = _GraphWalk()
@@ -2318,7 +2334,10 @@ def _bake_deferred_filter_or_defect(
             return arg_defect
     for key, value in kwargs.items():
         if type(key) is not str:
-            return ("untrusted", f"{cls_name} deferred filter kwarg key is a {type(key).__name__}")
+            return (
+                "untrusted",
+                f"{cls_name} deferred filter kwarg key is a {_safe_type_name(key)}",
+            )
         kwarg_defect = _deferred_value_defect(value, walk, f"{cls_name} deferred filter {key!r}")
         if kwarg_defect is not None:
             return kwarg_defect
@@ -2349,25 +2368,25 @@ def _queryset_state_defect(state: dict, cls_name: str) -> tuple[str, str] | None
     """
     db = state.get("_db")
     if db is not None and type(db) is not str:
-        return ("untrusted", f"{cls_name}._db is a {type(db).__name__}")
+        return ("untrusted", f"{cls_name}._db is a {_safe_type_name(db)}")
     hints = state.get("_hints")
     if hints is not None:
         if type(hints) is not dict:
-            return ("untrusted", f"{cls_name}._hints is a {type(hints).__name__}")
+            return ("untrusted", f"{cls_name}._hints is a {_safe_type_name(hints)}")
         for key in hints:
             if type(key) is not str:
                 return ("untrusted", f"{cls_name}._hints has a non-string key")
     fields = state.get("_fields")
     if fields is not None:
         if type(fields) not in (tuple, list):
-            return ("untrusted", f"{cls_name}._fields is a {type(fields).__name__}")
+            return ("untrusted", f"{cls_name}._fields is a {_safe_type_name(fields)}")
         for name in fields:
             if type(name) is not str:
-                return ("untrusted", f"{cls_name}._fields carries a {type(name).__name__}")
+                return ("untrusted", f"{cls_name}._fields carries a {_safe_type_name(name)}")
     for attr in ("_sticky_filter", "_for_write"):
         flag = state.get(attr)
         if flag is not None and type(flag) is not bool:
-            return ("untrusted", f"{cls_name}.{attr} is a {type(flag).__name__}")
+            return ("untrusted", f"{cls_name}.{attr} is a {_safe_type_name(flag)}")
     return None
 
 
@@ -2483,16 +2502,16 @@ def _seal_or_defect(
     cannot rewrite the visibility predicate between seal and compile.
     """
     if not isinstance(candidate, models.QuerySet):
-        return None, ("type", type(candidate).__name__)
+        return None, ("type", _safe_type_name(candidate))
     state = object.__getattribute__(candidate, "__dict__")
     query = state.get("_query")
     qmodel = state.get("model")
     db = state.get("_db")
     iterable = state.get("_iterable_class")
     concrete = model._meta.concrete_model
-    cls_name = type(candidate).__name__
+    cls_name = _safe_type_name(candidate)
     if _concrete_or_none(qmodel) is not concrete:
-        return None, ("table", getattr(qmodel, "__name__", type(qmodel).__name__))
+        return None, ("table", _safe_class_name(qmodel))
     # The outer exact-type check must precede the table walk AND the deferred-filter
     # resolution below: the walk reads ``query.model`` / ``query.alias_map`` /
     # ``query.combined_queries`` through normal attribute access, which on a foreign
@@ -2500,7 +2519,7 @@ def _seal_or_defect(
     # proven-genuine ``sql.Query`` is walked (the walk itself type-checks each branch
     # before recursing into it, extending the same discipline down the combinator tree).
     if type(query) is not sql.Query:
-        return None, ("untrusted", f"{cls_name}.query is {type(query).__name__}")
+        return None, ("untrusted", f"{cls_name}.query is {_safe_type_name(query)}")
     # Pin every retained ``QuerySet`` state field (``_db`` / ``_hints`` / ``_fields`` /
     # ``_sticky_filter`` / ``_for_write``) to its exact shape BEFORE any truthiness /
     # comparison / copy runs on it, so a consumer ``__bool__`` / ``__eq__`` / ``__iter__``
@@ -2574,7 +2593,7 @@ def _seal_or_defect(
     # candidate iterable, dispatching a consumer metaclass ``__hash__`` / ``__eq__``
     # (spec-045 Decision 5). ``is`` compares object identity only.
     if not any(iterable is cls for cls in _DJANGO_ITERABLE_CLASSES):
-        detail = getattr(iterable, "__name__", type(iterable).__name__)
+        detail = _safe_class_name(iterable)
         return None, ("untrusted", f"{cls_name}._iterable_class is {detail}")
     # The outer effective alias is what this seal pins the queryset onto (a required
     # alias, else the source's own explicit ``_db``); prefetch children are sealed
@@ -2592,7 +2611,7 @@ def _seal_or_defect(
     if require_model_rows and not allow_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
     if require_model_rows and iterable is not ModelIterable:
-        return None, ("projection", getattr(iterable, "__name__", type(iterable).__name__))
+        return None, ("projection", _safe_class_name(iterable))
     if require_shared_alias:
         # A prefetch child: its explicit ``_db`` must EQUAL the outer effective alias,
         # INCLUDING when that alias is ``None`` (an unrouted parent forces an unrouted
@@ -2643,18 +2662,32 @@ def _coerced_manager_queryset(manager: models.Manager) -> models.QuerySet:
     result validation (concrete table, actual base table, trust, alias); this
     helper only closes the Manager-coercion-specific holes.
     """
-    explicit = getattr(manager, "_db", None)
-    queryset = manager.all()
+    try:
+        manager_state = object.__getattribute__(manager, "__dict__")
+        explicit = manager_state.get("_db")
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"A {_safe_type_name(manager)}.all() coercion could not read the manager's "
+            "routing state; a Manager with unreadable routing metadata cannot enter the "
+            "visibility boundary.",
+        ) from exc
+    try:
+        queryset = manager.all()
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"A {_safe_type_name(manager)}.all() coercion could not produce a QuerySet; "
+            "the Manager's query source raised while entering the visibility boundary.",
+        ) from exc
     if not isinstance(queryset, models.QuerySet):
         raise ConfigurationError(
-            f"A {type(manager).__name__}.all() coercion must produce a QuerySet, but "
-            f"returned {type(queryset).__name__}; a Manager that degrades into a list "
+            f"A {_safe_type_name(manager)}.all() coercion must produce a QuerySet, but "
+            f"returned {_safe_type_name(queryset)}; a Manager that degrades into a list "
             f"or other non-queryset cannot enter the visibility boundary and must not "
             f"be treated as the deliberate plain-iterable bypass.",
         )
     if queryset._db != explicit:
         raise ConfigurationError(
-            f"A {type(manager).__name__} pinned to alias {explicit!r} produced a "
+            f"A {_safe_type_name(manager)} pinned to alias {explicit!r} produced a "
             f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "
             f"preserve the manager's explicit routing exactly (an unrouted manager "
             f"must stay unrouted until the resolution's required alias pins it), so a "
@@ -2684,20 +2717,20 @@ def _visibility_result_error(
         return ConfigurationError(render_error(code, detail))
     if code == "type":
         return ConfigurationError(
-            f"{type_cls.__name__}.get_queryset must return a QuerySet or Manager of "
-            f"{model.__name__} rows; got {detail}. A list / generator / iterable has no "
+            f"{_safe_class_name(type_cls)}.get_queryset must return a QuerySet or Manager of "
+            f"{_safe_class_name(model)} rows; got {detail}. A list / generator / iterable has no "
             f"lazy query for the surface to compose into, and None discards the "
             f"visibility contract entirely.",
         )
     if code == "table":
         return ConfigurationError(
-            f"{type_cls.__name__}.get_queryset returned a {detail} queryset; the "
-            f"visibility contract composes over {model.__name__}'s concrete table "
+            f"{_safe_class_name(type_cls)}.get_queryset returned a {detail} queryset; the "
+            f"visibility contract composes over {_safe_class_name(model)}'s concrete table "
             f"(proxy siblings are compatible, MTI children and unrelated models are not).",
         )
     if code == "untrusted":
         return ConfigurationError(
-            f"{type_cls.__name__}.get_queryset returned a queryset that cannot be sealed "
+            f"{_safe_class_name(type_cls)}.get_queryset returned a queryset that cannot be sealed "
             f"into a framework-owned execution queryset ({detail}); the visibility "
             f"boundary rebuilds a plain QuerySet from the validated query state, and a "
             f"foreign Query class, a foreign row iterable, or an unresolved deferred "
@@ -2706,7 +2739,7 @@ def _visibility_result_error(
         )
     if code == "sliced":
         return ConfigurationError(
-            f"{type_cls.__name__}.get_queryset returned a sliced queryset ({detail}); "
+            f"{_safe_class_name(type_cls)}.get_queryset returned a sliced queryset ({detail}); "
             f"the surface composes further filters and ordering onto the hook result, "
             f"and Django forbids refiltering or reordering a sliced query, so the next "
             f"transform would raise a raw TypeError outside the visibility contract. "
@@ -2714,16 +2747,16 @@ def _visibility_result_error(
         )
     if code == "projection":
         return ConfigurationError(
-            f"{type_cls.__name__}.get_queryset returned a {detail} projection; the "
-            f"visibility contract composes over {model.__name__} model rows, not a "
+            f"{_safe_class_name(type_cls)}.get_queryset returned a {detail} projection; the "
+            f"visibility contract composes over {_safe_class_name(model)} model rows, not a "
             f".values() / .values_list() (or custom-iterable) projection whose rows "
-            f"are not {model.__name__} instances. Return a queryset of model rows.",
+            f"are not {_safe_class_name(model)} instances. Return a queryset of model rows.",
         )
     # ``code == "alias"`` -- the only remaining defect the shared checker emits;
     # an unhandled future code would fall through silently, so this last branch
     # is unconditional.
     return ConfigurationError(
-        f"{type_cls.__name__}.get_queryset returned a queryset routed to alias "
+        f"{_safe_class_name(type_cls)}.get_queryset returned a queryset routed to alias "
         f"{detail!r}, but this resolution is pinned to alias {required_alias!r}; "
         f"a visibility hook cannot re-route a pinned resolution. Remove the "
         f".using(...) call.",
@@ -2734,6 +2767,7 @@ def _prepared_visibility_source(
     type_cls: type,
     queryset: Any,
     *,
+    render_error: Any = None,
     require_model_rows: bool = True,
     allow_sliced: bool = False,
 ) -> tuple[models.QuerySet, str | None]:
@@ -2765,6 +2799,14 @@ def _prepared_visibility_source(
     3. ``None`` - no required alias; an unpinned read hook keeps its
        documented ability to choose ``.using(alias)`` itself.
 
+    ``render_error`` mirrors ``_normalized_visibility_result``'s parameter of the
+    same name: a ``(code, detail) -> str`` callable whose message replaces the
+    default wording wholesale. A surface that is not ``apply_type_visibility``
+    itself - ``permissions.py::apply_cascade_permissions``, whose source is a
+    consumer hook's own argument - passes one so a source defect is attributed
+    to the call the consumer actually made. Surfaces without bespoke prose take
+    the defaults below.
+
     Resolver-source ``Manager`` coercion stays in ``normalize_query_source``;
     framework-created seeds are querysets by construction. Preparation composes
     lazy query state only; it executes zero SQL.
@@ -2779,15 +2821,17 @@ def _prepared_visibility_source(
     )
     if defect is not None:
         code, detail = defect
+        if render_error is not None:
+            raise ConfigurationError(render_error(code, detail))
         if code == "type":
             raise ConfigurationError(
-                f"apply_type_visibility requires a QuerySet of {model.__name__} rows "
-                f"for {type_cls.__name__}; got {detail}. Coerce a Manager with .all(); "
+                f"apply_type_visibility requires a QuerySet of {_safe_class_name(model)} rows "
+                f"for {_safe_class_name(type_cls)}; got {detail}. Coerce a Manager with .all(); "
                 f"a list has no lazy query for the hook to narrow.",
             )
         if code == "untrusted":
             raise ConfigurationError(
-                f"apply_type_visibility for {type_cls.__name__} got a source queryset "
+                f"apply_type_visibility for {_safe_class_name(type_cls)} got a source queryset "
                 f"that cannot be sealed into a framework-owned execution queryset "
                 f"({detail}); the boundary rebuilds a plain QuerySet from the validated "
                 f"query state, and a foreign Query class, a foreign row iterable, or an "
@@ -2796,7 +2840,7 @@ def _prepared_visibility_source(
             )
         if code == "sliced":
             raise ConfigurationError(
-                f"apply_type_visibility for {type_cls.__name__} got a sliced source "
+                f"apply_type_visibility for {_safe_class_name(type_cls)} got a sliced source "
                 f"queryset ({detail}); the visibility hook and the surface compose "
                 f"further filters and ordering onto the source, and Django forbids "
                 f"refiltering or reordering a sliced query. Pass the unsliced queryset "
@@ -2804,15 +2848,15 @@ def _prepared_visibility_source(
             )
         if code == "projection":
             raise ConfigurationError(
-                f"apply_type_visibility for {type_cls.__name__} got a {detail} projection "
-                f"source; the visibility contract composes over {model.__name__} model "
+                f"apply_type_visibility for {_safe_class_name(type_cls)} got a {detail} projection "
+                f"source; the visibility contract composes over {_safe_class_name(model)} model "
                 f"rows, not a .values() / .values_list() (or custom-iterable) projection.",
             )
         # ``code == "table"`` -- the only other defect reachable with no
         # required alias on a model-row source.
         raise ConfigurationError(
-            f"apply_type_visibility for {type_cls.__name__} requires a QuerySet over "
-            f"{model.__name__}'s concrete table; got a {detail} queryset (proxy "
+            f"apply_type_visibility for {_safe_class_name(type_cls)} requires a QuerySet over "
+            f"{_safe_class_name(model)}'s concrete table; got a {detail} queryset (proxy "
             f"siblings are compatible, MTI children and unrelated models are not).",
         )
     pipeline = current_write_pipeline()
@@ -2820,7 +2864,7 @@ def _prepared_visibility_source(
         queryset = pin_write_queryset(
             queryset,
             pipeline.alias,
-            owner=f"The {type_cls.__name__} visibility source",
+            owner=f"The {_safe_class_name(type_cls)} visibility source",
         )
         required_alias = pipeline.alias
     else:
@@ -2943,7 +2987,7 @@ def apply_type_visibility_sync(
     result = type_cls.get_queryset(queryset, info)
     result = reject_async_in_sync_context(
         result,
-        owner=type_cls.__name__,
+        owner=_safe_class_name(type_cls),
         method="get_queryset",
         context="resolver",
         recourse=async_recourse,
@@ -3185,7 +3229,7 @@ async def apply_type_visibility_async(
         if inspect.isawaitable(result):
             _dispose_sync_awaitable(result)
             raise ConfigurationError(
-                f"{type_cls.__name__}.get_queryset resolved to a nested awaitable; an "
+                f"{_safe_class_name(type_cls)}.get_queryset resolved to a nested awaitable; an "
                 f"async get_queryset must resolve to a QuerySet (or Manager) after ONE "
                 f"await, and an unbounded awaitable chain is never consumed.",
             )
@@ -3208,7 +3252,7 @@ def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
         return
     _dispose_sync_awaitable(source)
     raise SyncMisuseError(
-        f"A sync {type_cls.__name__} consumer resolver returned an awaitable. "
+        f"A sync {_safe_class_name(type_cls)} consumer resolver returned an awaitable. "
         "Declare the resolver `async def` (or use an async callable) so the "
         "field awaits it and applies the get_queryset visibility hook; a plain "
         "`def` resolver that returns an awaitable is committed to the sync path "
@@ -3239,7 +3283,7 @@ def reject_residual_async_source(source: Any, type_cls: type) -> None:
         return
     _dispose_sync_awaitable(source)
     raise ConfigurationError(
-        f"An async {type_cls.__name__} consumer resolver resolved to another "
+        f"An async {_safe_class_name(type_cls)} consumer resolver resolved to another "
         f"awaitable after being awaited; a nested awaitable is neither a QuerySet "
         f"nor a plain iterable, and passing it through would silently skip the "
         f"get_queryset visibility hook. Return the queryset (or iterable) directly.",

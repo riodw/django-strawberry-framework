@@ -10,8 +10,10 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models.constants import LOOKUP_SEP
 
 from django_strawberry_framework.exceptions import (
+    ConfigurationError,
     LookupValidationError,
     PathResolutionError,
+    _safe_type_name,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
@@ -28,6 +30,42 @@ RelationKind: TypeAlias = Literal[
 MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
     {"many", "reverse_many_to_one", "generic"},
 )
+
+_MISSING = object()
+
+
+def _relation_attr(field: object, name: str, default: Any = _MISSING) -> Any:
+    """Read relation metadata without allowing consumer objects to escape raw errors."""
+    try:
+        return getattr(field, name, default)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not read relation metadata {name!r} from {_safe_type_name(field)}.",
+        ) from exc
+
+
+def _relation_bool(field: object, name: str, default: bool = False) -> bool:
+    """Read one relation flag, rejecting hostile or malformed metadata safely."""
+    value = _relation_attr(field, name, default)
+    if value is None:
+        value = default
+    if type(value) is not bool:
+        raise ConfigurationError(
+            f"Relation metadata {name!r} on {_safe_type_name(field)} must be a bool; "
+            f"got {_safe_type_name(value)}.",
+        )
+    return value
+
+
+def _relation_name(field: object, name: str) -> str | None:
+    """Read an optional GenericRelation field-name slot without dispatching errors."""
+    value = _relation_attr(field, name, None)
+    if value is not None and type(value) is not str:
+        raise ConfigurationError(
+            f"Relation metadata {name!r} on {_safe_type_name(field)} must be a string or "
+            f"None; got {_safe_type_name(value)}.",
+        )
+    return value
 
 
 class _RelationFieldLike(Protocol):
@@ -95,7 +133,15 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
         ``ForeignKey``-like -> ``"forward_single"``;
         MTI ``<parent>_ptr``-like -> ``"forward_single"``.
     """
-    if getattr(field, "many_to_many", False):
+    many_to_many = _relation_bool(field, "many_to_many")
+    one_to_many = _relation_bool(field, "one_to_many")
+    one_to_one = _relation_bool(field, "one_to_one")
+    auto_created = _relation_bool(field, "auto_created")
+    concrete = _relation_bool(field, "concrete")
+    content_type_field_name = _relation_name(field, "content_type_field_name")
+    object_id_field_name = _relation_name(field, "object_id_field_name")
+
+    if many_to_many:
         return "many"
     # A ``GenericRelation`` (and a ``FieldMeta`` snapshot of one) is detected
     # duck-typed BEFORE the ``one_to_many`` ``"many"`` fallback below. The
@@ -103,27 +149,23 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
     # ``FieldMeta`` is a slotted dataclass that ALWAYS carries the two slots, so
     # ``hasattr`` would misclassify every ``FieldMeta`` as ``"generic"`` - only a
     # genuine ``GenericRelation`` populates the slots with real field names.
-    if (
-        getattr(field, "content_type_field_name", None) is not None
-        and getattr(field, "object_id_field_name", None) is not None
-    ):
+    if content_type_field_name is not None and object_id_field_name is not None:
         return "generic"
-    if getattr(field, "one_to_many", False):
-        if getattr(field, "auto_created", False):
+    if one_to_many:
+        if auto_created:
             return "reverse_many_to_one"
         return "many"
-    if (
-        getattr(field, "one_to_one", False)
-        and getattr(field, "auto_created", False)
-        and not getattr(field, "concrete", False)
-    ):
+    if one_to_one and auto_created and not concrete:
         return "reverse_one_to_one"
     return "forward_single"
 
 
 def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     """Return ``True`` for relation kinds represented as GraphQL lists."""
-    return kind in MANY_SIDE_RELATION_KINDS
+    try:
+        return kind in MANY_SIDE_RELATION_KINDS
+    except BaseException:
+        return False
 
 
 @dataclass(frozen=True)
@@ -179,9 +221,14 @@ def _resolve_segment_field(model: type, segment: str) -> object:
     typed ``PathResolutionError`` (this includes a hidden reverse relation
     declared ``related_name="+"``, whose reverse name ``get_field`` rejects).
     """
-    if segment == "pk":
-        return model._meta.pk
-    return model._meta.get_field(segment)
+    try:
+        if segment == "pk":
+            return model._meta.pk
+        return model._meta.get_field(segment)
+    except FieldDoesNotExist:
+        raise
+    except BaseException:
+        raise FieldDoesNotExist(segment) from None
 
 
 def _is_traversable_relation(field: object) -> bool:
@@ -193,7 +240,12 @@ def _is_traversable_relation(field: object) -> bool:
     instead of the typed error, so ``path_infos`` is touched ONLY after this
     returns ``True``.
     """
-    return bool(getattr(field, "is_relation", False)) and hasattr(field, "path_infos")
+    try:
+        if not _relation_bool(field, "is_relation"):
+            return False
+        return getattr(field, "path_infos", _MISSING) is not _MISSING
+    except BaseException:
+        return False
 
 
 def classify_path(model: type, field_path: str) -> ClassifiedPath:
@@ -217,6 +269,8 @@ def classify_path(model: type, field_path: str) -> ClassifiedPath:
     hot ``path_traverses_to_many`` path, keyed on the hashable,
     definition-time-stable ``(model, field_path)`` pair.
     """
+    if type(field_path) is not str:
+        raise PathResolutionError(model, field_path, field_path) from None
     segments = field_path.split(LOOKUP_SEP)
     current = model
     hops: list[RelationPathHop] = []
@@ -227,19 +281,36 @@ def classify_path(model: type, field_path: str) -> ClassifiedPath:
             field = _resolve_segment_field(current, segment)
         except FieldDoesNotExist:
             raise PathResolutionError(current, field_path, segment) from None
-        if getattr(field, "is_relation", False):
+        try:
+            is_relation = _relation_bool(field, "is_relation")
+        except ConfigurationError:
+            raise PathResolutionError(current, field_path, segment) from None
+        if is_relation:
             if not _is_traversable_relation(field):
                 raise PathResolutionError(current, field_path, segment)
-            path_infos = field.path_infos  # type: ignore[attr-defined]
-            if not path_infos:
-                raise PathResolutionError(current, field_path, segment)
-            target_model = path_infos[-1].to_opts.model
+            try:
+                path_infos = field.path_infos
+                if type(path_infos) not in (list, tuple) or not path_infos:
+                    raise ValueError("relation path_infos is empty or malformed")
+                last_path = path_infos[-1]
+                target_model = last_path.to_opts.model
+                many_side = False
+                for path_info in path_infos:
+                    if _relation_bool(path_info, "m2m"):
+                        many_side = True
+                        break
+            except BaseException:
+                raise PathResolutionError(current, field_path, segment) from None
+            try:
+                kind = relation_kind(field)
+            except BaseException:
+                raise PathResolutionError(current, field_path, segment) from None
             hops.append(
                 RelationPathHop(
                     segment=segment,
-                    kind=relation_kind(field),  # type: ignore[arg-type]
+                    kind=kind,
                     target_model=target_model,
-                    many_side=any(pi.m2m for pi in path_infos),
+                    many_side=many_side,
                 ),
             )
             current = target_model
@@ -298,6 +369,8 @@ def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
     part, an unresolvable mid-chain transform, or a final part that is neither
     a lookup nor a trailing transform with a supported ``exact``.
     """
+    if type(lookup_expr) is not str:
+        raise LookupValidationError(terminal, lookup_expr, lookup_expr) from None
     if not lookup_expr:
         raise LookupValidationError(terminal, lookup_expr, lookup_expr)
     parts = lookup_expr.split(LOOKUP_SEP)
@@ -308,17 +381,32 @@ def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
     last_index = len(parts) - 1
     for index, part in enumerate(parts):
         if index < last_index:
-            transform = cursor.get_transform(part)
+            try:
+                transform = cursor.get_transform(part)
+            except BaseException:
+                raise LookupValidationError(terminal, lookup_expr, part) from None
             if transform is None:
                 raise LookupValidationError(terminal, lookup_expr, part)
-            cursor = transform(cursor)
+            try:
+                cursor = transform(cursor)
+            except BaseException:
+                raise LookupValidationError(terminal, lookup_expr, part) from None
             continue
-        lookup = cursor.get_lookup(part)
+        try:
+            lookup = cursor.get_lookup(part)
+        except BaseException:
+            raise LookupValidationError(terminal, lookup_expr, part) from None
         if lookup is not None:
             return lookup
-        transform = cursor.get_transform(part)
+        try:
+            transform = cursor.get_transform(part)
+        except BaseException:
+            raise LookupValidationError(terminal, lookup_expr, part) from None
         if transform is not None:
-            exact = transform(cursor).get_lookup("exact")
+            try:
+                exact = transform(cursor).get_lookup("exact")
+            except BaseException:
+                raise LookupValidationError(terminal, lookup_expr, part) from None
             if exact is not None:
                 return exact
         raise LookupValidationError(terminal, lookup_expr, part)
@@ -338,17 +426,20 @@ def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
     instead; see ``path_traverses_to_many`` for the one deliberate divergence
     from this lenient walk's cardinality rule.
     """
+    if type(field_path) is not str:
+        return False
+    segments = field_path.split(LOOKUP_SEP)
     current = model
-    for segment in field_path.split(LOOKUP_SEP):
+    for segment in segments:
         try:
             field = current._meta.get_field(segment)
-        except FieldDoesNotExist:
+            if not _relation_bool(field, "is_relation"):
+                return False
+            if is_many_side_relation_kind(relation_kind(field)):
+                return True
+            related = getattr(field, "related_model", None)
+        except BaseException:
             return False
-        if not getattr(field, "is_relation", False):
-            return False
-        if is_many_side_relation_kind(relation_kind(field)):
-            return True
-        related = getattr(field, "related_model", None)
         if related is None:
             return False
         current = related
@@ -369,6 +460,16 @@ def _classify_path_cached(model: type, field_path: str) -> ClassifiedPath:
 
 
 @lru_cache(maxsize=2048)
+def _path_traverses_to_many_cached(model: type, field_path: str) -> bool:
+    """Cached implementation for hashable definition-time model/path pairs."""
+    try:
+        return _classify_path_cached(model, field_path).first_many_index is not None
+    except PathResolutionError:
+        return _lenient_traverses_to_many(model, field_path)
+    except BaseException:
+        return False
+
+
 def path_traverses_to_many(model: type, field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation.
 
@@ -404,9 +505,20 @@ def path_traverses_to_many(model: type, field_path: str) -> bool:
     subsystems.
     """
     try:
-        return _classify_path_cached(model, field_path).first_many_index is not None
-    except PathResolutionError:
-        return _lenient_traverses_to_many(model, field_path)
+        hash(model)
+        hash(field_path)
+    except BaseException:
+        try:
+            return classify_path(model, field_path).first_many_index is not None
+        except PathResolutionError:
+            return _lenient_traverses_to_many(model, field_path)
+        except BaseException:
+            return False
+    return _path_traverses_to_many_cached(model, field_path)
+
+
+path_traverses_to_many.cache_clear = _path_traverses_to_many_cached.cache_clear
+path_traverses_to_many.cache_info = _path_traverses_to_many_cached.cache_info
 
 
 def is_forward_many_to_many(field: object) -> bool:
@@ -429,9 +541,10 @@ def is_forward_many_to_many(field: object) -> bool:
     defaults defend against field shapes that omit a flag, matching
     ``relation_kind``'s read contract.
     """
-    return bool(getattr(field, "many_to_many", False)) and (
-        bool(getattr(field, "concrete", False)) or not getattr(field, "auto_created", False)
-    )
+    many_to_many = _relation_bool(field, "many_to_many")
+    concrete = _relation_bool(field, "concrete")
+    auto_created = _relation_bool(field, "auto_created")
+    return many_to_many and (concrete or not auto_created)
 
 
 def instance_accessor(field: object) -> str:
@@ -460,13 +573,34 @@ def instance_accessor(field: object) -> str:
     the Phase-2 relation resolvers' ``getattr``, the spec-032 synthesized
     relation connections, and the optimizer's prefetch lookup paths.
     """
-    precomputed = getattr(field, "accessor_name", None)
+    precomputed = _relation_attr(field, "accessor_name", None)
     if precomputed is not None:
+        if type(precomputed) is not str:
+            raise ConfigurationError(
+                f"Relation accessor metadata on {_safe_type_name(field)} must be a string; "
+                f"got {_safe_type_name(precomputed)}.",
+            )
         return precomputed
-    get_accessor_name = getattr(field, "get_accessor_name", None)
+    get_accessor_name = _relation_attr(field, "get_accessor_name", None)
     if get_accessor_name is not None:
-        return get_accessor_name()
-    return field.name  # type: ignore[attr-defined]
+        if not callable(get_accessor_name):
+            raise ConfigurationError(
+                f"Relation accessor metadata on {_safe_type_name(field)} must be callable.",
+            )
+        try:
+            accessor_name = get_accessor_name()
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"Could not resolve relation accessor on {_safe_type_name(field)}.",
+            ) from exc
+    else:
+        accessor_name = _relation_attr(field, "name")
+    if type(accessor_name) is not str:
+        raise ConfigurationError(
+            f"Resolved relation accessor on {_safe_type_name(field)} must be a string; "
+            f"got {_safe_type_name(accessor_name)}.",
+        )
+    return accessor_name
 
 
 def has_composite_pk(model: type[models.Model]) -> bool:
@@ -482,5 +616,11 @@ def has_composite_pk(model: type[models.Model]) -> bool:
     fallback (``optimizer/walker.py::_can_elide_fk_id``) - cannot disagree on
     what counts as composite.
     """
-    pk_fields = getattr(model._meta, "pk_fields", None)
-    return pk_fields is not None and len(pk_fields) > 1
+    try:
+        meta = model._meta
+        pk_fields = getattr(meta, "pk_fields", None)
+        return pk_fields is not None and len(pk_fields) > 1
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not read composite-primary-key metadata from {_safe_type_name(model)}.",
+        ) from exc

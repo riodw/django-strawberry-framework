@@ -67,23 +67,36 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       ``tests/optimizer/test_extension.py::test_get_context_value_swallows_attribute_error_from_getitem``
       (bridged-``AttributeError`` shape) - a future refactor that
       removes this fallback must trip those pins.
-    - ``__getitem__`` on a missing key may raise ``KeyError``,
-      ``TypeError``, or ``AttributeError`` (the last one for bridged
-      attribute-access contexts); all three are caught and return
-      ``default``. Read-only / frozen contexts are safe for the same
-      reason.
+    - A failed ordinary attribute or item access is treated as an unavailable
+      key and returns ``default``. This includes ``KeyError``, ``TypeError``,
+      ``AttributeError``, and exceptions from hostile consumer descriptors or
+      mapping methods; read-only / frozen contexts are safe for the same
+      reason. ``BaseException`` subclasses are deliberately not swallowed so
+      cancellation and process-control signals retain their meaning.
     """
     if context is None:
         return default
     if not isinstance(context, dict):
-        val = getattr(context, key, _MISSING)
+        try:
+            val = getattr(context, key, _MISSING)
+        except Exception:
+            # A consumer context can expose a descriptor that fails while
+            # answering an internal key. Treat that shape as an unreadable
+            # attribute and still try its mapping interface, if any; a
+            # context read is a fail-closed lookup, not a reason to abort the
+            # resolver before the resource / optimizer defaults can apply.
+            val = _MISSING
         if val is not _MISSING:
             return val
     try:
         if isinstance(context, dict):
             return context.get(key, default)
         return context[key]
-    except (TypeError, KeyError, AttributeError):
+    except Exception:
+        # Missing, frozen, or hostile mapping access all mean that this key is
+        # unavailable. Keep the read fail-closed; write helpers intentionally
+        # retain their narrower exception contract because an unexpected write
+        # failure can indicate a consumer-side programming error.
         return default
 
 

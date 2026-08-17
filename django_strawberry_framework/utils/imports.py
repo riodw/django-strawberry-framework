@@ -25,6 +25,13 @@ import sys
 from typing import Any
 
 
+def _plain_text(value: Any) -> Any:
+    """Normalize a string subclass before handing it to import machinery."""
+    if not isinstance(value, str) or type(value) is str:
+        return value
+    return str.__str__(value)
+
+
 def import_attr_if_importable(module_path: str, attr_name: str) -> Any | None:
     """Import ``module_path`` best-effort and return its ``attr_name``; ``None`` on ImportError.
 
@@ -38,6 +45,8 @@ def import_attr_if_importable(module_path: str, attr_name: str) -> Any | None:
     and fails loud (``AttributeError``), matching the registry co-clear
     semantics.
     """
+    module_path = _plain_text(module_path)
+    attr_name = _plain_text(attr_name)
     try:
         module = importlib.import_module(module_path)
     except ImportError:
@@ -54,6 +63,8 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
     ``getattr`` has NO default and fails loud on a missing attribute, same
     as ``import_attr_if_importable``.
     """
+    module_path = _plain_text(module_path)
+    attr_name = _plain_text(attr_name)
     module = sys.modules.get(module_path)
     if module is None:
         return None
@@ -73,6 +84,8 @@ def import_attr(module_path: str, attr_name: str) -> Any:
     attribute are the package's own and any failure is a real bug that must
     fail loud. The ``getattr`` has NO default for the same reason.
     """
+    module_path = _plain_text(module_path)
+    attr_name = _plain_text(attr_name)
     return getattr(importlib.import_module(module_path), attr_name)
 
 
@@ -93,7 +106,8 @@ def require_optional_module(module_name: str, *, install_hint: str) -> Any:
     text lives entirely in the caller's ``install_hint`` (the ``require_drf()``
     shape), and hint strings stay single-sited at the feature owner.
     """
+    module_name = _plain_text(module_name)
     try:
         return importlib.import_module(module_name)
     except ImportError as exc:
-        raise ImportError(install_hint) from exc
+        raise ImportError(_plain_text(install_hint)) from exc

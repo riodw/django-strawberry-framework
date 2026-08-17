@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
+from ..exceptions import _safe_type_name
+
 if TYPE_CHECKING:  # pragma: no cover
     from ..mutations.inputs import FieldError
 
@@ -52,13 +54,20 @@ def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
     """
     from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 
-    key = path if path else NON_FIELD_ERROR_KEY
+    normalized_path = _safe_text(path, fallback="") if path is not None else ""
+    key = normalized_path if normalized_path else NON_FIELD_ERROR_KEY
     # Root rule: a model-wide / non-field error (an empty path, or the bare
     # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
     # non-field bucket to exactly that) carries an EMPTY ``path``, while ``field`` stays
     # ``"__all__"``; a NESTED non-field error (``items.0.__all__``) keeps its segments. So
     # the model + serializer flavors agree on the root-non-field shape.
-    segments = [] if not path or path == NON_FIELD_ERROR_KEY else path.split(".")
+    segments = (
+        []
+        if not normalized_path or normalized_path == NON_FIELD_ERROR_KEY
+        else normalized_path.split(
+            ".",
+        )
+    )
     return FieldError(
         field=key,
         messages=_str_list(messages),
@@ -76,7 +85,73 @@ def _str_list(value: Any) -> list[str]:
     (a DRF ``ErrorDetail`` list, a tuple) is materialized with each element
     stringified.
     """
-    return [value] if isinstance(value, str) else [str(item) for item in value]
+    if isinstance(value, str):
+        return [_safe_text(value)]
+    try:
+        items = list(value)
+    except BaseException:
+        return [_unprintable(value)]
+    return [_safe_text(item) for item in items]
+
+
+def _safe_text(value: Any, *, fallback: str = "") -> str:
+    """Render one error value without dispatching a hostile string dunder.
+
+    Validation messages and field names are normally Django-owned strings, but
+    ``ValidationError`` also accepts consumer objects and ``str`` subclasses.
+    Error normalization is the last step before a mutation envelope reaches
+    GraphQL, so a failing ``__str__`` must not replace that expected envelope
+    with a raw exception.  Calling ``str.__str__`` directly also normalizes a
+    string subclass whose overridden ``__str__`` / ``__repr__`` is hostile.
+    """
+    try:
+        rendered = str.__str__(value) if isinstance(value, str) else str(value)
+    except BaseException:
+        return _unprintable(value)
+    return rendered or fallback
+
+
+def _unprintable(value: Any) -> str:
+    """Return a stable placeholder for an error value that cannot be rendered."""
+    return f"<unprintable {_safe_type_name(value)}>"
+
+
+def _validation_messages(error: Any) -> list[Any]:
+    """Read one Django validation leaf's messages without trusting its metadata."""
+    try:
+        return list(error.messages)
+    except BaseException:
+        try:
+            return [error.message]
+        except BaseException:
+            return [error]
+
+
+def _validation_code(leaf: Any) -> Any:
+    """Read one Django validation leaf's code, dropping hostile or empty values."""
+    try:
+        code = leaf.code
+        return code if code else None
+    except BaseException:
+        return None
+
+
+def _validation_codes(error: Any) -> list[Any]:
+    """Read all codes from one Django validation error leaf."""
+    try:
+        leaves = tuple(error.error_list)
+    except BaseException:
+        return []
+    return [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
+
+
+def _error_dict_entry(item: Any) -> tuple[Any, Any] | None:
+    """Unpack one ``ValidationError.error_dict`` item without trusting its shape."""
+    try:
+        field_name, field_errors = item
+    except BaseException:
+        return None
+    return field_name, field_errors
 
 
 def relation_field_error(graphql_name: str) -> FieldError:
@@ -84,16 +159,17 @@ def relation_field_error(graphql_name: str) -> FieldError:
 
     The single leaf constructor for the relation-decode error all three write
     flavors raise - the ``036`` model path (``decode_visible_relation_ids``),
-    the ``038`` form decoder, and the ``039``
-    serializer decoder all call this DIRECTLY (spec-039 folded away the former
-    per-flavor ``_relation_error`` / ``_relation_field_error`` aliases). A
-    wrong-model, hidden, missing, or uncoercible id all collapse to this one
-    field-keyed shape (no existence leak), keyed to the GraphQL wire name the
-    client sent (``categoryId``). Siblings the ``field_error`` leaf ctor above so
-    the ``"Invalid id for relation ..."`` message + leaf construction are single
+    the ``038`` form decoder, and the ``039`` serializer decoder all call this
+    DIRECTLY (spec-039 folded away the former per-flavor ``_relation_error`` /
+    ``_relation_field_error`` aliases). A wrong-model, hidden, missing, or
+    uncoercible id all collapse to this one field-keyed shape (no existence
+    leak), keyed to the GraphQL wire name the client sent (``categoryId``). Siblings
+    the ``field_error`` leaf ctor above so the ``"Invalid id for relation ..."`` message
+    + leaf construction are single
     sourced across every flavor.
     """
-    return field_error(graphql_name, f"Invalid id for relation {graphql_name!r}.", codes="invalid")
+    name = _safe_text(graphql_name)
+    return field_error(name, f"Invalid id for relation {name!r}.", codes="invalid")
 
 
 def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
@@ -109,19 +185,56 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     shared ``field_error`` leaf ctor so the sentinel + message coercion stay
     single-sited with the recursive DRF flattener.
     """
-    if hasattr(exc, "error_dict"):
+    try:
+        error_dict = exc.error_dict
+    except BaseException:
+        error_dict = None
+    if error_dict is not None:
         errors: list[FieldError] = []
-        for field_name, field_errors in exc.error_dict.items():
-            path = "" if field_name == NON_FIELD_ERRORS else field_name
-            messages = [message for error in field_errors for message in error.messages]
-            # Preserve each leaf Django ``ValidationError.code`` alongside the
-            # message (``error.error_list`` is the flattened leaf list ``error.messages``
-            # reads; a ``None`` code is dropped).
-            codes = [leaf.code for error in field_errors for leaf in error.error_list if leaf.code]
-            errors.append(field_error(path, messages, codes=codes))
-        return errors
-    codes = [leaf.code for leaf in exc.error_list if leaf.code]
-    return [field_error("", list(exc.messages), codes=codes)]
+        try:
+            error_items = tuple(error_dict.items())
+        except BaseException:
+            error_items = None
+        # An unreadable ``items()`` leaves the dict branch entirely and falls
+        # through to the ``error_list`` / ``messages`` fallback below.
+        if error_items is not None:
+            for item in error_items:
+                unpacked = _error_dict_entry(item)
+                if unpacked is None:
+                    errors.append(
+                        field_error(
+                            "",
+                            "Validation details could not be normalized.",
+                            codes="invalid",
+                        ),
+                    )
+                    continue
+                field_name, field_errors = unpacked
+                normalized_name = _safe_text(field_name)
+                path = "" if normalized_name == NON_FIELD_ERRORS else normalized_name
+                try:
+                    field_error_items = tuple(field_errors)
+                except BaseException:
+                    field_error_items = (field_errors,)
+                messages: list[Any] = []
+                for error in field_error_items:
+                    messages.extend(_validation_messages(error))
+                # Preserve each leaf Django ``ValidationError.code`` alongside the
+                # message (``error.error_list`` is the flattened leaf list ``error.messages``
+                # reads; a ``None`` code is dropped).
+                codes = [code for error in field_error_items for code in _validation_codes(error)]
+                errors.append(field_error(path, messages, codes=codes))
+            return errors
+    try:
+        error_list = tuple(exc.error_list)
+    except BaseException:
+        error_list = ()
+    codes = [code for leaf in error_list if (code := _validation_code(leaf)) is not None]
+    try:
+        messages = list(exc.messages)
+    except BaseException:
+        messages = [exc]
+    return [field_error("", messages, codes=codes)]
 
 
 def integrity_error_field_errors() -> list[FieldError]:
@@ -149,4 +262,6 @@ def join_error_path(prefix: str, segment: str) -> str:
     ``items.0.__all__`` (the root-vs-nested ``__all__`` distinction itself
     stays with each flattener's key handling).
     """
-    return f"{prefix}.{segment}" if prefix else segment
+    normalized_prefix = _safe_text(prefix, fallback="") if prefix is not None else ""
+    normalized_segment = _safe_text(segment)
+    return f"{normalized_prefix}.{normalized_segment}" if normalized_prefix else normalized_segment

@@ -80,9 +80,18 @@ def convert_with_mro(
             result = handler(field)
             if result is not None:
                 return result
-    for klass in type(field).__mro__:
-        if klass in scalar_registry:
-            return scalar_registry[klass]
+    # Read the actual MRO through ``type`` rather than through the field class's
+    # metaclass. A consumer-defined metaclass can override ``__getattribute__``
+    # and make ``type(field).__mro__`` raise while the class remains a valid
+    # field; conversion should still reach the typed unsupported-field path.
+    for klass in type.__getattribute__(type(field), "__mro__"):
+        # Match class keys by identity while scanning the small registry. A
+        # consumer metaclass may provide a hostile ``__hash__`` or equality
+        # implementation; ordinary dict membership would invoke it before the
+        # converter can reach its parent or typed fallthrough.
+        for registered, converter in scalar_registry.items():
+            if registered is klass:
+                return converter
     raise fallthrough_error_factory(field)
 
 

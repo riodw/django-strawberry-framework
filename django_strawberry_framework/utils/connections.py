@@ -578,7 +578,8 @@ def derive_connection_window_bounds(
     ``SliceMetadata.from_arguments`` - the same engine both the plan-time walker
     and the resolve-time pipeline use. ``max_results`` is passed EXPLICITLY (the
     walker's graphql-core ``info.schema`` has no ``.config`` for the engine to
-    read), so the plan-time and resolve-time caps are the same number.
+    read), and is narrowed through the request policy first, so plan-time and
+    resolve-time caps include the same ``max_page_size`` ceiling.
 
     ``SliceMetadata.from_arguments`` raises ``ValueError`` (negative / over-max
     ``first`` / ``last``) or ``TypeError`` (malformed cursor) for invalid
@@ -614,13 +615,14 @@ def derive_connection_window_bounds(
     pagination (``TypeError``), not a valid fallback, so strictness cannot mask
     the field's own negative-index error.
     """
+    effective_max_results = resolve_relay_max_results(info, max_results)
     slice_meta = SliceMetadata.from_arguments(
         info,
         before=before,
         after=after,
         first=first,
         last=last,
-        max_results=max_results,
+        max_results=effective_max_results,
     )
     reverse = isinstance(last, int) and not isinstance(first, int) and before is None
     if slice_meta.start < 0:

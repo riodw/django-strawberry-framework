@@ -13,6 +13,7 @@ from strawberry.relay.types import to_base64
 from strawberry.relay.utils import SliceMetadata
 
 from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.resource_policy import ResourcePolicy, stash_resource_policy
 from django_strawberry_framework.utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
@@ -71,6 +72,27 @@ def test_forward_window_limit_is_expected_and_not_reverse():
         max_results=_MAX,
     )
     assert bounds == ConnectionWindowBounds(offset=0, limit=3, reverse=False)
+
+
+def test_offset_window_applies_request_page_ceiling_to_plan_cap():
+    """The optimizer window cannot fetch past the request's page-size policy."""
+    context = {}
+    stash_resource_policy(context, ResourcePolicy(max_page_size=5))
+    info = SimpleNamespace(
+        context=context,
+        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
+    )
+
+    bounds = derive_connection_window_bounds(
+        info,
+        before=None,
+        after=to_base64("arrayconnection", "3"),
+        first=None,
+        last=None,
+        max_results=100,
+    )
+
+    assert bounds == ConnectionWindowBounds(offset=4, limit=5, reverse=False)
 
 
 def test_before_with_last_is_a_forward_window_not_reverse():

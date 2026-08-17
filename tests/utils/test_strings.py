@@ -2,12 +2,29 @@
 
 import pytest
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.strings import (
     flatten_lookup_path,
     graphql_camel_name,
     pascal_case,
     snake_case,
 )
+
+
+class _HostileString(str):
+    """A string subclass whose ordinary operations cannot be trusted."""
+
+    def __hash__(self):
+        raise RuntimeError("hostile hash")
+
+    def split(self, *args, **kwargs):
+        raise RuntimeError("hostile split")
+
+    def replace(self, *args, **kwargs):
+        raise RuntimeError("hostile replace")
+
+    def __str__(self):
+        raise RuntimeError("hostile string")
 
 
 def test_snake_case_round_trips_camel_case():
@@ -81,3 +98,42 @@ def test_flatten_lookup_path_flattens_every_lookup_sep():
     assert flatten_lookup_path("entries__property__category__name") == (
         "entries_property_category_name"
     )
+
+
+def test_string_helpers_normalize_hostile_string_subclasses():
+    """Hostile subclass overrides cannot escape through helper internals."""
+    assert snake_case(_HostileString("isPrivate")) == "is_private"
+    assert pascal_case(_HostileString("is_private")) == "IsPrivate"
+    assert graphql_camel_name(_HostileString("is_private")) == "isPrivate"
+    assert flatten_lookup_path(_HostileString("category__name")) == "category_name"
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        snake_case,
+        pascal_case,
+        graphql_camel_name,
+        flatten_lookup_path,
+    ],
+)
+def test_string_helpers_reject_non_string_inputs(helper):
+    """Malformed helper inputs fail with the package's typed configuration error."""
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        helper(42)
+
+
+def test_snake_case_preserves_lru_cache_controls():
+    """The normalization boundary keeps the historical cache-control surface."""
+    snake_case.cache_clear()
+    assert snake_case.cache_parameters() == {"maxsize": 2048, "typed": False}
+    before = snake_case.cache_info()
+
+    assert snake_case("isPrivate") == "is_private"
+    after_miss = snake_case.cache_info()
+    assert after_miss.misses == before.misses + 1
+
+    assert snake_case("isPrivate") == "is_private"
+    after_hit = snake_case.cache_info()
+    assert after_hit.hits == after_miss.hits + 1
+    assert snake_case.__wrapped__("isPrivate") == "is_private"

@@ -1220,17 +1220,43 @@ class TestReverseOrderBy:
         assert nulls_last.nulls_first is True
         assert nulls_last.nulls_last is None
 
-    def test_bare_expression_without_descending_passes_through(self):
-        """A non-string term with no ``.descending`` is reversed by passing it through.
+    def test_bare_expression_reverses_through_desc(self):
+        """A term with no ``.descending`` is IMPLICITLY ascending; its reverse is ``desc()``.
 
-        ``deterministic_order`` yields strings and ``OrderBy`` wrappers, but the
-        guard handles a raw expression term defensively: with no ``.descending`` to
-        flip, it is appended unchanged rather than mutated.
+        ``deterministic_order`` carries whatever the child queryset or
+        ``Meta.ordering`` ordered by, and Django's ``order_by`` accepts bare
+        expressions (``Lower("title")``, ``Coalesce(...)``, a plain ``F``) with no
+        direction of their own. SQL reads those as ascending, and
+        ``queryset.reverse()`` inverts them - so the window's reversed row number
+        must sort them DESCENDING.
+
+        This previously passed the term through UNCHANGED, which left
+        ``_dst_row_number_reversed`` ordered forward on that column: a ``last: N``
+        page then filtered ``rn_reversed <= N`` over a forward numbering and
+        returned the partition's FIRST rows.
         """
         from django.db.models import F
+        from django.db.models.functions import Lower
 
-        expr = F("name")
-        assert _reverse_order_by([expr]) == [expr]
+        reversed_f = _reverse_order_by([F("name")])[0]
+        assert reversed_f.descending is True
+        assert reversed_f.expression == F("name")
+
+        reversed_expression = _reverse_order_by([Lower("title")])[0]
+        assert reversed_expression.descending is True
+        assert reversed_expression.expression == Lower("title")
+
+    def test_unreversible_term_raises_instead_of_serving_the_wrong_end(self):
+        """A term that can be neither flagged nor ``desc()``-ed fails loudly.
+
+        There is no correct reversal for such a term, and silently keeping it
+        forward is what produced a wrong ``last: N`` page. ``OptimizerError`` (not
+        ``ValueError`` / ``TypeError``) so the walker's leave-unplanned pagination
+        handler cannot swallow it.
+        """
+        unreversible = SimpleNamespace(name="not-an-expression")
+        with pytest.raises(OptimizerError, match="Cannot reverse connection order entry"):
+            _reverse_order_by([unreversible])
 
 
 class TestPruneUnsupportableSelectRelated:

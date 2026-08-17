@@ -19,8 +19,10 @@ from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, FragmentSpreadNode
 
 from django_strawberry_framework.optimizer.selections import (
+    DEFAULT_CONNECTION_FIELD_NAMES,
     ast_child_selections,
     connection_count_required,
+    connection_field_names,
     connection_node_children,
     direct_child_selected,
     directive_variable_names,
@@ -456,3 +458,100 @@ def test_connection_count_required_matrix():
         ],
     )
     assert connection_count_required(nested_only) is False
+
+
+# ---------------------------------------------------------------------------
+# connection_field_names -- the connection vocabulary comes from the SCHEMA
+# ---------------------------------------------------------------------------
+
+
+def _info_with_converter(converter):
+    """A plan-time-shaped ``info`` whose schema config carries ``converter``."""
+    return SimpleNamespace(
+        schema=SimpleNamespace(
+            _strawberry_schema=SimpleNamespace(
+                config=SimpleNamespace(name_converter=converter),
+            ),
+        ),
+    )
+
+
+def test_connection_field_names_default_converter_is_camel_case():
+    """Strawberry's default converter yields the historical camelCase vocabulary."""
+    from strawberry.schema.name_converter import NameConverter
+
+    names = connection_field_names(_info_with_converter(NameConverter()))
+    assert names == DEFAULT_CONNECTION_FIELD_NAMES
+    assert (names.page_info, names.total_count, names.has_next_page) == (
+        "pageInfo",
+        "totalCount",
+        "hasNextPage",
+    )
+
+
+def test_connection_field_names_follow_auto_camel_case_disabled():
+    """``auto_camel_case=False`` renders the snake_case field names, and we match those.
+
+    The defect this pins: matching the camelCase literals made both count
+    observers report "not selected" on such a schema, so the planner chose
+    ``FetchMode.NONE`` - ``hasNextPage`` resolved ``False`` on a page that had a
+    next page, and ``totalCount`` raised for an attribute the resolver never set.
+    """
+    from strawberry.schema.name_converter import NameConverter
+
+    names = connection_field_names(_info_with_converter(NameConverter(auto_camel_case=False)))
+    assert (names.edges, names.node) == ("edges", "node")
+    assert (names.page_info, names.total_count, names.has_next_page) == (
+        "page_info",
+        "total_count",
+        "has_next_page",
+    )
+
+
+def test_connection_field_names_honor_a_custom_naming_config():
+    """A converter overriding ``apply_naming_config`` drives the vocabulary too."""
+
+    class _Shouty:
+        def apply_naming_config(self, name):
+            return name.upper()
+
+    names = connection_field_names(_info_with_converter(_Shouty()))
+    assert names.total_count == "TOTAL_COUNT"
+    assert names.has_next_page == "HAS_NEXT_PAGE"
+
+
+def test_connection_field_names_fall_back_without_a_reachable_converter():
+    """No schema config (or no ``apply_naming_config``) means Strawberry's defaults.
+
+    Covers the direct / test-caller shapes: a bare ``info`` stub, ``None``, and a
+    converter object that does not expose the naming hook.
+    """
+    assert connection_field_names(None) is DEFAULT_CONNECTION_FIELD_NAMES
+    assert connection_field_names(SimpleNamespace()) is DEFAULT_CONNECTION_FIELD_NAMES
+    assert (
+        connection_field_names(_info_with_converter(SimpleNamespace()))
+        is DEFAULT_CONNECTION_FIELD_NAMES
+    )
+
+
+def test_connection_predicates_consume_the_resolved_names():
+    """Each selection walk matches the supplied vocabulary, not a camelCase literal."""
+    from strawberry.schema.name_converter import NameConverter
+
+    snake = connection_field_names(_info_with_converter(NameConverter(auto_camel_case=False)))
+    connection = _field(
+        "conn",
+        selections=[
+            _field("total_count"),
+            _field("page_info", selections=[_field("has_next_page")]),
+            _field("edges", selections=[_field("node", selections=[_field("title")])]),
+        ],
+    )
+    assert connection_count_required(connection, names=snake) is True
+    assert connection_count_required(connection) is False
+    node_children = connection_node_children(
+        connection,
+        runtime_prefixes=(("conn",),),
+        names=snake,
+    )
+    assert [child.name for child in node_children] == ["title"]

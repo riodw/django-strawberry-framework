@@ -38,13 +38,15 @@ contracts cannot drift:
 Cycle-safe: ``walker.py`` and ``extension.py`` both import from here; this
 module imports neither (it previously lived split between them, with
 ``extension`` importing the edge-node helpers back from ``walker`` - the reverse
-dependency this consolidation removes). It depends only on graphql-core AST node
-types and the stdlib.
+dependency this consolidation removes). Beyond graphql-core AST node types and
+the stdlib it reaches only ``utils/typing.py`` (itself stdlib-only) for the
+schema-config dig ``connection_field_names`` needs.
 """
 
 from __future__ import annotations
 
 from contextvars import ContextVar
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -54,6 +56,8 @@ from graphql.language.ast import (
     InlineFragmentNode,
     VariableNode,
 )
+
+from ..utils.typing import schema_config_from_info
 
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
@@ -484,10 +488,95 @@ def node_children_with_runtime_prefix(
     return children
 
 
+@dataclass(frozen=True)
+class ConnectionFieldNames:
+    """The GraphQL names the active schema gives a connection's own fields.
+
+    Every selection walk below matches a connection's structural fields by
+    GraphQL name, so those names must come from the schema Strawberry actually
+    built rather than from a hardcoded camelCase literal. Under
+    ``strawberry_config(auto_camel_case=False)`` - a supported, documented knob -
+    the fields render ``page_info`` / ``total_count`` / ``has_next_page``, and a
+    literal-matching walk silently reported "not selected" for both count
+    observers: the planner then chose ``FetchMode.NONE``, so ``hasNextPage``
+    resolved ``False`` on a page that had a next page and ``totalCount`` raised
+    for a never-set attribute.
+
+    ``edges`` / ``node`` are single lowercase words and therefore camel-invariant,
+    but they are carried here too so no half of the vocabulary is resolved by a
+    different mechanism than the other.
+    """
+
+    edges: str
+    node: str
+    page_info: str
+    total_count: str
+    has_next_page: str
+
+
+#: The default-``NameConverter`` vocabulary (``auto_camel_case=True``). It is the
+#: fallback for every direct / test caller that has no ``info`` in hand, so those
+#: call sites keep their historical behavior without threading a schema through.
+DEFAULT_CONNECTION_FIELD_NAMES = ConnectionFieldNames(
+    edges="edges",
+    node="node",
+    page_info="pageInfo",
+    total_count="totalCount",
+    has_next_page="hasNextPage",
+)
+
+#: The PYTHON attribute names of the five fields above, in ``ConnectionFieldNames``
+#: field order - the input the schema's name converter transforms.
+_CONNECTION_FIELD_PYTHON_NAMES = (
+    "edges",
+    "node",
+    "page_info",
+    "total_count",
+    "has_next_page",
+)
+
+
+def connection_field_names(info: Any) -> ConnectionFieldNames:
+    """Resolve a connection's structural field names through ``info``'s schema.
+
+    Forward resolution, the direction ``ATTENTION.md`` establishes for this
+    boundary and the walker already uses for MODEL fields
+    (``walker.py::_graphql_names_by_python_name``): the Python attribute name is
+    authoritative, and the active schema's ``NameConverter`` says what it renders
+    as. All five fields are framework-owned and declared WITHOUT an explicit
+    ``graphql_name`` (``connection.py`` declares ``total_count`` as a bare
+    ``strawberry.field(description=...)``; the rest come from Strawberry's own
+    ``Connection`` / ``Edge`` / ``PageInfo``), so the converter's naming policy -
+    ``NameConverter.apply_naming_config``, exactly what
+    ``get_graphql_name`` applies to a field with no explicit name - IS the whole
+    transformation.
+
+    Falls back to ``DEFAULT_CONNECTION_FIELD_NAMES`` when no schema config is
+    reachable (a plain graphql-core ``info`` stub, a direct planner call) or when
+    the converter does not expose ``apply_naming_config``; both mean "assume
+    Strawberry's default vocabulary", which is what the literals encoded before.
+
+    Known limitation: a consumer ``NameConverter`` that overrides
+    ``get_graphql_name`` / ``from_field`` to rename by something other than the
+    python name (e.g. keyed on the owning type) is not reproduced here, because
+    these predicates walk a SELECTION and never hold the ``StrawberryField``
+    objects. ``auto_camel_case`` and any ``apply_naming_config`` override - the
+    documented naming knobs - are.
+    """
+    converter = getattr(schema_config_from_info(info), "name_converter", None)
+    apply_naming_config = getattr(converter, "apply_naming_config", None)
+    if not callable(apply_naming_config):
+        return DEFAULT_CONNECTION_FIELD_NAMES
+    return ConnectionFieldNames(
+        *(apply_naming_config(python_name) for python_name in _CONNECTION_FIELD_PYTHON_NAMES),
+    )
+
+
 def connection_node_children(
     selection: Any,
     *,
     runtime_prefixes: tuple[tuple[str, ...], ...],
+    names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
 ) -> list[Any]:
     """Unwrap a Relay connection's ``edges { node { ... } }`` child selections.
 
@@ -497,11 +586,15 @@ def connection_node_children(
     (``nested_planner.py``) so fragment / directive / prefix semantics cannot
     drift between those call sites. Returns an empty list when the selection
     has no ``edges { node }`` (e.g. ``pageInfo`` / ``totalCount`` only).
+
+    ``names`` carries the active schema's connection vocabulary
+    (``connection_field_names``); it defaults to Strawberry's camelCase names so
+    direct / test callers need not thread a schema.
     """
     node_children: list[Any] = []
-    for edge_selection in named_children(selection, "edges"):
+    for edge_selection in named_children(selection, names.edges):
         edge_path_prefixes = tuple((*rp, response_key(edge_selection)) for rp in runtime_prefixes)
-        for node_selection in named_children(edge_selection, "node"):
+        for node_selection in named_children(edge_selection, names.node):
             node_path_prefixes = tuple(
                 (*ep, response_key(node_selection)) for ep in edge_path_prefixes
             )
@@ -546,37 +639,53 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
     return any(_check(child) for child in selection_roots)
 
 
-def connection_total_count_selected(selection: Any) -> bool:
+def connection_total_count_selected(
+    selection: Any,
+    *,
+    names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
+) -> bool:
     """Return whether ``selection`` (a connection field) selects ``totalCount``.
 
-    ``totalCount`` as a DIRECT child of the connection, through fragment
+    The count field as a DIRECT child of the connection, through fragment
     wrappers only (``direct_child_selected``). The single implementation of
     the count-observability walk: the plan-time
     ``connection_count_required`` and the resolve-time
     ``connection.py::_total_count_requested`` both call it, so the two
     halves of the conditional ``_dst_total_count`` contract share one walk
-    by construction.
+    by construction - which also means they share ONE resolved ``names``
+    vocabulary and cannot disagree about what the field is called.
     """
     children = getattr(selection, "selections", None) or []
-    return direct_child_selected(children, "totalCount")
+    return direct_child_selected(children, names.total_count)
 
 
-def connection_has_next_page_selected(selection: Any) -> bool:
+def connection_has_next_page_selected(
+    selection: Any,
+    *,
+    names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
+) -> bool:
     """Return whether ``selection`` selects ``pageInfo { hasNextPage }``.
 
     The ``hasNextPage`` sibling of ``connection_total_count_selected``: a
-    direct ``pageInfo`` child (through fragment wrappers, alias-merged via
-    ``named_children``), then a direct ``hasNextPage`` under it. Shared by
+    direct page-info child (through fragment wrappers, alias-merged via
+    ``named_children``), then a direct has-next-page child under it. Shared by
     the plan-time ``connection_count_required`` and the resolve-time
     ``connection.py::_has_next_page_requested``.
     """
     return any(
-        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
-        for page_info in named_children(selection, "pageInfo")
+        direct_child_selected(
+            getattr(page_info, "selections", None) or [],
+            names.has_next_page,
+        )
+        for page_info in named_children(selection, names.page_info)
     )
 
 
-def connection_count_required(selection: Any) -> bool:
+def connection_count_required(
+    selection: Any,
+    *,
+    names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
+) -> bool:
     """Return whether a connection selection can OBSERVE the partition total count.
 
     The count-OBSERVABILITY predicate (connection window rigor, workstream B):
@@ -609,6 +718,7 @@ def connection_count_required(selection: Any) -> bool:
     (``walker.py::_merge_aliased_selections``), so one alias selecting
     ``totalCount`` conservatively keeps the count for the shared window.
     """
-    return connection_total_count_selected(selection) or connection_has_next_page_selected(
+    return connection_total_count_selected(
         selection,
-    )
+        names=names,
+    ) or connection_has_next_page_selected(selection, names=names)

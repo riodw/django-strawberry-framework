@@ -1161,29 +1161,58 @@ def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
 
     Backward (``last``-only) pagination counts row numbers from the partition
     end, which needs the reversed ordering. Mirrors Django's
-    ``queryset.reverse()`` for the string and ``OrderBy`` / expression shapes
-    ``deterministic_order`` produces, without re-running the queryset compiler:
+    ``queryset.reverse()`` for every entry shape ``deterministic_order``
+    produces, without re-running the queryset compiler:
     the direction flips, and any explicit ``nulls_first`` / ``nulls_last``
     positioning swaps too (Django inverts NULLS placement on reversal), so a
     consumer ordering with explicit NULLS positioning reverses the same way the
     resolve-time ``.reverse()`` pipeline does.
+
+    Three entry shapes, all of which Django's ``order_by`` accepts and
+    ``deterministic_order`` can therefore carry into a window:
+
+    - a STRING ref (``"title"`` / ``"-title"``): the leading ``-`` toggles;
+    - an ``OrderBy``-like wrapper (it carries a ``descending`` flag): the flag
+      inverts and the explicit NULLS positioning swaps with it;
+    - a BARE EXPRESSION (``Lower("title")``, ``Coalesce(...)``, a plain ``F``):
+      it carries no direction of its own, which SQL reads as ascending, so the
+      reverse is the expression sorted descending - ``expression.desc()``,
+      Django's own spelling. Passing such a term through UNCHANGED (the shape
+      this function carried before) left ``_dst_row_number_reversed`` ordered
+      forward on that column, so a ``last: N`` window returned the partition's
+      FIRST page under any expression ordering.
+
+    Raises ``OptimizerError`` for an entry with neither a ``descending`` flag
+    nor a callable ``desc()``: such a term cannot be reversed, and an
+    unreversible window must fail loudly rather than silently serve the wrong
+    end of the partition. ``OptimizerError`` is deliberately not a
+    ``ValueError`` / ``TypeError``, so the walker's leave-unplanned pagination
+    handler cannot swallow it (the same posture as the keyset-plus-``reverse``
+    guard in ``apply_window_pagination``).
     """
     reversed_order: list[Any] = []
     for entry in order_by:
         if isinstance(entry, str):
             reversed_order.append(entry[1:] if entry.startswith("-") else f"-{entry}")
-        else:
-            descending = getattr(entry, "descending", None)
-            if descending is None:
-                reversed_order.append(entry)
-            else:
-                clone = entry.copy() if hasattr(entry, "copy") else entry
-                clone.descending = not descending
-                nulls_first = getattr(clone, "nulls_first", None)
-                nulls_last = getattr(clone, "nulls_last", None)
-                if nulls_first or nulls_last:
-                    clone.nulls_first, clone.nulls_last = nulls_last, nulls_first
-                reversed_order.append(clone)
+            continue
+        descending = getattr(entry, "descending", None)
+        if descending is None:
+            desc = getattr(entry, "desc", None)
+            if not callable(desc):
+                raise OptimizerError(
+                    f"Cannot reverse connection order entry {entry!r}: it carries neither a "
+                    "'descending' flag nor a callable 'desc()', so a backward (last-only) "
+                    "window cannot be expressed for it.",
+                )
+            reversed_order.append(desc())
+            continue
+        clone = entry.copy() if hasattr(entry, "copy") else entry
+        clone.descending = not descending
+        nulls_first = getattr(clone, "nulls_first", None)
+        nulls_last = getattr(clone, "nulls_last", None)
+        if nulls_first or nulls_last:
+            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first
+        reversed_order.append(clone)
     return reversed_order
 
 

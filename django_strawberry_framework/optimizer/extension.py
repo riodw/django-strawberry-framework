@@ -28,7 +28,10 @@ root-gate pattern, same ``ContextVar`` lifecycle, same recursive
 type-tracing through graphql-core wrappers.
 """
 
+import datetime
+import decimal
 import inspect
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Set
 from contextlib import suppress
@@ -84,6 +87,7 @@ from .plans import (
 from .selections import (
     ast_child_selections,
     ast_to_converted_selections,
+    connection_field_names,
     connection_node_children,
     converted_selections_cache,
     directive_variable_names,
@@ -120,6 +124,41 @@ _PAGINATION_ARG_NAMES = frozenset(
         "last",
         "before",
         "after",
+    },
+)
+
+# Only exact immutable scalar types whose equality/hash is *library* code have a
+# contract the cache boundary can rely on. Custom scalar parsers may return
+# arbitrary hashable objects whose ``__eq__`` or ``__hash__`` raises; storing
+# those objects directly in a plan-cache key lets a later lookup execute consumer
+# code, so they get opaque identities instead.
+#
+# The set spans the Python built-ins AND the stdlib types Strawberry's own
+# built-in scalars parse to (``Date`` -> ``datetime.date``, ``DateTime`` ->
+# ``datetime.datetime``, ``Time`` -> ``datetime.time``, ``Decimal`` ->
+# ``decimal.Decimal``, ``UUID`` -> ``uuid.UUID``; ``Void`` -> ``NoneType``).
+# Omitting those would make an ordinary schema pay the opaque-identity penalty:
+# the pagination collector over-collects by argument NAME, so a field such as
+# ``logs(after: $timestamp)`` typed ``DateTime`` would never share a plan-cache
+# key between two requests sending the same instant, and every request would
+# insert a fresh key that evicts live plans from the bounded LRU. Membership is
+# tested with exact ``type()``, so subclasses (which may override equality) are
+# still excluded.
+_SAFE_CACHE_SCALAR_TYPES = frozenset(
+    {
+        type(None),
+        bool,
+        int,
+        float,
+        complex,
+        str,
+        bytes,
+        datetime.date,
+        datetime.datetime,
+        datetime.time,
+        datetime.timedelta,
+        decimal.Decimal,
+        uuid.UUID,
     },
 )
 
@@ -301,14 +340,19 @@ def _hashable_variable_value(value: Any) -> Any:
     over-collects by argument name, so a plain nested field such as
     ``logs(after: $values)`` can put any input type on this cache boundary.
 
-    Standard containers receive tagged structural identities. Tags preserve
-    distinctions such as list versus tuple and bool versus int; unordered
-    containers sort by ``repr`` so mixed, mutually-unorderable values remain
-    deterministic. An opaque unhashable object has no generally correct
-    structural identity, so it receives a fresh token: that request may miss the
-    cross-request plan cache, but it cannot collide with another value and serve
+    Standard containers receive tagged structural identities before any direct
+    hash/equality operation on the container itself. Tags preserve distinctions
+    such as list versus tuple and bool versus int; unordered containers remain
+    deterministic through their recursively frozen members. Exact immutable
+    scalar types whose equality is library-owned (``_SAFE_CACHE_SCALAR_TYPES``,
+    which covers the built-ins and the stdlib types Strawberry's own scalars
+    parse to) are safe to retain structurally, so two requests sending the same
+    date or decimal share one plan-cache key. Every other value, including a
+    custom scalar that happens to be hashable, receives a fresh opaque token:
+    that request may miss the cross-request plan cache, but it cannot invoke
+    consumer-defined equality/hash code or collide with another value and serve
     the wrong plan. The same fallback terminates a custom scalar that returns a
-    cyclic container.
+    cyclic or hostile container.
     """
     return _freeze_variable_value(value, set())
 
@@ -317,25 +361,24 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
     """Recursive implementation for ``_hashable_variable_value``."""
     value_type_id = id(type(value))
     try:
-        hash(value)
+        if type(value) in _SAFE_CACHE_SCALAR_TYPES:
+            return ("scalar", value_type_id, value)
+        is_mapping = isinstance(value, Mapping)
+        is_set = isinstance(value, Set)
+        is_sequence = isinstance(value, (list, tuple))
     except Exception:
-        pass
-    else:
-        return ("scalar", value_type_id, value)
-
-    try:
-        is_container = isinstance(
-            value,
-            (
-                Mapping,
-                list,
-                tuple,
-                Set,
-            ),
-        )
-    except Exception:
+        # ``Exception``, never ``BaseException`` - matching the container branch
+        # below and the package's boundary policy: a hostile ``__class__`` or
+        # ``__instancecheck__`` degrades to an opaque identity, while
+        # cancellation and process-control signals still propagate rather than
+        # being absorbed into a cache key.
         return ("opaque", value_type_id, object())
-    if not is_container:
+
+    if not (is_mapping or is_set or is_sequence):
+        # Do not probe ``hash(value)`` here. A custom scalar's hash/equality
+        # implementation is consumer code and is not part of this boundary;
+        # an opaque identity is the safe fallback for both hashable and
+        # unhashable custom values.
         return ("opaque", value_type_id, object())
 
     container_id = id(value)
@@ -344,7 +387,7 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
     active_containers.add(container_id)
     try:
         try:
-            if isinstance(value, Mapping):
+            if is_mapping:
                 return (
                     "mapping",
                     value_type_id,
@@ -356,7 +399,7 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
                         for key, item in value.items()
                     ),
                 )
-            if isinstance(value, Set):
+            if is_set:
                 return (
                     "set",
                     value_type_id,
@@ -554,11 +597,16 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     """
     node_children: list[Any] = []
     root_path = runtime_path_from_info(info)
+    # The active schema's ``edges`` / ``node`` names (camel-invariant in practice,
+    # but resolved through the same one owner as the count observers so the
+    # connection vocabulary has a single source).
+    names = connection_field_names(info)
     for connection_selection in selections:
         node_children.extend(
             connection_node_children(
                 connection_selection,
                 runtime_prefixes=(root_path,),
+                names=names,
             ),
         )
     return node_children

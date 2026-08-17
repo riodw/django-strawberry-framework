@@ -1463,6 +1463,146 @@ def test_fast_path_wire_parity_last_only():
     assert fast.data == slow.data
 
 
+def _genres_expression_ordered_schema(*, optimizer=True, auto_camel_case=True):
+    """``_genres_list_schema`` whose ``BookType`` orders by a bare EXPRESSION.
+
+    ``get_queryset`` returns ``queryset.order_by(Lower("title"))``, so the
+    connection's effective ordering carries a term with no direction of its own -
+    the shape a ``last: N`` window must still be able to reverse
+    (``plans.py::_reverse_order_by``). ``auto_camel_case`` doubles this fixture as
+    the non-default-``NameConverter`` schema for the count-observer pins.
+    """
+    from django.db.models.functions import Lower
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
+            connection = {"total_count": True}
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.order_by(Lower("title"))
+
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
+        ),
+    )
+    extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+    return strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(auto_camel_case=auto_camel_case),
+        extensions=extensions,
+    )
+
+
+@pytest.mark.django_db
+def test_windowed_last_page_reverses_a_bare_expression_ordering(django_assert_num_queries):
+    """A ``last: N`` window under an EXPRESSION ordering serves the partition's TAIL.
+
+    ``_reverse_order_by`` builds ``_dst_row_number_reversed``; a term with no
+    ``descending`` slot (here ``Lower("title")``) used to pass through unflipped,
+    so the reversed numbering ran FORWARD on that column and ``rn_reversed <= N``
+    returned the partition's FIRST rows. Seeded in the inverse of title order so
+    pk order and ``Lower(title)`` order disagree - otherwise the pk tiebreaker
+    alone would mask the unflipped term.
+
+    Pinned as an optimizer-on/off wire comparison AND a query-count assertion:
+    without the count the test could pass by silently falling back to the
+    per-parent pipeline instead of proving the WINDOW reverses correctly.
+    """
+    _seed_library_books(
+        [
+            "e",
+            "d",
+            "c",
+            "b",
+            "a",
+        ],
+    )
+    selection = (
+        "booksConnection(last: 2) { edges { cursor node { title } } "
+        "pageInfo { hasNextPage hasPreviousPage } }"
+    )
+    query = f"{{ objs {{ {selection} }} }}"
+
+    with django_assert_num_queries(2):  # parents + ONE windowed prefetch.
+        fast = _exec(_genres_expression_ordered_schema(optimizer=True), query)
+    fast_conn = fast.data["objs"][0]["booksConnection"]
+    assert [e["node"]["title"] for e in fast_conn["edges"]] == ["d", "e"]
+    assert fast_conn["pageInfo"]["hasPreviousPage"] is True
+    assert fast_conn["pageInfo"]["hasNextPage"] is False
+
+    registry.clear()
+    _connection_type_cache.clear()
+    slow = _exec(_genres_expression_ordered_schema(optimizer=False), query)
+    assert fast.data == slow.data
+
+
+@pytest.mark.django_db
+def test_nested_window_count_observers_follow_a_non_camel_case_schema(
+    django_assert_num_queries,
+):
+    """``auto_camel_case=False`` renames the count observers; the planner must follow.
+
+    The observers are matched by GraphQL name, resolved through the active
+    schema's ``NameConverter``
+    (``optimizer/selections.py::connection_field_names``). Matching hardcoded
+    camelCase literals made BOTH report absent on such a schema, so the window
+    carried neither the partition count nor the n+1 probe: ``has_next_page``
+    resolved ``False`` on a page that had one, and ``total_count`` raised
+    ``AttributeError`` for an attribute ``resolve_connection`` never set.
+
+    Asserted against the identical query on the default-converter schema so the
+    two vocabularies are proven to agree, and with a query count so a silent
+    per-parent fallback cannot green it.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    snake = (
+        "books_connection(first: 2) { total_count "
+        "page_info { has_next_page has_previous_page } edges { node { title } } }"
+    )
+    with django_assert_num_queries(2):  # parents + ONE windowed prefetch.
+        result = _exec(
+            _genres_expression_ordered_schema(optimizer=True, auto_camel_case=False),
+            f"{{ objs {{ {snake} }} }}",
+        )
+    conn = result.data["objs"][0]["books_connection"]
+    assert conn["total_count"] == 5
+    assert conn["page_info"]["has_next_page"] is True
+    assert conn["page_info"]["has_previous_page"] is False
+    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b"]
+
+    registry.clear()
+    _connection_type_cache.clear()
+    camel = (
+        "booksConnection(first: 2) { totalCount "
+        "pageInfo { hasNextPage hasPreviousPage } edges { node { title } } }"
+    )
+    default = _exec(
+        _genres_expression_ordered_schema(optimizer=True, auto_camel_case=True),
+        f"{{ objs {{ {camel} }} }}",
+    )
+    default_conn = default.data["objs"][0]["booksConnection"]
+    assert default_conn["totalCount"] == conn["total_count"]
+    assert default_conn["pageInfo"]["hasNextPage"] == conn["page_info"]["has_next_page"]
+    assert [e["node"]["title"] for e in default_conn["edges"]] == ["a", "b"]
+
+
 @pytest.mark.django_db(transaction=True)
 def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
     """A non-pk-ordered child: the windowed prefetch's outer ORDER BY carries the pk tiebreaker.

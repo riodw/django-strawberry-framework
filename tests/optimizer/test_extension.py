@@ -33,6 +33,9 @@ global ``registry`` is cleared on entry and exit.
 
 import asyncio
 import contextlib
+import datetime
+import decimal
+import uuid
 import warnings
 from collections import OrderedDict
 from types import SimpleNamespace
@@ -1912,6 +1915,131 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     assert isinstance(hash(_hashable_variable_value(cyclic)), int)
 
 
+def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
+    """Hostile hashable custom scalars become opaque cache identities.
+
+    A custom scalar parser may return a hashable object whose equality method
+    raises. The first plan-key build can store such a value, but the second
+    request's dict/frozenset lookup compares the two values. The cache must
+    never execute that consumer-defined equality method: opaque identities
+    deliberately miss the cross-request cache instead.
+    """
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    class EqualityBomb:
+        def __hash__(self):
+            return 1
+
+        def __eq__(self, _other):
+            raise RuntimeError("custom scalar equality must not run in cache lookup")
+
+    first = _hashable_variable_value(EqualityBomb())
+    second = _hashable_variable_value(EqualityBomb())
+
+    assert first != second
+    assert isinstance(hash(first), int)
+    assert isinstance(hash(second), int)
+    from graphql import parse
+
+    operation = parse(
+        "query Q($value: Int!) { parents { child(first: $value) { value } } }",
+    ).definitions[0]
+
+    def _key(value):
+        info = SimpleNamespace(
+            operation=operation,
+            fragments={},
+            variable_values={"value": value},
+            path=SimpleNamespace(key="parents", prev=None),
+        )
+        return DjangoOptimizerExtension._build_cache_key(info, Category)
+
+    assert _key(EqualityBomb()) != _key(EqualityBomb())
+
+
+def test_library_owned_scalars_share_one_cache_identity_across_requests():
+    """Built-in and stdlib scalar variables must still reach the cross-request cache.
+
+    The opaque-identity fallback protects the cache from consumer-defined
+    equality, but Strawberry's own built-in scalars parse to stdlib types
+    (``Date`` -> ``date``, ``DateTime`` -> ``datetime``, ``Time`` -> ``time``,
+    ``Decimal`` -> ``Decimal``, ``UUID`` -> ``UUID``). Their equality is library
+    code, so two requests sending the same value must produce ONE key: the
+    pagination collector over-collects by argument name, so an ordinary
+    ``logs(after: $timestamp)`` would otherwise never hit the plan cache and
+    would evict live plans from the bounded LRU on every request.
+    """
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    equal_pairs = (
+        (None, None),
+        (True, True),
+        (7, 7),
+        (1.5, 1.5),
+        (complex(1, 2), complex(1, 2)),
+        ("cursor", "cursor"),
+        (b"cursor", b"cursor"),
+        (datetime.date(2026, 8, 17), datetime.date(2026, 8, 17)),
+        (datetime.datetime(2026, 8, 17, 12, 30), datetime.datetime(2026, 8, 17, 12, 30)),
+        (datetime.time(12, 30), datetime.time(12, 30)),
+        (datetime.timedelta(hours=3), datetime.timedelta(hours=3)),
+        (decimal.Decimal("1.50"), decimal.Decimal("1.50")),
+        (uuid.UUID(int=99), uuid.UUID(int=99)),
+    )
+    for left, right in equal_pairs:
+        assert _hashable_variable_value(left) == _hashable_variable_value(right), left
+
+    # Distinct values of the same safe type must NOT collide, or the cache would
+    # serve one value's plan for another's.
+    assert _hashable_variable_value(datetime.date(2026, 8, 17)) != _hashable_variable_value(
+        datetime.date(2026, 8, 18),
+    )
+    assert _hashable_variable_value(decimal.Decimal("1.50")) != _hashable_variable_value(
+        decimal.Decimal("2.50"),
+    )
+
+    # A SUBCLASS may override equality, so exact-type membership must exclude it.
+    class SneakyDate(datetime.date):
+        def __eq__(self, _other):
+            raise RuntimeError("subclass equality must not run in cache lookup")
+
+        __hash__ = datetime.date.__hash__
+
+    assert _hashable_variable_value(SneakyDate(2026, 8, 17))[0] == "opaque"
+
+
+def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
+    """A ``BaseException`` from hostile type inspection is not absorbed into a key.
+
+    Ordinary failures degrade to an opaque identity so malformed consumer data
+    cannot abort a valid operation, but cancellation and process-control signals
+    are not cache outcomes -- swallowing one would convert an interrupted request
+    into a silent cache miss.
+    """
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    class CancellingMeta(type):
+        def __hash__(cls):
+            raise asyncio.CancelledError
+
+    class Cancelling(metaclass=CancellingMeta):
+        pass
+
+    class InterruptingMeta(type):
+        def __hash__(cls):
+            raise KeyboardInterrupt
+
+    class Interrupting(metaclass=InterruptingMeta):
+        pass
+
+    # The safe-scalar membership test hashes ``type(value)``, so a hostile
+    # metaclass ``__hash__`` is the reachable entry point into this guard.
+    with pytest.raises(asyncio.CancelledError):
+        _hashable_variable_value(Cancelling())
+    with pytest.raises(KeyboardInterrupt):
+        _hashable_variable_value(Interrupting())
+
+
 def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
     """Hostile custom-scalar values cannot abort plan-cache key construction."""
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
@@ -2049,6 +2177,65 @@ def test_optimizer_survives_sibling_field_with_unhashable_custom_scalar():
     assert result.errors is None, result.errors
     assert result.data["misc"]["logs"] == ["a", "b"]
     assert len(result.data["objs"]) >= 1
+
+
+@pytest.mark.django_db
+def test_optimizer_survives_sibling_field_with_hashable_equality_bomb_scalar():
+    """A public GraphQL operation never executes custom scalar equality in cache lookup."""
+    services.seed_data(1)
+
+    from typing import NewType
+
+    class EqualityBomb:
+        def __hash__(self):
+            return 1
+
+        def __eq__(self, _other):
+            raise RuntimeError("custom scalar equality must not run in cache lookup")
+
+    BombValue = NewType("BombValue", object)
+    bomb_scalar = strawberry.scalar(
+        name="BombValue",
+        serialize=lambda _value: "ok",
+        parse_value=lambda _value: EqualityBomb(),
+    )
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Misc:
+        @strawberry.field
+        def logs(self, after: BombValue) -> list[str]:
+            return ["ok"]
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        objs: list[CategoryType] = DjangoListField(CategoryType)
+
+        @strawberry.field
+        def misc(self) -> Misc:
+            return Misc()
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(extra_scalar_map={BombValue: bomb_scalar}),
+        extensions=[lambda: ext],
+    )
+    query = "query Q($value: BombValue!) { objs { name } misc { logs(after: $value) } }"
+
+    first = schema.execute_sync(query, variable_values={"value": "marker"})
+    second = schema.execute_sync(query, variable_values={"value": "marker"})
+
+    assert first.errors is None, first.errors
+    assert second.errors is None, second.errors
+    assert first.data["misc"]["logs"] == ["ok"]
+    assert second.data["misc"]["logs"] == ["ok"]
 
 
 def _categories_list_schema(ext):

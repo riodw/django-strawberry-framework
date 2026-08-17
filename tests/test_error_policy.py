@@ -38,6 +38,7 @@ import pytest
 import strawberry
 from graphql import GraphQLError
 from graphql.execution import ExecutionResult as GraphQLExecutionResult
+from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 
 from django_strawberry_framework import DjangoSchema
 from django_strawberry_framework.error_policy import (
@@ -47,6 +48,7 @@ from django_strawberry_framework.error_policy import (
     resolve_error_policy,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.extensions.debug import DjangoDebugExtension
 from django_strawberry_framework.extensions.error_policy import (
     DjangoErrorPolicyExtension,
     mask_execution_result,
@@ -239,6 +241,40 @@ def test_the_error_policy_extension_is_installed_at_index_zero():
     assert schema.extensions[-1] is DjangoResourcePolicyExtension
 
 
+def test_a_callable_policy_entry_suppresses_the_auto_policy_at_runtime():
+    """A factory-produced policy is the consumer's one explicit policy entry."""
+
+    class _FactoryPolicy(DjangoErrorPolicyExtension):
+        pass
+
+    def factory():
+        return _FactoryPolicy()
+
+    schema = DjangoSchema(query=_Query, extensions=[factory])
+    resolved = schema.get_extensions(sync=True)
+    policies = [
+        extension for extension in resolved if isinstance(extension, DjangoErrorPolicyExtension)
+    ]
+
+    assert len(policies) == 1
+    assert isinstance(policies[0], _FactoryPolicy)
+
+
+def test_callable_policy_and_debug_entries_preserve_debug_exception_capture():
+    """A callable error policy must not duplicate and preempt debug teardown."""
+
+    def error_factory():
+        return DjangoErrorPolicyExtension()
+
+    def debug_factory():
+        return DjangoDebugExtension(allow_unsafe_production=True)
+
+    schema = DjangoSchema(query=_Query, extensions=[error_factory, debug_factory])
+    result = schema.execute_sync("{ boom }")
+
+    assert len(result.extensions["debug"]["exceptions"]) == 1
+
+
 def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it():
     """A consumer's own extension keeps its order relative to its peers."""
 
@@ -274,6 +310,8 @@ def test_a_consumer_supplied_policy_entry_suppresses_the_prepend_and_keeps_its_p
         _ConsumerPolicyExtension,
         DjangoResourcePolicyExtension,
     ]
+    resolved = schema.get_extensions(sync=True)
+    assert sum(isinstance(item, DjangoErrorPolicyExtension) for item in resolved) == 1
 
 
 def test_an_instance_entry_also_suppresses_the_prepend():
@@ -294,6 +332,18 @@ def test_the_disabled_policy_leaves_the_original_message_on_the_wire(settings):
     schema = DjangoSchema(query=_Query, error_policy={"enabled": False})
     result = schema.execute_sync("{ boom }")
     assert _SENSITIVE in result.errors[0].message
+
+
+@pytest.mark.parametrize("debug_value", ["False", 1, object()])
+def test_a_malformed_debug_setting_does_not_disable_production_masking(settings, debug_value):
+    """Only an explicit ``DEBUG=True`` opens the development pass-through gate."""
+    settings.DEBUG = debug_value
+    schema = DjangoSchema(query=_Query)
+
+    result = schema.execute_sync("{ boom }")
+
+    assert result.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert _SENSITIVE not in result.errors[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +560,27 @@ class _HostileResult:
         raise RuntimeError(_SENSITIVE)
 
 
+class _HostileStrawberryResult(StrawberryExecutionResult):
+    """An admitted result whose error list raises when read but accepts replacement."""
+
+    @property
+    def errors(self):
+        raise RuntimeError(_SENSITIVE)
+
+    @errors.setter
+    def errors(self, value):
+        self._replacement_errors = value
+
+
+class _WriteRejectingStrawberryResult(StrawberryExecutionResult):
+    """A stock-shape subclass that rejects adoption after construction."""
+
+    def __setattr__(self, name, value):
+        if name == "data" and name in self.__dict__:
+            raise RuntimeError("result is frozen")
+        super().__setattr__(name, value)
+
+
 def test_one_error_that_cannot_be_masked_degrades_to_the_policy_message(caplog):
     """A masking failure is a disclosure risk, so it fails CLOSED, not open.
 
@@ -549,6 +620,54 @@ def test_a_result_whose_errors_cannot_be_read_degrades_to_one_policy_message(cap
     assert masked.data is None
     assert len(masked.errors) == 1
     assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_the_extension_adopts_all_fields_of_the_outer_fail_closed_degrade(caplog):
+    """An unreadable result retains neither data nor extensions after the floor applies.
+
+    The degrade drops all three fields, so the adoption must overwrite the
+    populated ``extensions`` map too -- leaving it in place would publish
+    whatever the failed result carried there.
+    """
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    result = _HostileStrawberryResult(
+        data={"secret": _SENSITIVE},
+        errors=[],
+        extensions={"leak": _SENSITIVE},
+    )
+    extension = DjangoErrorPolicyExtension()
+    extension.execution_context = SimpleNamespace(
+        schema=SimpleNamespace(error_policy=DEFAULT_ERROR_POLICY),
+        result=result,
+    )
+
+    extension._process_result(result, DEFAULT_ERROR_POLICY)
+
+    assert result.data is None
+    assert result._replacement_errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert result.extensions is None
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(caplog):
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    result = _WriteRejectingStrawberryResult(
+        data={"secret": _SENSITIVE},
+        errors=[GraphQLError(_SENSITIVE, original_error=RuntimeError(_SENSITIVE))],
+    )
+    extension = DjangoErrorPolicyExtension()
+    context = SimpleNamespace(
+        schema=SimpleNamespace(error_policy=DEFAULT_ERROR_POLICY),
+        result=result,
+    )
+    extension.execution_context = context
+
+    extension._process_result(result, DEFAULT_ERROR_POLICY)
+
+    assert context.result is not result
+    assert context.result.data is None
+    assert context.result.errors[0].message == DEFAULT_ERROR_POLICY.message
     assert any(record.exc_info for record in caplog.records)
 
 

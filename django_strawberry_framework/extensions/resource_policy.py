@@ -74,11 +74,13 @@ from strawberry.extensions.base_extension import SchemaExtension
 
 from ..resource_policy import (
     DEFAULT_RESOURCE_POLICY,
+    DST_RESOURCE_DEADLINE,
+    DST_RESOURCE_POLICY,
     ResourceLimitExceeded,
     ResourcePolicy,
-    clear_resource_context,
     stash_resource_policy,
 )
+from ..utils.context import clear_context_key, get_context_value, stash_on_context
 
 __all__ = ("DjangoResourcePolicyExtension",)
 
@@ -112,6 +114,7 @@ _EDGE_MARKER_FIELDS = frozenset({"node", "cursor"})
 _SCHEMA_META_FIELD = "__schema"
 _TYPE_META_FIELD = "__type"
 _TYPENAME_META_FIELD = "__typename"
+_MISSING_CONTEXT_VALUE = object()
 
 
 def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
@@ -281,7 +284,25 @@ class _ValueBudget:
                     in_mutation,
                     argument,
                 ):
-                    stack.append((node_type.of_type, node_value, path))
+                    # GraphQL coerces a bare value supplied for a list input into a
+                    # one-item list. Charge that synthetic container just as the
+                    # coerced value will be walked, including list-family bounds
+                    # and one level of value depth. ``max_container_width`` is not
+                    # charged: it is validated at or above 1, so a one-item
+                    # container can never exceed it.
+                    self.nodes += 1
+                    self._reject(
+                        "max_input_nodes",
+                        self.nodes,
+                        "the request's argument values carry more input nodes than the policy allows",
+                    )
+                    self._charge_list_family(
+                        node_type.of_type,
+                        1,
+                        in_mutation=in_mutation,
+                        argument=argument,
+                    )
+                    stack.append((node_type.of_type, node_value, (*path, object())))
                 continue
             if isinstance(node_value, (list, tuple, Mapping)):
                 # An untyped container: a JSON-shaped custom scalar, or a value
@@ -438,7 +459,15 @@ class _ValueBudget:
             self.upload_count,
             "the request carries more files than the policy allows",
         )
-        size = getattr(value, "size", None)
+        try:
+            size = getattr(value, "size", None)
+        except Exception as exc:
+            raise ResourceLimitExceeded(
+                "max_upload_file_bytes",
+                self.policy.max_upload_file_bytes,
+                self.policy.max_upload_file_bytes + 1,
+                "an uploaded file does not report a usable size, so its bytes cannot be bounded",
+            ) from exc
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             raise ResourceLimitExceeded(
                 "max_upload_file_bytes",
@@ -752,15 +781,34 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         )
 
     def on_operation(self) -> Iterator[None]:
-        """Publish the policy, charge the raw document, and clear the context after."""
+        """Publish the policy, charge the document, and restore nested context state."""
         policy = self._resolved_policy()
         context = self.execution_context.context
-        stash_resource_policy(context, policy)
+        previous_policy = get_context_value(
+            context,
+            DST_RESOURCE_POLICY,
+            _MISSING_CONTEXT_VALUE,
+        )
+        previous_deadline = get_context_value(
+            context,
+            DST_RESOURCE_DEADLINE,
+            _MISSING_CONTEXT_VALUE,
+        )
         try:
+            stash_resource_policy(context, policy)
             scan_document_text(policy, self.execution_context.query)
             yield
         finally:
-            clear_resource_context(context)
+            self._restore_context_value(context, DST_RESOURCE_POLICY, previous_policy)
+            self._restore_context_value(context, DST_RESOURCE_DEADLINE, previous_deadline)
+
+    @staticmethod
+    def _restore_context_value(context: Any, key: str, value: Any) -> None:
+        """Restore one prior context value or clear it when the key was absent."""
+        if value is _MISSING_CONTEXT_VALUE:
+            clear_context_key(context, key)
+        else:
+            stash_on_context(context, key, value)
 
     def on_execute(self) -> Iterator[None]:
         """Charge the validated document's shape and every argument value, then execute."""

@@ -36,7 +36,7 @@ also keeps ``import django_strawberry_framework.testing`` light - the
 
 from strawberry import relay
 
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
 from django_strawberry_framework.types.base import (
     _RELAY_NODE_GATE_INHERIT_TAIL,
     _RELAY_NODE_GATE_LEAD,
@@ -59,7 +59,8 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     definition = getattr(type_cls, "__django_strawberry_definition__", None)
     if definition is None:
         raise ConfigurationError(
-            f"global_id_for: {type_cls!r} is not a registered DjangoType subclass; "
+            f"global_id_for: {_safe_arg_repr(type_cls)} is not a registered "
+            "DjangoType subclass; "
             "pass the DjangoType class whose emitted id you want to mint.",
         )
     if not definition.finalized:

@@ -257,6 +257,21 @@ def test_files_placeholder_present_but_not_none_raises():
         )
 
 
+def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
+    """A malformed value's broken ``repr`` cannot replace the placeholder guard."""
+
+    class _HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(AssertionError, match="None placeholder"):
+        TestClient().query(
+            "mutation($file: Upload!) { up }",
+            variables={"file": _HostileRepr()},
+            files={"file": object()},
+        )
+
+
 def test_files_key_shadowing_a_reserved_envelope_field_raises():
     """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
 
@@ -384,6 +399,19 @@ def test_clients_carry_the_pytest_collection_guard():
     """
     assert TestClient.__test__ is False
     assert AsyncTestClient.__test__ is False
+
+
+@pytest.mark.parametrize("client_class", [TestClient, AsyncTestClient])
+def test_clients_preserve_an_explicit_falsy_transport(client_class):
+    """An explicitly supplied client is selected by presence, not truthiness."""
+
+    class _FalsyClient:
+        def __bool__(self):
+            return False
+
+    supplied = _FalsyClient()
+    client = client_class(client=supplied)
+    assert client.client is supplied
 
 
 def test_export_surface_is_the_testing_root_not_the_package_root():

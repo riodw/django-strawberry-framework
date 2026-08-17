@@ -128,9 +128,17 @@ Steps 1, 2, 4, 6 ran: the baseline is enumerated above and included per the main
 
 ## Artifact list
 
-- `docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md`
-- `docs/builder/bld-015-r2-doc_completion_archive_audit.md`
+- `docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md` — **retired at closeout**
+- `docs/builder/bld-015-r2-doc_completion_archive_audit.md` — **retired at closeout**
 - `docs/builder/bld-015-final.md`
+
+**Closeout, 2026-08-17.** The two round artifacts were deleted once the cycle was committed, along
+with the two `worker-memory/spec-015-worker-*.md` scratch files; this plan and the final gate are the
+surviving pair. The names above are kept as the record of what the cycle produced, and both files
+remain readable at the commit that landed them — `git show 01b011ea:<path>`. Deleting them stranded
+eighteen references across three surviving files (fifteen reference links in the final gate, one
+pointer in the shipped rationale companion, two names here); all were de-linked or retargeted in the
+same pass rather than left to dangle.
 
 **No `bld-integration.md`.** `docs/builder/BUILD.md` `## Cross-slice integration pass` scans landed source for cross-slice duplication; this cycle lands no source at all, so there is no cross-slice DRY surface. Both of the pass's live obligations are folded into the final gate: the staged-anchor sweep, and the read of every closed artifact. Same disposition, and the same reason, as the spec-011 through spec-014 cycles.
 

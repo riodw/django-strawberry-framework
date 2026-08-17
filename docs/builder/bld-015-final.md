@@ -8,8 +8,21 @@ Procedural-closure shape per [`docs/builder/BUILD.md`][build-md] `### Procedural
 same disposition R1 and R2 carried: dispatched to Worker 1 alone. This artifact carries a combined
 Plan + Final-verification block.
 
+> **Closeout note (2026-08-17).** The two round artifacts this file reads and cites throughout —
+> `bld-015-r1-rationale_and_spec_reconciliation.md` and `bld-015-r2-doc_completion_archive_audit.md`
+> — were **retired at closeout**, along with the cycle's two `worker-memory/spec-015-worker-*.md`
+> scratch files. Every reference to them below is preserved as written and de-linked rather than
+> rewritten, because this file's findings are traceable only through the rounds that produced them.
+> Both remain readable at the commit that landed them:
+> `git show 01b011ea:docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md` and
+> `git show 01b011ea:docs/builder/bld-015-r2-doc_completion_archive_audit.md`. The surviving pair for
+> this cycle is this file and [`docs/builder/build-015-relay_interfaces-0_0_5.md`][build-015], whose
+> `## Post-gate disposition of the deferred catalog` records what happened to the catalog below —
+> including that **item 1 (F13) was subsequently falsified and its CSV row reverted**, so the
+> `### Deferred work catalog` entry for it is superseded.
+
 **This pass changed no spec, no companion, no source, and no test.** Its only writes are this file and
-[`docs/builder/worker-memory/spec-015-worker-1.md`][w1-memory].
+`docs/builder/worker-memory/spec-015-worker-1.md`.
 
 **No `bld-integration.md` exists for this cycle**, by the plan's `## Artifact list` decision: the
 cycle lands no source, so there is no cross-slice DRY surface. The integration pass's two live
@@ -274,10 +287,10 @@ This reproduces R2's independent sweep.
 
 [`docs/builder/BUILD.md`][build-md] `## Cross-slice integration pass` step 1 — no "as needed".
 
-- [`docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md`][bld-015-r1] — read in full, 282
+- `docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md` — read in full, 282
   lines. `Status: final-accepted`. Its `### Dispatched findings checklist` carries F1-F12 plus W1a-W1c,
   every box `- [x]`, no box deferred.
-- [`docs/builder/bld-015-r2-doc_completion_archive_audit.md`][bld-015-r2] — read in full, 587 lines.
+- `docs/builder/bld-015-r2-doc_completion_archive_audit.md` — read in full, 587 lines.
   `Status: final-accepted`. Its `### Dispatched findings checklist` carries F13-F16 plus the
   adversarial re-derivation box, every box `- [x]`, no box deferred.
 
@@ -413,7 +426,7 @@ list (items 7 and 8), which the catalog's purpose says belong in it.
 None of the eight is a code defect. **Nothing spec-015 promised is missing from the shipped code.**
 
 1. **`DONE-015-0.0.5`'s card-side glossary sync — the open half of F13.** *Source:*
-   [`bld-015-r2`][bld-015-r2] `### F13`, and its `### Notes for Worker 1` item 1. *Licensing:* none in
+   `bld-015-r2` `### F13`, and its `### Notes for Worker 1` item 1. *Licensing:* none in
    the spec; it is a board-state obligation, not a spec obligation. *Description:* R2 closed the
    file-side half by adding the `public exports,public-exports,…` row, so the terms CSV now carries 19
    rows and `check_spec_glossary` reads `OK: 19 terms`. The card still renders **18** glossary terms
@@ -446,7 +459,7 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
       `uv run python examples/fakeshop/manage.py check` passes.
 
 2. **Re-anchor the one source citation the rationale move legitimately stranded.** *Source:*
-   [`bld-015-r2`][bld-015-r2] finding R2-a (the fourth row) and its `### Notes for Worker 1` item 2.
+   `bld-015-r2` finding R2-a (the fourth row) and its `### Notes for Worker 1` item 2.
    *Licensing:* [`docs/builder/BUILD.md`][build-md] `## Spec rationale extraction` — the section that
    carried the sentence was deliberative and correctly left the spec. *Description:*
    `django_strawberry_framework/types/relay.py::apply_interfaces` and the matching
@@ -462,8 +475,8 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
    matches a plain grep there — one more reason to retarget it rather than leave it.
 
 3. **The `[spec-011]` renumber cluster — plan F14.** *Source:* the plan's `### R2 findings` F14 and its
-   three-bullet ownership argument; [`bld-015-r1`][bld-015-r1] `### Notes for Worker 1` item 3;
-   [`bld-015-r2`][bld-015-r2] `### F14`. *Licensing:* none in the spec — it is a citation defect
+   three-bullet ownership argument; `bld-015-r1` `### Notes for Worker 1` item 3;
+   `bld-015-r2` `### F14`. *Licensing:* none in the spec — it is a citation defect
    created by the `81e4704d` renumber, outside spec-015's contract. *Description:* commit `81e4704d`
    renamed `spec-011-relay_interfaces-0_0_5.md` to `spec-015-…` without sweeping the citations, so **8
    occurrences across 4 files** now point at `spec-011-stale_placeholder_cleanup-0_0_4.md`, a
@@ -483,8 +496,8 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
      with [`AGENTS.md`][agents] rule 34 and [`START.md`][start] `## Concurrent sessions`.
    **Worth batching with item 2** — same defect class, and two of the same files.
 
-4. **The A/B relation-planning row.** *Source:* [`bld-015-r1`][bld-015-r1]
-   `### The adversarial obligation` and its `### Notes for Worker 1` item 1; [`bld-015-r2`][bld-015-r2]
+4. **The A/B relation-planning row.** *Source:* `bld-015-r1`
+   `### The adversarial obligation` and its `### Notes for Worker 1` item 1; `bld-015-r2`
    `### Notes for Worker 1` item 4. *Licensing:* spec-015 Decision 7's relation-traversal invariant,
    as reconciled — the spec now states the invariant without claiming a specific ORM verb, which is
    what makes the missing row visible. *Description:* `test_relay_target_relation_planning_unchanged`
@@ -496,8 +509,8 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
    downgrade path and no comparison survives. **Nothing regressed**; the comparative assertion is
    simply no longer pinned. Writing it is a test change no item of this cycle was authorized to make.
 
-5. **A stale cross-reference inside a shipped test docstring.** *Source:* [`bld-015-r1`][bld-015-r1]
-   `### Notes for Worker 1` item 2; [`bld-015-r2`][bld-015-r2] `### Notes for Worker 1` item 5.
+5. **A stale cross-reference inside a shipped test docstring.** *Source:* `bld-015-r1`
+   `### Notes for Worker 1` item 2; `bld-015-r2` `### Notes for Worker 1` item 5.
    *Licensing:* none — it is a source-comment defect, not a spec claim. *Description:*
    `tests/types/test_relay_interfaces.py::test_relay_node_strips_django_id_annotation` closes with
    "End-to-end coverage of the same suppression path lives in
@@ -510,7 +523,7 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
    `examples/fakeshop/test_query/test_library_api.py`'s two live twins. Test-file edit, outside the
    writable set; the file is dirty with the concurrent cycle.
 
-6. **Two non-unique `#"substring"` anchors in the spec.** *Source:* [`bld-015-r2`][bld-015-r2] finding
+6. **Two non-unique `#"substring"` anchors in the spec.** *Source:* `bld-015-r2` finding
    R2-d and its `### Notes for Worker 1` item 6. *Licensing:* [`AGENTS.md`][agents] rule 27's "unique
    substring" requirement. *Description:* `pyproject.toml #"version ="` matches **2** times and
    `django_strawberry_framework/types/finalizer.py #"_attach_relation_resolvers"` matches **3** —
@@ -520,7 +533,7 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
    pass may tighten them, and must sweep the citing source in the same change if it does.
 
 7. **The Test plan's projection bullets illustrate a query the shipped rows do not send.** *Source:*
-   [`bld-015-r2`][bld-015-r2] `### R1's counts, re-derived`, closing "looseness items" paragraph —
+   `bld-015-r2` `### R1's counts, re-derived`, closing "looseness items" paragraph —
    recorded there and deliberately not treated as a defect. *Licensing:* none; the mismatch is
    illustrative, not normative. *Description:* re-derived independently here and it is **slightly
    worse than R2 stated**. The spec's `## Test plan` describes
@@ -535,7 +548,7 @@ None of the eight is a code defect. **Nothing spec-015 promised is missing from 
    `### Implementation discretion items`); a one-line spec correction for a future custodian pass.
 
 8. **The risk register is summarized, not reproduced verbatim, in the companion.** *Source:*
-   [`bld-015-r2`][bld-015-r2] `### R1's counts, re-derived`, same closing paragraph. *Licensing:*
+   `bld-015-r2` `### R1's counts, re-derived`, same closing paragraph. *Licensing:*
    [`docs/builder/worker-1.md`][worker-1] `### Performing the rationale move` — the move's obligation
    is that moved text leaves the spec, not that it is transcribed word for word. *Description:*
    R1's rationale marks `## Risks and open questions` "*Moved, all eleven bullets*", and all eleven
@@ -686,11 +699,8 @@ two deliberately-untouched non-unique anchors, and two spec-text looseness items
 <!-- docs/builder/ -->
 
 [artifact]: ARTIFACT.md
-[bld-015-r1]: bld-015-r1-rationale_and_spec_reconciliation.md
-[bld-015-r2]: bld-015-r2-doc_completion_archive_audit.md
 [build-015]: build-015-relay_interfaces-0_0_5.md
 [build-md]: BUILD.md
-[w1-memory]: worker-memory/spec-015-worker-1.md
 [worker-0]: worker-0.md
 [worker-1]: worker-1.md
 

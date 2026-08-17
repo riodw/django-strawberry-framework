@@ -82,8 +82,9 @@ so the term string still matches its `spec-015-…-terms.csv` row, and
 exits 0 after the rewrite. No other moved paragraph carried a glossary link.
 
 **Spec size:** 73,479 bytes before this pass and 66,594 after, both measured with `wc -c`; 626 lines
-before and 595 after. The per-section accounting is in this cycle's
-`docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md`.
+before and 595 after. The per-section accounting was recorded in this cycle's R1 artifact, which was
+retired at closeout; it is readable at
+`git show 01b011ea:docs/builder/bld-015-r1-rationale_and_spec_reconciliation.md`.
 
 ## What the card actually did — recovered from history
 

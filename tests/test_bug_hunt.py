@@ -64,6 +64,8 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert "Break things, break things, break things" in report
     assert "every extreme, test the opposite extreme" in report
     assert "Do not clean up scratch probes" in report
+    assert "leave it intact so Worker 0 can independently verify it" in report
+    assert "Report evidence, changed files, tests, and validation to Worker 0" in report
     assert "layers often fail only when several reasonable assumptions stack together" in report
     assert "- [ ] django_strawberry_framework/module.py" in report
     assert "Use django_strawberry_framework/module.py as the entry point" in report
@@ -73,6 +75,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert "- [ ] Package integration" in report
     assert "including public exports and `__init__.py` files" in report
     assert "- [ ] Final test gate" in report
+    assert "    - Owner: Worker 0" in report
     assert report.index(stripped.name) < report.index("Package integration")
     assert report.index("Package integration") < report.index("Final test gate")
     assert refreshes == [(full_sha, bug_hunt.DEFAULT_PACKAGE_DIR, current_dir.resolve())]

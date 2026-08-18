@@ -464,6 +464,61 @@ def _sorted_meta_values(value: Any) -> list[Any]:
         ) from exc
 
 
+_MAX_META_VALUE_DEPTH = 64
+
+
+def _hashable_meta_value(v: Any, active: set[int], depth: int) -> Any:
+    """Recursive implementation with an active-path cycle guard and depth bound."""
+    is_container = isinstance(
+        v,
+        (
+            dict,
+            set,
+            frozenset,
+            list,
+            tuple,
+        ),
+    )
+    if is_container:
+        if depth > _MAX_META_VALUE_DEPTH:
+            raise ConfigurationError(
+                "Generated set metadata exceeds the maximum supported container depth "
+                f"({_MAX_META_VALUE_DEPTH}). Flatten the metadata value.",
+            )
+        marker = id(v)
+        if marker in active:
+            raise ConfigurationError(
+                "Generated set metadata contains a cyclic container value; cache-key "
+                "metadata must be acyclic.",
+            )
+        active.add(marker)
+        try:
+            if isinstance(v, dict):
+                pairs = tuple(
+                    (
+                        _hashable_meta_value(key, active, depth + 1),
+                        _hashable_meta_value(value, active, depth + 1),
+                    )
+                    for key, value in dict.items(v)
+                )
+                return tuple(sorted(pairs, key=_meta_sort_key))
+            if isinstance(v, (set, frozenset)):
+                values = (
+                    _hashable_meta_value(item, active, depth + 1) for item in _base_meta_values(v)
+                )
+                return tuple(sorted(values, key=_meta_sort_key))
+            return tuple(
+                _hashable_meta_value(item, active, depth + 1) for item in _base_meta_values(v)
+            )
+        finally:
+            active.remove(marker)
+    try:
+        hash(v)
+    except BaseException:
+        return _opaque_meta_value(v)
+    return v
+
+
 def make_hashable_meta_value(v: Any) -> Any:
     """Recursively convert unhashable objects into hashable cache-key parts.
 
@@ -481,23 +536,13 @@ def make_hashable_meta_value(v: Any) -> Any:
     safe structural canonical form. Those land as
     ``("__unhashable_meta_value__", id(type(v)), id(v))`` so reuse of the same
     object still hits the cache while distinct objects cannot alias.
+
+    Container traversal is bounded to ``_MAX_META_VALUE_DEPTH`` and tracks the
+    active object path. Cyclic metadata and pathologically deep values therefore
+    raise a typed ``ConfigurationError`` at schema construction instead of
+    escaping as a raw ``RecursionError``.
     """
-    if isinstance(v, dict):
-        pairs = tuple(
-            (make_hashable_meta_value(key), make_hashable_meta_value(value))
-            for key, value in dict.items(v)
-        )
-        return tuple(sorted(pairs, key=_meta_sort_key))
-    if isinstance(v, (set, frozenset)):
-        values = (make_hashable_meta_value(item) for item in _base_meta_values(v))
-        return tuple(sorted(values, key=_meta_sort_key))
-    if isinstance(v, (list, tuple)):
-        return tuple(make_hashable_meta_value(item) for item in _base_meta_values(v))
-    try:
-        hash(v)
-    except BaseException:
-        return _opaque_meta_value(v)
-    return v
+    return _hashable_meta_value(v, set(), 0)
 
 
 FILTERSET_FIELDS_ALIAS = "filter_fields"

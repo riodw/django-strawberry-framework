@@ -440,6 +440,32 @@ def test_make_hashable_meta_value_sorts_mixed_dict_keys():
     assert set(result) == {("a", 1), (0, 2)}
 
 
+def test_make_hashable_meta_value_rejects_cyclic_containers():
+    value = []
+    value.append(value)
+
+    with pytest.raises(ConfigurationError, match="cyclic container"):
+        make_hashable_meta_value(value)
+
+
+def test_make_hashable_meta_value_rejects_excessive_container_depth():
+    value = []
+    cursor = value
+    for _ in range(100):
+        child = []
+        cursor.append(child)
+        cursor = child
+
+    with pytest.raises(ConfigurationError, match="maximum supported container depth"):
+        make_hashable_meta_value(value)
+
+
+def test_make_hashable_meta_value_allows_shared_acyclic_containers():
+    shared = ["exact"]
+
+    assert make_hashable_meta_value([shared, shared]) == (("exact",), ("exact",))
+
+
 def test_base_meta_values_reads_builtin_dict_items():
     """The container reader exposes built-in dict entries without invoking overrides."""
     assert _base_meta_values({"name": 1}) == (("name", 1),)

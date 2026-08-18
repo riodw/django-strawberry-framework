@@ -59,7 +59,24 @@ def _snake_case_cached(name: str) -> str:
         ``"_legacyId"`` -> ``"_legacy_id"``.
     """
     out: list[str] = []
-    for i, c in enumerate(name):
+    i = 0
+    while i < len(name):
+        c = name[i]
+        if (
+            c == "_"
+            and i + 3 < len(name)
+            and name[i + 1] == "_"
+            and name[i + 2] == "x"
+            and name[i + 3].isupper()
+        ):
+            # ``graphql_camel_name`` reserves ``__x`` before an uppercase
+            # segment to encode adjacent one-letter snake segments
+            # (``a_a_a`` -> ``aA__xA``). Consume that marker as one source
+            # separator and let the following uppercase letter supply the
+            # segment's first character without adding a second separator.
+            out.extend(("_", name[i + 3].lower()))
+            i += 4
+            continue
         previous = name[i - 1] if i > 0 else ""
         following = name[i + 1] if i + 1 < len(name) else ""
         if (
@@ -74,6 +91,7 @@ def _snake_case_cached(name: str) -> str:
         ):
             out.append("_")
         out.append(c.lower())
+        i += 1
     return "".join(out)
 
 
@@ -154,10 +172,13 @@ def graphql_camel_name(name: str) -> str:
     Leading and trailing underscores are preserved, and an empty token between
     words becomes one literal underscore. A separator before a digit-leading
     segment is also retained because capitalization cannot encode that boundary.
-    This keeps the transform injective over normalized snake-case identifiers
-    instead of collapsing ``"_legacy_id"`` into ``"legacyId"``,
-    ``"double__name"`` into ``"doubleName"``, or ``"field_2"`` into
-    ``"field2"``. An all-underscore name passes through unchanged.
+    When adjacent segments would create an uppercase run (``a_a_a``), the
+    additional separator is encoded as ``__x``; ``snake_case`` reserves that
+    marker when it precedes an uppercase segment. This keeps the transform
+    injective over normalized snake-case identifiers instead of collapsing
+    ``"_legacy_id"`` into ``"legacyId"``, ``"double__name"`` into
+    ``"doubleName"``, or ``"field_2"`` into ``"field2"``. An all-underscore
+    name passes through unchanged.
     """
     name = _plain_text(name)
     core = name.strip("_")
@@ -167,9 +188,13 @@ def graphql_camel_name(name: str) -> str:
     trailing = name[len(name.rstrip("_")) :]
     parts = core.split("_")
     head, *rest = parts
-    camel = head + "".join(
-        f"_{part}" if not part or part[0].isdigit() else part.capitalize() for part in rest
-    )
+    camel = head
+    for part in rest:
+        if not part or part[0].isdigit():
+            camel += f"_{part}"
+        else:
+            separator = "__x" if camel and camel[-1].isupper() else ""
+            camel += f"{separator}{part.capitalize()}"
     return f"{leading}{camel}{trailing}"
 
 
@@ -186,4 +211,7 @@ def flatten_lookup_path(name: str) -> str:
     exactly this class of bug), so when the escaping rules ever change there is
     ONE symbol to grep for, not four inline respellings.
     """
-    return _plain_text(name).replace("__", "_")
+    flattened = _plain_text(name)
+    while "__" in flattened:
+        flattened = flattened.replace("__", "_")
+    return flattened

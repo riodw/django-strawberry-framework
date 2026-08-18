@@ -58,6 +58,7 @@ def test_snake_case_pins_acronym_digit_and_underscore_edges(camel, snake):
         "version_2_value",
         "_legacy_id",
         "double__underscore",
+        "a_a_a",
         "trailing_",
     ],
 )
@@ -98,6 +99,8 @@ def test_flatten_lookup_path_flattens_every_lookup_sep():
     assert flatten_lookup_path("entries__property__category__name") == (
         "entries_property_category_name"
     )
+    assert flatten_lookup_path("a____b") == "a_b"
+    assert flatten_lookup_path("a____b") == flatten_lookup_path(flatten_lookup_path("a____b"))
 
 
 def test_string_helpers_normalize_hostile_string_subclasses():
@@ -106,6 +109,13 @@ def test_string_helpers_normalize_hostile_string_subclasses():
     assert pascal_case(_HostileString("is_private")) == "IsPrivate"
     assert graphql_camel_name(_HostileString("is_private")) == "isPrivate"
     assert flatten_lookup_path(_HostileString("category__name")) == "category_name"
+
+
+def test_graphql_camel_name_escapes_adjacent_uppercase_segments():
+    """Adjacent one-letter snake segments keep a reversible separator marker."""
+    assert graphql_camel_name("a_a_a") == "aA__xA"
+    assert snake_case(graphql_camel_name("a_a_a")) == "a_a_a"
+    assert snake_case("aA__xA") != snake_case("aAA")
 
 
 @pytest.mark.parametrize(

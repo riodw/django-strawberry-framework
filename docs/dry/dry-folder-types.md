@@ -315,6 +315,50 @@ Worker 2. No pytest. Concurrent `types/definition.py` dirt left untouched.
    validators, PendingRelation snapshots, `SyncMisuseError` re-export)
    remain documented under Rejected / deferred — not blockers for verify.
 
+### Iteration 2026-08-17 (second-pass correctness evidence)
+
+New executable evidence overturns Rejected #1's old premise without
+reintroducing its rejected line-count abstraction. The old candidate merely
+returned the identical inline union of annotations, selected model fields, and
+assigned Strawberry fields. The new
+`django_strawberry_framework/types/finalizer.py::_field_surface_names` owns a
+different rule: map Python names to emitted GraphQL names from inherited
+Strawberry definitions, current annotations, and assigned fields; apply
+same-GraphQL-name subclass override precedence; and exclude selected fields
+removed by Relay or connection-only suppression.
+
+The distinction is correctness-bearing at both consumers:
+
+- `_audit_field_surface` otherwise falsely rejects suppressed fields and
+  Relay-only inherited surfaces, and misses explicit GraphQL names.
+- `_synthesize_relation_connections` otherwise falsely treats a suppressed
+  primary-key column as a live generated-name collision.
+
+Permanent tests in `tests/types/test_definition_order.py` prove both false
+positives, inherited Relay field inclusion, and explicit-name collision
+detection. The prior rejection remains valid for the old three-set-union
+micro-extract; this iteration supersedes only its claim that no clearer
+surface owner or new evidence existed.
+
+### Iteration 2026-08-17 (runtime isolation evidence)
+
+The earlier deferment of many-side visibility was superseded by a different
+kind of evidence: a real GraphQL query without the optimizer returned a private
+child through a generated relation despite the target type's custom
+`get_queryset`. This is not a DRY micro-extract question; it is a
+cross-module lifecycle invariant between `types/resolvers.py` and
+`utils/querysets.py`.
+
+The root fix keeps default relation resolution and optimizer-filtered caches
+fast, but routes unoptimized many-side, forward, reverse-one-to-one, and
+FK-id-stub paths through the shared visibility boundary. A relation cache is
+trusted only during an active optimizer execution, including executions with no
+mutable ``info.context`` (tracked by the optimizer's execution ``ContextVar``);
+unoptimized caches still go through visibility. Sync and async live HTTP
+regressions pass, and optimizer query-count tests remain unchanged. The old
+“defer outside this folder” note is therefore closed by the shipped resolver
+fix, not by a consolidation.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->

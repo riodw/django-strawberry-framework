@@ -26,6 +26,7 @@ from typing import Any
 import strawberry
 from django.db import router
 from strawberry.types import Info
+from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import OptimizerError
 
@@ -42,12 +43,23 @@ from ..optimizer._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ..optimizer._context import (
+    active_strictness as _active_strictness,
+)
+from ..optimizer._context import (
     get_context_value as _get_context_value,
+)
+from ..optimizer._context import (
+    relation_is_optimizer_scoped as _relation_is_optimizer_scoped,
 )
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
-from ..resource_policy import bounded_rows
+from ..resource_policy import bounded_rows, bounded_rows_async
+from ..utils.querysets import (
+    apply_type_visibility_async,
+    apply_type_visibility_sync,
+    initial_queryset,
+)
 from ..utils.relations import instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
 
@@ -157,6 +169,37 @@ def _will_lazy_load_many(root: Any, field_name: str) -> bool:
     return field_name not in prefetch_cache
 
 
+def _strictness_for(context: Any) -> str:
+    """Return the N+1 strictness in force for this execution (``"off"`` when none).
+
+    Prefers the per-execution ``ContextVar`` the running extension armed, which is
+    set at ``on_execute`` entry and therefore survives an execution carrying no
+    ``context_value`` and one whose root the walker could not plan. Falls back to
+    the ``DST_OPTIMIZER_STRICTNESS`` stash, which is the only channel available to
+    a caller that drives this module with a hand-built context and no extension.
+
+    A caller holding the ``ContextVar`` value already threads it into ``_check_n1``
+    rather than calling this again (``forward_resolver``).
+    """
+    live = _active_strictness()
+    if live is not None:
+        return live
+    return _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
+
+
+def _relation_is_planned(key: str, planned: Any) -> bool:
+    """Return whether the optimizer planned the relation named by ``key``.
+
+    Reads both publish channels: the ``DST_OPTIMIZER_PLANNED`` stash (``planned``,
+    already read by the caller) and the per-execution scoped-relation set. The
+    latter is published on every execution, so it answers for the shapes the
+    stash cannot reach; the two carry the same resolver-key vocabulary.
+    """
+    if planned is not None and key in planned:
+        return True
+    return _relation_is_optimizer_scoped(key)
+
+
 def _check_n1(
     info: Any,
     root: Any,
@@ -170,6 +213,7 @@ def _check_n1(
     planned: Any = _PLAN_UNREAD,
     precomputed_key: str | None = None,
     force_unplanned: bool = False,
+    strictness: str | None = None,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
@@ -206,11 +250,17 @@ def _check_n1(
     list-relation calls pass no ``reason`` and produce the byte-identical
     pre-slice message.
 
-    ``planned`` / ``precomputed_key`` (keyword-only): a caller that
-    already read the ``DST_OPTIMIZER_PLANNED`` sentinel and computed the resolver
-    key (``forward_resolver``) threads both so this function neither re-reads the
-    sentinel nor re-walks ``info.path``. Omitting them (every other call site)
-    keeps the original read-and-compute behavior.
+    ``planned`` / ``precomputed_key`` / ``strictness`` (keyword-only): a caller
+    that already read the ``DST_OPTIMIZER_PLANNED`` sentinel, computed the resolver
+    key, and resolved the in-force strictness (``forward_resolver``) threads all
+    three so this function neither re-reads a sentinel nor re-walks ``info.path``.
+    Omitting them (every other call site) keeps the read-and-compute behavior.
+
+    A relation counts as planned when EITHER publish channel names its key -
+    the ``DST_OPTIMIZER_PLANNED`` stash or the per-execution scoped-relation set
+    (``_relation_is_planned``). Reading only the stash left strictness silently
+    disarmed for an execution that carries no ``context_value`` and for one whose
+    root the walker could not plan, because neither publishes the stash.
 
     ``force_unplanned`` (keyword-only, spec-035 Decision 5): when ``True`` the
     ``key in planned`` short-circuit is bypassed so the lazy-load probe runs even
@@ -222,20 +272,25 @@ def _check_n1(
     never reaches this call with the flag set, so it stays a no-op there.
     """
     context = getattr(info, "context", None)
+    # Strictness gates everything below, so read it FIRST: an absent planned
+    # sentinel means "the walker planned nothing here", which is precisely the
+    # case strictness exists to report, not a reason to stay silent.
+    if strictness is None:
+        strictness = _strictness_for(context)
+    if strictness == "off":
+        return
     # ``forward_resolver`` may have already read the PLAN sentinel and computed
     # the resolver key; reuse them when threaded so the ``info.path`` walk runs
     # once per row, not once per consumer. Other call sites omit
     # both and get the original read-and-compute behavior.
     if planned is _PLAN_UNREAD:
         planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
-    if planned is None:
-        return
     key = (
         precomputed_key
         if precomputed_key is not None
         else resolver_key(parent_type, field_name, runtime_path_from_info(info))
     )
-    if key in planned and not force_unplanned:
+    if not force_unplanned and _relation_is_planned(key, planned):
         return
     if kind == "connection_to_attr":
         # The windowed page already landed under ``to_attr`` when present;
@@ -249,7 +304,6 @@ def _check_n1(
             lazy = _will_lazy_load_single(root, probe_name)
     if not lazy:
         return
-    strictness = _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
     suffix = f" ({reason})" if reason is not None else ""
     if strictness == "raise":
         raise OptimizerError(f"Unplanned N+1: {field_name}{suffix}")
@@ -297,6 +351,109 @@ def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
     return FieldMeta.from_django_field(field)
 
 
+def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
+    """Return a registered target type whose custom visibility hook must run here.
+
+    Optimizer prefetch planning applies a custom target ``get_queryset`` to the
+    child querysets of relations it PLANS. Everything else reaching a generated
+    relation resolver - a schema with no optimizer, a relation the walker never
+    planned, a cache the consumer prefetched itself - has not passed through
+    that hook, so the resolver applies it (``_optimizer_scoped_relation`` draws
+    that line). Default identity hooks stay on the existing fast path and
+    preserve prefetched-cache behavior.
+    """
+    if field_meta.related_model is None:
+        return None
+    if not isinstance(field_meta.related_model, type):
+        return None
+    target_type = registry.get(field_meta.related_model)
+    if target_type is None:
+        return None
+    definition = registry.get_definition(target_type)
+    if definition is None or not definition.has_custom_get_queryset:
+        return None
+    return target_type
+
+
+def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
+    """Re-check one relation object through its target visibility hook."""
+    source = initial_queryset(target_type)
+    alias = getattr(getattr(related, "_state", None), "db", None)
+    if alias is not None:
+        source = source.using(alias)
+    source = source.filter(pk=related.pk)
+    if in_async_context():
+
+        async def _resolve() -> Any:
+            visible = await apply_type_visibility_async(target_type, source, info)
+            return await visible.afirst()
+
+        return _resolve()
+    return apply_type_visibility_sync(target_type, source, info).first()
+
+
+def _visible_many_rows(source: Any, target_type: type, info: Info) -> Any:
+    """Apply target visibility, then bound and materialize a many-side relation.
+
+    The async branch iterates the bound with ``async for`` unconditionally: the
+    visibility boundary normalizes every hook return to a framework-owned plain
+    ``QuerySet`` (``querysets.py::_normalized_visibility_result`` fails closed on
+    a list), slicing one keeps it a ``QuerySet``, and every ``QuerySet`` is
+    ``AsyncIterable``. A sync-iterable fallback here would be unreachable.
+    """
+    if in_async_context():
+
+        async def _resolve() -> list[Any]:
+            visible = await apply_type_visibility_async(target_type, source, info)
+            bounded = await bounded_rows_async(visible, info)
+            return [row async for row in bounded]
+
+        return _resolve()
+    visible = apply_type_visibility_sync(target_type, source, info)
+    return list(bounded_rows(visible, info))
+
+
+def _optimizer_scoped_relation(
+    info: Info,
+    parent_type: type | None,
+    field_name: str,
+    *,
+    precomputed_key: Any = None,
+) -> bool:
+    """Return whether the optimizer planned THIS relation, so its rows are already scoped.
+
+    The trust boundary for skipping a target's custom ``get_queryset`` here is
+    per-relation, not per-request. The optimizer downgrades a custom-visibility
+    target's traversal to a ``Prefetch`` and applies the hook to that child
+    queryset (``optimizer/walker.py::plan_relation``), so a relation the walker
+    planned arrives already scoped and re-filtering it would only repeat the
+    query. Nothing else in the request carries that guarantee: a relation the
+    walker never planned still lazy-loads unscoped, and a cache the CONSUMER
+    populated with its own ``prefetch_related`` was never offered to the hook at
+    all.
+
+    Answered from the optimizer's per-execution scoped-relation set
+    (``optimizer/_context.py::relation_is_optimizer_scoped``). None of the
+    request-context sentinels can answer it: ``DST_OPTIMIZER_PLANNED`` carries
+    the right keys but only under a non-default ``strictness``,
+    ``DST_OPTIMIZER_PLAN`` is last-wins introspection data a nested connection's
+    fallback publish can replace, and neither exists at all for an execution
+    given no ``context_value``. An empty set means no optimizer planned this
+    relation, so it is re-checked - one query where the alternative is serving a
+    row the target type excludes.
+
+    ``precomputed_key`` mirrors ``_check_n1``'s threading convention - the
+    forward resolver already built the resolver key, so it is reused instead of
+    re-walking ``info.path``.
+    """
+    key = (
+        precomputed_key
+        if precomputed_key is not None
+        else resolver_key(parent_type, field_name, runtime_path_from_info(info))
+    )
+    return _relation_is_optimizer_scoped(key)
+
+
 def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     """Generate a resolver for a Django relation field.
 
@@ -322,8 +479,8 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
       the related instance, or ``None`` if the FK is nullable and unset.
 
     B3: all resolvers now accept ``info`` (Strawberry injects it
-    automatically) and call ``_check_n1`` when a strictness sentinel
-    is present on ``info.context``. ``_check_n1`` receives a
+    automatically) and call ``_check_n1`` whenever a strictness other
+    than ``"off"`` is in force for the execution. ``_check_n1`` receives a
     ``FieldMeta``-derived relation-kind key so the many-side dispatch uses
     ``_prefetched_objects_cache`` exclusively and does not mis-classify
     a consumer-assigned attribute as "already loaded".
@@ -335,6 +492,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     accessor_name = instance_accessor(field)
     field_meta = _field_meta_for_resolver(field, parent_type)
     kind = field_meta.relation_kind
+    visibility_type = _custom_visibility_type(field_meta)
 
     if field_meta.is_many_side:
 
@@ -350,16 +508,31 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             if prefetched is not None:
                 cached = prefetched.get(accessor_name)
                 if cached is not None:
-                    result_cache = getattr(cached, "_result_cache", None)
-                    return bounded_rows(
-                        result_cache if result_cache is not None else cached,
+                    # A cache the optimizer did not plan (a consumer's own
+                    # ``prefetch_related``) was never offered to the target's
+                    # visibility hook, so it is re-read through the boundary
+                    # rather than trusted.
+                    if visibility_type is not None and not _optimizer_scoped_relation(
                         info,
-                    )
+                        parent_type,
+                        field_name,
+                    ):
+                        return _visible_many_rows(
+                            getattr(root, accessor_name).all(),
+                            visibility_type,
+                            info,
+                        )
+                    result_cache = getattr(cached, "_result_cache", None)
+                    source = result_cache if result_cache is not None else cached
+                    return bounded_rows(source, info)
             # The bound is applied to the QUERYSET, before ``list(...)``, so the
             # unprefetched path carries it into SQL as a ``LIMIT`` rather than
             # materializing the whole relation and discarding the tail
             # (``resource_policy.py::bounded_rows``).
-            return list(bounded_rows(getattr(root, accessor_name).all(), info))
+            source = getattr(root, accessor_name).all()
+            if visibility_type is not None:
+                return _visible_many_rows(source, visibility_type, info)
+            return list(bounded_rows(source, info))
 
         return _name_resolver(many_resolver, field_name)
 
@@ -369,9 +542,14 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
             try:
-                return getattr(root, accessor_name)
+                related = getattr(root, accessor_name)
             except related_does_not_exist:
                 return None
+            if visibility_type is not None:
+                if _optimizer_scoped_relation(info, parent_type, field_name):
+                    return related
+                return _visible_related_object(related, visibility_type, info)
+            return related
 
         return _name_resolver(reverse_one_to_one_resolver, field_name)
 
@@ -388,8 +566,22 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             else _EMPTY_ELISIONS
         )
         planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
-        if not elisions and planned is None:
-            return getattr(root, field_name)
+        # Cheap per-row gate: a ``ContextVar`` read, not a second stash dispatch.
+        # ``None`` (no extension ran) plus an absent plan sentinel means nothing
+        # armed the guard and there is no plan to compare against, so the
+        # resolver-key walk is skipped exactly as it was before strictness became
+        # reachable without a stash. A real value threads into ``_check_n1``
+        # below, which then re-reads nothing.
+        live_strictness = _active_strictness()
+        if not elisions and planned is None and live_strictness in (None, "off"):
+            related = getattr(root, field_name)
+            if visibility_type is None or related is None:
+                return related
+            # Strictness being off says nothing about what the optimizer planned,
+            # so the scoped set still decides.
+            if _optimizer_scoped_relation(info, parent_type, field_name):
+                return related
+            return _visible_related_object(related, visibility_type, info)
         key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
         elision_unsafe = False
         if elisions and key in elisions:
@@ -400,6 +592,15 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             # the access instead of a silent per-row lazy load.
             stub = _build_fk_id_stub(root, field_meta)
             if stub is not _FK_ELISION_UNSAFE:
+                if visibility_type is not None and stub is not None:
+                    if _optimizer_scoped_relation(
+                        info,
+                        parent_type,
+                        field_name,
+                        precomputed_key=key,
+                    ):
+                        return stub
+                    return _visible_related_object(stub, visibility_type, info)
                 return stub
             # The relation is in ``planned`` (the elision branch recorded it), so
             # ``_check_n1`` would short-circuit on the planned key and stay silent.
@@ -416,8 +617,19 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             planned=planned,
             precomputed_key=key,
             force_unplanned=elision_unsafe,
+            strictness=live_strictness,
         )
-        return getattr(root, field_name)
+        related = getattr(root, field_name)
+        if visibility_type is not None and related is not None:
+            if _optimizer_scoped_relation(
+                info,
+                parent_type,
+                field_name,
+                precomputed_key=key,
+            ):
+                return related
+            return _visible_related_object(related, visibility_type, info)
+        return related
 
     return _name_resolver(forward_resolver, field_name)
 

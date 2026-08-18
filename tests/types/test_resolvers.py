@@ -16,17 +16,30 @@ be exercised without a real Django OneToOne in the example schema.
 """
 
 import itertools
+from types import SimpleNamespace
 
 import pytest
 import strawberry
+from apps.products import services
 from apps.products.models import Category, Item
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.test import override_settings
 
 from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.optimizer._context import (
+    begin_scoped_relations as _begin_scoped_relations,
+)
+from django_strawberry_framework.optimizer._context import (
+    end_scoped_relations as _end_scoped_relations,
+)
+from django_strawberry_framework.optimizer._context import (
+    publish_scoped_relations as _publish_scoped_relations,
+)
 from django_strawberry_framework.optimizer.plans import resolver_key
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
 
 def _path(*keys):
@@ -67,6 +80,96 @@ def test_o1_make_relation_resolver_many_side():
     fake_info = SimpleNamespace(context=None, path=None)
     assert resolver(fake_root, fake_info) == [1, 2, 3]
     assert resolver.__name__ == "resolve_items"
+
+
+@pytest.mark.django_db
+def test_many_relation_scopes_custom_target_without_optimizer():
+    """Generated relation resolvers enforce target visibility without an optimizer."""
+    services.seed_data(1)
+    category = Category.objects.first()
+    assert category is not None
+    item = Item.objects.filter(category=category).first()
+    assert item is not None
+    Item.objects.filter(pk=item.pk).update(is_private=True)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "items")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return Category.objects.filter(pk=category.pk)
+
+    result = strawberry.Schema(query=Query).execute_sync("{ categories { items { name } } }")
+    assert result.errors is None, result.errors
+    assert result.data == {"categories": [{"items": []}]}
+
+
+@pytest.mark.django_db
+def test_reverse_one_to_one_scopes_custom_target_by_planned_relation():
+    """Reverse-OneToOne visibility follows the PER-RELATION optimizer attribution.
+
+    No fakeshop reverse-OneToOne target declares ``get_queryset``, so this shape
+    is unreachable from the shipped schema and lives here rather than in the live
+    tier. Both sides of the attribution are asserted: a relation no optimizer
+    planned is re-read through the target hook (a hidden card collapses to
+    ``None``), and a relation the optimizer planned - whose ``Prefetch`` the
+    walker already scoped - is returned as loaded without a second query.
+    """
+    from apps.library.models import MembershipCard, Patron
+
+    hidden_patron = Patron.objects.create(name="Hidden Holder")
+    MembershipCard.objects.create(patron=hidden_patron, barcode="HIDDEN-1")
+    visible_patron = Patron.objects.create(name="Visible Holder")
+    MembershipCard.objects.create(patron=visible_patron, barcode="OPEN-1")
+
+    class MembershipCardType(DjangoType):
+        class Meta:
+            model = MembershipCard
+            fields = ("id", "barcode")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(barcode__startswith="HIDDEN")
+
+    class PatronType(DjangoType):
+        class Meta:
+            model = Patron
+            fields = ("id", "card")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def patrons(self) -> list[PatronType]:
+            return Patron.objects.filter(name__endswith="Holder").order_by("name")
+
+    query = "{ patrons { card { barcode } } }"
+    unplanned = strawberry.Schema(query=Query).execute_sync(query)
+    assert unplanned.errors is None, unplanned.errors
+    assert unplanned.data == {"patrons": [{"card": None}, {"card": {"barcode": "OPEN-1"}}]}
+
+    planned = strawberry.Schema(
+        query=Query,
+        extensions=[DjangoOptimizerExtension],
+    ).execute_sync(query, context_value=SimpleNamespace())
+    assert planned.errors is None, planned.errors
+    assert planned.data == unplanned.data
 
 
 def test_o1_make_relation_resolver_forward_returns_attribute():
@@ -125,6 +228,111 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     assert result.id == 42
     assert result._state.adding is False
     assert result._state.db == router.db_for_read(Category)
+
+
+@pytest.mark.django_db
+def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
+    """An FK-id stub for a CUSTOM-visibility target is re-read through the hook.
+
+    The walker refuses to elide a target whose type overrides ``get_queryset``
+    (``optimizer/walker.py::_plan_select_relation``), but the resolver's own
+    ``visibility_type`` comes from ``registry.get(related_model)`` while that gate
+    reads the plan-time target type - a multi-type registry can disagree. The
+    guard therefore stays, and it must fail CLOSED: an unscoped stub is resolved
+    through the target hook, which drops a stub whose row the hook excludes.
+    """
+    services.seed_data(1)
+    category = Category.objects.first()
+    assert category is not None
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.none()
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    finalize_django_types()
+
+    # Bound outside the class body: ``category`` is class-local there (the
+    # property below), so the class body cannot read the enclosing name.
+    elided_pk = category.pk
+
+    class Root:
+        category_id = elided_pk
+
+        @property
+        def category(self):
+            raise AssertionError("the relation resolver must not lazy-load the relation")
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+    fake_info = SimpleNamespace(
+        context=SimpleNamespace(dst_optimizer_fk_id_elisions={key}),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    # No optimizer published this relation as planned, so the stub is rescoped -
+    # and this target's hook hides every row.
+    assert resolver(Root(), fake_info) is None
+
+    # Published as planned: the stub is served as-is, no visibility re-read.
+    token = _begin_scoped_relations()
+    try:
+        _publish_scoped_relations({key})
+        scoped = resolver(Root(), fake_info)
+    finally:
+        _end_scoped_relations(token)
+    assert isinstance(scoped, Category)
+    assert scoped.pk == category.pk
+
+
+@pytest.mark.django_db
+def test_forward_relation_is_scoped_when_strictness_leaves_it_unplanned():
+    """The forward tail re-reads a custom-visibility target the plan never claimed.
+
+    Reached when planning metadata EXISTS for the request (strictness publishes
+    ``DST_OPTIMIZER_PLANNED``) but this relation is not among the planned keys, so
+    the ``getattr`` below is an unscoped lazy load.
+    """
+    services.seed_data(1)
+    item = Item.objects.select_related("category").first()
+    assert item is not None
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.none()
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    finalize_django_types()
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    fake_info = SimpleNamespace(
+        context=SimpleNamespace(dst_optimizer_planned=frozenset()),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    assert resolver(item, fake_info) is None
 
 
 def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():

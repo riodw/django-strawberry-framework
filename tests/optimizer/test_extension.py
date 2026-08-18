@@ -5383,3 +5383,150 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
     assert result.errors is None, result.errors
     ids = [item["category"]["id"] for obj in result.data["objs"] for item in obj["items"]]
     assert all(cid for cid in ids)
+
+
+# B3 strictness reachability: ``_check_n1`` consults the in-force strictness
+# BEFORE it decides to stay silent. Gating on the ``DST_OPTIMIZER_PLANNED`` stash
+# alone left an armed guard silently disarmed for three shapes - an execution with
+# no stashable context, an operation whose root the walker cannot plan, and an
+# async execution where Django's sync gate fires first.
+
+
+@pytest.mark.django_db
+def test_strictness_reaches_an_execution_with_no_stashable_context():
+    """B3: an armed guard fires without a ``context_value`` to stash on.
+
+    The strictness sentinel rides a request-context stash, which an execution
+    given ``None`` - or no ``context_value`` argument at all - cannot carry. The
+    guard belongs to the running extension, not to the context shape, so every
+    execution of the same unplanned relation reports the same N+1.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def projected_items(self) -> list[ItemType]:
+            return Item.objects.order_by("id").only("name")
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    query = "{ projectedItems { name category { name } } }"
+
+    stashable = schema.execute_sync(query, context_value=SimpleNamespace())
+    assert stashable.errors is not None
+    assert any("Unplanned N+1: category" in str(error) for error in stashable.errors)
+
+    none_context = schema.execute_sync(query, context_value=None)
+    assert none_context.errors is not None
+    assert any("Unplanned N+1: category" in str(error) for error in none_context.errors)
+
+    bare = schema.execute_sync(query)
+    assert bare.errors is not None
+    assert any("Unplanned N+1: category" in str(error) for error in bare.errors)
+
+
+@pytest.mark.django_db
+def test_strictness_flags_a_relation_under_an_unplannable_root():
+    """B3: a root the walker cannot plan leaves every relation strictness-visible.
+
+    A resolver returning a materialized ``list`` gives the walker no queryset to
+    rewrite, so the operation publishes no planned-resolver keys at all. That is
+    the case the guard exists to report - every parent row lazy-loads - not a
+    reason to treat the relation as satisfied. ``strictness="off"`` on the same
+    schema stays silent and serves the rows.
+    """
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return list(Category.objects.order_by("id"))
+
+    finalize_django_types()
+    query = "{ categories { name items { name } } }"
+
+    raising = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    flagged = raising.execute_sync(query, context_value=SimpleNamespace())
+    assert flagged.errors is not None
+    assert any("Unplanned N+1: items" in str(error) for error in flagged.errors)
+
+    silent = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="off")],
+    )
+    served = silent.execute_sync(query, context_value=SimpleNamespace())
+    assert served.errors is None, served.errors
+    assert served.data["categories"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate():
+    """B3: the guard speaks before Django's ``SynchronousOnlyOperation``.
+
+    A many-side lazy load inside an async execution trips Django's sync-only gate,
+    which surfaces to the consumer as an opaque "cannot call this from an async
+    context" rather than as the actionable unplanned-relation report. The N+1
+    probe reads only the instance cache (never the database), so an armed guard
+    reaches the relation first and names it.
+    """
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        async def categories(self) -> list[CategoryType]:
+            return [obj async for obj in Category.objects.order_by("id")]
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    result = await schema.execute(
+        "{ categories { name items { name } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert result.errors is not None
+    messages = [str(error) for error in result.errors]
+    assert any("Unplanned N+1: items" in message for message in messages)
+    assert not any("async context" in message for message in messages)

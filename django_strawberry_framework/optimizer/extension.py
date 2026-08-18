@@ -67,10 +67,25 @@ from ._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ._context import (
+    begin_scoped_relations as _begin_scoped_relations,
+)
+from ._context import (
+    begin_strictness as _begin_strictness,
+)
+from ._context import (
     clear_optimizer_context as _clear_optimizer_context,
 )
 from ._context import (
+    end_scoped_relations as _end_scoped_relations,
+)
+from ._context import (
+    end_strictness as _end_strictness,
+)
+from ._context import (
     get_context_value as _get_context_value,
+)
+from ._context import (
+    publish_scoped_relations as _publish_scoped_relations,
 )
 from ._context import (
     stash_on_context as _stash_on_context,
@@ -982,9 +997,20 @@ class DjangoOptimizerExtension(SchemaExtension):
         key_parts_token = _cache_key_parts_cache.set({})
         plan_memo_token = _execution_plan_cache.set({})
         converted_token = converted_selections_cache.set({})
+        # Per-execution record of which relations the walker planned, read by the
+        # generated relation resolvers to tell an optimizer-scoped child cache
+        # from a consumer-supplied one.
+        scoped_token = _begin_scoped_relations()
+        # Arm this instance's strictness for the whole operation, before any
+        # planning runs: a relation the walker never planned - including one on
+        # an operation the walker could not plan at all - must still be visible
+        # to ``_check_n1``.
+        strictness_token = _begin_strictness(self.strictness)
         try:
             yield
         finally:
+            _end_strictness(strictness_token)
+            _end_scoped_relations(scoped_token)
             converted_selections_cache.reset(converted_token)
             _execution_plan_cache.reset(plan_memo_token)
             _cache_key_parts_cache.reset(key_parts_token)
@@ -1272,10 +1298,15 @@ class DjangoOptimizerExtension(SchemaExtension):
         if fk_id_elisions is None:
             fk_id_elisions = frozenset(plan.fk_id_elisions)
         self._stash_union(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
+        planned_resolver_keys = plan.finalized_planned_resolver_keys
+        if planned_resolver_keys is None:
+            planned_resolver_keys = frozenset(plan.planned_resolver_keys)
+        # Published on EVERY execution, and to a ``ContextVar`` rather than the
+        # request context: the generated relation resolvers' visibility
+        # attribution is live under the default strictness and must also survive
+        # an execution that carries no ``context_value`` at all.
+        _publish_scoped_relations(planned_resolver_keys)
         if self.strictness != "off":
-            planned_resolver_keys = plan.finalized_planned_resolver_keys
-            if planned_resolver_keys is None:
-                planned_resolver_keys = frozenset(plan.planned_resolver_keys)
             plan_lookup_paths = plan.finalized_lookup_paths
             if plan_lookup_paths is None:
                 plan_lookup_paths = frozenset(lookup_paths(plan))

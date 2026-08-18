@@ -154,6 +154,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_mutation_atomicity.py",
     "examples/fakeshop/test_query/test_optimizer_auto_api.py",
     "examples/fakeshop/test_query/test_products_api.py",
+    "examples/fakeshop/test_query/test_products_visibility_api.py",
     "examples/fakeshop/test_query/test_resource_policy_api.py",
     "examples/fakeshop/test_query/test_scalars_api.py",
     "examples/fakeshop/test_query/test_scalars_filter_api.py",

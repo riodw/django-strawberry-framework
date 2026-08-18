@@ -8,14 +8,21 @@ Created by the [`docs/builder/BUILD.md`][build] `## Spec rationale extraction` p
 
 **This pass performed a MOVE, not a reconstruction.** Spec-019 carried an unusually dense deliberative layer: a 53-line `Revision history (kept inline so the spec is self-contained)` block enumerating eleven review rounds with their H / M / L sub-items, plus **182 inline `rev<N> <H|M|L><n>` attributions** scattered through the Slice checklist, the Decisions, the Edge cases, the Test strategy, the Definition of done, and the verbatim KANBAN and CHANGELOG bodies — a spec that narrated its own history in almost every paragraph. Text marked **Moved** below was **cut** out of the spec, not copied: it exists here and nowhere else.
 
-**Measured byte counts, both with `wc -c` at this working tree, taken when both files were final:**
+**Measured byte counts, both with `wc -c`, pinned to commit `435e190e` — the commit that landed this pair — rather than to a working tree:**
 
 | File | Before this pass | After |
 |---|---|---|
-| `docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md` | 181,073 | see the round artifact's final measurement |
-| `docs/SPECS/appx/spec-019-consumer_overrides_scalar-0_0_6-rationale.md` | 0 (did not exist) | see the round artifact's final measurement |
+| `docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md` | 181,073 | 104,017 |
+| `docs/SPECS/appx/spec-019-consumer_overrides_scalar-0_0_6-rationale.md` | 0 (did not exist) | 48,834 |
+| **Pair total** | 181,073 | 152,851 |
 
-The authoritative post-move figures are recorded in [`docs/builder/bld-review-1-spec019_rationale.md`][bld-r1], measured after both files were finished. They are deliberately not restated here: a byte count written into the file it measures is a count of a file still being written.
+**The pair shrank by 28,222 bytes, which is what proves the move was a move and not a copy** — a copy would have left the pair total at or above 181,073. The reduction is falsified and superseded prose that was *deleted* rather than moved: chiefly the retired `typing.get_type_hints` fail-soft apparatus, described at length across six spec sections; the seven successive line-delta estimates; and the per-revision restatements of contracts that later revisions replaced.
+
+**Two measurement points, deliberately not collapsed into one.** The table is the cycle's committed state at `435e190e`. The round that performed the move measured the companion at **47,488** bytes, for a pair total of **151,505** and a net of **-29,568**; the integration pass that followed added 1,346 bytes of custodial corrections to this file, which is the whole of the difference. Both readings are correct for their own moment and neither supersedes the other, so a later pass re-deriving one should not read the gap as drift. **Only the table re-derives.** The whole cycle landed as one commit, so R1's intermediate 47,488 / 151,505 / -29,568 was never a committed state and cannot be recovered from history; it is a historical measurement carried out of that round's artifact, which was itself deleted at closeout. Treat it as attributed, not verifiable, and do not go looking for a commit that shows it.
+
+**Why the table is pinned to a commit and not to a live `wc -c`.** This file has grown since `435e190e`: the closeout pass that deleted the cycle's round artifacts resolved their inbound pointers, which is what put the figures above inline in the first place. Any number this file states about its own current size is invalidated by the edit that states it — the original reason these figures were a forward pointer rather than a table. Pinning to a commit is what makes them re-derivable (`git show 435e190e:<path> | wc -c`) instead of merely asserted, so **do not "correct" the table against a working tree**; a disagreement there is expected and is not drift.
+
+These figures were originally left as a forward pointer into the round artifact, on the reasoning that a byte count written into the file it measures is a count of a file still being written. That reasoning was sound while the pass was running and is spent now that both files are final and committed; the pointer was resolved into the numbers when the round artifacts were deleted at closeout.
 
 `HEAD` at the time of the pass is `09003dc2`. The package is at `0.0.14`; this card shipped at `0.0.6` on 2026-05-19.
 
@@ -216,7 +223,7 @@ The permission for the edit is this spec's own Slice 5, which grants CHANGELOG a
 
 ## Reconciliation record — what the spec now says, and why
 
-Every edit this pass made to the spec, beyond the rationale move itself, is enumerated with its finding number in [`docs/builder/bld-review-1-spec019_rationale.md`][bld-r1] under `### Spec changes made (Worker 1 only)`. The short form:
+Every edit this pass made to the spec, beyond the rationale move itself, was enumerated with its finding number in the round artifact, under `### Spec changes made (Worker 1 only)`: 25 numbered entries. That artifact was deleted at closeout, so the full enumeration now lives only in commit `435e190e`, which added it and the spec edits together. The short form, which is self-sufficient:
 
 | Spec surface | Was | Is |
 |---|---|---|
@@ -256,7 +263,6 @@ Every edit this pass made to the spec, beyond the rationale move itself, is enum
 [spec-019]: ../spec-019-consumer_overrides_scalar-0_0_6.md
 
 <!-- docs/builder/ -->
-[bld-r1]: ../../builder/bld-review-1-spec019_rationale.md
 [build]: ../../builder/BUILD.md
 [worker-1]: ../../builder/worker-1.md
 

@@ -192,7 +192,9 @@ independently verifiable; the weight is breadth, not depth.
         path).
   - [x] D2 walker `_resolve_field_map` dual contract retired (FieldMeta
         fallback map).
-  - [ ] D3 model relation decoder re-expressed over the shared spine.
+  - [x] D3 model relation decoder re-expressed over the shared spine
+        (`decode_provided_fields` rider; bind-stashed specs; handler map
+        composed directly from the `*_into` primitives).
 - [ ] **Slice 5 — Docs fold-in + the joint `0.0.15` cut + card wrap**
   - [ ] GLOSSARY/TREE/KANBAN fold-in per the completing-spec rules;
         `docs/GLOSSARY.md` status flips for anything this card shipped **and
@@ -604,9 +606,17 @@ referenced symbols. Key parameterize-don't-average obligations, restated:
   run before `hint_is_skip`, so sidecar + SKIP logged "sidecar arguments";
   post-fold it returns silently at SKIP (plan output identical, matching
   today's divergent order).
-- D3: the raw-pk existence fallback (`_relation_existence_error`,
-  default-manager check) and the `_relation_membership_error`
-  declared-vs-queried-pks contract survive as threaded parameters.
+- D3: model decode rides `decode_provided_fields`. Bind stashes total-coverage
+  `InputFieldSpec`s (merged dataclass included) plus a Django-field index for
+  `extra(spec)` (`relation_field.null`) and `_provided_attr_names` reversal.
+  Exclusion is a bind-time `EXCLUDED` kind + capture handler, not a request-time
+  `excluded_input_fields` flag. Scalar handler is `decoded_into` composed as
+  null-reject → `decode_scalar_leaf` → `_make_aware_if_naive`. The handler map
+  is composed directly from the `*_into` primitives (`decode_field_handlers`
+  stays form + serializer: the model replaces every default but
+  `RELATION_SINGLE`, so the factory adds nothing). `_relation_field_index`
+  survives as the bind-time helper in `mutations/inputs.py`; request-time
+  rediscovery dies. Non-column override attrs fail loud at spec synthesis.
 
 ## Helper-reuse obligations (DRY)
 
@@ -648,6 +658,13 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   the shared-window path now returns silently at SKIP instead of logging
   "sidecar arguments". Plan output is identical (fully unplanned); the
   order now matches the divergent scheme. Documented, not preserved.
+- **D3 merged-input coverage**: bind must produce a spec for every field on
+  the merged dataclass (`decode_provided_fields` KeyErrors on a miss). A
+  non-column override attr is a bind-time `ConfigurationError`, converting
+  the previous request-time `FieldDoesNotExist` from
+  `_explicit_null_error`'s live `get_field`. `_provided_attr_names` reverses
+  FK attrs via the bind-time Django-field index (spec-036 M3-1), not a
+  request-time `_relation_field_index`.
 - **B1 dead-delegate deletion** is gated on the cookbook-parity check (see
   Risks): if the delegates are documented consumer surface, they are
   absorbed (single implementation, kept methods) instead of deleted.

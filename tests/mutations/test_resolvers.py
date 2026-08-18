@@ -1496,10 +1496,11 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
     """
     m2m_field = library_models.Book._meta.get_field("genres")
     _pks, error = resolvers._decode_relation_id_list(
-        "genres",
         [9223372036854775808],
-        m2m_field,
+        graphql_name="genres",
+        related_model=m2m_field.related_model,
         info=None,
+        relation_field=m2m_field,
     )
     assert error is not None
     assert error.field == "genres"
@@ -1669,7 +1670,13 @@ def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
     fk_field = product_models.Item._meta.get_field("category")
     # Temporarily treat the relation as nullable for the clear-signal branch.
     with mock.patch.object(fk_field, "null", True):
-        pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
+        pk, error = resolvers._decode_single_relation_id(
+            None,
+            graphql_name="categoryId",
+            related_model=fk_field.related_model,
+            info=None,
+            relation_field=fk_field,
+        )
     assert error is None
     assert pk is None
 
@@ -1684,7 +1691,13 @@ def test_single_fk_explicit_null_on_required_is_field_keyed_null_error():
     _build_item_schema()
     fk_field = product_models.Item._meta.get_field("category")
     assert fk_field.null is False
-    pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
+    pk, error = resolvers._decode_single_relation_id(
+        None,
+        graphql_name="categoryId",
+        related_model=fk_field.related_model,
+        info=None,
+        relation_field=fk_field,
+    )
     assert pk is None
     assert error is not None
     assert error.field == "categoryId"
@@ -1996,8 +2009,17 @@ def test_provided_attr_names_keeps_scalar_id_suffix_field():
     ``content_type``, while ``object_id`` (a scalar) stays ``object_id`` - never
     mangled to ``object``.
     """
+    from django_strawberry_framework.mutations.inputs import mutation_input_field_specs
+
+    @strawberry.input
+    class Probe:
+        object_id: int
+        tag: str
+        content_type_id: int
+
+    _specs, model_fields = mutation_input_field_specs(library_models.TaggedItem, Probe)
     provided = resolvers._provided_attr_names(
-        library_models.TaggedItem,
+        model_fields,
         {"object_id": 5, "tag": "x", "content_type_id": 1},
         [],
     )
@@ -2012,7 +2034,9 @@ def test_relation_field_index_excludes_generic_foreign_key():
     later compare a decoded model against ``related_model=None``). The real
     ``content_type`` FK is still indexed.
     """
-    fk_by_attr, _m2m_by_name = resolvers._relation_field_index(library_models.TaggedItem)
+    from django_strawberry_framework.mutations.inputs import _relation_field_index
+
+    fk_by_attr, _m2m_by_name = _relation_field_index(library_models.TaggedItem)
     assert "content_object_id" not in fk_by_attr
     assert "content_type_id" in fk_by_attr
 
@@ -2128,7 +2152,7 @@ def test_create_assigns_uploaded_file_through_generic_path(tmp_path):
 def test_partial_update_omitting_file_leaves_stored_file_unchanged(tmp_path):
     """A partial update that omits the file field leaves the stored ``FieldFile`` byte-identical.
 
-    ``UNSET`` is stripped in ``_decode_relations`` before the ``setattr`` loop, so
+    ``UNSET`` is stripped in ``decode_provided_fields`` before the ``setattr`` loop, so
     the stored file never reaches a re-assignment.
     """
     model = _make_asset_model()
@@ -2336,8 +2360,7 @@ def test_explicit_null_error_allows_null_on_nullable_column():
     """
     assert (
         resolvers._explicit_null_error(
-            scalars_models.NullableScalarSpecimen,
-            "score",
+            scalars_models.NullableScalarSpecimen._meta.get_field("score"),
             "score",
             None,
         )

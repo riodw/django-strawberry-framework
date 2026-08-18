@@ -30,8 +30,8 @@ The serializer-specific invariants this module owns:
   ``RELATION_SINGLE`` / ``RELATION_MULTI`` / ``FILE``).
 
 - **The dedicated serializer relation decoder mirrors the ``038`` form decoder**
-  (serializer-field-keyed, NOT the model-attr-keyed ``036``
-  ``_decode_relations``). Each relation id - a ``relay.GlobalID`` *or* a raw
+  (serializer-field-keyed, NOT the model-attr-keyed ``036`` decode; all three
+  ride ``decode_provided_fields``). Each relation id - a ``relay.GlobalID`` *or* a raw
   pk - is type-checked against the relation's **target model**, which is recorded on
   the bind-stashed reverse map (``InputFieldSpec.related_model``, resolved once at
   build from the backing FK via the serializer field's ``source``, or

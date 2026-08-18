@@ -36,11 +36,11 @@ symmetric by construction (spec-036 Decision 6).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, NamedTuple
 
 import strawberry
-from django.core.exceptions import NON_FIELD_ERRORS
+from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist
 from django.db import models
 from strawberry import relay
 from strawberry.utils.str_converters import to_camel_case
@@ -55,6 +55,7 @@ from ..utils.inputs import (
     RELATION_MULTI,
     RELATION_SINGLE,
     SCALAR,
+    InputFieldSpec,
     build_strawberry_input_class,
     iter_input_field_collisions,
     make_input_namespace,
@@ -77,6 +78,12 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.mutations.inputs"
 # multi-field-constraint ``ValidationError`` to the same sentinel the read of
 # ``error_dict`` produces.
 NON_FIELD_ERROR_KEY: str = NON_FIELD_ERRORS
+
+# Model-local decode kind: a provided input attr captured out of model
+# construction (the spec-040 D6 exclusion seam; the register flavor's ``password``).
+# ``utils/inputs.py`` does not own this kind - nested writes are serializer-only;
+# exclusion is model-only. Bind writes it onto the stashed ``InputFieldSpec``.
+EXCLUDED: str = "excluded"
 
 # Operation kinds the input GENERATOR understands. ``CREATE`` honors the
 # per-field required rule; ``PARTIAL`` forces every field optional (the
@@ -445,6 +452,108 @@ def model_column_write_kind(field: models.Field) -> str:
     if isinstance(field, (models.FileField, models.ImageField)):
         return FILE
     return SCALAR
+
+
+def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Index a model's forward FK/OneToOne (by ``<field>_id`` attr) and M2M (by name).
+
+    Bind-time helper: the same input-attr-to-relation-field mapping the generator's
+    naming scheme implies (``<field>_id`` for forward FK / OneToOne, the plain
+    field name for M2M - ``relation_input_annotation``), so spec synthesis reads
+    the same scheme the input was built from. The request-time decode no longer
+    rebuilds this index; it rides the stashed specs + the Django-field map.
+
+    A forward FK / OneToOne is keyed by its ``<field>_id`` input attr. The guard
+    requires a **concrete DB column** (``column is not None``) and a non-``None``
+    ``related_model`` so a *virtual* relation - a ``GenericForeignKey`` reports
+    ``is_relation=True`` with ``column=None`` and ``related_model=None`` - is
+    never indexed as a decode-able FK (spec-036 L3-1). The generator already
+    excludes virtual relations from the input, so this only hardens the index
+    against ever mis-mapping one.
+    """
+    fk_by_attr: dict[str, Any] = {}
+    m2m_by_name: dict[str, Any] = {}
+    for field in model._meta.get_fields():
+        if getattr(field, "many_to_many", False):
+            if is_forward_many_to_many(field):
+                m2m_by_name[field.name] = field
+        elif _is_forward_concrete_relation(field):
+            fk_by_attr[f"{field.name}_id"] = field
+    return fk_by_attr, m2m_by_name
+
+
+def _is_forward_concrete_relation(field: Any) -> bool:
+    """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
+
+    A concrete forward relation has both a non-``None`` ``column`` (a real DB
+    column - a ``GenericForeignKey`` reports ``column=None``) and a non-``None``
+    ``related_model`` (the type the relation id is checked against - a
+    ``GenericForeignKey`` reports ``related_model=None``). This excludes virtual
+    relations from the FK index so a scalar field that merely *ends in* ``_id`` is
+    never reverse-mapped to a non-existent relation field.
+    """
+    if not getattr(field, "is_relation", False):
+        return False
+    return getattr(field, "column", None) is not None and field.related_model is not None
+
+
+def mutation_input_field_specs(
+    model: type,
+    input_cls: type,
+    *,
+    excluded_attrs: Collection[str] = (),
+) -> tuple[list[InputFieldSpec], dict[str, Any]]:
+    """Build total-coverage reverse-map specs + the Django-field index for ``input_cls``.
+
+    Walks every field of the (possibly merged) input dataclass so
+    ``decode_provided_fields``'s ``spec_by_attr[python_name]`` lookup cannot
+    ``KeyError``. Each attr must resolve to a concrete column or a concrete
+    forward relation under the generated naming scheme; an unresolvable attr
+    (a non-column override, a ``GenericForeignKey``) is a ``ConfigurationError``
+    at bind, never a request-time ``FieldDoesNotExist``.
+
+    ``excluded_attrs`` is the spec-040 D6 exclusion seam: those python attrs are
+    recorded with kind ``EXCLUDED`` so the decode capture handler runs instead of
+    the column/relation handler. Kind classification is the shared
+    ``model_column_write_kind``: the resolution above leaves ``django_field``
+    either an indexed forward relation or a non-relation concrete column, so the
+    classifier is total here (no per-index kind branches). ``target_name`` is
+    the model attr the decode writes (``category_id`` for a forward FK /
+    OneToOne, the field name for a scalar / M2M).
+    """
+    excluded = frozenset(excluded_attrs)
+    fk_by_attr, m2m_by_name = _relation_field_index(model)
+    specs: list[InputFieldSpec] = []
+    model_fields: dict[str, Any] = {}
+    for field in input_cls.__strawberry_definition__.fields:
+        python_name = field.python_name
+        graphql_name = field.graphql_name or graphql_camel_name(python_name)
+        django_field = fk_by_attr.get(python_name) or m2m_by_name.get(python_name)
+        if django_field is None:
+            try:
+                django_field = model._meta.get_field(python_name)
+            except FieldDoesNotExist:
+                django_field = None
+            if django_field is None or getattr(django_field, "is_relation", False):
+                raise ConfigurationError(
+                    f"DjangoMutation input field {python_name!r} does not map to a "
+                    f"concrete column of {model.__name__}.",
+                )
+        kind = EXCLUDED if python_name in excluded else model_column_write_kind(django_field)
+        related_model = (
+            django_field.related_model if kind in (RELATION_SINGLE, RELATION_MULTI) else None
+        )
+        model_fields[python_name] = django_field
+        specs.append(
+            InputFieldSpec(
+                input_attr=python_name,
+                graphql_name=graphql_name,
+                target_name=python_name,
+                kind=kind,
+                related_model=related_model,
+            ),
+        )
+    return specs, model_fields
 
 
 def model_column_write_annotation(

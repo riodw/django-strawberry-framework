@@ -15,7 +15,7 @@ mutation resolver is not the utility module for the other write flavors):
   id, then one visibility / existence ``pk__in`` query);
 - ``store_decoded`` / ``decoded_into`` / ``scalar_into`` / ``file_into`` /
   ``relation_into`` / ``decode_field_handlers`` - the SCALAR / RELATION / FILE
-  store-into-dest vocabulary the form and serializer walks share;
+  store-into-dest vocabulary the write-flavor walks share;
 - ``decode_provided_fields`` - the kind-routed walk over a bound write input.
 """
 
@@ -400,14 +400,17 @@ def decode_field_handlers(
     dict[str, Callable[[Any, Any], FieldError | None]],
     Callable[[Any, Any], FieldError | None],
 ]:
-    """Build the SCALAR / RELATION_* / FILE handler map both write flavors share.
+    """Build the SCALAR / RELATION_* / FILE handler map the form + serializer flavors share.
 
     Returns ``(handlers, scalar_handler)`` for ``decode_provided_fields``.
     ``file_dest`` is the form ``provided_files`` split (Django ``files=``);
     omitted, FILE lands in ``dest`` (DRF ``data``). ``extra_handlers`` is the
-    serializer nested map. Flavor relation decoders stay arguments so form
-    per-element ``to_field_name`` and serializer batched ids cannot drift into
-    a mode flag.
+    serializer nested map (spreads last, so it can override a default kind).
+    Flavor relation decoders stay arguments so form per-element
+    ``to_field_name`` and serializer batched ids cannot drift into a mode flag.
+    The model rider composes its handler map directly from the ``*_into``
+    primitives instead (its FILE and M2M dest policies replace every default
+    but ``RELATION_SINGLE``).
     """
     relation = relation_into(
         dest,
@@ -435,20 +438,17 @@ def decode_provided_fields(
 ) -> FieldError | None:
     """Route each provided input field by ``spec.kind`` through a handler map.
 
-    The kind-dispatch decode loop the form and serializer flavors share: build
+    The kind-dispatch decode loop the write flavors share: build
     the ``{spec.input_attr: spec}`` reverse map, walk the PROVIDED input fields
     (``UNSET`` stripped - single-sited in ``iter_provided_input_fields``), and
     hand each ``(spec, value)`` to the flavor's handler for ``spec.kind``
     (falling back to ``scalar_handler`` for the scalar leaf). Destination policy
     is the ``decode_field_handlers`` / ``*_into`` factories (the form splits
     ``provided_files`` for Django's ``files=``; the serializer routes everything
-    into ``data``, including its ``NESTED_*`` recursion via ``extra_handlers``).
-    Each handler returns a ``FieldError`` to short-circuit or ``None`` to
+    into ``data``, including its ``NESTED_*`` recursion via ``extra_handlers``;
+    the model flavor dest-splits M2M and captures ``EXCLUDED`` attrs the same
+    way). Each handler returns a ``FieldError`` to short-circuit or ``None`` to
     continue. Returns the first handler ``FieldError`` or ``None``.
-
-    The model flavor's ``mutations/resolvers.py::_decode_relations`` is a
-    near-parallel with a genuinely different key space (model attrs) and stays
-    put; its id-set decode rides ``decode_visible_relation_ids``.
     """
     spec_by_attr = {spec.input_attr: spec for spec in specs}
     for python_name, value, _field in iter_provided_input_fields(data):

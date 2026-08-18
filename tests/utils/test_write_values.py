@@ -393,8 +393,9 @@ def test_decode_field_handlers_split_files_from_data():
 
 
 def test_form_and_serializer_decode_walks_share_field_handlers():
-    """Form and serializer decode walks import the same store-into-dest compose."""
+    """Form, serializer, and model decode walks import the same store-into-dest compose."""
     from django_strawberry_framework.forms import resolvers as form_resolvers
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
     from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
 
     assert form_resolvers.decode_field_handlers is decode_field_handlers
@@ -402,3 +403,9 @@ def test_form_and_serializer_decode_walks_share_field_handlers():
     assert serializer_resolvers.decoded_into is decoded_into
     assert form_resolvers.decode_provided_fields is decode_provided_fields
     assert serializer_resolvers.decode_provided_fields is decode_provided_fields
+    # The model rider composes its handler map from the ``*_into`` primitives
+    # directly (it replaces every ``decode_field_handlers`` default but
+    # ``RELATION_SINGLE``), so it shares the spine + primitives, not the factory.
+    assert mutation_resolvers.decode_provided_fields is decode_provided_fields
+    assert mutation_resolvers.decoded_into is decoded_into
+    assert mutation_resolvers.relation_into is relation_into

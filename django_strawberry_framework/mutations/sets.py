@@ -69,6 +69,7 @@ from .inputs import (
     build_payload_type,
     editable_input_fields,
     materialize_mutation_input_class,
+    mutation_input_field_specs,
     mutation_input_shape,
     payload_object_slot,
     relation_input_annotation,
@@ -972,6 +973,12 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     _primary_type: type | None = None
     _input_class: type | None = None
     _payload_type_name: str | None = None
+    # Bind-stashed reverse map the model decode rides
+    # (``utils/write_values.py::decode_provided_fields``). ``None`` until bind
+    # (and stays ``None`` for ``delete``, which has no input). Form / serializer
+    # subclasses overwrite ``_input_field_specs`` with their own flavor map.
+    _input_field_specs: list | None = None
+    _model_fields_by_attr: dict | None = None
 
     @classmethod
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
@@ -1158,11 +1165,22 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         phase 2.5. The **model default** delegates to ``_materialize_input_for``
         (today's exact model behavior: the model-column ``<Model>Input`` /
         ``<Model>PartialInput`` built from the editable columns, or ``None`` for a
-        ``delete``); the form flavors override it to build the form-derived input
+        ``delete``), then stashes ``_input_field_specs`` + ``_model_fields_by_attr``
+        for the decode; the form flavors override it to build the form-derived input
         from ``forms/inputs.py`` instead (spec-038 Decision 13). Returning ``None``
         means "no input for this operation" (the model ``delete`` case).
         """
-        return _materialize_input_for(cls.__name__, meta, primary_type)
+        input_cls = _materialize_input_for(cls.__name__, meta, primary_type)
+        if input_cls is not None:
+            # The decode's bind-time hand-off: total-coverage specs (merged
+            # dataclass, consumer overrides included) + the Django-field index
+            # (``relation_field.null`` and the ``_provided_attr_names``
+            # FK-to-field-name reversal, spec-036 M3-1).
+            cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
+                meta.model,
+                input_cls,
+            )
+        return input_cls
 
     @classmethod
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:

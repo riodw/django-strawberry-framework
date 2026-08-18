@@ -44,6 +44,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import FieldError as FieldErrorFromPackage
 from django_strawberry_framework.mutations.inputs import (
     CREATE,
+    EXCLUDED,
     INPUTS_MODULE_PATH,
     NON_FIELD_ERROR_KEY,
     PARTIAL,
@@ -58,6 +59,7 @@ from django_strawberry_framework.mutations.inputs import (
     model_column_input_annotation,
     model_column_write_annotation,
     model_column_write_kind,
+    mutation_input_field_specs,
     mutation_input_type_name,
     payload_object_slot,
     related_model_of_queryset,
@@ -1294,6 +1296,87 @@ def test_payload_slot_never_model_derived_for_property_like_model():
     fields = {f.python_name for f in payload.__strawberry_definition__.fields}
     assert "property" not in fields
     assert "node" in fields
+
+
+# ---------------------------------------------------------------------------
+# mutation_input_field_specs - bind-time reverse map (spec-051 D3)
+# ---------------------------------------------------------------------------
+
+
+def test_mutation_input_field_specs_covers_generated_input():
+    """Specs cover every generated input attr; FK target_name is ``<field>_id``."""
+    from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
+
+    input_cls = build_mutation_input(
+        product_models.Item,
+        operation_kind=CREATE,
+        primary_type=ItemType,
+    )
+    specs, model_fields = mutation_input_field_specs(product_models.Item, input_cls)
+    by_attr = {spec.input_attr: spec for spec in specs}
+    assert set(by_attr) == set(_field_map(input_cls))
+    assert by_attr["name"].kind == SCALAR
+    assert by_attr["name"].target_name == "name"
+    assert by_attr["category_id"].kind == RELATION_SINGLE
+    assert by_attr["category_id"].target_name == "category_id"
+    assert by_attr["category_id"].related_model is product_models.Category
+    assert model_fields["category_id"] is product_models.Item._meta.get_field("category")
+    assert model_fields["name"] is product_models.Item._meta.get_field("name")
+
+
+def test_mutation_input_field_specs_rejects_non_column_attr():
+    """A merged-input attr that is not a concrete column fails at spec synthesis."""
+
+    @strawberry.input
+    class Rogue:
+        not_a_column: str
+
+    with pytest.raises(ConfigurationError, match="not_a_column"):
+        mutation_input_field_specs(product_models.Item, Rogue)
+
+
+def test_mutation_input_field_specs_rejects_generic_foreign_key_attr():
+    """A virtual relation (GFK) is not a concrete column, even if ``get_field`` finds it."""
+    from apps.library import models as library_models
+
+    @strawberry.input
+    class Rogue:
+        content_object: str
+
+    with pytest.raises(ConfigurationError, match="content_object"):
+        mutation_input_field_specs(library_models.TaggedItem, Rogue)
+
+
+def test_mutation_input_field_specs_classifies_m2m():
+    """Forward M2M is ``RELATION_MULTI`` keyed by the field name, not ``<name>_id``."""
+    from apps.library import models as library_models
+
+    from django_strawberry_framework.utils.inputs import RELATION_MULTI
+
+    @strawberry.input
+    class Probe:
+        genres: list[int]
+
+    specs, model_fields = mutation_input_field_specs(library_models.Book, Probe)
+    assert specs[0].kind == RELATION_MULTI
+    assert specs[0].target_name == "genres"
+    assert model_fields["genres"] is library_models.Book._meta.get_field("genres")
+
+
+def test_mutation_input_field_specs_marks_excluded_kind():
+    """``excluded_attrs`` records kind ``EXCLUDED`` without changing target_name."""
+
+    @strawberry.input
+    class Probe:
+        name: str
+
+    specs, _model_fields = mutation_input_field_specs(
+        product_models.Item,
+        Probe,
+        excluded_attrs={"name"},
+    )
+    assert specs[0].kind == EXCLUDED
+    assert specs[0].target_name == "name"
 
 
 # ---------------------------------------------------------------------------

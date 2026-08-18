@@ -230,7 +230,8 @@ def emit_set_input_field_triples(
 # ``forms/converter.py`` and ``rest_framework/serializer_converter.py``.
 # Single-sourced here next to ``InputFieldSpec`` (their type-level consumer);
 # the serializer flavor extends with its ``NESTED_SINGLE`` / ``NESTED_MULTI``
-# pair (nested writes are DRF-only). Each flavor's converter module re-exports
+# pair (nested writes are DRF-only) and the model flavor with ``EXCLUDED``
+# (the spec-040 D6 capture seam). Each flavor's converter module re-exports
 # them so existing ``from .converter import SCALAR`` consumers keep their path.
 SCALAR: str = "scalar"
 RELATION_SINGLE: str = "relation_single"
@@ -276,8 +277,9 @@ class InputFieldSpec:
     One reverse-map record for every write flavor that decodes a generated GraphQL
     input back to a framework write target. ``target_name`` is the neutral
     decode key (the bound form field name on the form path; the declared
-    serializer field name on the DRF path). Serializer-only axes stay optional
-    defaults so the form path never carries unused mode flags:
+    serializer field name on the DRF path; the model attr on the model path).
+    Serializer-only axes stay optional defaults so the form and model paths never
+    carry unused mode flags:
 
     - ``input_attr`` - the generated Strawberry dataclass attr (``category_id``
       for an FK relation, ``name`` for a scalar).
@@ -286,14 +288,18 @@ class InputFieldSpec:
       form's declared field name (``category``); for the serializer flavor this is
       the DECLARED serializer field name (``category_pk``), which the framework
       supplies in the serializer's input ``data`` before DRF maps it through
-      ``source`` into ``validated_data``. Never the ``<name>_id`` relation attr.
+      ``source`` into ``validated_data``; for the model flavor this is the model
+      attr the decode writes (``category_id`` for a forward FK / OneToOne, the
+      field name for a scalar / M2M).
     - ``kind`` - one of the flavor's decode kinds (``scalar`` /
       ``relation_single`` / ``relation_multi`` / ``file``; serializer also uses
-      nested kinds).
+      nested kinds; the model flavor uses ``excluded`` for the spec-040 D6
+      capture seam).
     - ``source`` - the serializer-only extra axis: the one-segment ``source`` the
       backing ``models.Field`` was resolved through (``category`` for a
-      ``category_pk`` field declared ``source="category"``). ``None`` for forms and
-      for a serializer field whose ``source`` equals its declared name.
+      ``category_pk`` field declared ``source="category"``). ``None`` for forms,
+      model mutations, and a serializer field whose ``source`` equals its
+      declared name.
     - ``related_model`` - the Django target model a relation field decodes its
       id(s) against (``Category`` for a ``category`` / ``category_pk`` relation),
       recorded at BUILD/BIND time so the decode never re-discovers the
@@ -1141,10 +1147,8 @@ def guard_dropped_required(
 def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
     """Yield ``(python_name, value, field)`` for each PROVIDED field of a bound input.
 
-    The ``UNSET``-strip walk every write-flavor decoder opens with - the model
-    ``mutations/resolvers.py::_decode_relations``, the form
-    ``forms/resolvers.py::_decode_form_data``, and the serializer
-    ``rest_framework/resolvers.py::_decode_input_object``: iterate
+    The ``UNSET``-strip walk ``decode_provided_fields`` opens with - the model,
+    form, and serializer write-flavor riders all go through that spine: iterate
     ``data.__strawberry_definition__.fields``, read each field's value off the input
     dataclass, and skip any left ``strawberry.UNSET`` (an OMITTED field, distinct from
     an explicit ``None`` which is kept as a provided value). Single-sited so the three

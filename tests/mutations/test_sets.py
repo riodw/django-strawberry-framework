@@ -665,7 +665,16 @@ def test_bind_materializes_input_and_payload_globals():
     assert CreateItem._input_class is _materialized_names["ItemInput"]
     assert CreateItem._payload_type_name == "CreateItemPayload"
     assert DeleteItem._input_class is None  # delete is id-only
+    assert DeleteItem._input_field_specs is None
     assert UpdateItem._primary_type is not None
+    create_attrs = {spec.input_attr for spec in CreateItem._input_field_specs or ()}
+    assert create_attrs == {
+        field.python_name for field in CreateItem._input_class.__strawberry_definition__.fields
+    }
+    assert "category_id" in create_attrs
+    assert CreateItem._model_fields_by_attr["category_id"] is (
+        product_models.Item._meta.get_field("category")
+    )
 
 
 def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
@@ -747,6 +756,13 @@ def test_bind_merges_consumer_input_class_with_generated_remainder():
     assert "is_private" in fields
     # Consumer field honored, not clobbered (its description survives the merge).
     assert fields["name"].description == "A custom-described name"
+    spec_by_attr = {spec.input_attr: spec for spec in CreateItem._input_field_specs or ()}
+    assert set(spec_by_attr) == set(fields)
+    from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR
+
+    assert spec_by_attr["name"].kind == SCALAR
+    assert spec_by_attr["category_id"].kind == RELATION_SINGLE
+    assert spec_by_attr["category_id"].related_model is product_models.Category
 
 
 def test_bind_merges_consumer_partial_input_class_for_update():

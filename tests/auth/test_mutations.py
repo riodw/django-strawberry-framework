@@ -443,6 +443,12 @@ def test_register_only_surface_keyed_bind_emits_no_login_logout_payloads():
     assert "RegisterPayload" in _materialized_names
     assert "LoginPayload" not in _materialized_names
     assert "LogoutPayload" not in _materialized_names
+    from django_strawberry_framework.mutations.inputs import EXCLUDED
+
+    rider = _declared_auth_surface("register")
+    spec_by_attr = {spec.input_attr: spec for spec in rider._input_field_specs or ()}
+    assert spec_by_attr["password"].kind == EXCLUDED
+    assert spec_by_attr["username"].kind != EXCLUDED
 
 
 def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface():
@@ -915,6 +921,7 @@ def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields(
 
 def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
     """The spec-040 D6 seam: value captured, marker preserved, attr never constructed."""
+    from django_strawberry_framework.mutations.inputs import EXCLUDED, mutation_input_field_specs
 
     @strawberry.input
     class ProbeRegisterInput:
@@ -922,12 +929,19 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
         password: str
 
     data = ProbeRegisterInput(username="seam_probe", password="raw-secret")
+    specs, model_fields = mutation_input_field_specs(
+        User,
+        ProbeRegisterInput,
+        excluded_attrs={"password"},
+    )
+    assert {spec.input_attr: spec.kind for spec in specs}["password"] == EXCLUDED
     decoded = _model_decode_step(
         User,
         data,
         info=None,
         instance=None,
-        excluded_input_fields=frozenset({"password"}),
+        specs=specs,
+        model_fields=model_fields,
     )
     target, m2m_assignments, exclude, excluded_values = decoded
     # The raw value was captured out of the constructed attrs...
@@ -944,12 +958,21 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
 
 def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
     """The default no-exclusion call is byte-compatible with the model flavor."""
+    from django_strawberry_framework.mutations.inputs import mutation_input_field_specs
 
     @strawberry.input
     class ProbeInput:
         username: str
 
-    decoded = _model_decode_step(User, ProbeInput(username="plain"), info=None, instance=None)
+    specs, model_fields = mutation_input_field_specs(User, ProbeInput)
+    decoded = _model_decode_step(
+        User,
+        ProbeInput(username="plain"),
+        info=None,
+        instance=None,
+        specs=specs,
+        model_fields=model_fields,
+    )
     assert len(decoded) == 3
 
 

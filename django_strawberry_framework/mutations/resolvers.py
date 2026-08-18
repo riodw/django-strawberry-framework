@@ -89,7 +89,7 @@ from ..utils.errors import (
     integrity_error_field_errors,
     validation_error_to_field_errors,
 )
-from ..utils.inputs import iter_provided_input_fields
+from ..utils.inputs import FILE, RELATION_MULTI, RELATION_SINGLE
 from ..utils.permissions import auth_aliases_for_permission_classes
 from ..utils.querysets import (
     apply_type_visibility_sync,
@@ -98,8 +98,6 @@ from ..utils.querysets import (
     run_in_one_sync_boundary,
     sync_pipeline_recourse,
 )
-from ..utils.relations import is_forward_many_to_many
-from ..utils.strings import graphql_camel_name
 from ..utils.write_transaction import (
     authorization_phase,
     base_locked_queryset,
@@ -115,8 +113,14 @@ from ..utils.write_transaction import (
     require_write_pipeline,
     snapshot_target_state,
 )
-from ..utils.write_values import decode_scalar_leaf, decode_visible_relation_ids
-from .inputs import FieldError, payload_object_slot
+from ..utils.write_values import (
+    decode_provided_fields,
+    decode_scalar_leaf,
+    decode_visible_relation_ids,
+    decoded_into,
+    relation_into,
+)
+from .inputs import EXCLUDED, FieldError, payload_object_slot
 from .permissions import _require_sync_bool_auth_result
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -346,104 +350,80 @@ def error_payload_builder(payload_cls: type, slot: str | None, using: str) -> An
 
 
 def _decode_relations(
-    model: type,
     data: Any,
     info: Any,
     *,
-    excluded_input_fields: frozenset[str] = frozenset(),
+    specs: list,
+    model_fields: dict[str, Any],
 ) -> tuple[dict[str, Any], list[Any], dict[str, Any], FieldError | None]:
-    """Decode the provided input fields into model attrs + M2M pk lists (spec-036 Decision 8 step 1).
+    """Decode provided input fields into model attrs + M2M pk lists.
 
-    Walks the input dataclass's provided fields (``UNSET`` stripped - the
-    ``UNSET`` / ``null`` / value tri-state is preserved: ``UNSET`` means
-    "omitted", an explicit ``None`` is kept as a provided ``None``). For each
-    forward FK / OneToOne ``<field>_id`` whose value is a ``relay.GlobalID``
-    or a raw pk, ``decode_visible_relation_ids`` type-checks the id against the
-    relation's Django target model: a wrong-type id returns a ``FieldError``
-    on that relation field, never a cross-model pk lookup and never a raw
-    ``DoesNotExist``. The type-checked id is then **resolved through the related
-    model's primary type visibility ``get_queryset``** (spec-036 Decision 10):
-    a row the caller cannot see is the same field-keyed
-    ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is not
-    GlobalID-decoded, but is STILL visibility-checked when the related model has
-    a registered (even non-Relay) primary type with a ``get_queryset`` - the
-    model-path equivalent of the form decoder's visibility-on-every-branch
-    contract. With no primary registered there is no contract to apply, and the
-    shared helper existence-checks through the default manager.
+    The model rider of ``utils/write_values.py::decode_provided_fields`` (spec-036
+    Decision 8 step 1): bind-stashed ``InputFieldSpec`` records route each
+    provided attr by ``kind``. Dest policy stays on the handlers:
 
-    ``excluded_input_fields`` is the spec-040 D6 **exclusion seam**: a provided
-    input attr named there (the register flavor's ``password``) is captured into
-    the ``excluded_values`` map and skipped BEFORE the relation / scalar / null
-    routing, so its raw value never reaches ``model(**scalar_and_fk_attrs)`` -
-    while the walk itself (the UNSET-vs-null-vs-value tri-state) stays the ONE
-    shared ``iter_provided_input_fields`` pass, never a forked copy. The caller
-    (``_model_decode_step``) folds the captured names back into the provided-marker
-    calculation, so exclusion never silently drops the column
-    from ``full_clean`` validation.
+    - SCALAR / FILE / RELATION_SINGLE -> ``scalar_and_fk_attrs`` (FK as
+      ``<field>_id`` -> pk). FILE rides the scalar handler so an explicit
+      ``null`` on a required file column still hits ``_explicit_null_error``
+      (spec-037: no file-specific resolver branch).
+    - RELATION_MULTI -> a separate ``{m2m_name: pks}`` dest; ``.items()``
+      preserves assignment order for the post-save write step.
+    - EXCLUDED (spec-040 D6) -> ``excluded_values``; the raw value never
+      reaches ``model(**scalar_and_fk_attrs)``.
 
-    Returns ``(scalar_and_fk_attrs, m2m_assignments, excluded_values, error)``
-    where ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for
-    ``setattr`` / ``Model(**...)`` (FK as ``<field>_id`` -> pk),
-    ``m2m_assignments`` is a list of ``(m2m_field_name, [pk, ...])`` deferred to
-    the post-save write step, ``excluded_values`` is the captured
-    ``{excluded_attr: raw value}`` map (empty for the default no-exclusion walk),
-    and ``error`` is the first decode ``FieldError`` or ``None``.
+    Relation ids (``relay.GlobalID`` or raw pk) are type-checked +
+    visibility-checked by ``_decode_single_relation_id`` /
+    ``_decode_relation_id_list``. A decode ``FieldError`` short-circuits; the
+    caller discards the dest dicts so the spine's partial-fill-on-error is
+    invisible.
+
+    Returns ``(scalar_and_fk_attrs, m2m_assignments, excluded_values, error)``.
     """
-    fk_by_attr, m2m_by_name = _relation_field_index(model)
-    scalar_and_fk_attrs: dict[str, Any] = {}
-    m2m_assignments: list[Any] = []
-    excluded_values: dict[str, Any] = {}
 
-    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``;
-    # the per-field kind routing below stays flavor-specific.
-    for python_name, value, field in iter_provided_input_fields(data):
-        if python_name in excluded_input_fields:
-            # The exclusion seam: capture the raw provided value and
-            # skip every decode branch - the value must never become a model attr.
-            excluded_values[python_name] = value
-            continue
-        # A decode failure keys to the input field's GraphQL name (what the
-        # client sent), e.g. ``categoryId`` - distinct from a ``full_clean``
-        # error, which keys to the MODEL field name. ``graphql_name`` is the
-        # field's wire alias (or ``python_name`` when no alias differs).
-        graphql_name = field.graphql_name or graphql_camel_name(python_name)
+    def extra(spec: Any) -> dict[str, Any]:
+        return {"relation_field": model_fields[spec.input_attr]}
 
-        m2m_field = m2m_by_name.get(python_name)
-        if m2m_field is not None:
-            pks, error = _decode_relation_id_list(graphql_name, value, m2m_field, info)
-            if error is not None:
-                return {}, [], {}, error
-            m2m_assignments.append((python_name, pks))
-            continue
-
-        fk_field = fk_by_attr.get(python_name)
-        if fk_field is not None:
-            pk, error = _decode_single_relation_id(graphql_name, value, fk_field, info)
-            if error is not None:
-                return {}, [], {}, error
-            scalar_and_fk_attrs[python_name] = pk
-            continue
-
-        null_error = _explicit_null_error(model, python_name, graphql_name, value)
+    def _model_scalar_decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+        graphql_name = spec.graphql_name
+        null_error = _explicit_null_error(model_fields[spec.input_attr], graphql_name, value)
         if null_error is not None:
-            return {}, [], {}, null_error
-        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
-        # ``decode_scalar_leaf``), composed between the model-only
-        # explicit-null rejection above and the naive-datetime coercion below.
+            return None, null_error
         decoded, text_error = decode_scalar_leaf(graphql_name, value)
         if text_error is not None:
-            return {}, [], {}, text_error
-        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(decoded)
+            return None, text_error
+        return _make_aware_if_naive(decoded), None
 
-    return scalar_and_fk_attrs, m2m_assignments, excluded_values, None
+    def relation_handler(dest: dict[str, Any]) -> Any:
+        return relation_into(
+            dest,
+            single=_decode_single_relation_id,
+            multi=_decode_relation_id_list,
+            info=info,
+            extra=extra,
+        )
+
+    scalar_and_fk_attrs: dict[str, Any] = {}
+    m2m_pks: dict[str, Any] = {}
+    excluded_values: dict[str, Any] = {}
+    scalar_handler = decoded_into(scalar_and_fk_attrs, _model_scalar_decode)
+    handlers = {
+        RELATION_SINGLE: relation_handler(scalar_and_fk_attrs),
+        RELATION_MULTI: relation_handler(m2m_pks),
+        FILE: scalar_handler,
+        EXCLUDED: decoded_into(excluded_values, lambda _spec, value: (value, None)),
+    }
+    error = decode_provided_fields(
+        specs,
+        data,
+        handlers=handlers,
+        scalar_handler=scalar_handler,
+    )
+    if error is not None:
+        return {}, [], {}, error
+    return scalar_and_fk_attrs, list(m2m_pks.items()), excluded_values, None
 
 
-def _explicit_null_error(
-    model: type,
-    python_name: str,
-    field_name: str,
-    value: Any,
-) -> FieldError | None:
+def _explicit_null_error(django_field: Any, field_name: str, value: Any) -> FieldError | None:
     """Reject an explicit ``null`` on a non-nullable scalar column.
 
     A provided ``None`` (``UNSET`` is already stripped) on a ``null=False`` column is
@@ -454,13 +434,12 @@ def _explicit_null_error(
     as the generic ``"__all__"`` "A database constraint was violated." with no field
     attribution, after a write was attempted. Reject it at decode as a field-keyed
     ``FieldError`` so the client learns WHICH field, before any DB work. A ``null=True``
-    column treats ``None`` as a valid clear and is left alone; a non-scalar attr (FK /
-    M2M) is handled by its own branch before this point, so ``python_name`` here is
-    always a concrete scalar column of ``model``.
+    column treats ``None`` as a valid clear and is left alone. ``django_field`` is the
+    bind-time column from ``_model_fields_by_attr`` (never a live ``get_field``).
     """
     if value is not None:
         return None
-    if model._meta.get_field(python_name).null:
+    if django_field.null:
         return None
     return field_error(field_name, "This field cannot be null.", codes="null")
 
@@ -483,59 +462,15 @@ def _make_aware_if_naive(value: Any) -> Any:
     return value
 
 
-def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Index a model's forward FK/OneToOne (by ``<field>_id`` attr) and M2M (by name).
-
-    Single-sources the input-attr-to-relation-field mapping the generator's
-    naming scheme implies (``<field>_id`` for forward FK / OneToOne, the plain
-    field name for M2M - ``mutations/inputs.py::relation_input_annotation``), so
-    the decode reads the same scheme the input was built from, AND so the
-    partial-update provided-field mapping (``_provided_attr_names``) can reverse a
-    ``<field>_id`` attr back to its model field name from the index rather than by
-    a blind string-suffix strip (which would mangle a *scalar* field literally
-    named ``<x>_id``, e.g. ``library.TaggedItem.object_id``).
-
-    A forward FK / OneToOne is keyed by its ``<field>_id`` input attr. The guard
-    requires a **concrete DB column** (``column is not None``) and a non-``None``
-    ``related_model`` so a *virtual* relation - a ``GenericForeignKey`` reports
-    ``is_relation=True`` with ``column=None`` and ``related_model=None`` - is
-    never indexed as a decode-able FK (spec-036 L3-1). The generator already
-    excludes virtual relations from the input, so this only hardens the index
-    against ever mis-mapping one.
-    """
-    fk_by_attr: dict[str, Any] = {}
-    m2m_by_name: dict[str, Any] = {}
-    for field in model._meta.get_fields():
-        if getattr(field, "many_to_many", False):
-            if is_forward_many_to_many(field):
-                m2m_by_name[field.name] = field
-        elif _is_forward_concrete_relation(field):
-            fk_by_attr[f"{field.name}_id"] = field
-    return fk_by_attr, m2m_by_name
-
-
-def _is_forward_concrete_relation(field: Any) -> bool:
-    """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
-
-    A concrete forward relation has both a non-``None`` ``column`` (a real DB
-    column - a ``GenericForeignKey`` reports ``column=None``) and a non-``None``
-    ``related_model`` (the type the relation id is checked against - a
-    ``GenericForeignKey`` reports ``related_model=None``). This excludes virtual
-    relations from the FK index so a scalar field that merely *ends in* ``_id`` is
-    never reverse-mapped to a non-existent relation field.
-    """
-    if not getattr(field, "is_relation", False):
-        return False
-    return getattr(field, "column", None) is not None and field.related_model is not None
-
-
 def _decode_single_relation_id(
-    field_name: str,
     value: Any,
-    relation_field: Any,
+    *,
+    graphql_name: str,
+    related_model: Any,
     info: Any,
+    relation_field: Any,
 ) -> tuple[Any, FieldError | None]:
-    """Decode one FK / OneToOne id via the shared set decoder.
+    """Decode one FK / OneToOne id via the shared set decoder (spec-036 Decision 8 / 10).
 
     Wraps the single value in a one-element list, delegates to
     ``decode_visible_relation_ids`` (type-check + coerce + visibility), and unwraps
@@ -549,16 +484,17 @@ def _decode_single_relation_id(
     ``_explicit_null_error`` guard. Django's ``full_clean`` SKIPS a ``blank=True``
     empty value, so a ``blank=True, null=False`` FK would otherwise slip to a NOT NULL
     ``IntegrityError`` and the generic ``"__all__"`` constraint envelope with no field
-    attribution.
+    attribution. ``relation_field`` is the bind-time Django field from ``extra(spec)``
+    (``null`` lives on the field, not on ``InputFieldSpec``).
     """
     if value is None:
         if getattr(relation_field, "null", False):
             return None, None
-        return None, field_error(field_name, "This field cannot be null.", codes="null")
+        return None, field_error(graphql_name, "This field cannot be null.", codes="null")
     pks, error = decode_visible_relation_ids(
         [value],
-        graphql_name=field_name,
-        related_model=relation_field.related_model,
+        graphql_name=graphql_name,
+        related_model=related_model,
         info=info,
         async_recourse=_MUTATION_ASYNC_RECOURSE,
     )
@@ -568,27 +504,32 @@ def _decode_single_relation_id(
 
 
 def _decode_relation_id_list(
-    field_name: str,
     value: Any,
-    relation_field: Any,
+    *,
+    graphql_name: str,
+    related_model: Any,
     info: Any,
+    relation_field: Any,
 ) -> tuple[list[Any], FieldError | None]:
     """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder.
 
     The list is the replace-set the post-save step assigns. An explicit
     ``null`` (reachable because the generated optional M2M field is
     ``list[<id>] | None``) is NOT a valid replace-set - it returns a ``FieldError``
-    on ``field_name`` (the valid "clear" signal is an empty list ``[]``), rather
+    on ``graphql_name`` (the valid "clear" signal is an empty list ``[]``), rather
     than iterating ``None`` into a resolver exception. A non-null list
     delegates to ``decode_visible_relation_ids`` (the same type-check + coerce +
-    one-query visibility contract the FK path uses).
+    one-query visibility contract the FK path uses; spec-036 Decision 10).
+    ``relation_field`` is accepted for ``relation_into`` extra() symmetry; M2M
+    nullability is the list contract, not ``relation_field.null``.
     """
+    del relation_field
     if value is None:
-        return [], _relation_null_error(field_name)
+        return [], _relation_null_error(graphql_name)
     pks, error = decode_visible_relation_ids(
         value,
-        graphql_name=field_name,
-        related_model=relation_field.related_model,
+        graphql_name=graphql_name,
+        related_model=related_model,
         info=info,
         async_recourse=_MUTATION_ASYNC_RECOURSE,
     )
@@ -659,7 +600,7 @@ def locate_instance(
 
 
 def _provided_attr_names(
-    model: type,
+    model_fields: dict[str, Any],
     scalar_and_fk_attrs: dict[str, Any],
     m2m_assignments: list[Any],
 ) -> set[str]:
@@ -669,22 +610,20 @@ def _provided_attr_names(
     (``category_id`` -> ``category``) so ``_unprovided_exclude`` reasons over
     model field names, and includes provided M2M field names.
 
-    The FK-to-field reversal uses the model's **relation field index**
-    (``_relation_field_index``) as the source of truth - a ``<field>_id`` attr is
-    mapped to its relation field name ONLY when the index confirms it is a forward
-    FK / OneToOne. A blind string-suffix strip (``attr[:-3] if
-    attr.endswith("_id")``) would mangle a *scalar* model field literally named
-    ``<x>_id`` (e.g. ``library.TaggedItem.object_id``) to ``<x>``, so the real
-    scalar field would read as unprovided, be added to the ``full_clean(exclude=
-    ...)`` set, and skip validation - surfacing later as a mis-labeled
-    ``IntegrityError`` (spec-036 M3-1). Scalar attrs (including any ending in
-    ``_id``) therefore stay under their real name.
+    The FK-to-field reversal uses the bind-time Django-field index
+    (``_model_fields_by_attr``) as the source of truth - ``model_fields[attr].name``
+    is ``category`` for a forward FK stored under ``category_id``, and ``object_id``
+    for a scalar literally named ``<x>_id``. A blind string-suffix strip
+    (``attr[:-3] if attr.endswith("_id")``) would mangle
+    ``library.TaggedItem.object_id`` to ``object``, so the real scalar field would
+    read as unprovided, be added to the ``full_clean(exclude=...)`` set, and skip
+    validation - surfacing later as a mis-labeled ``IntegrityError`` (spec-036
+    M3-1). Scalar attrs (including any ending in ``_id``) therefore stay under
+    their real name.
     """
-    fk_by_attr, _m2m_by_name = _relation_field_index(model)
     names: set[str] = set()
     for attr in scalar_and_fk_attrs:
-        fk_field = fk_by_attr.get(attr)
-        names.add(fk_field.name if fk_field is not None else attr)
+        names.add(model_fields[attr].name)
     for m2m_name, _pks in m2m_assignments:
         names.add(m2m_name)
     return names
@@ -849,7 +788,14 @@ def _run_pipeline_sync(
         info,
         data,
         id,
-        decode_step=lambda instance: _model_decode_step(model, data, info, instance=instance),
+        decode_step=lambda instance: _model_decode_step(
+            model,
+            data,
+            info,
+            instance=instance,
+            specs=mutation_cls._input_field_specs,
+            model_fields=mutation_cls._model_fields_by_attr,
+        ),
         write_step=lambda instance, decoded: _model_write_step(instance, decoded),
     )
 
@@ -860,39 +806,43 @@ def _model_decode_step(
     info: Any,
     *,
     instance: Any,
-    excluded_input_fields: frozenset[str] = frozenset(),
+    specs: list,
+    model_fields: dict[str, Any],
 ) -> tuple[Any, ...] | list[FieldError]:
     """The model ``decode_step``: relation-decode + construct / ``setattr``.
 
-    Decodes the input relations (the ``036`` ``_decode_relations`` contract:
-    type-check + visibility on every branch), then either CONSTRUCTS a fresh
-    ``model(**attrs)`` (create, ``instance is None``) or sets the provided attrs on
-    the located row (update). Returns ``(constructed_instance, m2m_assignments,
-    exclude)`` for the write step, or a ``list[FieldError]`` on a decode failure
-    (the skeleton maps it to a null-object payload). ``exclude`` is the exclude-aware
-    unprovided-field list for BOTH create and update - create excludes unprovided
-    fields so their model defaults are not validated (mirroring
-    ``Model.objects.create()``), update excludes unprovided fields so an unsent
-    column keeps its stored value, both keep validating any unprovided field
-    co-participating in a unique constraint with a provided one.
+    Decodes the input via ``_decode_relations`` (the ``036`` contract: type-check
+    + visibility on every relation branch, riding ``decode_provided_fields``),
+    then either CONSTRUCTS a fresh ``model(**attrs)`` (create, ``instance is
+    None``) or sets the provided attrs on the located row (update). Returns
+    ``(constructed_instance, m2m_assignments, exclude)`` for the write step, or a
+    ``list[FieldError]`` on a decode failure (the skeleton maps it to a
+    null-object payload). ``exclude`` is the exclude-aware unprovided-field list
+    for BOTH create and update - create excludes unprovided fields so their model
+    defaults are not validated (mirroring ``Model.objects.create()``), update
+    excludes unprovided fields so an unsent column keeps its stored value, both
+    keep validating any unprovided field co-participating in a unique constraint
+    with a provided one.
 
-    ``excluded_input_fields`` is the spec-040 D6 exclusion seam (the register
-    flavor's ``password``): the named provided attrs are captured OUT of the model
-    construction by ``_decode_relations`` (the raw value never becomes a model
+    Specs with kind ``EXCLUDED`` are the spec-040 D6 exclusion seam (the register
+    flavor's ``password``): those provided attrs are captured OUT of the model
+    construction by the EXCLUDED handler (the raw value never becomes a model
     attr) **with their provided-marker preserved** - the captured names are folded
     back into the ``provided`` set below, so the excluded column still
     participates in ``full_clean`` validation (naively popping it pre-walk would
     mark it unprovided and silently drop it from the exclude calculation - the
-    spec-040 Revision-7 marker fix). A NON-EMPTY exclusion returns the extended
-    tuple ``(target, m2m_assignments, exclude, excluded_values)``; the default
-    no-exclusion call keeps the exact historical three-tuple, so the model
+    spec-040 Revision-7 marker fix). Bind writes the kind (register's
+    ``build_input`` stashes ``password`` as ``EXCLUDED``); a mutation whose specs
+    include any ``EXCLUDED`` kind returns the extended tuple
+    ``(target, m2m_assignments, exclude, excluded_values)``. The default
+    no-exclusion bind keeps the exact historical three-tuple, so the model
     flavor's ``_model_write_step`` contract is byte-unchanged.
     """
     scalar_and_fk_attrs, m2m_assignments, excluded_values, decode_error = _decode_relations(
-        model,
         data,
         info,
-        excluded_input_fields=excluded_input_fields,
+        specs=specs,
+        model_fields=model_fields,
     )
     if decode_error is not None:
         return [decode_error]
@@ -904,12 +854,12 @@ def _model_decode_step(
         for attr, value in scalar_and_fk_attrs.items():
             setattr(target, attr, value)
 
-    provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
+    provided = _provided_attr_names(model_fields, scalar_and_fk_attrs, m2m_assignments)
     # The exclusion seam preserves the provided-marker: an excluded
     # input WAS provided, so it still counts for the exclude calculation.
-    provided |= set(excluded_values)
+    provided |= {model_fields[attr].name for attr in excluded_values}
     exclude = _unprovided_exclude(model, provided)
-    if excluded_input_fields:
+    if any(spec.kind == EXCLUDED for spec in specs):
         return target, m2m_assignments, exclude, excluded_values
     return target, m2m_assignments, exclude
 

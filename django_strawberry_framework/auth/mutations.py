@@ -54,6 +54,7 @@ from ..mutations.inputs import (
     build_payload_type,
     editable_input_fields,
     materialize_mutation_input_class,
+    mutation_input_field_specs,
     mutation_input_shape,
     payload_object_slot,
 )
@@ -936,15 +937,15 @@ def derive_register_fields(user_model: type) -> tuple[str, ...]:
 
 
 def _register_decode_step(
-    model: type,
+    mutation_cls: type,
     data: Any,
     info: Any,
     instance: Any,
 ) -> Any:
     """The register ``decode_step``: the shared model decode + the password capture.
 
-    Rides ``_model_decode_step`` with the ``excluded_input_fields`` seam - the ONE
-    shared UNSET-strip walk, never a fork - so ``password`` is captured out of the
+    Rides ``_model_decode_step``; bind stashes ``password`` as kind ``EXCLUDED``
+    (spec-040 D6) so the ONE shared UNSET-strip walk captures it out of the
     constructed model attrs (the raw value never touches
     ``model(**scalar_and_fk_attrs)``) while the exclude calculation still
     counts it as provided. Returns the extended decoded tuple
@@ -955,12 +956,14 @@ def _register_decode_step(
     """
     from ..mutations.resolvers import _model_decode_step
 
+    model = mutation_cls._mutation_meta.model
     decoded = _model_decode_step(
         model,
         data,
         info,
         instance=instance,
-        excluded_input_fields=_REGISTER_EXCLUDED_INPUT_FIELDS,
+        specs=mutation_cls._input_field_specs,
+        model_fields=mutation_cls._model_fields_by_attr,
     )
     if isinstance(decoded, list):
         return decoded
@@ -1022,13 +1025,12 @@ def _run_register_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any
     """
     from ..mutations.resolvers import run_write_pipeline_sync
 
-    model = mutation_cls._mutation_meta.model
     return run_write_pipeline_sync(
         mutation_cls,
         info,
         data,
         strawberry.UNSET,
-        decode_step=lambda instance: _register_decode_step(model, data, info, instance),
+        decode_step=lambda instance: _register_decode_step(mutation_cls, data, info, instance),
         write_step=_register_write_step,
     )
 
@@ -1079,7 +1081,8 @@ def _synthesize_register_rider(permission_classes: list[Any]) -> type:
             ``RegisterInput`` instead of the deterministic shape-derived name.
             Materialized onto the standard ``mutations.inputs`` emit ledger so the
             the distinct-shape collision raise still guards a consumer's own
-            ``RegisterInput``.
+            ``RegisterInput``. Stashes specs with ``password`` as kind ``EXCLUDED``
+            (spec-040 D6) so the shared model decode captures it out of construction.
             """
             shape = mutation_input_shape(meta.model, CREATE, fields=meta.fields)
             pinned = shape._replace(type_name=_REGISTER_INPUT_NAME)
@@ -1091,6 +1094,11 @@ def _synthesize_register_rider(permission_classes: list[Any]) -> type:
                 shape=pinned,
             )
             materialize_mutation_input_class(input_cls.__name__, input_cls)
+            cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
+                meta.model,
+                input_cls,
+                excluded_attrs=_REGISTER_EXCLUDED_INPUT_FIELDS,
+            )
             return input_cls
 
         @classmethod

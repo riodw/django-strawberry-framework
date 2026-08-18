@@ -22,7 +22,7 @@ import decimal
 import enum
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
@@ -35,6 +35,7 @@ from strawberry import UNSET, relay
 from ..conf import hide_flat_filters_setting
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear
+from ..utils.converters import MRO_CONTINUE, convert_with_mro
 from ..utils.input_values import is_inactive_value
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
@@ -356,6 +357,49 @@ def _element_annotation(
 # ---------------------------------------------------------------------------
 
 
+# Most-specific-first filter-class order. Convert and normalize both walk this
+# via ``convert_with_mro`` so a new primitive cannot be typed on one ladder and
+# coerced on the other (spec-051 C3). ``TypedFilter`` is convert-only: List /
+# Array / Range already matched, so normalize returns ``MRO_CONTINUE`` and
+# falls through to ChoiceFilter / the catch-all. Last entry is ``object`` (the
+# original ``else``): convert's method-filter / ``isnull`` / scalar arm,
+# normalize's unwrap. A duck-typed non-``Filter`` still reaches that arm so
+# hostile-``__repr__`` diagnostics stay typed ``ConfigurationError``.
+_FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
+    GlobalIDMultipleChoiceFilter,
+    GlobalIDFilter,
+    BaseCSVFilter,
+    (RangeFilter, _DjangoRangeFilter),
+    (ListFilter, ArrayFilter),
+    TypedFilter,
+    (ChoiceFilter, TypedChoiceFilter),
+    object,
+)
+
+
+def _filter_input_prechecks(
+    *handlers: Callable[[Any], Any],
+) -> list[tuple[type | tuple[type, ...], Callable[[Any], Any]]]:
+    """Zip the shared kind order with per-pass handlers.
+
+    ``zip(..., strict=True)`` fails loud if convert or normalize forgets a
+    handler when the kind table grows.
+    """
+    return list(zip(_FILTER_INPUT_KIND_TYPES, handlers, strict=True))
+
+
+def _unexpected_filter_dispatch(obj: Any) -> ConfigurationError:
+    """Fallthrough factory for the filter-input ``convert_with_mro`` riders.
+
+    Last precheck is ``object`` (the original ``else``), so a real dispatch
+    never reaches here. The factory keeps ``convert_with_mro``'s raising
+    contract if a handler returns ``MRO_CONTINUE`` all the way through.
+    """
+    return ConfigurationError(
+        f"internal: filter input dispatch reached fallthrough for {_safe_repr(obj)}",
+    )
+
+
 def convert_filter_to_input_annotation(
     filter_instance: Filter,
     model_field: Any,
@@ -364,13 +408,15 @@ def convert_filter_to_input_annotation(
 ) -> Any:
     """Return the Strawberry annotation for a resolved ``django-filter`` filter.
 
-    Implements the Decision-4 M1 conversion table. Branch order is
-    most-specific to least-specific: the Relay-aware primitives first
-    (they subclass ``Filter`` / ``MultipleChoiceFilter`` and would
-    otherwise fall through to scalar / list), then the typed-filter
-    family (``RangeFilter`` / ``ListFilter`` / ``ArrayFilter``), then
-    ``ChoiceFilter``, then the scalar catch-all. ``method=...`` filters
-    that do not match any branch raise ``ConfigurationError``.
+    Implements the Decision-4 M1 conversion table. Kind order is
+    ``_FILTER_INPUT_KIND_TYPES`` (most-specific first): Relay-aware primitives,
+    then Range / List / Array, then bare ``TypedFilter``, then
+    ``ChoiceFilter``, then the ``object`` catch-all (the original ``else``).
+    ``method=...`` filters
+    that expose no form field raise ``ConfigurationError``.
+
+    Dispatch rides ``utils/converters.py::convert_with_mro`` with the same
+    kind table ``normalize_input_value`` uses.
 
     ``filterset_cls`` (the owning ``FilterSet`` for a leaf built through
     ``_build_input_fields``) qualifies the nested ``RangeFilter`` sub-input
@@ -381,51 +427,67 @@ def convert_filter_to_input_annotation(
     """
     required = bool(filter_instance.extra.get("required", False))
 
-    if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):
-        annotation = list[str]
-    elif isinstance(filter_instance, GlobalIDFilter):
-        annotation = str
-    elif isinstance(filter_instance, BaseCSVFilter):
+    def _gid_multi(_filter: Filter) -> Any:
+        return list[str]
+
+    def _gid(_filter: Filter) -> Any:
+        return str
+
+    def _csv(matched: Filter) -> Any:
         # django-filter expands ``Meta.fields`` ``in`` / ``range`` lookups
         # into ``BaseInFilter`` / ``BaseRangeFilter`` (both ``BaseCSVFilter``
         # subclasses) whose form field consumes a LIST of values, not a
-        # scalar. Without this branch they fell through to the scalar
-        # catch-all and the generated input was a single value -- the
-        # runtime CSV field then mis-parsed a lone scalar as a 1-element
-        # list. Our own ``RangeFilter`` primitive (a ``{start, end}`` input)
-        # is a separate, non-CSV class handled by the branch below. The element
-        # type is model-field-driven so a CSV ``in`` over a choice column keeps
-        # its enum and a 64-bit column keeps ``BigInt`` (not ``str`` / ``Int``).
-        annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
-    elif isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
+        # scalar. The element type is model-field-driven so a CSV ``in`` over
+        # a choice column keeps its enum and a 64-bit column keeps ``BigInt``.
+        return list[_element_annotation(matched, model_field, owner_definition)]
+
+    def _range(matched: Filter) -> Any:
         inner = _scalar_from_model_field(model_field)
-        annotation = _build_range_input_class(filter_instance, inner, filterset_cls)
-    elif isinstance(filter_instance, (ListFilter, ArrayFilter)):
-        annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
-    elif isinstance(filter_instance, TypedFilter):
-        annotation = _element_annotation(filter_instance, model_field, owner_definition)
-    elif isinstance(filter_instance, (ChoiceFilter, TypedChoiceFilter)):
+        return _build_range_input_class(matched, inner, filterset_cls)
+
+    def _list(matched: Filter) -> Any:
+        return list[_element_annotation(matched, model_field, owner_definition)]
+
+    def _typed(matched: Filter) -> Any:
+        return _element_annotation(matched, model_field, owner_definition)
+
+    def _choice(matched: Filter) -> Any:
         type_name = _owner_type_name(owner_definition) or "Filter"
-        annotation = _choice_enum_from_filter(filter_instance, type_name, model_field)
-    else:
+        return _choice_enum_from_filter(matched, type_name, model_field)
+
+    def _catchall(matched: Filter) -> Any:
         # Catch-all scalar branch. ``Filter(method=...)`` filters land
         # here when their ``field_class`` is a recognized form field; an
         # unknown form-field shape raises per spec-027 line 595.
-        form_field = getattr(filter_instance, "field", None)
-        method = getattr(filter_instance, "method", None)
+        form_field = getattr(matched, "field", None)
+        method = getattr(matched, "method", None)
         if method is not None and form_field is None:
             raise ConfigurationError(
-                f"Filter(method={_safe_repr(method)}) on {_safe_repr(filter_instance)} exposes no "
+                f"Filter(method={_safe_repr(method)}) on {_safe_repr(matched)} exposes no "
                 "form field; declare an explicit `Filter(method=..., field_class=...)` "
                 "or wrap the method on a typed filter primitive.",
             )
-        if getattr(filter_instance, "lookup_expr", None) == "isnull":
+        if getattr(matched, "lookup_expr", None) == "isnull":
             # ``isnull`` is a boolean predicate regardless of the column type;
             # the model field (the column's value type) is irrelevant here.
-            annotation = bool
-        else:
-            annotation = _element_annotation(filter_instance, model_field, owner_definition)
+            return bool
+        return _element_annotation(matched, model_field, owner_definition)
 
+    annotation = convert_with_mro(
+        filter_instance,
+        isinstance_prechecks=_filter_input_prechecks(
+            _gid_multi,
+            _gid,
+            _csv,
+            _range,
+            _list,
+            _typed,
+            _choice,
+            _catchall,
+        ),
+        scalar_registry={},
+        fallthrough_error_factory=_unexpected_filter_dispatch,
+    )
     if not required:
         annotation = annotation | None
     return annotation
@@ -451,6 +513,12 @@ def normalize_input_value(
       dict when the filter consumes more than one positional form-data
       key (``RangeFilter`` -> ``{<field>_0, <field>_1}``).
 
+    Kind order is ``_FILTER_INPUT_KIND_TYPES``, the same table convert
+    walks. ``TypedFilter`` is convert-only: normalize returns
+    ``MRO_CONTINUE`` so ChoiceFilter / the unwrap catch-all can still
+    fire. ``None`` from unwrap (an enum member whose ``.value`` is
+    ``None``) is a successful result, not a continue signal.
+
     Per the spec-027 Implementation-discretion item, the
     multi-key return shape lets the ``_normalize_input`` caller merge
     the patch without inventing a sentinel-pair object.
@@ -465,21 +533,47 @@ def normalize_input_value(
     if is_inactive_value(raw_value, unset_sentinel=UNSET):
         return None
 
-    if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):
+    def _gid_multi(_filter: Filter) -> Any:
         return [_encode_global_id_input(item) for item in raw_value]
-    if isinstance(filter_instance, GlobalIDFilter):
+
+    def _gid(_filter: Filter) -> Any:
         return _encode_global_id_input(raw_value)
-    if isinstance(filter_instance, BaseCSVFilter):
+
+    def _csv(_filter: Filter) -> Any:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
         return [_unwrap_enum_member(item) for item in raw_value]
-    if isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
-        return _normalize_range_value(filter_instance, raw_value, field_name=field_name)
-    if isinstance(filter_instance, (ChoiceFilter, TypedChoiceFilter)):
-        return _unwrap_enum_member(raw_value)
-    if isinstance(filter_instance, (ListFilter, ArrayFilter)):
+
+    def _range(matched: Filter) -> Any:
+        return _normalize_range_value(matched, raw_value, field_name=field_name)
+
+    def _list(_filter: Filter) -> Any:
         return [_unwrap_enum_member(item) for item in raw_value]
-    return _unwrap_enum_member(raw_value)
+
+    def _typed(_filter: Filter) -> object:
+        return MRO_CONTINUE
+
+    def _choice(_filter: Filter) -> Any:
+        return _unwrap_enum_member(raw_value)
+
+    def _catchall(_filter: Filter) -> Any:
+        return _unwrap_enum_member(raw_value)
+
+    return convert_with_mro(
+        filter_instance,
+        isinstance_prechecks=_filter_input_prechecks(
+            _gid_multi,
+            _gid,
+            _csv,
+            _range,
+            _list,
+            _typed,
+            _choice,
+            _catchall,
+        ),
+        scalar_registry={},
+        fallthrough_error_factory=_unexpected_filter_dispatch,
+    )
 
 
 # ---------------------------------------------------------------------------

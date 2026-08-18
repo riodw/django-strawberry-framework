@@ -8,6 +8,7 @@ its owner:
 
 - a precheck match wins (and runs in order; a precheck for a parent class
   precedes the scalar walk over a child);
+- ``MRO_CONTINUE`` from a precheck keeps walking; ``None`` is a real result;
 - the MRO registry resolves the MOST-specific class regardless of insertion
   order;
 - an unhandled field calls the ``fallthrough_error_factory`` and raises.
@@ -29,6 +30,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.forms import converter as form_converter
 from django_strawberry_framework.rest_framework import serializer_converter as ser_converter
 from django_strawberry_framework.utils.converters import (
+    MRO_CONTINUE,
     convert_with_mro,
     finish_field_conversion,
     make_kind_converter,
@@ -74,21 +76,39 @@ def test_prechecks_run_in_order():
     assert result == "first"
 
 
-def test_precheck_returning_none_continues_to_walk():
-    """A precheck handler returning ``None`` lets the skeleton continue to the registry walk.
+def test_precheck_returning_mro_continue_continues_to_walk():
+    """A precheck handler returning ``MRO_CONTINUE`` lets the skeleton keep walking.
 
     This is the bare-``forms.Field`` exact-type pattern: a precheck that matches by
-    ``isinstance`` but returns ``None`` for the non-exact case falls through to the
-    scalar walk rather than short-circuiting.
+    ``isinstance`` but continues for the non-exact case falls through to the
+    scalar walk rather than short-circuiting. ``None`` is a successful result
+    (see ``test_precheck_returning_none_is_a_value``).
     """
     field = _Child()
     result = convert_with_mro(
         field,
-        isinstance_prechecks=[(_Base, lambda _f: None)],
+        isinstance_prechecks=[(_Base, lambda _f: MRO_CONTINUE)],
         scalar_registry={_Child: "registry-value"},
         fallthrough_error_factory=lambda _f: AssertionError("should not raise"),
     )
     assert result == "registry-value"
+    assert repr(MRO_CONTINUE) == "MRO_CONTINUE"
+
+
+def test_precheck_returning_none_is_a_value():
+    """``None`` from a precheck is a successful conversion, not a continue signal.
+
+    Filter ``normalize_input_value`` unwraps enum members whose ``.value`` is
+    ``None``; treating ``None`` as continue would fall through and raise.
+    """
+    field = _Child()
+    result = convert_with_mro(
+        field,
+        isinstance_prechecks=[(_Child, lambda _f: None)],
+        scalar_registry={_Child: "registry-value"},
+        fallthrough_error_factory=lambda _f: AssertionError("should not raise"),
+    )
+    assert result is None
 
 
 def test_mro_walk_resolves_most_specific_class():

@@ -36,6 +36,7 @@ from django_strawberry_framework.filters import (
     filter_input_type,
 )
 from django_strawberry_framework.filters.inputs import (
+    _FILTER_INPUT_KIND_TYPES,
     _LOGIC_KEYS,
     INPUTS_MODULE_PATH,
     LOOKUP_NAME_MAP,
@@ -44,12 +45,14 @@ from django_strawberry_framework.filters.inputs import (
     _build_range_input_class,
     _camel_case,
     _field_specs,
+    _filter_input_prechecks,
     _iter_filterset_subclasses,
     _model_field_for_filter,
     _pascal_case,
     _safe_repr,
     _scalar_from_form_field,
     _scalar_from_model_field,
+    _unexpected_filter_dispatch,
     build_input_class,
     clear_filter_input_namespace,
     construct_search,
@@ -909,6 +912,36 @@ def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
     )
     # Optional wrapper around the resolved scalar.
     assert annotation == (int | None)
+
+
+def test_filter_convert_and_normalize_ride_shared_kind_table():
+    """Convert and normalize walk one most-specific-first filter-class table.
+
+    The two ladders used to be independent ``isinstance`` chains (spec-051 C3
+    drift hazard). Both now zip ``_FILTER_INPUT_KIND_TYPES`` into
+    ``convert_with_mro`` prechecks; ``object`` is last (the original ``else``).
+    """
+    from django_strawberry_framework.filters import inputs as inputs_mod
+
+    for fn in (inputs_mod.convert_filter_to_input_annotation, inputs_mod.normalize_input_value):
+        assert "convert_with_mro" in fn.__code__.co_names
+        assert "_filter_input_prechecks" in fn.__code__.co_names
+    assert _FILTER_INPUT_KIND_TYPES[-1] is object
+    assert _FILTER_INPUT_KIND_TYPES[-3] is TypedFilter
+    with pytest.raises(ValueError, match="argument"):
+        _filter_input_prechecks(lambda _f: None)
+    exc = _unexpected_filter_dispatch(object())
+    assert isinstance(exc, ConfigurationError)
+    assert "internal: filter input dispatch" in str(exc)
+
+
+def test_normalize_input_value_typed_filter_unwraps_none_enum_value():
+    """``TypedFilter`` is convert-only; normalize continues and may return ``None``."""
+
+    class Tri(Enum):
+        UNKNOWN = None
+
+    assert normalize_input_value(TypedFilter(), Tri.UNKNOWN) is None
 
 
 def test_normalize_input_value_list_filter_unwraps_each_element():

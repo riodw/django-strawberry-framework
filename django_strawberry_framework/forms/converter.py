@@ -52,6 +52,7 @@ from django import forms
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.converters import (
+    MRO_CONTINUE,
     convert_with_mro,
     finish_field_conversion,
     make_kind_converter,
@@ -192,13 +193,14 @@ _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
 }
 
 
-def _bare_form_field(field: forms.Field) -> FormFieldConversion | None:
+def _bare_form_field(field: forms.Field) -> FormFieldConversion | object:
     """Exact-type ``forms.Field`` -> ``str``; any subclass continues the MRO walk.
 
     NOT a catch-all: an ``isinstance`` match that always returned a conversion
-    would shadow the raising fallthrough. Returning ``None`` lets
-    ``convert_with_mro`` continue. Ordered LAST in the precheck list so a
-    supported subclass has already been offered to the scalar registry.
+    would shadow the raising fallthrough. Returning ``MRO_CONTINUE`` lets
+    ``convert_with_mro`` continue (``None`` is a successful conversion
+    elsewhere). Ordered LAST in the precheck list so a supported subclass has
+    already been offered to the scalar registry.
     """
     if type(field) is forms.Field:
         return FormFieldConversion(
@@ -206,7 +208,7 @@ def _bare_form_field(field: forms.Field) -> FormFieldConversion | None:
             kind=SCALAR,
             required=form_field_required(field),
         )
-    return None
+    return MRO_CONTINUE
 
 
 # Kind prechecks that must win BEFORE the scalar walk reaches a parent class

@@ -1,21 +1,23 @@
-"""Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
+"""Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
 
 The single owner of the ordered-precheck -> MRO-walk -> raising-fallthrough
-control flow both ``forms/converter.py::convert_form_field`` and
-``rest_framework/serializer_converter.py::convert_serializer_field`` run. Before
+control flow ``forms/converter.py::convert_form_field``,
+``rest_framework/serializer_converter.py::convert_serializer_field``, and
+the filter convert / normalize pair in ``filters/inputs.py`` run. Before
 spec-039 the form converter spelled this walk free-standing; the serializer
 converter would have been the second copy of the subtle no-silent-catch-all
 contract. Promoting the skeleton single-sites it so the GOAL-mandated
 "unmapped field RAISES, never silently becomes ``String``" contract is written
-once (spec-039 Decision 4).
+once (spec-039 Decision 4). Filter convert/normalize share the same walk so
+their kind order cannot drift (spec-051 C3).
 
 What lives here is mechanics only. Each caller supplies its own flavor-specific
 prechecks (the ``isinstance`` kind detections a relation / file / multi-choice
 field must win on BEFORE the scalar walk reaches a parent class), its own scalar
 registry (``forms.Field`` vs DRF ``serializers.Field`` keys - the two key spaces
 stay strictly separate; this module imports neither ``django.forms`` nor
-``rest_framework``), and its own fallthrough error factory (the package's
-``ConfigurationError`` either way).
+``rest_framework``; filter-input riders pass an empty registry), and its own
+fallthrough error factory (the package's ``ConfigurationError`` either way).
 
 The scalar-table VALUE shape is also single-sited here, without merging those
 key spaces: ``make_scalar_converter`` / ``make_kind_converter`` build the
@@ -33,6 +35,24 @@ from typing import Any
 from .inputs import SCALAR, FieldConversionBase
 
 
+class _MroContinue:
+    """Sentinel: a precheck matched, but ``convert_with_mro`` should keep walking.
+
+    ``None`` is a successful conversion (filter ``normalize_input_value`` may
+    unwrap an enum member whose ``.value`` is ``None``). The bare-``forms.Field``
+    exact-type precheck returns this sentinel for subclasses so the scalar
+    registry can still run.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "MRO_CONTINUE"
+
+
+MRO_CONTINUE = _MroContinue()
+
+
 def convert_with_mro(
     field: Any,
     *,
@@ -42,9 +62,10 @@ def convert_with_mro(
 ) -> Any:
     """Dispatch ``field`` to a conversion via ordered prechecks, an MRO walk, then a raise.
 
-    The flavor-agnostic body of ``forms/converter.py::convert_form_field`` (and
-    ``rest_framework/serializer_converter.py::convert_serializer_field``), single-sited
-    so the no-silent-catch-all contract lands once.
+    The flavor-agnostic body of ``forms/converter.py::convert_form_field``,
+    ``rest_framework/serializer_converter.py::convert_serializer_field``, and
+    the filter convert / normalize pair, single-sited so the no-silent-catch-all
+    contract (and the filter kind order) lands once.
 
     Control flow, in order:
 
@@ -55,8 +76,9 @@ def convert_with_mro(
        registry entry would otherwise win, so the more-specific kind MUST be
        checked first (``ModelChoiceField`` before ``ChoiceField`` -> ``str``;
        DRF ``PrimaryKeyRelatedField`` / ``FileField`` before any scalar). A
-       precheck handler may itself return ``None`` only if the caller wants the
-       walk to continue, but the standard callers always produce a conversion.
+       precheck handler may return ``MRO_CONTINUE`` to keep walking (the
+       bare-``forms.Field`` exact-type pattern, and filter normalize skipping
+       convert-only kinds). ``None`` is a real result, not a continue signal.
 
     2. **Scalar registry MRO walk.** Walks ``type(field).__mro__`` against
        ``scalar_registry`` so the MOST-specific registered class wins regardless
@@ -78,7 +100,7 @@ def convert_with_mro(
     for types, handler in isinstance_prechecks:
         if isinstance(field, types):
             result = handler(field)
-            if result is not None:
+            if result is not MRO_CONTINUE:
                 return result
     # Read the actual MRO through ``type`` rather than through the field class's
     # metaclass. A consumer-defined metaclass can override ``__getattribute__``

@@ -69,17 +69,19 @@ No file appears in both. `docs/SPECS/spec-020-list_field-0_0_7.md` stays custodi
 
 ## Artifact list
 
-- `docs/builder/bld-review-1-spec020_reconciliation.md`
-- `docs/builder/bld-review-2-docs_completion.md`
-- `docs/builder/bld-020-integration.md`
-- `docs/builder/bld-020-final.md`
+- `docs/builder/bld-review-1-spec020_reconciliation.md` — **deleted at closeout**
+- `docs/builder/bld-review-2-docs_completion.md` — **deleted at closeout**
+- `docs/builder/bld-020-integration.md` — **deleted at closeout**
+- `docs/builder/bld-020-final.md` — **deleted at closeout**; its unique content is folded into `## Final gate results` below
+
+All four were written, reviewed, and `final-accepted` in `522f6c12`; the three marked above were deleted afterwards, leaving this plan and the final artifact as the cycle's record. Citations of the deleted three survive in both kept files as provenance — they name which pass established a finding, not where to read it — and every finding they carry is restated in full where it lands. Nothing that outlives this directory depends on them: the five board bullets homed on cards 051 and 052 were written to stand alone, and the one that cited the integration artifact was rewritten before the deletion.
 
 ## Checklist
 
 - [x] Round 1: Spec reconciliation against shipped code (F1-F14) -> `docs/builder/bld-review-1-spec020_reconciliation.md`
 - [x] Round 2: Documentation completion (README status surface + glossary contract gaps) -> `docs/builder/bld-review-2-docs_completion.md`
 - [x] Cross-round integration pass -> `docs/builder/bld-020-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-020-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-020-final.md` (deleted at closeout; results folded into `## Final gate results` below)
 
 ## Worker 0's verified findings (dispatch-side record)
 
@@ -175,7 +177,7 @@ The maintainer authorized this shape for this cycle: "if it's just the spec file
 
 ## Deferred-work homing (post-gate, maintainer-requested)
 
-The six-item `### Deferred work catalog` in `docs/builder/bld-020-final.md` was homed on the board after the final gate, at the maintainer's request. Five of the six became `CardItem` scope bullets; the sixth needed none. Baseline verified first: `scripts/build_kanban_md.py --check` and `scripts/build_kanban_html.py --check` both exited 0 and neither generated file was dirty, so the regenerate publishes only these edits.
+The six-item `### Deferred work catalog` in the since-deleted `docs/builder/bld-020-final.md` was homed on the board after the final gate, at the maintainer's request. Five of the six became `CardItem` scope bullets; the sixth needed none. Baseline verified first: `scripts/build_kanban_md.py --check` and `scripts/build_kanban_html.py --check` both exited 0 and neither generated file was dirty, so the regenerate publishes only these edits.
 
 | Catalog item | Homed on | Why that card |
 | --- | --- | --- |
@@ -196,3 +198,44 @@ Both corrections are carried in the board bullets themselves, because `docs/buil
 ### Verification
 
 `5` `CardItem` rows added (`kanban_carditem` ids 1371-1375), nothing removed and nothing else edited. Proved statement-wise against `git show HEAD:examples/fakeshop/db.sqlite3`: 9921 -> 9931 `iterdump()` statements, 2 removed and 12 added, and every one accounted for — 5 `kanban_carditem`, their 5 `kanban_uuidmodel` side rows, the `sqlite_sequence` bump, and this cycle's single replaced `glossary_glossaryterm` row. `KANBAN.md` gained exactly 5 lines and lost none; `KANBAN.html` changed only its embedded data block; both `--check` runs exit 0 again. Every `#"substring"` citation written into the five bullets was resolved against its target file before the regenerate, and each is unique in that file.
+
+## Final gate results (folded in from the deleted final artifact)
+
+`docs/builder/bld-020-final.md` was deleted after `522f6c12`. Everything it carried is recorded elsewhere except the material below, which is folded in here so nothing is dropped. Its deferred-work catalog lives on cards 051 and 052 (see `## Deferred-work homing` above), its narrative in `522f6c12`'s message, its `### Verified NOT a finding` overlap in this plan's own list, and its counting lessons in the session memory topic file.
+
+Run from the repository root in the shared `.venv`, in the order `docs/builder/BUILD.md` `## Final test-run gate` gives.
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `uv run pytest --no-cov` | **PASS** — `6170 passed, 40 skipped in 73.67s`, exit 0. Full sweep across all three test trees. No `--cov*` flag in this or any pass; `--no-cov` is required because `pytest.ini`'s `addopts` auto-applies `--cov`. No coverage figure was inspected or asserted. |
+| 2 | `uv run python examples/fakeshop/manage.py check` | **PASS** — `System check identified no issues (0 silenced).`, exit 0. |
+| 3 | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | **PASS** — `No changes detected`, exit 0. Expected: the cycle changed one `glossary_glossaryterm` **row**, no model. |
+| 4 | `uv run ruff format --check .` | **PASS** — exit 0, `424 files already formatted`. Read-only; never `--fix`. |
+| 5 | `uv run ruff check .` | **PASS** — exit 0, `All checks passed!`. Read-only; never `--fix`. |
+| 6 | `git diff --check` | **PASS** — exit 0, no output, the concurrent session's files included. |
+| 7 | Floor verification | **`none`** — see below. |
+
+Supporting doc gates, re-run because the cycle wrote to the surfaces they govern:
+
+| Command | Result |
+|---|---|
+| `uv run python scripts/check_spec_glossary.py --spec docs/SPECS/spec-020-list_field-0_0_7.md` | exit 0 — `OK: 24 terms - all have glossary entries and at least one spec link.` |
+| `uv run python scripts/build_glossary_md.py --check` | exit 0 — the rendered `docs/GLOSSARY.md` provably agrees with the DB, so Round 2's regenerate is intact and no hand-edit slipped in after it |
+| `uv run python scripts/build_kanban_md.py --check` | exit 0 at gate time (the board writes came later, at homing) |
+| `uv run python scripts/check_trailing_commas.py --check` scoped to this cycle's files | exit 0 |
+| `uv run python scripts/check_trailing_commas.py --check` repo-wide | exit 1 — **baseline exception 1** (preamble) |
+| `uv run python scripts/build_tree_md.py --check` | exit 1 — **baseline exception 2** (preamble) |
+
+Byte counts of the two files under custody, measured with `wc -c` and matching Round 1's final-verification record exactly, so neither the integration pass nor the gate disturbed them: `docs/SPECS/spec-020-list_field-0_0_7.md` **100,566**; `docs/SPECS/appx/spec-020-list_field-0_0_7-rationale.md` **109,687**.
+
+**Floor verification confirmed, not merely inherited.** The preamble declares `none` and both rounds restated it; the gate verified independently that no round touches a Django / Strawberry / channels integration seam — no request/response handling, no view or ASGI plumbing, no body or upload parsing, no session/auth surface, no queryset or expression compilation, no schema or type construction against Strawberry internals, no consumer or middleware wiring. No floor venv was built and the shared `.venv` was not mutated, installed into, or downgraded by any pass, so **no unrun floor claim is inherited**.
+
+**Every gate passed, so no failure needed attributing.** The rule was held ready and never invoked: a code-level failure in this tree would have been the concurrent session's, recorded with evidence and escalated rather than fixed or reverted (`AGENTS.md` rule 34).
+
+Also confirmed at the gate and not recorded elsewhere: failability proofs **none owed** (no pass introduced a boundary, guard, gate, or rejection path — the diff carries no executable line, so the population is empty legally); hot-path budget **`none`**; `scripts/review_inspect.py` **skipped**, no `.py` file added or modified by any pass; relocation / promotion claims **none**.
+
+### Closed rather than carried, beyond this plan's `### Verified NOT a finding` list
+
+- The Slice 5 `KANBAN.md #"## Done"` citation — Round 2's final verification closed it as true as written, and its only consumer, finding F13, has landed.
+- Every alternative the rationale records as rejected; they live in `docs/SPECS/appx/spec-020-list_field-0_0_7-rationale.md` and need no separate ledger.
+- The four artifact-record defects the rounds adjudicated in place: Round 1's two stated-count corrections under N2, Round 2's inverted `converters.py` labels, and the non-reproducible `iterdump()` line count. All four were corrections to now-deleted round artifacts, not to shipped content.

@@ -52,12 +52,23 @@ from django.db import connections
 from django.test import Client, override_settings
 from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success as _graphql_data
+from strawberry import relay
 from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
-from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
+from django_strawberry_framework import (
+    DjangoMutation,
+    DjangoMutationField,
+    DjangoOptimizerExtension,
+    DjangoSchema,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
 from django_strawberry_framework.extensions import DjangoDebugExtension
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework.testing.relay import global_id_for
 
 _UPDATE_BOOK_TITLE_VALIDATOR_MUTATION = """
 mutation($id: ID!, $d: AliasValidatedBookSerializerPartialInput!) {
@@ -584,6 +595,101 @@ def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias(_projec
     # ...the shard_b twin was written, and the default twin never touched.
     assert product_models.Item.objects.using("shard_b").get(pk=90001).name == "pinned-write"
     assert product_models.Item.objects.using("default").get(pk=90001).name == "pin-item-default"
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias():
+    """A custom NodeID mutation resolves its non-pk payload on ``shard_b``.
+
+    ``CategoryNode.name`` is the Relay id, while the mutation locate still needs
+    the row's real integer pk. The target exists only on the write alias and the
+    router sends fresh reads to ``default``; resolving the NodeID through the
+    default manager would produce an in-band not-found error before the locate.
+    """
+    from apps.products import models as product_models
+
+    registry.clear()
+    category_pk = 92021
+    product_models.Category.objects.using("default").create(
+        pk=category_pk,
+        name="read-alias-category",
+        description="default untouched",
+    )
+    target = product_models.Category.objects.using("shard_b").create(
+        pk=category_pk,
+        name="write-alias-category",
+        description="before",
+    )
+
+    class CategoryNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name", "description")
+            interfaces = (relay.Node,)
+            primary = True
+
+    class UpdateCategory(DjangoMutation):
+        class Meta:
+            model = product_models.Category
+            operation = "update"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> int:
+            return 1
+
+    @strawberry.type
+    class Mutation:
+        update_category = DjangoMutationField(UpdateCategory)
+
+    finalize_django_types()
+    _current["schema"] = DjangoSchema(
+        query=Query,
+        mutation=Mutation,
+        config=strawberry_config(),
+        extensions=[],
+    )
+    client = _login_products_writer("change_category")
+    query = """
+      mutation($id: ID!, $d: CategoryPartialInput!) {
+        updateCategory(id: $id, data: $d) {
+          node { id description }
+          errors { field messages }
+        }
+      }
+    """
+    try:
+        with override_settings(
+            ROOT_URLCONF=__name__,
+            DATABASE_ROUTERS=[_ProductsWriteToShardBRouter()],
+        ):
+            clear_url_caches()
+            try:
+                response = TestClient(client=client).query(
+                    query,
+                    variables={
+                        "id": global_id_for(CategoryNode, target.name),
+                        "d": {"description": "write-alias-updated"},
+                    },
+                )
+            finally:
+                clear_url_caches()
+    finally:
+        _current["schema"] = None
+
+    assert response.data["updateCategory"]["errors"] == []
+    assert response.data["updateCategory"]["node"]["description"] == "write-alias-updated"
+    assert (
+        product_models.Category.objects.using("shard_b").get(pk=category_pk).description
+        == "write-alias-updated"
+    )
+    assert (
+        product_models.Category.objects.using("default").get(pk=category_pk).description
+        == "default untouched"
+    )
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)

@@ -207,7 +207,7 @@ def run_write_pipeline_sync(
 
         instance = None
         if needs_locate:
-            node_id, id_error = coerce_lookup_id(id, primary_type)
+            node_id, id_error = coerce_lookup_id(id, primary_type, using=using)
             if id_error is not None:
                 return _error_payload([id_error])
             # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
@@ -1187,7 +1187,12 @@ def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
     return None
 
 
-def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None]:  # noqa: A002
+def coerce_lookup_id(
+    id: Any,  # noqa: A002
+    target_type: type,
+    *,
+    using: str | None = None,
+) -> tuple[Any, FieldError | None]:
     """Decode + type-check the update/delete ``id:`` against the target model.
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
@@ -1212,10 +1217,17 @@ def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None
       on ``id`` - identifies no row, exactly like the node field returns ``null``,
       never the raw Django ``ValueError`` that would leak the pk column type.
 
+    ``using`` pins the decode's NodeID-to-real-pk lookup to the mutation's write
+    alias. The caller runs inside ``open_write_pipeline`` and already holds that
+    alias, so it is threaded explicitly rather than recovered from pipeline state
+    here: ``relay.py::_resolve_real_pk`` performs that recovery for the relation
+    riders that cannot thread one, and a second read of the same context variable
+    at this seam could only ever return the same answer.
+
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
     target_model = model_for(target_type)
-    result = decode_model_global_id(id, target_model)
+    result = decode_model_global_id(id, target_model, using=using)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()
     if result.status is GlobalIDDecode.UNCOERCIBLE_PK:

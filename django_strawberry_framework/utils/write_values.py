@@ -56,15 +56,16 @@ def unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
     HERE, at decode, before any DB-bound work, as a ``FieldError`` naming the
     offending input field - the same in-band envelope every other input failure
     returns - so neither the unique-field ``validate_unique`` path nor the plain
-    ``save`` path can leak the raw exception. ``str.encode("utf-8")`` is the
-    universal storability test: a lone surrogate fails it, while every valid scalar
-    value (including an embedded ``NUL``) passes, so this rejects ONLY genuinely
-    unstorable text. A non-string value (an int, a JSON dict whose own encoder
-    escapes nested surrogates, a choice enum) is passed through unchanged.
+    ``save`` path can leak the raw exception. The base ``str``'s
+    ``encode("utf-8")`` is the universal storability test: a lone surrogate fails
+    it, while every valid scalar value (including an embedded ``NUL``) passes, so
+    this rejects ONLY genuinely unstorable text. A non-string value (an int, a
+    JSON dict whose own encoder escapes nested surrogates, a choice enum) is
+    passed through unchanged.
     """
     if isinstance(value, str):
         try:
-            value.encode("utf-8")
+            str.__str__(value).encode("utf-8")
         except UnicodeEncodeError:
             return field_error(
                 field_name,
@@ -88,7 +89,8 @@ def raw_choice_value(value: Any) -> Any:
     it stores and validates against. A non-enum scalar is passed through unchanged;
     an explicit ``None`` (a provided null) stays ``None``.
     """
-    return value.value if isinstance(value, Enum) else value
+    raw_value = value.value if isinstance(value, Enum) else value
+    return str.__str__(raw_value) if isinstance(raw_value, str) else raw_value
 
 
 def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
@@ -155,22 +157,26 @@ def type_check_relation_id(
 
 
 def decode_scalar_leaf(graphql_name: str, value: Any) -> tuple[Any, FieldError | None]:
-    """Run the shared scalar leaf decode: text preflight, then choice unwrap.
+    """Run the shared scalar leaf decode: choice unwrap, then text preflight.
 
     The two-step compose every write flavor runs on a provided scalar value -
-    ``unencodable_text_error`` (an unstorable lone surrogate is a field-keyed
-    ``FieldError`` at decode, never a raw backend ``UnicodeEncodeError`` at
-    ``save()``) then ``raw_choice_value`` (a choice-enum member unwrapped to the
-    raw Django choice value). The primitives were already shared; this owns the
-    compose so a fourth flavor cannot mis-order it. Returns ``(decoded, None)``
-    on success or ``(None, FieldError)``. Flavor-specific scalar steps (the model
-    path's explicit-null rejection and naive-datetime coercion) stay at the call
-    site, composed around this leaf.
+    ``raw_choice_value`` (a choice-enum member unwrapped to the raw Django choice
+    value) then ``unencodable_text_error`` (an unstorable lone surrogate is a
+    field-keyed ``FieldError`` at decode, never a raw backend
+    ``UnicodeEncodeError`` at ``save()``). Unwrapping MUST happen first because
+    an enum member is not itself a string while its storage value can be one; a
+    preflight over the member would miss an invalid-Unicode choice value. The
+    primitives were already shared; this owns the compose so a fourth flavor
+    cannot mis-order it. Returns ``(decoded, None)`` on success or ``(None,
+    FieldError)``. Flavor-specific scalar steps (the model path's explicit-null
+    rejection and naive-datetime coercion) stay at the call site, composed
+    around this leaf.
     """
-    error = unencodable_text_error(graphql_name, value)
+    decoded = raw_choice_value(value)
+    error = unencodable_text_error(graphql_name, decoded)
     if error is not None:
         return None, error
-    return raw_choice_value(value), None
+    return decoded, None
 
 
 def decode_visible_relation(

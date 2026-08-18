@@ -208,7 +208,12 @@ class DecodeResult(NamedTuple):
     resolved_type: type | None
 
 
-def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
+def _resolve_real_pk(
+    resolved_type: type,
+    coerced_id: Any,
+    *,
+    using: str | None = None,
+) -> Any | None:
     """Map a coerced NodeID-attr value to the model's real primary key.
 
     ``_coerce_pk_or_none`` coerces ``node_id`` against ``resolve_id_attr()`` - which
@@ -230,7 +235,10 @@ def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
     is enforced downstream by every consumer (the locate / relation / form
     visibility ``get_queryset`` query), so a value matching a *hidden* row resolves
     to its pk and is then rejected by that downstream hook, indistinguishable from
-    missing (no existence leak). The default (``id_attr == "pk"``: the coerced value
+    missing (no existence leak). ``using`` pins this lookup to a caller-owned
+    transaction alias; when omitted, an active mutation write pipeline supplies its
+    pinned alias, while standalone decode callers retain the default-manager behavior.
+    The default (``id_attr == "pk"``: the coerced value
     already IS the pk) and a NodeID over a non-concrete attr (no column to filter,
     mirroring ``_coerce_pk_or_none``'s ``FieldDoesNotExist`` fall-through) both
     return the value unchanged with no query.
@@ -243,12 +251,29 @@ def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
         model._meta.get_field(id_attr)
     except FieldDoesNotExist:
         return coerced_id
-    return (
-        model._default_manager.filter(**{id_attr: coerced_id}).values_list("pk", flat=True).first()
-    )
+    if using is None:
+        # Relation and serializer decoders call ``decode_model_global_id`` through
+        # the shared write pipeline without threading an alias through every
+        # flavor-specific handler. Recover the active pinned alias here so the
+        # NodeID -> real-pk lookup cannot fall back to the router's default read
+        # database. Standalone callers have no pipeline and keep the historical
+        # default-manager behavior.
+        from .utils.write_transaction import current_write_pipeline
+
+        pipeline = current_write_pipeline()
+        using = None if pipeline is None else pipeline.alias
+    manager = model._default_manager
+    if using is not None:
+        manager = manager.using(using)
+    return manager.filter(**{id_attr: coerced_id}).values_list("pk", flat=True).first()
 
 
-def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
+def decode_model_global_id(
+    value: Any,
+    expected_model: type,
+    *,
+    using: str | None = None,
+) -> DecodeResult:
     """Decode a typed ``GlobalID`` against ``expected_model``, non-raising.
 
     The single source of the mutation typed-id contract the root ``id:`` decode
@@ -259,7 +284,7 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     via ``_coerce_pk_or_none`` (the SAME coercer the node field uses, so an
     uncoercible literal never reaches the ORM as a raw ``ValueError``). The
     coerced value is then mapped to the model's real primary key via
-    ``_resolve_real_pk``: unlike the READ node field - which filters
+    ``_resolve_real_pk`` (pinned to ``using`` when supplied): unlike the READ node field - which filters
     ``{id_attr: value}`` and never needs the pk - every WRITE consumer here uses the
     result as an actual pk (``get(pk=...)`` / ``pk__in`` / FK-M2M assignment), so a
     consumer ``id: relay.NodeID[...]`` over a non-pk column must be resolved to the
@@ -277,7 +302,7 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     pk = _coerce_pk_or_none(resolved_type, node_id)
     if pk is None:
         return DecodeResult(GlobalIDDecode.UNCOERCIBLE_PK, None, resolved_type)
-    real_pk = _resolve_real_pk(resolved_type, pk)
+    real_pk = _resolve_real_pk(resolved_type, pk, using=using)
     if real_pk is None:
         return DecodeResult(GlobalIDDecode.UNCOERCIBLE_PK, None, resolved_type)
     return DecodeResult(GlobalIDDecode.OK, real_pk, resolved_type)

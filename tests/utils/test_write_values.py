@@ -1,5 +1,7 @@
 """Tests for the shared write-value decoding substrate."""
 
+from enum import Enum
+
 import pytest
 import strawberry
 from apps.products.models import Category
@@ -202,6 +204,45 @@ def test_store_decoded_writes_target_or_returns_error():
     dest.clear()
     assert store_decoded(dest, spec, (None, error)) is error
     assert dest == {}
+
+
+def test_decode_scalar_leaf_rejects_hostile_string_subclass_encoding():
+    """Unicode preflight must not dispatch a consumer string subclass's ``encode``."""
+
+    class HostileText(str):
+        def encode(self, *args, **kwargs):
+            return b""
+
+    decoded, error = decode_scalar_leaf("name", HostileText("\ud800"))
+    assert decoded is None
+    assert error is not None
+    assert error.field == "name"
+
+
+def test_decode_scalar_leaf_normalizes_string_subclass_after_preflight():
+    """A valid string subclass is stored as an exact ``str``, not consumer code."""
+
+    class HostileText(str):
+        def __str__(self):
+            raise AssertionError("storage must not dispatch the override")
+
+    decoded, error = decode_scalar_leaf("name", HostileText("valid"))
+    assert error is None
+    assert type(decoded) is str
+    assert decoded == "valid"
+
+
+def test_decode_scalar_leaf_checks_choice_value_after_unwrapping():
+    """An enum's raw storage string receives the Unicode preflight."""
+
+    class InvalidTextChoice(Enum):
+        broken = "\ud800"
+
+    decoded, error = decode_scalar_leaf("status", InvalidTextChoice.broken)
+    assert decoded is None
+    assert error is not None
+    assert error.field == "status"
+    assert error.codes == ["invalid"]
 
 
 def test_scalar_into_stores_decoded_leaf_and_keys_errors_to_field_name():

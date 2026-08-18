@@ -382,6 +382,33 @@ def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
 
 
 @pytest.mark.django_db
+def test_custom_node_id_real_pk_lookup_uses_pinned_alias(monkeypatch):
+    """A custom NodeID lookup forwards the mutation's pinned database alias.
+
+    The NodeID payload identifies a non-pk column, so
+    ``decode_model_global_id`` must resolve that value to a real pk before the
+    mutation locates its row. The lookup is part of the write transaction's
+    alias contract: a router may send reads to one alias and writes to another,
+    and resolving the NodeID through the default manager would miss a row that
+    exists only on the write alias. This package-level seam test pins the
+    forwarding without requiring a second test database; the live sharded
+    fakeshop suite exercises the same contract end to end.
+    """
+    _schema, CategoryNode = _build_category_node_schema()
+    target = product_models.Category.objects.create(name="alias-node-id", description="before")
+    gid = global_id_for(CategoryNode, target.name)
+    manager = product_models.Category._default_manager
+    using = mock.Mock(wraps=manager.using)
+    monkeypatch.setattr(manager, "using", using)
+
+    node_id, error = resolvers.coerce_lookup_id(gid, CategoryNode, using="default")
+
+    assert error is None
+    assert node_id == target.pk
+    using.assert_called_once_with("default")
+
+
+@pytest.mark.django_db
 def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row, not the pk-coincident one.
 
@@ -2534,7 +2561,14 @@ def _pipeline_harness(monkeypatch, *, operation="update", authorize=None):
     monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: fake_model)
     monkeypatch.setattr(mutation_resolvers, "payload_object_slot", lambda _t: "node")
     monkeypatch.setattr(mutation_resolvers, "payload_cls_for", lambda _m: MagicMock())
-    monkeypatch.setattr(mutation_resolvers, "coerce_lookup_id", lambda _id, _t: (7, None))
+    # ``**_kwargs`` absorbs the pinned ``using=`` alias the pipeline threads to the
+    # real decode; this harness asserts drift handling, not alias propagation
+    # (``test_custom_node_id_real_pk_lookup_uses_pinned_alias`` owns that).
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "coerce_lookup_id",
+        lambda _id, _t, **_kwargs: (7, None),
+    )
     monkeypatch.setattr(mutation_resolvers, "check_instance_write_alias", lambda *a, **k: None)
     monkeypatch.setattr(
         mutation_resolvers,

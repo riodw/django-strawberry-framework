@@ -104,8 +104,8 @@ This cycle changed **no source and no tests**. It wrote exactly six files, all M
 | `docs/SPECS/spec-017-deferred_scalars-0_0_6.md` | modified — deliberative layer removed, contract reconciled to `HEAD` |
 | `docs/SPECS/appx/spec-017-deferred_scalars-0_0_6-rationale.md` | new — the companion this cycle existed to create |
 | `docs/builder/build-017-deferred_scalars-0_0_6.md` | new — this plan |
-| `docs/builder/bld-017-r1-rationale_and_spec_reconciliation.md` | new |
-| `docs/builder/bld-017-r3-doc_completion_audit.md` | new |
+| `docs/builder/bld-017-r1-rationale_and_spec_reconciliation.md` | new — **deleted at closeout** |
+| `docs/builder/bld-017-r3-doc_completion_audit.md` | new — **deleted at closeout** |
 | `docs/builder/bld-017-final.md` | new |
 
 Everything else dirty in the tree is a concurrent session's and is listed under `## Baseline-dirty out-of-scope files`. Stage explicitly per `START.md` — never `git add -A`.
@@ -122,3 +122,12 @@ Both bullets cite by `path #"substring"` and section heading rather than `path:N
 ## Worker memory
 
 Namespaced per cycle so a concurrent session's build cannot read or clobber them: `docs/builder/worker-memory/spec-017-worker-0.md` … `spec-017-worker-3.md`, seeded empty at plan time. Gitignored (`.gitignore:188`). The four un-namespaced `worker-N.md` files in that directory belong to another cycle and are left untouched.
+
+## Closeout artifact deletion (2026-08-17)
+
+On maintainer instruction, after the cycle landed at `172a1ab1` / `64828956`, both round artifacts were deleted along with this cycle's four `docs/builder/worker-memory/spec-017-worker-N.md` files (gitignored, never committed). Only this plan and `docs/builder/bld-017-final.md` survive. Later mentions of `bld-017-r1-*` / `bld-017-r3-*` in either surviving file are provenance — which round established a finding — not live pointers; both files are recoverable from git history.
+
+Two live pointers existed and were resolved before the deletion rather than left to dangle:
+
+- **`TODO-ALPHA-052-0.1.0`'s MF-1 bullet** cited R3's `## Obligation 2` for the exact current/replacement text of the four kanban rows. That text is the only content of either artifact that anything outside this cycle depends on, so it was folded verbatim into `docs/builder/bld-017-final.md` `### MF-1` and the card bullet repointed there (`CardItem` 1368, one ORM edit plus a `KANBAN.md` / `KANBAN.html` regenerate).
+- **`docs/SPECS/appx/spec-017-deferred_scalars-0_0_6-rationale.md`** pointed at R1 for the full audit disposition table. It is a shipped deliverable, so a dangling pointer there would outlive every per-cycle record; reworded to state that the table lived in the deleted artifact and is recoverable at `172a1ab1`. The result it supports — no item was ever unshipped — is stated inline and needs no lookup.

@@ -3,7 +3,7 @@
 Spec reference: `docs/SPECS/spec-017-deferred_scalars-0_0_6.md`
 Rationale companion: `docs/SPECS/appx/spec-017-deferred_scalars-0_0_6-rationale.md`
 Build plan: `docs/builder/build-017-deferred_scalars-0_0_6.md`
-Closed round artifacts: `docs/builder/bld-017-r1-rationale_and_spec_reconciliation.md` (`final-accepted`), `docs/builder/bld-017-r3-doc_completion_audit.md` (`final-accepted`)
+Closed round artifacts: `docs/builder/bld-017-r1-rationale_and_spec_reconciliation.md` (`final-accepted`), `docs/builder/bld-017-r3-doc_completion_audit.md` (`final-accepted`) — **both DELETED at closeout on maintainer instruction (2026-08-17), after their cycle was committed at `172a1ab1` / `64828956`.** Every later reference to either file in this artifact is provenance, kept so a reader can see which round established a finding; none of it is a live pointer. The one piece of their content anything outside this cycle depended on — R3's exact current/replacement text for the four MF-1 rows, cited by `TODO-ALPHA-052-0.1.0`'s MF-1 bullet — was folded into `### MF-1` below before the deletion. Both files remain recoverable from git history.
 Shape: **final test-run gate** (`docs/builder/BUILD.md` `## Final test-run gate`), with the cross-slice integration pass's two live obligations folded in per the build plan's `## Artifact list`.
 Status: final-accepted
 
@@ -243,7 +243,56 @@ DB side, opened read-only (`sqlite3.connect("file:examples/fakeshop/db.sqlite3?m
 - `kanban_cardreference` **`id=62`** (`source_card_id=39` → `target_card_id=47`, and card 47 is confirmed `number=25`, `title="Warning-free scalar registration via `StrawberryConfig.scalar_map`"`, i.e. `DONE-025-0.0.7`), field `raw_text`.
 - **Rows `715` and `62` are byte-identical** — verified by direct string comparison at this pass, not assumed. **They must be amended together** or the rendered card contradicts itself. The `{{card_ref:1}}` placeholder inside them is FK-backed and must be kept verbatim.
 
-Four rows, four occurrences, one each. Exact current text and exact replacement text for all four, plus the `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate commands and the post-edit verification (the occurrence count must drop to **3**, all past-tense, with zero occurrences of `is suppressed at the definition site`), are in R3's `## Obligation 2`. **Target: maintainer**, on a tree where no concurrent session is live on the DB.
+Four rows, four occurrences, one each. **Target: maintainer**, on a tree where no concurrent session is live on the DB.
+
+The exact current and replacement text for all four rows follows. **It was folded in here from R3's `## Obligation 2` when R1 and R3 were deleted at closeout** (see the note under the header above) — it is the one piece of either artifact that anything outside this cycle depends on, since `TODO-ALPHA-052-0.1.0`'s MF-1 bullet cites it.
+
+**1. `kanban.CardItem` `id=703`** (section `note`, order `1`). Current:
+
+```text
+Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
+```
+
+Replacement:
+
+```text
+Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based). At `0.0.6` the Strawberry class-direct-to-`scalar()` `DeprecationWarning` was suppressed at the definition site so consumers saw no warning at import time; that suppression no longer exists — see the registration note below.
+```
+
+**2. `kanban.CardItem` `id=713`** (section `test_plan`, order `0`). Current:
+
+```text
+100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
+```
+
+Replacement:
+
+```text
+100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the warning-free import surface are explicit.
+```
+
+The test survives under that name; only what it guards changed.
+
+**3. `kanban.CardItem` `id=715`** (section `note`, order `12`) **and 4. `kanban.CardReference` `id=62`** (`source_card_id=39`, `target_card_id=47`), field `raw_text`. Current text of **both** (the `{{card_ref:1}}` placeholder is FK-backed — keep it verbatim):
+
+```text
+The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `{{card_ref:1}}` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
+```
+
+Replacement for **both**:
+
+```text
+The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` was suppressed at the definition site at `0.0.6` (tight `warnings.catch_warnings()` filter), keeping the package import surface clean. `{{card_ref:1}}` replaced that suppression: `BigInt` is now a bare `NewType` bound to a `ScalarDefinition` built from Strawberry's no-warning `strawberry.scalar(name=...)` overload and registered through the package scalar map that the public `strawberry_config()` factory merges into a consumer's `strawberry.Schema(...)` — the real public-API change this note anticipated, not an internal-only refactor.
+```
+
+Edit through the Django ORM against `examples/fakeshop/db.sqlite3` (never raw SQL — `post_save` writes the side rows the render needs), then regenerate both rendered surfaces:
+
+```shell
+uv run python scripts/build_kanban_md.py
+uv run python scripts/build_kanban_html.py
+```
+
+Verify by re-running the occurrence count: `awk` over the `DONE-017-0.0.6` card range piped through `grep -o 'suppress[a-z]*'` must report **3 occurrences**, all past-tense inside the amended sentences, and zero occurrences of `is suppressed at the definition site`. `KANBAN.html`'s hand-edited Vue shell is untouched by the regenerate; only its data block moves.
 
 ### MF-2 — `CHANGELOG.md`'s `[0.0.6]` entry labels this card with its pre-renumber number
 

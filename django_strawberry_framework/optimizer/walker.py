@@ -62,7 +62,6 @@ _with_runtime_prefix = with_runtime_prefix
 # Compatibility aliases for private imports that predate the connection
 # planner extraction. The implementations now live with their owner.
 _concrete_order_columns = _nested_planner._concrete_order_columns
-_connection_window_slice = _nested_planner._connection_window_slice
 _connection_window_slice_from_arguments = _nested_planner._connection_window_slice_from_arguments
 _extend_only_projection = _nested_planner._extend_only_projection
 _keyset_cursor_context = _nested_planner._keyset_cursor_context
@@ -284,14 +283,16 @@ def _resolve_field_map(
     model: type[models.Model],
     *,
     source_type: type | None = None,
-) -> tuple[type | None, Any | None, dict[str, Any]]:
+) -> tuple[type | None, Any | None, dict[str, FieldMeta]]:
     """Return ``(registered DjangoType, definition, field_map)`` for ``model``.
 
     Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
     for the ``DjangoType`` subclass; falls back to a fresh
-    ``model._meta.get_fields()`` walk when the model has no registered
+    ``model._meta.get_fields()`` walk stamped through
+    ``FieldMeta.from_django_field`` when the model has no registered
     definition. Centralizes the brittle Django-private ``_meta`` access
-    used by the walker.
+    used by the walker. Fallback keys stay raw ``f.name``;
+    ``_resolve_selection_target`` already snake_cases the lookup side.
 
     ``source_type`` carries the root resolver's actual return type when
     the call comes from ``plan_optimizations`` - that type's field_map /
@@ -301,30 +302,18 @@ def _resolve_field_map(
     which routes through ``registry.get(model)`` and resolves nested
     relation targets to the primary (the spec-018 nested contract).
 
-    DUAL CONTRACT (read before consuming the returned map): the values
-    are ``FieldMeta`` when the model has a registered ``DjangoType``, but
-    raw Django field objects (from ``model._meta.get_fields()``) on the
-    fallback path when it does not. ``name`` and ``is_relation`` are
-    guaranteed on both shapes (``field_meta.py::_DjangoFieldLike``) and are
-    read directly; any other attribute is read directly only where both
-    shapes carry it, and a ``FieldMeta``-only attribute must never be read
-    off this map without a ``getattr(..., default)``. That rule, not a
-    blanket ``getattr`` discipline, is what lets the two shapes coexist
-    safely. Treat the values as ``FieldMeta | Any`` until the
-    registry-coverage gate lands.
-    ``types/resolvers.py::_field_meta_for_resolver`` shares the policy --
-    prefer the canonical definition-backed metadata, fall back when it is
-    unreachable -- but not this dual return shape: it returns a
-    ``FieldMeta`` unconditionally, so its callers read every attribute
-    directly. Keep the policy in sync; the shapes differ by design.
+    Map values are ``FieldMeta`` on both paths.
+    ``types/resolvers.py::_field_meta_for_resolver`` shares the same
+    policy and the same shape -- prefer the canonical definition-backed
+    metadata, fall back when it is unreachable -- so callers on either
+    site read every attribute directly. Keep the policy in sync.
     """
     type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None
-    field_map = (
-        definition.field_map
-        if definition is not None
-        else {f.name: f for f in model._meta.get_fields()}
-    )
+    if definition is not None:
+        field_map = definition.field_map
+    else:
+        field_map = {f.name: FieldMeta.from_django_field(f) for f in model._meta.get_fields()}
     return type_cls, definition, field_map
 
 
@@ -339,7 +328,7 @@ def _resolve_relation_target(
         if resolved is not None:
             target_definition, _model_field = resolved
             return target_definition.origin
-    related_model = getattr(django_field, "related_model", None)
+    related_model = django_field.related_model
     if related_model is None:
         return None
     return registry.get(related_model)
@@ -543,11 +532,7 @@ def _walk_selections(
                 if id_attr == "pk":
                     id_attr = model._meta.pk.attname
                 db_field = next(
-                    (
-                        f
-                        for f in field_map.values()
-                        if f.name == id_attr or getattr(f, "attname", None) == id_attr
-                    ),
+                    (f for f in field_map.values() if f.name == id_attr or f.attname == id_attr),
                     None,
                 )
                 # ``enable_only`` is the G2 gate (spec-035 Decision 4): under a
@@ -562,7 +547,7 @@ def _walk_selections(
                     # still lands on the FK column ``user_id`` instead of
                     # the relation name, which would drag the related row
                     # back via ``.only("user")``.
-                    column = getattr(db_field, "attname", None) or id_attr
+                    column = db_field.attname or id_attr
                     append_unique(plan.only_fields, f"{prefix}{column}")
             continue
         if not django_field.is_relation:
@@ -729,9 +714,9 @@ def _plan_select_relation(
         resolver_identities,
         enable_only=enable_only,
     )
-    target_pk_name = _target_pk_name(django_field)
+    target_pk_name = django_field.target_pk_name
     if (
-        _can_elide_fk_id(django_field)
+        django_field.fk_id_elision_eligible
         and not _target_has_custom_get_queryset(target_type)
         and not _has_custom_id_resolver(target_type, target_pk_name)
         and _selected_scalar_names(sel.selections, django_field.related_model, info=info)
@@ -836,7 +821,7 @@ def _record_relation_access(
 ) -> None:
     """Record the shared connector and resolver metadata for a relation.
 
-    MUST run before ``_can_elide_fk_id`` fires in ``_plan_select_relation``:
+    MUST run before the FK-id elision check in ``_plan_select_relation``:
     the FK ``attname`` appended to ``plan.only_fields`` here is the column
     Django still needs to materialise the relation when the JOIN is elided
     (``_resolve_id_default`` reads ``obj.<fk>_id`` directly instead of
@@ -850,7 +835,7 @@ def _record_relation_access(
     append stays unconditional so strictness still sees the planned
     relation regardless of operation (Decision 4 / edge case line 315).
     """
-    attname = getattr(django_field, "attname", None)
+    attname = django_field.attname
     if enable_only and attname is not None:
         append_unique(plan.only_fields, f"{prefix}{attname}")
     append_unique_many(plan.planned_resolver_keys, resolver_identities)
@@ -1171,27 +1156,6 @@ def _selected_scalar_names(
             return None
         scalar_names.add(django_name)
     return scalar_names
-
-
-def _can_elide_fk_id(field: Any) -> bool:
-    """Return ``True`` when ``field`` stores the related object's id on the source row.
-
-    ``field`` is ``FieldMeta | Any`` per the ``_resolve_field_map`` dual
-    contract. Delegates to ``FieldMeta.can_elide_fk_id`` so the walker and
-    the stamp owner share ONE dual-contract reader (and one rebuild path
-    through ``_from_field_shape`` for unstamped raw Django fields).
-    """
-    return FieldMeta.can_elide_fk_id(field)
-
-
-def _target_pk_name(field: Any) -> str | None:
-    """Return the related model's concrete primary-key field name.
-
-    Dual-contract adapter over ``FieldMeta.target_pk_name_of``: trusts a
-    stamped ``FieldMeta.target_pk_name`` including legitimate ``None``, and
-    uses the defensive model helper for raw Django fields.
-    """
-    return FieldMeta.target_pk_name_of(field)
 
 
 def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None) -> bool:

@@ -610,11 +610,10 @@ def has_composite_pk(model: type[models.Model]) -> bool:
     id-only child selection from the source row's local FK column) must fail
     closed for a composite primary key: the source-row ``attname`` carries a
     single-column id, but the target's ``pk`` is a tuple, so eliding would
-    compare the wrong shapes and surface wrong data. Single-sited here so the
-    optimizer's two elision deciders - ``FieldMeta.from_django_field`` (which
-    precomputes the ``fk_id_elision_eligible`` slot) and the walker's raw-field
-    fallback (``optimizer/walker.py::_can_elide_fk_id``) - cannot disagree on
-    what counts as composite.
+    compare the wrong shapes and surface wrong data. Single-sited here so
+    ``FieldMeta.from_django_field`` stamps ``fk_id_elision_eligible`` the
+    same way for registered types and the walker's unregistered fallback
+    map.
     """
     try:
         meta = model._meta

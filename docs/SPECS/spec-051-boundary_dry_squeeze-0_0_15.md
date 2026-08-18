@@ -187,8 +187,10 @@ independently verifiable; the weight is breadth, not depth.
   - [ ] C13 `editable_input_fields` onto `resolve_effective_fields`
         ([Decision 10](#decision-10--editable_input_fields-rides-the-shared-spine-strictness-tightening-accepted)).
 - [ ] **Slice 4 — Contract-level DRY (WP-D, ~150 lines + doc debt)**
-  - [ ] D1 single-window planner scheme through `_divergent_key_windows`.
-  - [ ] D2 walker `_resolve_field_map` dual contract retired (FieldMeta
+  - [x] D1 single-window planner scheme through `_divergent_key_windows`
+        (payload map parameter; `{None: arguments}` on the shared-window
+        path).
+  - [x] D2 walker `_resolve_field_map` dual contract retired (FieldMeta
         fallback map).
   - [ ] D3 model relation decoder re-expressed over the shared spine.
 - [ ] **Slice 5 — Docs fold-in + the joint `0.0.15` cut + card wrap**
@@ -592,8 +594,16 @@ referenced symbols. Key parameterize-don't-average obligations, restated:
   the model-less relation core parameterizes the raw-pk-fallback vs
   require-primary divergence.
 - D1: Decision-4/5/8 strictness accounting (malformed keys record
-  identities; fallbacks must not), per-shape log reasons, and the `last: 0`
-  quirk survive byte-for-byte.
+  identities; fallbacks must not), per-shape log *reasons*, and the
+  `last: 0` quirk survive. Log *keys* thread
+  `[resp_key] if resp_key is not None else _response_keys(sel)` — a naive
+  `[None]` logs the literal. The helper takes the payload map as a
+  parameter; the shared-window caller passes `{None: arguments}` because
+  unmerged selections never grew `_optimizer_response_key_arguments`. One
+  accepted debug-log delta: the outer single-window sidecar gate used to
+  run before `hint_is_skip`, so sidecar + SKIP logged "sidecar arguments";
+  post-fold it returns silently at SKIP (plan output identical, matching
+  today's divergent order).
 - D3: the raw-pk existence fallback (`_relation_existence_error`,
   default-manager check) and the `_relation_membership_error`
   declared-vs-queried-pks contract survive as threaded parameters.
@@ -632,6 +642,12 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   (`SimpleNamespace` fields) — the FieldMeta-ized fallback map needs those
   doubles updated in the same change, and
   `nested_planner._raw_relation_field`'s re-fetch path re-verified.
+- **D1 sidecar + SKIP log delta**: folding the single-window arm through
+  `_divergent_key_windows` moves the sidecar gate after `hint_is_skip` /
+  `resolver_identities_for` / `related_model is None`. Sidecar + SKIP on
+  the shared-window path now returns silently at SKIP instead of logging
+  "sidecar arguments". Plan output is identical (fully unplanned); the
+  order now matches the divergent scheme. Documented, not preserved.
 - **B1 dead-delegate deletion** is gated on the cookbook-parity check (see
   Risks): if the delegates are documented consumer surface, they are
   absorbed (single implementation, kept methods) instead of deleted.

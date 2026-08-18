@@ -241,8 +241,8 @@ def test_from_django_field_rejects_non_django_input():
     """Inputs missing 'name'/'is_relation' raise OptimizerError at the call site.
 
     Without the guard, the failure mode would be ``AttributeError`` deep
-    inside the optimizer walker's class-creation path. The typed
-    exception makes the contract violation explicit.
+    inside the optimizer walk. The typed exception makes the contract
+    violation explicit at stamp time.
     """
 
     class NotAField:
@@ -465,69 +465,25 @@ def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
 
 
 # ---------------------------------------------------------------------------
-# Dual-contract FieldMeta | raw Django field readers (walker field_map)
+# Walker unregistered fallback stamps FieldMeta
 # ---------------------------------------------------------------------------
 
 
-def test_can_elide_fk_id_reads_stamped_field_meta_and_raw_django_field():
-    """``FieldMeta.can_elide_fk_id`` is the single dual-contract elision reader."""
-    cat_field = Item._meta.get_field("category")
-    stamped = FieldMeta.from_django_field(cat_field)
-    assert FieldMeta.can_elide_fk_id(stamped) is True
-    assert FieldMeta.can_elide_fk_id(cat_field) is True
+def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name():
+    """Unregistered fallback is ``dict[str, FieldMeta]`` keyed by raw ``f.name``."""
+    from django_strawberry_framework.optimizer.walker import _resolve_field_map
 
-    items_field = next(f for f in Category._meta.get_fields() if f.name == "items")
-    reverse = FieldMeta.from_django_field(items_field)
-    assert FieldMeta.can_elide_fk_id(reverse) is False
-    assert FieldMeta.can_elide_fk_id(items_field) is False
-
-
-def test_can_elide_fk_id_reads_stamped_duck_typed_shape():
-    """A non-FieldMeta stamp carrying a non-None ``fk_id_elision_eligible`` is trusted.
-
-    Duck-typed stamps that are not ``FieldMeta`` (nor raw Django fields) short-
-    circuit on the stamped bool rather than rebuilding through
-    ``_from_field_shape``.
-    """
-    from types import SimpleNamespace
-
-    assert FieldMeta.can_elide_fk_id(SimpleNamespace(fk_id_elision_eligible=True)) is True
-    assert FieldMeta.can_elide_fk_id(SimpleNamespace(fk_id_elision_eligible=False)) is False
-
-
-def test_target_pk_name_of_reads_stamped_duck_typed_shape():
-    """A non-FieldMeta stamp carrying a non-None ``target_pk_name`` is trusted."""
-    from types import SimpleNamespace
-
-    assert FieldMeta.target_pk_name_of(SimpleNamespace(target_pk_name="uuid")) == "uuid"
-
-
-def test_target_pk_name_of_trusts_stamped_none_on_field_meta():
-    """Stamped ``target_pk_name=None`` must not fall through to ``related_model._meta``.
-
-    A lightweight related-model stand-in (resolver-path / fabricated shapes)
-    can leave ``target_pk_name`` stamped ``None`` while still carrying a
-    ``related_model`` object. The dual-contract reader must return that
-    ``None`` rather than re-raise on a missing ``_meta``.
-    """
-    from types import SimpleNamespace
-
-    stand_in = SimpleNamespace()  # no ``_meta``
-    stamped = FieldMeta(
-        name="owner",
-        is_relation=True,
-        related_model=stand_in,  # type: ignore[arg-type]
-        target_pk_name=None,
-        fk_id_elision_eligible=False,
-    )
-    assert FieldMeta.target_pk_name_of(stamped) is None
-
-
-def test_target_pk_name_of_reads_raw_django_field_defensively():
-    """Raw Django fields resolve the related model's concrete PK name."""
-    cat_field = Item._meta.get_field("category")
-    assert FieldMeta.target_pk_name_of(cat_field) == "id"
-    assert FieldMeta.target_pk_name_of(FieldMeta.from_django_field(cat_field)) == "id"
+    type_cls, definition, field_map = _resolve_field_map(Item)
+    assert type_cls is None
+    assert definition is None
+    assert set(field_map) == {f.name for f in Item._meta.get_fields()}
+    assert all(isinstance(value, FieldMeta) for value in field_map.values())
+    cat = field_map["category"]
+    assert cat.name == "category"
+    assert cat.is_relation is True
+    assert cat.related_model is Category
+    assert cat.fk_id_elision_eligible is True
+    assert cat.target_pk_name == "id"
 
 
 def test_mti_child_type_renders_parent_link_non_null():

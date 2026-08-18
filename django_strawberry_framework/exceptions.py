@@ -313,11 +313,12 @@ class OptimizerError(DjangoStrawberryFrameworkError):
 
     Raise sites:
 
-        - Typed input-guard at construction: ``FieldMeta.from_django_field``
+        - Typed input-guard at stamp time: ``FieldMeta.from_django_field``
           rejects an input that is not a Django field descriptor (missing
-          ``name`` / ``is_relation``), converting an otherwise late
-          ``AttributeError`` into a typed, call-site failure naming the bad
-          input.
+          ``name`` / ``is_relation``), converting a malformed descriptor
+          into a typed failure at ``DjangoType`` construction or the
+          walker's unregistered fallback map-build rather than a late
+          ``AttributeError`` mid-walk.
         - Strictness-``"raise"`` N+1 guard: fires when optimizer
           ``strictness`` is ``"raise"`` and a request reaches an unplanned
           relation that would lazy-load. Covers both the list-relation

@@ -11,7 +11,7 @@ cannot leak partial directives into the walker's parent plan.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -816,16 +816,19 @@ def _coerce_pagination_int(value: Any) -> Any:
         return value
 
 
-def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool] | None:
-    """Resolve the window ``(offset, limit, reverse)`` from a connection selection.
+def _connection_window_slice_from_arguments(
+    arguments: dict[str, Any],
+    info: Any,
+) -> tuple[int, int | None, bool] | None:
+    """Resolve the window ``(offset, limit, reverse)`` from one argument payload.
 
     The planner-side adapter over the shared
     ``utils/connections.py::derive_connection_window_bounds`` contract (so the
-    plan-time and resolve-time windows can never drift): it reads the RESOLVED
-    ``first`` / ``last`` / ``before`` / ``after`` values off ``sel.arguments``
-    (converted selections already resolved variable references through
-    ``info.variable_values``), applies the walker-only int coercion, resolves
-    ``max_results`` from the Strawberry schema config via
+    plan-time and resolve-time windows can never drift). Both window schemes
+    iterate this: the shared-window scheme with one payload, the per-key
+    scheme with each response key's recorded payload
+    (``_optimizer_response_key_arguments``). Applies the walker-only int
+    coercion, resolves ``max_results`` from the Strawberry schema config via
     ``_relay_max_results_from_info`` (the walker's graphql-core ``info.schema``
     has no ``.config`` the engine could read), and hands those to the shared
     helper, which owns the ``reverse`` / ``limit`` rule.
@@ -843,26 +846,6 @@ def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool
     Decision-6 fallback (no ``planned_resolver_keys`` entry, like the sidecar /
     distinct shapes) rather than the malformed-pagination ``None`` path that
     records the field as accounted-for (spec-033 Decision 5).
-    """
-    return _connection_window_slice_from_arguments(
-        getattr(sel, "arguments", None) or {},
-        info,
-    )
-
-
-def _connection_window_slice_from_arguments(
-    arguments: dict[str, Any],
-    info: Any,
-) -> tuple[int, int | None, bool] | None:
-    """``_connection_window_slice`` over one raw argument payload.
-
-    The per-payload entry point the divergent-alias scheme iterates: each
-    response key's recorded argument payload
-    (``_optimizer_response_key_arguments``) resolves its OWN window through
-    the same shared-contract adapter, so per-key windows can never drift from
-    the merged-selection window the single-window scheme derives. Same
-    coercion, same error contract (``None`` on malformed pagination;
-    ``UnwindowableConnection`` propagates).
     """
     # ``first`` / ``last`` from an inline GraphQL Int LITERAL arrive as the raw
     # token STRING (``convert_value`` returns ``node.value`` and graphql-core
@@ -972,31 +955,40 @@ def _keyset_window_slice_from_arguments(
 
 
 def _divergent_key_windows(
-    sel: Any,
+    response_key_arguments: Mapping[str | None, dict[str, Any]],
     info: Any,
     keyset_context: tuple[tuple[Any, ...], str] | None = None,
 ) -> tuple[
-    list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]],
-    list[str],
-    list[tuple[str, str]],
+    list[tuple[str | None, tuple[int, int | None, bool], KeysetSeek | None]],
+    list[str | None],
+    list[tuple[str | None, str]],
 ]:
-    """Resolve one window per response key for a divergent-alias connection.
+    """Resolve one window per payload for a nested connection selection.
 
-    The divergent scheme's pure window pass: iterate the merged selection's
-    per-response-key argument payloads (``_optimizer_response_key_arguments``)
-    and run the ARGUMENTS-DERIVED fallback gates per key - each alias is its
-    own windowed fetch (the graph-node model: one batched children query per
-    response key), so one alias's fallback shape must not drag its siblings
+    The arguments-derived window pass for both schemes. The caller supplies
+    the payload map: per-response-key arguments
+    (``_optimizer_response_key_arguments``) when aliases diverge, or
+    ``{None: arguments}`` for the shared-window scheme (unmerged selections
+    never grow that attribute, so this helper must not read it off ``sel``).
+
+    Iterate the map and run the ARGUMENTS-DERIVED fallback gates per payload
+    - each entry is its own windowed fetch (the graph-node model: one batched
+    children query per response key, or one shared fetch when the key is
+    ``None``), so one alias's fallback shape must not drag its siblings
     per-parent:
 
     - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
       (per-parent, strictness-visible), siblings unaffected;
     - ``UnwindowableConnection`` (``after`` + ``last``; inverted offset interval;
       every backward keyset shape) and the reversed ``last: 0`` quirk -> likewise
-      that key alone falls back per-parent;
+      that key alone falls back per-parent (a planned reversed ``last: 0``
+      window would come back empty; ``_resolve_from_window`` keeps its own
+      ``last: 0`` guard as the defensive tail for direct callers);
     - malformed pagination -> that key is returned in ``malformed`` so the
       caller records ONLY its identities (per-key error locality: the
-      per-parent pipeline raises that alias's own validation error);
+      per-parent pipeline raises that alias's own validation error). A
+      ``None`` key is the shared-window scheme: the caller records every
+      identity, matching the pre-fold single-window write;
     - otherwise the key's ``(offset, limit, reverse)`` window joins
       ``planned``.
 
@@ -1008,12 +1000,12 @@ def _divergent_key_windows(
     Returns ``(planned, malformed, fallbacks)``; each fallback carries its
     stable reason for the caller's debug log. Relation-level gates (hint
     SKIP, join windowability, child-queryset safety) stay whole-relation in
-    ``_plan_connection_relation``.
+    ``plan_connection_relation``.
     """
-    planned: list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]] = []
-    malformed: list[str] = []
-    fallbacks: list[tuple[str, str]] = []
-    for resp_key, key_arguments in sel._optimizer_response_key_arguments.items():
+    planned: list[tuple[str | None, tuple[int, int | None, bool], KeysetSeek | None]] = []
+    malformed: list[str | None] = []
+    fallbacks: list[tuple[str | None, str]] = []
+    for resp_key, key_arguments in response_key_arguments.items():
         if has_connection_sidecar_kwargs(key_arguments):
             fallbacks.append((resp_key, "sidecar arguments"))
             continue
@@ -1147,20 +1139,10 @@ def plan_connection_relation(
         # shapes. A silent first-payload-wins window here served the sibling
         # alias a wrong page.
         return NestedConnectionPlanResult(plan=plan)
-    # Divergent aliased arguments select the PER-KEY scheme (one window per
-    # response key); its arguments-derived gates - the sidecar check
-    # included - run per key inside ``_divergent_key_windows``, so the merged
-    # primary-payload sidecar gate below applies only to the single-window
-    # scheme (where every alias shares one payload by definition).
-    arguments = getattr(sel, "arguments", None) or {}
+    # Scheme selector only (payload map + identity writes). Arguments-derived
+    # gates including sidecar run per payload inside ``_divergent_key_windows``,
+    # after the relation-level SKIP / identities / related_model gates below.
     divergent = aliased_arguments_diverge(sel)
-    if not divergent and has_connection_sidecar_kwargs(arguments):
-        _log_connection_fallback(
-            relation_field_name,
-            _response_keys(sel),
-            "sidecar arguments",
-        )
-        return NestedConnectionPlanResult(plan=plan)
     hints_map = resolve_optimizer_hints(definition)
     if hint_is_skip(hints_map.get(relation_field_name)):
         return NestedConnectionPlanResult(plan=plan)
@@ -1189,34 +1171,41 @@ def plan_connection_relation(
     # (e/f) Slice window(s) from the selection's resolved pagination arguments.
     # Pure (mutates nothing), so resolve BEFORE the child build - a malformed
     # slice must not leave child resolver keys / cacheable flips on the parent
-    # plan. ``keyed_windows`` is the scheme-agnostic hand-off: the divergent
-    # scheme yields one ``(response_key, window, seek)`` per plannable alias
-    # (each gets its own per-key ``to_attr``); the single-window scheme yields
-    # one ``(None, window, seek)`` entry (the legacy shared ``to_attr``,
-    # byte-identical to the pre-nested-window path by construction). ``seek`` is the
+    # plan. Both schemes feed ``_divergent_key_windows``: per-key payloads when
+    # aliases diverge, ``{None: arguments}`` for the shared window (unmerged
+    # selections never grew ``_optimizer_response_key_arguments``).
+    # ``keyed_windows`` stays the scheme-agnostic hand-off: ``None`` keeps the
+    # legacy shared ``to_attr``; a real key namespaces it. ``seek`` is the
     # decoded keyset value seek, ``None`` under the offset vocabulary and for
     # keyset first pages alike.
-    keyed_windows: list[tuple[str | None, tuple[int, int | None, bool], Any]]
-    if divergent:
-        planned_windows, malformed_keys, fallback_keys = _divergent_key_windows(
-            sel,
-            info,
-            keyset_context,
+    keyed_windows, malformed_keys, fallback_keys = _divergent_key_windows(
+        (
+            sel._optimizer_response_key_arguments
+            if divergent
+            else {None: getattr(sel, "arguments", None) or {}}
+        ),
+        info,
+        keyset_context,
+    )
+    for fallback_key, reason in fallback_keys:
+        _log_connection_fallback(
+            relation_field_name,
+            [fallback_key] if fallback_key is not None else _response_keys(sel),
+            reason,
         )
-        keyed_windows = list(planned_windows)
-        for fallback_key, reason in fallback_keys:
-            _log_connection_fallback(relation_field_name, [fallback_key], reason)
-        if malformed_keys:
-            _log_connection_fallback(
-                relation_field_name,
-                malformed_keys,
-                "malformed pagination",
-            )
-            # Malformed pagination, per key (Decision 4 step f): that alias
-            # resolves per-parent and raises its OWN cursor/pagination
-            # validation error, so record ONLY its identities as accounted-for
-            # (strictness must not preempt the error under ``"raise"``;
-            # spec-033 Decision 8). Sibling keys plan independently below.
+    if malformed_keys:
+        _log_connection_fallback(
+            relation_field_name,
+            malformed_keys if divergent else _response_keys(sel),
+            "malformed pagination",
+        )
+        # Malformed pagination (Decision 4 step f / spec-033 Decision 8): emit
+        # NO window so the connection pipeline raises at the field, but RECORD
+        # the identities so strictness does not preempt that error. Per-key
+        # under the divergent scheme (that alias's own error locality; siblings
+        # plan independently); every identity for the shared window (``None``
+        # is not a runtime_path suffix, so the filter would drop them all).
+        if divergent:
             append_unique_many(
                 plan.planned_resolver_keys,
                 _identities_for_response_keys(
@@ -1225,74 +1214,10 @@ def plan_connection_relation(
                     malformed_keys,
                 ),
             )
-        if not keyed_windows:
-            return NestedConnectionPlanResult(plan=plan)
-    else:
-        try:
-            if keyset_context is not None:
-                columns, fingerprint = keyset_context
-                keyed = _keyset_window_slice_from_arguments(
-                    arguments,
-                    info,
-                    columns=columns,
-                    fingerprint=fingerprint,
-                )
-                window = keyed[0] if keyed is not None else None
-                seek = keyed[1] if keyed is not None else None
-            else:
-                window = _connection_window_slice(sel, info)
-                seek = None
-        except UnwindowableConnection:
-            _log_connection_fallback(
-                relation_field_name,
-                _response_keys(sel),
-                "unsupported pagination window",
-            )
-            # (b) A valid offset interval the SQL window cannot represent
-            # (``after`` + ``last`` or inverted ``after`` + ``before``) - and,
-            # for a keyset target, EVERY backward shape (``last`` / ``before:``;
-            # the v1 keyset window is forward-only). Fall back per-parent like
-            # the other Decision-6 shapes (sidecar, distinct). Stay FULLY
-            # unplanned so the per-parent access remains strictness-visible;
-            # unlike malformed pagination, this query resolves normally there.
-            return NestedConnectionPlanResult(plan=plan)
-        if window is None:
-            _log_connection_fallback(
-                relation_field_name,
-                _response_keys(sel),
-                "malformed pagination",
-            )
-            # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
-            # connection pipeline runs per-parent and raises its OWN cursor/pagination
-            # validation error at the field. But RECORD the resolver identities so the
-            # strictness contract treats the field as accounted-for and does
-            # NOT preempt that error with a spurious "Unplanned N+1" OptimizerError
-            # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
-            # other Decision-6 fallback shapes (sidecar, hint SKIP,
-            # distinct, unwindowable partition) stay fully unplanned on purpose so
-            # strictness CAN see them as real per-parent accesses. A keyset
-            # target reaches this path for an invalid / tampered / wrong-order
-            # cursor too - the codec raises the SAME GraphQLError per-parent.
+        else:
             append_unique_many(plan.planned_resolver_keys, resolver_identities)
-            return NestedConnectionPlanResult(plan=plan)
-        offset, limit, reverse = window
-        if reverse and limit == 0:
-            _log_connection_fallback(
-                relation_field_name,
-                _response_keys(sel),
-                "last: 0",
-            )
-            # (b) ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
-            # which is the WHOLE list - only the per-parent pipeline reproduces
-            # that quirk, so a planned reversed window would always come back
-            # empty and be discarded by ``_resolve_from_window``'s fallback
-            # return. Plan nothing: no dead
-            # window query riding every request, and no resolver keys - the
-            # per-parent fallback stays strictness-visible like the other
-            # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own
-            # ``last: 0`` guard as the defensive tail for direct callers.
-            return NestedConnectionPlanResult(plan=plan)
-        keyed_windows = [(None, window, seek)]
+    if not keyed_windows:
+        return NestedConnectionPlanResult(plan=plan)
 
     # (g, partition) also pure; classify the join before the child build so an
     # unsupported relation kind (single-valued forward, or a shape with no

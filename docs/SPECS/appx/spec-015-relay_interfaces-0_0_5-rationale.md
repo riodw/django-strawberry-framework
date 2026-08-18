@@ -904,8 +904,7 @@ Bears on [Decision 7][spec-015-decision-7]. Its FK-id-elision invariant cited
 `django_strawberry_framework/types/resolvers.py::_is_fk_id_elided`, a symbol that does not exist at
 `HEAD` and did not exist when the reconciliation ran — it was inherited unexamined from the
 pre-reconciliation text, in the one Decision the pass otherwise rewrote. The resolver-side executor
-is `::_build_fk_id_stub` (the walker-side predicate, `optimizer/walker.py::_can_elide_fk_id`, was
-always correct), and the citation now names it.
+is `::_build_fk_id_stub` (the walker reads the stamped `FieldMeta.fk_id_elision_eligible` slot), and the citation now names it.
 
 ### Decision 3's injection-loop fence did not match the shipped guard
 

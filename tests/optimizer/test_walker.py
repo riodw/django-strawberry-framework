@@ -24,7 +24,7 @@ from django.db.models import Prefetch
 from graphql import OperationType
 
 from django_strawberry_framework import OptimizerHint
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.nested_planner import _connector_only_field
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -377,6 +377,18 @@ def test_plan_select_relation_with_missing_related_model_is_not_elided():
     assert plan.select_related == ("relation",)
     assert plan.only_fields == ("relation_id",)
     assert plan.fk_id_elisions == ()
+
+
+def test_unregistered_field_map_rejects_malformed_descriptor():
+    """Unregistered planning stamps via ``from_django_field`` and fails typed-and-early."""
+
+    class FakeModel:
+        pass
+
+    FakeModel._meta = SimpleNamespace(get_fields=lambda: [SimpleNamespace(name="x")])
+
+    with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
+        plan_optimizations([_sel("x")], FakeModel)
 
 
 def test_selected_scalar_names_returns_none_without_model():
@@ -3396,7 +3408,7 @@ def test_windowed_prefetch_queryset_carries_deterministic_order():
         registry.clear()
 
 
-def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
+def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog):
     """A malformed ``after:`` cursor emits NO window but RECORDS the resolver key.
 
     Error-locality contract (spec-033 Decision 4 step f / Decision 8): the
@@ -3405,10 +3417,14 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
     resolver identity IS recorded so the strictness check does not preempt
     that error with a spurious "Unplanned N+1" under ``"raise"``. This is the
     distinction from the other Decision-6 fallbacks (sidecar / distinct / hint),
-    which stay fully unplanned so strictness CAN flag them.
+    which stay fully unplanned so strictness CAN flag them. The debug log names
+    the real response key, never the shared-window ``None`` payload key.
     """
+    from django_strawberry_framework.optimizer import logger
+
     registry.clear()
     try:
+        caplog.set_level("DEBUG", logger=logger.name)
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
         plan = plan_optimizations(
@@ -3426,6 +3442,12 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
         assert plan.prefetch_related == ()
         # Recorded so strictness stays silent and the pipeline owns the error.
         assert len(plan.planned_resolver_keys) >= 1
+        assert any(
+            "response key 'booksConnection'" in record.message
+            and "(malformed pagination)" in record.message
+            for record in caplog.records
+        )
+        assert not any("response key None" in record.message for record in caplog.records)
     finally:
         registry.clear()
 
@@ -3464,6 +3486,84 @@ def test_fallback_not_planned_sidecar_input(sidecar):
         )
         assert plan.prefetch_related == ()
         assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_divergent_key_windows_shared_payload_uses_none_key():
+    """The shared-window scheme feeds ``{None: arguments}``; unmerged sels have no per-key map."""
+    import base64
+
+    from django_strawberry_framework.optimizer.nested_planner import _divergent_key_windows
+
+    info = _fake_info()
+
+    planned, malformed, fallbacks = _divergent_key_windows({None: {"first": 2}}, info)
+    assert planned == [(None, (0, 2, False), None)]
+    assert malformed == []
+    assert fallbacks == []
+
+    planned, malformed, fallbacks = _divergent_key_windows(
+        {None: {"first": 2, "filter": object()}},
+        info,
+    )
+    assert planned == []
+    assert malformed == []
+    assert fallbacks == [(None, "sidecar arguments")]
+
+    planned, malformed, fallbacks = _divergent_key_windows({None: {"last": 0}}, info)
+    assert planned == []
+    assert malformed == []
+    assert fallbacks == [(None, "last: 0")]
+
+    planned, malformed, fallbacks = _divergent_key_windows(
+        {None: {"first": 3, "after": "not-a-valid-cursor"}},
+        info,
+    )
+    assert planned == []
+    assert malformed == [None]
+    assert fallbacks == []
+
+    after = base64.b64encode(b"arrayconnection:1").decode()
+    planned, malformed, fallbacks = _divergent_key_windows(
+        {None: {"last": 2, "after": after}},
+        info,
+    )
+    assert planned == []
+    assert malformed == []
+    assert fallbacks == [(None, "unsupported pagination window")]
+
+
+def test_shared_window_sidecar_logs_response_keys_not_none(caplog):
+    """Shared-window sidecar fallback logs the real response keys, never ``None``."""
+    from django_strawberry_framework.optimizer import logger
+
+    registry.clear()
+    try:
+        caplog.set_level("DEBUG", logger=logger.name)
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3, "filter": object()},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+        assert any(
+            "response key 'booksConnection'" in record.message
+            and "(sidecar arguments)" in record.message
+            for record in caplog.records
+        )
+        assert not any("response key None" in record.message for record in caplog.records)
+        assert not any("response key 'None'" in record.message for record in caplog.records)
     finally:
         registry.clear()
 
@@ -4030,6 +4130,57 @@ def test_fallback_not_planned_skip_hint():
         )
         assert plan.prefetch_related == ()
         assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog):
+    """SKIP on a sidecar-carrying shared-window connection stays silent.
+
+    Relation-level SKIP runs before the arguments-derived sidecar gate, so
+    this shape returns unplanned at SKIP with no ``sidecar arguments`` debug
+    log. Plan output is identical to the pre-fold outer sidecar gate; only
+    the diagnostic differs (spec-051 D1).
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+    from django_strawberry_framework.optimizer import logger
+
+    registry.clear()
+    try:
+        caplog.set_level("DEBUG", logger=logger.name)
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+                optimizer_hints = {"books": OptimizerHint.SKIP}
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3, "filter": object()},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+        assert not any("(sidecar arguments)" in record.message for record in caplog.records)
     finally:
         registry.clear()
 

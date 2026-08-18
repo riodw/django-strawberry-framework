@@ -1017,8 +1017,9 @@ class TestApplyWindowPagination:
         """``reverse=True, limit=None`` annotates the reversed window but adds no bound.
 
         Guards that the limit-vs-``None`` decision lives in the caller
-        (``_connection_window_slice`` passes the literal ``last`` for the reverse
-        branch); ``apply_window_pagination`` itself still no-ops on ``None``.
+        (``_connection_window_slice_from_arguments`` passes the literal
+        ``last`` for the reverse branch); ``apply_window_pagination`` itself
+        still no-ops on ``None``.
         """
         qs = self._windowed(offset=0, limit=None, reverse=True)
         assert WINDOW_ROW_NUMBER_REVERSED in qs.query.annotations

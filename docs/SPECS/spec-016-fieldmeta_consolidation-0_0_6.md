@@ -4,7 +4,7 @@ Target release: `0.0.6` (per [KANBAN.md][kanban] card `DONE-016-0.0.6`).
 Status: shipped.
 Owner: package maintainer.
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-016-rationale]: which two commits the card actually shipped, why three of the reader sites this spec once named were stale on the day it shipped, what the two bounded exceptions to the single-source rule buy and what they cost, why the free relation classifiers are deliberately still called on raw Django fields, and every claim this spec once made and may no longer make.
+Deliberation and this spec's change record live in its companion [rationale file][spec-016-rationale]: which two commits the card actually shipped, why three of the reader sites this spec once named were stale on the day it shipped, what the remaining bounded exception to the single-source rule buys and what it costs, why the free relation classifiers are deliberately still called on raw Django fields, and every claim this spec once made and may no longer make.
 
 ## Card snapshot
 
@@ -22,17 +22,18 @@ Seven reader sites hold that rule, three in `types/` and four in `optimizer/`:
 - `django_strawberry_framework/types/base.py::_build_annotations` #"field_meta = field_map[snake_case(field.name)]" — reads the canonical entry and carries `relation_kind` / `nullable` onto the `PendingRelation` record.
 - `django_strawberry_framework/types/finalizer.py::finalize_django_types` #"field_meta = definition.field_map[snake_case(pending.field_name)]" — performs the canonical read and passes it explicitly into `django_strawberry_framework/types/converters.py::resolved_relation_annotation` via its keyword-only `field_meta` parameter. `resolved_relation_annotation` itself reads only `meta.is_many_side` / `meta.nullable` and derives nothing.
 - `django_strawberry_framework/types/resolvers.py::_field_meta_for_resolver` — resolves `registry.get_definition(parent_type)` then `definition.field_map.get(field.name)`; `::_make_relation_resolver` consumes the returned `FieldMeta`'s `relation_kind`, `is_many_side`, `related_model`, and `attname`. Production callers MUST pass `parent_type=cls`.
-- `django_strawberry_framework/optimizer/walker.py::_resolve_field_map` — resolves the registered `DjangoType` and returns `definition.field_map`. This is the walker's only field-map source; the brittle Django-private `_meta` access is centralized here.
+- `django_strawberry_framework/optimizer/walker.py::_resolve_field_map` — resolves the registered `DjangoType` and returns `definition.field_map`. When no type is registered, the same helper stamps `FieldMeta.from_django_field` over `model._meta.get_fields()`, keyed by raw `f.name`. Both paths yield `FieldMeta`; the brittle Django-private `_meta` access is centralized here.
 - `django_strawberry_framework/optimizer/walker.py::_resolve_optimizer_hints` — returns `definition.optimizer_hints or {}`. It is called by `::_walk_selections` and is **injected** into the nested-connection planner (`walker.py` #"resolve_optimizer_hints=_resolve_optimizer_hints" consumed at `django_strawberry_framework/optimizer/nested_planner.py` #"hints_map = resolve_optimizer_hints(definition)"), so the planner inherits the canonical read rather than opening a second source.
 - `django_strawberry_framework/optimizer/extension.py::_collect_schema_reachable_types` — gates schema reachability on `registry.get_definition(origin) is not None`.
 - `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.check_schema` — reads `definition.field_map` and `definition.optimizer_hints` for every schema-reachable type.
 
 ### Bounded exceptions to the single-source rule
 
-Two exceptions exist by design. Both are documented at their site, and neither is drift:
+One exception exists by design. It is documented at its site, and is not drift:
 
-- **The walker's dual contract.** `optimizer/walker.py::_resolve_field_map` returns `FieldMeta` values for a model with a registered `DjangoType` and **raw Django field objects** from a `model._meta.get_fields()` walk for a model without one. `name` and `is_relation` are guaranteed on both shapes (`optimizer/field_meta.py::_DjangoFieldLike`) and are read directly; any other attribute is read directly only where both shapes carry it, and a `FieldMeta`-only attribute must never be read off that map without a `getattr(..., default)`. That rule, not a blanket `getattr` discipline, is what makes the two shapes safe to coexist. The site's docstring is the standing statement of this contract. `types/resolvers.py::_field_meta_for_resolver` shares the policy (prefer the canonical definition-backed metadata, fall back when it is unreachable) but not this dual return shape: it returns a `FieldMeta` unconditionally, so its callers read every attribute directly.
 - **Test-double fallbacks.** `types/resolvers.py::_field_meta_for_resolver` falls back to `FieldMeta._from_field_shape(field, is_relation=True)` for a descriptor lacking `is_relation`, else to `FieldMeta.from_django_field(field)`; `types/converters.py::resolved_relation_annotation` re-derives via `FieldMeta.from_django_field` when its `field_meta` argument is `None`. Both paths exist ONLY for direct callers exercising cardinality branches without a registered `DjangoType`, and both produce a `FieldMeta` observably identical to the canonical builder's on the same descriptor. No production call site reaches either.
+
+Unregistered-model planning is not an exception: `optimizer/walker.py::_resolve_field_map` stamps the fallback map through `FieldMeta.from_django_field`, so walker callers read the same shape as the registered path. Join taxonomy still re-fetches the live descriptor via `optimizer/nested_planner.py::_raw_relation_field` because `FieldMeta` does not snapshot `remote_field` / `through`.
 
 ### Mirror retirement
 

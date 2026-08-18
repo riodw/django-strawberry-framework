@@ -37,10 +37,12 @@ also keeps ``import django_strawberry_framework.testing`` light - the
 from strawberry import relay
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import (
     _RELAY_NODE_GATE_INHERIT_TAIL,
     _RELAY_NODE_GATE_LEAD,
     STRING_GLOBALID_STRATEGIES,
+    DjangoType,
 )
 from django_strawberry_framework.types.relay import decode_global_id, encode_typename
 
@@ -56,8 +58,18 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     types, finalized non-Relay-Node types, and ``callable`` / ``custom``
     strategies (see the module docstring for the full contract).
     """
-    definition = getattr(type_cls, "__django_strawberry_definition__", None)
-    if definition is None:
+    try:
+        is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)
+        definition = getattr(type_cls, "__django_strawberry_definition__", None)
+        registered_definition = registry.get_definition(type_cls) if is_django_type else None
+        is_registered_own_definition = (
+            definition is not None
+            and definition is registered_definition
+            and getattr(definition, "origin", None) is type_cls
+        )
+    except BaseException:
+        is_registered_own_definition = False
+    if not is_registered_own_definition:
         raise ConfigurationError(
             f"global_id_for: {_safe_arg_repr(type_cls)} is not a registered "
             "DjangoType subclass; "

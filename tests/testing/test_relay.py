@@ -213,6 +213,22 @@ def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary(
         global_id_for(_HostileRepr(), 1)
 
 
+def test_global_id_for_rejects_inherited_or_stale_definitions():
+    """Only the active registry's own definition may mint a GlobalID."""
+    type_cls = _make_node_type("CategoryNode")
+    finalize_django_types()
+
+    class UnregisteredChild(type_cls):
+        pass
+
+    with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
+        global_id_for(UnregisteredChild, 1)
+
+    registry.clear()
+    with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
+        global_id_for(type_cls, 1)
+
+
 def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
     """A Phase-3 failure leaves the strategy stamped but ``finalized=False`` -> raise.
 

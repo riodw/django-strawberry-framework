@@ -203,21 +203,23 @@ prohibition") and is R1's to make.
 
 ## Artifact list
 
-- `docs/builder/bld-review-1-spec019_rationale.md` — R1: rationale extraction + spec reconciliation.
-- `docs/builder/bld-019-integration.md` — cross-round integration pass.
-- `docs/builder/bld-019-final.md` — final gate.
+**All three were deleted at closeout**, leaving this plan as the cycle's only surviving build document. All three are recoverable in full from commit `435e190e`, which added them. Load-bearing content was resolved into surviving files before each deletion rather than left to the commit — see `### Closeout artifact deletion` below.
+
+- `docs/builder/bld-review-1-spec019_rationale.md` — R1: rationale extraction + spec reconciliation. **Deleted at closeout.**
+- `docs/builder/bld-019-integration.md` — cross-round integration pass. **Deleted at closeout.**
+- `docs/builder/bld-019-final.md` — final gate. **Deleted at closeout.**
 
 ## Checklist
 
-- [x] R1: Rationale extraction + spec-to-HEAD reconciliation -> `docs/builder/bld-review-1-spec019_rationale.md`
-- [x] Cross-slice integration pass -> `docs/builder/bld-019-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-019-final.md`
+- [x] R1: Rationale extraction + spec-to-HEAD reconciliation -> `docs/builder/bld-review-1-spec019_rationale.md` (deleted at closeout; in `435e190e`)
+- [x] Cross-slice integration pass -> `docs/builder/bld-019-integration.md` (deleted at closeout; in `435e190e`)
+- [x] Final test-run gate -> `docs/builder/bld-019-final.md` (deleted at closeout; in `435e190e`)
 
 ## Closeout record
 
 ### Deferred-work homing (2026-08-18, after the gate closed)
 
-All four items of `docs/builder/bld-019-final.md`'s `### Deferred work catalog` are homed on the board. Recorded here because the catalog's own targets read "maintainer follow-up, or any future card that opens that file" for items 1 and 2, which is not a card until a card says so. The board is now the source of truth for all four; the catalog remains the measurement record.
+All four items of the final gate's `### Deferred work catalog` are homed on the board. Recorded here because the catalog's own targets read "maintainer follow-up, or any future card that opens that file" for items 1 and 2, which is not a card until a card says so. **The board is now the sole source of truth for all four** — the catalog that measured them was deleted at closeout, so cards 051 and 052 carry both the item and its measurement.
 
 - **Catalog items 1 and 2 -> `TODO-ALPHA-051-0.0.15`, one new `scope` bullet** (`CardItem` 1370, order 34). Both populations live in one file, `tests/types/test_definition_order.py`, so they are homed in one bullet: a single WP batch opening that file retires both or neither. The bullet carries (a) the retired fail-soft vocabulary — four occurrences across three tests, with the two test *names* enumerated and the not-greppable-by-its-own-vocabulary trap stated — and (b) the four `spec015_*` synthetic identifiers, enumerated verbatim, with the licensed leave-as-landed disposition named as a decision the owning batch must make rather than sweep. Card 051 is the right home because its `_optimizer_field_map`, `convert_relation` and `[spec-011]` bullets already establish the fold-into-whichever-WP-batch-opens-the-file convention for exactly this shape, and its WP batches open the test tree.
 - **Catalog items 3 and 4 -> `TODO-ALPHA-052-0.1.0`, an amendment to the existing `[spec-011]` / `[spec-013]` cluster bullet** (`CardItem` 1345, 3,571 -> 4,632 bytes). Item 3 was the bullet naming this spec as still carrying the pre-renumber filenames `spec-013-deferred_scalars` / `spec-014-meta_primary`; spec-019 has left that population, so it is now recorded alongside spec-018's identical departure rather than as a live carrier. Item 4, `CHANGELOG.md`'s `[015-consumer_override_semantics_scalar_fields-0.0.6]` tracking label, is added as the cluster's fifth surface beside the `[013-…]` label already there — same shape, same two reasons for landing on 052 (rule 21 closes `CHANGELOG.md` to a build cycle; half-fixing a cluster leaves it divergently rather than uniformly wrong).
@@ -237,3 +239,22 @@ All four items of `docs/builder/bld-019-final.md`'s `### Deferred work catalog` 
 Verified after the regenerate: both renders are byte-stable across two consecutive runs; `scripts/check_trailing_commas.py --check KANBAN.md` exits 0; no `{{...}}` placeholder survives resolution; `scripts/build_kanban_tracked_path_constants.py` leaves `examples/fakeshop/apps/kanban/constants.py` identical to `HEAD`, so the tracked-path pre-commit hook has nothing to stash-conflict over.
 
 **A concurrent session's board work rides along and cannot be separated.** `KANBAN.md`'s third hunk against `HEAD` is the spec-018 cycle's `DONE-018-0.0.6` bullet edit (`CardItem` 1369, DB-written 04:59 UTC today). It was already rendered into the dirty working-tree copy before this homing ran — that copy's line measured 2,362 bytes against `HEAD`'s 2,216, and this regenerate reproduced 2,362 byte-identically, so nothing of theirs was lost or altered. A binary SQLite file and its two renders cannot be split by author; the immediately preceding commit `1b286483` resolved the same situation the same way and said so in its message.
+
+### Commits
+
+The cycle landed in two commits, split on the spec-018 precedent (`b5b2af81` / `1b286483`) rather than as one:
+
+- **`435e190e`** `docs(specs,builder): complete the spec-019 residual closeout cycle` — 7 paths, +1439/-477: the rationale companion, the reconciled spec, the one authorized `CHANGELOG.md` sentence, and all four builder artifacts.
+- **`8a80218e`** `docs(kanban): home the spec-019 cycle's deferred board work on cards 051 and 052` — 3 paths: `examples/fakeshop/db.sqlite3` and both renders.
+
+Neither commit carries anything belonging to the concurrent sessions. Their two staged artifact deletions (`docs/builder/bld-017-final.md`, `docs/builder/bld-018-final.md`) were sitting in the shared index and were **unstaged, not restored**, before the first commit — index-only, so their deletions survive on disk and simply are not authored here.
+
+### Closeout artifact deletion
+
+The two round artifacts were deleted after the commits, on the maintainer's instruction, keeping only this plan and the final gate. Deleting a cited artifact is a known pointer-breaking hazard on this board — the spec-017 closeout needed a whole follow-up commit (`09003dc2`) to repair what its own deletion broke — so every inbound reference was enumerated first and resolved rather than left dangling.
+
+Three files cited the deleted pair. The one that mattered is `docs/SPECS/appx/spec-019-consumer_overrides_scalar-0_0_6-rationale.md`, a permanent shipped document, which deferred its authoritative byte figures to R1's artifact on the sound reasoning that a byte count written into the file it measures is a count of a file still being written. That reasoning is spent once both files are final, so the figures are now **inlined** there, with the two measurement points kept separate rather than collapsed: 47,488 / 151,505 / -29,568 at R1's close, and 48,834 / 152,851 / -28,222 at commit `435e190e`, the 1,346-byte difference being the integration pass's custodial corrections. Its second pointer, at the 25-entry spec-edit enumeration, now names the commit; its `[bld-r1]` link definition was removed rather than left unused, since unused link definitions are themselves a tracked defect class on card 052.
+
+The final gate was then deleted too, on the same instruction, leaving this plan alone. Its own content was audited section by section first, and **nothing was folded in, deliberately.** Everything unique to it was gate and process record rather than a spec or code fix: the six gate-command results at `HEAD 1b286483` (`6161 passed, 40 skipped` — 37 Postgres-tier, 3 `FAKESHOP_SHARDED` — plus clean `manage.py check`, `makemigrations --check`, `ruff format --check`, `ruff check`, `git diff --check`); the four-level re-derivation that killed R1's false fifth deferral about the live `DONE-019-0.0.6` card body; and the supersession note that R1 had undercounted the fail-soft population. The first is re-runnable and pins a commit, not a contract. The second is a measured non-defect whose only consumer, R1's artifact, is itself deleted — and card 051's bullet already records the corrected count and that it was first understated, which carries the third. All three remain in `435e190e`.
+
+Everything this plan cites that no longer exists on disk is marked deleted-at-closeout with the recovering commit named. Nothing points at a vanished path without saying so, and this plan cites no artifact as live.

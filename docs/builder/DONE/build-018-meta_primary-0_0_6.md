@@ -134,15 +134,15 @@ None of the ten is a code defect. **No code round is opened unless R1's own veri
 
 - `docs/builder/bld-review-1-spec018_rationale.md` — R1: rationale extraction + spec reconciliation. **Deleted at closeout.**
 - `docs/builder/bld-integration.md` — cross-round integration pass. **Deleted at closeout.**
-- `docs/builder/bld-018-final.md` — final gate. Survives.
+- `docs/builder/bld-018-final.md` — final gate. **Deleted at closeout; its content is folded into `## Closeout record` below.**
 
-**Closeout disposition, 2026-08-18.** The two per-round artifacts were deleted at closeout by the
-maintainer's instruction, **before the cycle was committed — so they appear in no commit and cannot be
-recovered from git history**; this plan and `docs/builder/bld-018-final.md` are the surviving record. The names above are kept because they record which passes ran and in what order — **they name
+**Closeout disposition, 2026-08-18.** All three `bld-*` artifacts were deleted at closeout by the
+maintainer's instruction. The two per-round artifacts were deleted before the cycle was committed and
+**appear in no commit**; `bld-018-final.md` was committed at `b5b2af81` and is recoverable from there.
+**This plan is the cycle's sole surviving file**, and `## Closeout record` below carries everything the
+three artifacts held that a later reader needs. The names above are kept because they record which passes ran and in what order — **they name
 passes, not readable files, and the checklist boxes below inherit that reading.** Everything a later
-reader needs from either artifact is folded into `docs/builder/bld-018-final.md`: the integration pass's
-measured results under its `## Integration pass results, folded in`, and R1's findings in its
-`## Deferred work catalog`. The spec-017 closeout produced this same condition and left its pointers
+reader needs from any of the three is folded into `## Closeout record` below. The spec-017 closeout produced this same condition and left its pointers
 dangling, which cost commit `09003dc2` to repair — hence the explicit note rather than a silent
 deletion.
 
@@ -150,4 +150,117 @@ deletion.
 
 - [x] R1: Rationale extraction + spec-to-HEAD reconciliation -> `docs/builder/bld-review-1-spec018_rationale.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-018-final.md`
+- [x] Final test-run gate -> recorded under `## Closeout record` below (artifact deleted at closeout).
+
+## Closeout record
+
+Folded in from `docs/builder/bld-018-final.md` when that artifact was deleted at closeout. `HEAD` at
+gate time: `de2601e9`. `Status: final-accepted` for every round and for the gate.
+
+### What a green gate does and does not prove here
+
+**This round wrote zero lines of code** — its writable set was markdown only, so a red suite could not
+have been its doing and a green suite proves nothing about its diff. The gate was run because the
+process requires it and because an unattributed failure must never be waved through, not because it
+can validate a documentation change.
+
+**The tree was not this round's alone.** At gate time `git status --short` showed **94 entries**, of
+which **15 under `django_strawberry_framework/`** (14 `.py` modules plus the `debug_toolbar.html`
+template) and **12 under `tests/`** — all 27 a concurrent session's work, not read as work product, not
+edited, not reverted (`AGENTS.md` rule 34). Attribution rule applied to every command: a failure is
+this round's only if the failing path is in this round's writable set. None was.
+
+### Gate results
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `uv run pytest --no-cov` | **PASS** — `6151 passed, 40 skipped in 59.98s`, exit 0 |
+| 2 | `uv run python examples/fakeshop/manage.py check` | **PASS** — `no issues (0 silenced)`, exit 0 |
+| 3 | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | **PASS** — `No changes detected`, exit 0 |
+| 4 | `uv run ruff format --check .` | **PASS** — `424 files already formatted`, exit 0 |
+| 5 | `uv run ruff check .` | **PASS** — `All checks passed!`, exit 0 |
+| 6 | `git diff --check` | **PASS** — no output, exit 0 |
+
+**No `--cov*` flag was passed to any command** and plain `uv run pytest` — a coverage run in this
+repository — was never invoked. No `git stash`, `checkout`, `restore`, or `worktree` at any point.
+Neither `ruff` invocation used `--fix`. The plan's recorded dirty-baseline exception went **unused**,
+because nothing failed. The suite was fully interpretable: no collection error, no half-saved
+concurrent edit, no unattributable row.
+
+Two checks outside the gate's list were re-run rather than cited from an earlier pass:
+`check_spec_glossary.py --spec docs/SPECS/spec-018-meta_primary-0_0_6.md` -> `OK: 15 terms`, exit 0 (it
+is the one script a rationale move can break, and it broke mid-pass twice in the spec-017 sibling and
+once here); `check_trailing_commas.py --check` -> exit 0 on this cycle's written paths.
+
+**Floor verification scope: `none`**, correctly — no Django, Strawberry, or channels seam is touched
+because no source is. No floor venv was built and the shared `.venv` was never mutated.
+
+### The proof the extraction was a move, not a copy
+
+The cross-round integration pass returned **no integration findings** and required no consolidation
+dispatch. Its measurements are the evidence for this cycle's central claim:
+
+| Measure | Result |
+|---|---|
+| Long sentences (>=90 chars) in the spec | 371 |
+| Long sentences (>=90 chars) in the companion | 203 |
+| **Byte-identical sentences shared by both** | **0** |
+| **Near-duplicate runs of >=110 chars (`difflib` longest-match over all 75,313 pairs)** | **0** |
+
+Both files were stripped of fenced code and table rows before splitting, so quoted pseudocode in the
+companion's historical records does not inflate the comparison. Two zeros over 75,313 pairs is the
+`Moved` / `Kept deliberately` / `Deleted outright` / `Reconciled in place` disposition set holding in
+fact rather than in assertion.
+
+Four further confirmations: **32** `path::Symbol` refs in the spec and **17** in the companion all
+resolve against a parsed AST; the **5** surviving `#"substring"` citations each resolve inside the named
+symbol's own source range, extracted via `ast` rather than by searching the file; the moved round-label
+vocabulary (`H[1-3]` / `M[1-2]` / `L[1-5]` / `rev[1-6]` / `revision`) returns **0** hits under a
+word-boundary sweep; and **9** pointer links carry each spec site whose deliberation moved. Overlap
+against `docs/GLOSSARY.md` and `CHANGELOG.md` peaks at 45 characters and every hit is an identifier or
+the mandated link scaffold — no contract sentence and no error message is duplicated.
+
+The one place the pair could have told two stories was the `plan_optimizations` call site, where the
+spec carried a precise checklist box against a vague routing-table row. Worker 3 caught it as RR-1 and
+both sites now spell the chain identically (`_get_or_build_plan`, reached from `._optimize` via
+`.apply_to`).
+
+### Maintainer hand-offs
+
+**No deferred work of this round's own.** Every dispatched finding, Worker 3's seven findings, RR-1,
+and the final-verification pass's own Decision 1 finding landed inside the round. D-R3-1, escalated
+non-blocking, was closed by deletion rather than parked. Three items lie outside the writable set by
+the dispatch:
+
+1. **The live `KANBAN.md` `DONE-018-0.0.6` card body names the public `audit_primary_ambiguity()`** —
+   private as `_audit_primary_ambiguity` since commit `13d8dac5`, 2026-05-18. **Now homed on
+   `TODO-ALPHA-052-0.1.0`**, which carries the row id, the fix instrument (a DB edit plus regenerate,
+   since `KANBAN.md` renders from `examples/fakeshop/db.sqlite3`), and the two findings below. Nothing
+   further is owed here. **One row, not two:** this item originally also charged the body with quoting
+   the retired duplicate-primary message `"<new> is already declared primary as <existing>"`. That was
+   read off the verbatim card-body copy in the companion, which does carry it, and attributed to the
+   board, which never did — the substring `declared primary` returns zero `CardItem` and zero
+   `CardReference` rows board-wide. The withdrawal is recorded because the card bullet cites this
+   hand-off and tells its author not to hunt for a second edit. Two facts surfaced in the same
+   measurement and travelled to that bullet: the one real staleness is `CardItem` 723 (`note`, order
+   6), and **10 of that card's 15 `note` items end mid-sentence** (rows 720, 721, 722, 723, 725, 726,
+   727, 728, 732, 733) from an import-time truncation predating every residual cycle, so row 723 is
+   both stale and clipped. Same defect class the round's own reports hit three times — a description
+   outliving the source it was derived from — reaching the hand-off list itself.
+2. **Two `check_trailing_commas` layout violations exist repo-wide and belong to no cycle**, so they
+   are recorded here rather than carded: `examples/fakeshop/test_query/test_products_visibility_api.py`
+   (untracked, a concurrent session's live-tier test, `should collapse (< threshold, over-exploded)`)
+   and an agent memory file under `.claude/` missing the link-def scaffold, outside the package
+   entirely. Both block a pre-commit run over their own paths until their owners fix them. Neither was
+   fixed and neither was reverted.
+3. **No standing-doc edit is owed for this card.** `docs/GLOSSARY.md`, `CHANGELOG.md`,
+   `docs/README.md`, and `TODAY.md` were each read against `HEAD` and each reflects shipped state — the
+   glossary marks `Meta.primary` `shipped (0.0.6)` and quotes the landed error message, and
+   `CHANGELOG.md` documents both the message reword and the `register` / `get` semantics. Recorded so
+   the next author does not re-derive it.
+
+### The honest reading of the green
+
+This round wrote no code, **so the suite can neither convict nor acquit it.** What the gate genuinely
+establishes is that the tree the round was closed against is coherent, and that nothing the round did
+broke a build it never touched.

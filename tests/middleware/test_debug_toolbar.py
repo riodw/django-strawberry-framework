@@ -496,8 +496,8 @@ def test_template_port_invariants_and_robustness_divergence():
     #    scrubbed before any DOM write (see the ordering invariant, #7 below).
     assert 'djDebug.setAttribute("data-request-id", toolbar.requestId)' in template
     # 5. The per-panel title / subtitle DOM updates.
-    assert '.querySelector("h3").textContent = panel.title' in template
-    assert '.querySelector("small").textContent = panel.subtitle' in template
+    assert "heading.textContent = panel.title" in template
+    assert "subtitle.textContent = panel.subtitle" in template
     # 5a. debug-toolbar>=7 defaults USE_SHADOW_DOM=True: resolve #djDebug via
     #     #djDebugRoot's shadowRoot (stock getDebugElement pattern) with a
     #     light-DOM fallback; nav nodes are queried under djDebug, not document.
@@ -526,3 +526,19 @@ def test_template_port_invariants_and_robustness_divergence():
     #    throw inside the patched ``JSON.parse`` and break the IDE response path.
     assert "Object.entries(toolbar.panels).forEach(" in template
     assert "if (content === null) return;" in template
+    # 9. Every nested lookup is independently guarded: toolbar releases or
+    #    consumer customizations may retain a panel container while omitting
+    #    one of its title, heading, scroll, loader/content, or nav descendants.
+    #    The global JSON hooks must still return the scrubbed response.
+    assert 'const panelTitle = content.querySelector(".djDebugPanelTitle");' in template
+    assert "if (panelTitle !== null)" in template
+    assert 'const heading = panelTitle.querySelector("h3");' in template
+    assert "if (heading !== null)" in template
+    assert 'const scroll = content.querySelector(".djdt-scroll");' in template
+    assert "if (scroll !== null)" in template
+    assert 'const loader = content.querySelector(".djdt-loader");' in template
+    assert "if (loader === null)" in template
+    assert 'const panelContent = content.querySelector(".djDebugPanelContent");' in template
+    assert "if (panelContent !== null)" in template
+    assert 'const subtitle = nav.querySelector("small");' in template
+    assert "if (subtitle !== null)" in template

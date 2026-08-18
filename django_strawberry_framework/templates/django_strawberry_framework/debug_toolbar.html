@@ -36,24 +36,37 @@
         if (panel.title) {
           const content = djDebug.querySelector(`#${id}`);
           if (content === null) return;
+          const panelTitle = content.querySelector(".djDebugPanelTitle");
+          if (panelTitle !== null) {
+            const heading = panelTitle.querySelector("h3");
+            if (heading !== null) {
+              heading.textContent = panel.title;
+            }
+          }
 
-          content
-            .querySelector(".djDebugPanelTitle")
-            .querySelector("h3").textContent = panel.title;
+          const scroll = content.querySelector(".djdt-scroll");
+          if (scroll !== null) {
+            scroll.innerHTML = "";
+          }
 
-          content.querySelector(".djdt-scroll").innerHTML = "";
-
-          if (content.querySelector(".djdt-loader") === null) {
-            const loader = document.createElement("div");
-            loader.className = "djdt-loader";
-            content.querySelector(".djDebugPanelContent").prepend(loader);
+          const loader = content.querySelector(".djdt-loader");
+          if (loader === null) {
+            const panelContent = content.querySelector(".djDebugPanelContent");
+            if (panelContent !== null) {
+              const newLoader = document.createElement("div");
+              newLoader.className = "djdt-loader";
+              panelContent.prepend(newLoader);
+            }
           }
         }
         if (panel.subtitle) {
           // Nav buttons are descendants of #djDebug (same shadow/light tree).
           const nav = djDebug.querySelector(`#djdt-${id}`);
           if (nav !== null) {
-            nav.querySelector("small").textContent = panel.subtitle;
+            const subtitle = nav.querySelector("small");
+            if (subtitle !== null) {
+              subtitle.textContent = panel.subtitle;
+            }
           }
         }
       });

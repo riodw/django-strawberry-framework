@@ -135,6 +135,30 @@ STRING_GLOBALID_STRATEGIES: frozenset[str] = frozenset({"model", "type", "type+m
 DEFAULT_GLOBALID_STRATEGY = "model"
 
 
+def _validate_set_sidecar(
+    meta: type,
+    sidecar_class: Any,
+    *,
+    expected: type,
+    meta_key: str,
+    article: str,
+) -> type:
+    """Return ``sidecar_class`` if it is an ``expected`` subclass, else raise.
+
+    The type-gate skeleton ``Meta.filterset_class`` and ``Meta.orderset_class``
+    share. Wrappers keep the cycle-safe local import of ``FilterSet`` /
+    ``OrderSet`` in their own body (spec-028 N3) and the ``None``-means-unset
+    short-circuit; this owns only the subclass check and the
+    ``must be {article} {expected.__name__} subclass`` wording.
+    """
+    if not (isinstance(sidecar_class, type) and issubclass(sidecar_class, expected)):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.{meta_key} must be {article} {expected.__name__} subclass; "
+            f"got {_safe_arg_repr(sidecar_class)}",
+        )
+    return sidecar_class
+
+
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
 
@@ -153,12 +177,13 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     # cycle. Do NOT hoist to module top.
     from ..filters.sets import FilterSet
 
-    if not (isinstance(filterset_class, type) and issubclass(filterset_class, FilterSet)):
-        raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.filterset_class must be a FilterSet subclass; "
-            f"got {_safe_arg_repr(filterset_class)}",
-        )
-    return filterset_class
+    return _validate_set_sidecar(
+        meta,
+        filterset_class,
+        expected=FilterSet,
+        meta_key="filterset_class",
+        article="a",
+    )
 
 
 def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
@@ -181,12 +206,13 @@ def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
     # cycle. Do NOT hoist to module top.
     from ..orders.sets import OrderSet
 
-    if not (isinstance(orderset_class, type) and issubclass(orderset_class, OrderSet)):
-        raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.orderset_class must be an OrderSet subclass; "
-            f"got {_safe_arg_repr(orderset_class)}",
-        )
-    return orderset_class
+    return _validate_set_sidecar(
+        meta,
+        orderset_class,
+        expected=OrderSet,
+        meta_key="orderset_class",
+        article="an",
+    )
 
 
 def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dict | None:

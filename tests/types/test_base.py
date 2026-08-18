@@ -754,6 +754,27 @@ def test_meta_filterset_class_rejects_non_filterset_value():
                 filterset_class = object
 
 
+def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar():
+    """Both DjangoType sidecar Meta gates share ``_validate_set_sidecar``.
+
+    The wrappers keep the cycle-safe local imports (spec-028 N3); the
+    subclass check and ``must be {article} {Name} subclass`` wording live
+    once in the shared helper.
+    """
+    import inspect
+
+    import django_strawberry_framework.types.base as base_mod
+
+    for fn in (base_mod._validate_filterset_class, base_mod._validate_orderset_class):
+        assert "_validate_set_sidecar" in fn.__code__.co_names
+    src_filter = inspect.getsource(base_mod._validate_filterset_class)
+    src_order = inspect.getsource(base_mod._validate_orderset_class)
+    assert "from ..filters.sets import FilterSet" in src_filter
+    assert "from ..orders.sets import OrderSet" in src_order
+    assert "FilterSet" not in vars(base_mod)
+    assert "OrderSet" not in vars(base_mod)
+
+
 def test_meta_filterset_class_accepts_filterset_subclass():
     """A real ``FilterSet`` subclass is accepted and stored on the definition."""
     from django_strawberry_framework.filters import FilterSet

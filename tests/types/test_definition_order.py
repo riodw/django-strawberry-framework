@@ -583,6 +583,124 @@ def test_camel_case_field_collision_raises():
     assert "collide" in message
 
 
+def test_explicit_graphql_field_name_collision_raises():
+    """An explicit Strawberry name participates in the settled-surface audit."""
+
+    class ExplicitNameCollision(models.Model):
+        foo_bar = models.IntegerField()
+
+        class Meta:
+            app_label = "test_field_surface"
+            managed = False
+
+    class ExplicitNameCollisionType(DjangoType):
+        @strawberry.field(name="fooBar")
+        def custom(self) -> int:
+            return 1
+
+        class Meta:
+            model = ExplicitNameCollision
+            fields = ("foo_bar",)
+
+    with pytest.raises(ConfigurationError) as exc:
+        finalize_django_types()
+    message = str(exc.value)
+    assert "custom" in message
+    assert "foo_bar" in message
+    assert "collide" in message
+
+
+def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
+    """A selected pk removed by Relay is not part of the settled GraphQL surface."""
+
+    class RenamedPrimaryKey(models.Model):
+        legacy_id = models.AutoField(primary_key=True)
+
+        class Meta:
+            app_label = "test_field_surface"
+            managed = False
+
+    class RenamedPrimaryKeyType(DjangoType):
+        @strawberry.field
+        def legacyId(self) -> str:
+            return "visible"
+
+        class Meta:
+            model = RenamedPrimaryKey
+            fields = ("legacy_id",)
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    field_names = {
+        field.graphql_name or field.python_name
+        for field in RenamedPrimaryKeyType.__strawberry_definition__.fields
+    }
+    assert field_names == {"id", "legacyId"}
+
+
+def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
+    """A generated connection may reuse the Python name of a suppressed pk column."""
+
+    class Target(models.Model):
+        name = models.CharField(max_length=20)
+
+        class Meta:
+            app_label = "test_field_surface"
+            managed = False
+
+    class Source(models.Model):
+        items_connection = models.AutoField(primary_key=True)
+        items = models.ManyToManyField(Target)
+
+        class Meta:
+            app_label = "test_field_surface"
+            managed = False
+
+    class TargetType(DjangoType):
+        class Meta:
+            model = Target
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class SourceType(DjangoType):
+        class Meta:
+            model = Source
+            fields = ("items_connection", "items")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    field_names = {
+        field.graphql_name or field.python_name
+        for field in SourceType.__strawberry_definition__.fields
+    }
+    assert field_names == {"id", "items_connection"}
+
+
+def test_relay_interface_field_prevents_false_empty_surface():
+    """The inherited Relay id is a real field even when no model field is selected."""
+
+    class RelayOnlyModel(models.Model):
+        class Meta:
+            app_label = "test_field_surface"
+            managed = False
+
+    class RelayOnlyType(DjangoType):
+        class Meta:
+            model = RelayOnlyModel
+            fields = ()
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    field_names = {
+        field.graphql_name or field.python_name
+        for field in RelayOnlyType.__strawberry_definition__.fields
+    }
+    assert field_names == {"id"}
+
+
 def test_empty_field_surface_raises():
     """A DjangoType with no GraphQL fields (``Meta.fields = ()``) fails loud at finalize.
 

@@ -228,6 +228,61 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
+def _field_surface_names(type_cls: type) -> dict[str, str]:
+    """Return ``{python_name: graphql_name}`` for the settled pre-decoration surface.
+
+    Finalization changes the surface before ``strawberry.type`` freezes it:
+    Relay suppresses the selected model primary-key annotation, connection-only
+    relation synthesis removes the list annotation/resolver, and interface base
+    injection contributes inherited Strawberry fields. Model selection metadata
+    therefore cannot answer which fields are actually present.
+
+    Build the surface from the same three sources Strawberry will collect:
+    inherited decorated-base fields, current annotations, and assigned
+    ``StrawberryField`` objects. Own fields replace inherited fields with the
+    same emitted GraphQL name (notably consumer ``id: relay.NodeID[...]`` over
+    Relay's private ``_id`` field); two distinct own Python names remain visible
+    to the collision audit. Explicit ``StrawberryField.graphql_name`` values win
+    over default camel-casing.
+    """
+    inherited_surface: dict[str, str] = {}
+    for base in reversed(type_cls.__mro__[1:]):
+        definition = getattr(base, "__strawberry_definition__", None)
+        if definition is None:
+            continue
+        for field in definition.fields:
+            python_name = field.python_name
+            graphql_name = field.graphql_name
+            label = python_name if python_name is not None else graphql_name
+            if label is None:
+                continue
+            label = str(label)
+            inherited_surface[label] = (
+                str(graphql_name) if graphql_name is not None else to_camel_case(label)
+            )
+    own_surface: dict[str, str] = {}
+
+    for name in _annotation_names(type_cls):
+        own_surface[name] = to_camel_case(name)
+
+    for name, value in vars(type_cls).items():
+        if not isinstance(value, StrawberryField):
+            continue
+        own_surface[name] = (
+            str(value.graphql_name) if value.graphql_name is not None else to_camel_case(name)
+        )
+
+    own_graphql_names = set(own_surface.values())
+    surface = {
+        name: graphql_name
+        for name, graphql_name in inherited_surface.items()
+        if graphql_name not in own_graphql_names
+    }
+    surface.update(own_surface)
+
+    return surface
+
+
 def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> None:
     """Reject an empty or camel-colliding GraphQL field surface on ``type_cls``.
 
@@ -246,15 +301,14 @@ def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> No
       ``<name>_connection`` colliding with an existing field; this covers the
       remaining column-vs-column / field-vs-field case.
 
-    The surface set mirrors the connection guard's: declared annotations, the
-    definition's selected fields, and consumer-assigned ``StrawberryField``s. A
-    consumer override shares its column's NAME (e.g. ``name`` over ``name``), so
-    it is one entry, never a collision; only distinct names colliding under
-    ``to_camel_case`` raise.
+    ``_field_surface_names`` mirrors the connection guard and owns the settled
+    pre-decoration surface: inherited interface fields, current annotations,
+    and consumer-assigned ``StrawberryField``s. A consumer override shares its
+    column's Python name (e.g. ``name`` over ``name``), so it is one entry,
+    never a collision; only distinct Python names emitting one GraphQL name
+    raise.
     """
-    names = set(_annotation_names(type_cls))
-    names.update(f.name for f in definition.selected_fields)
-    names.update(k for k, v in vars(type_cls).items() if isinstance(v, StrawberryField))
+    names = _field_surface_names(type_cls)
     if not names:
         raise ConfigurationError(
             f"{definition.graphql_type_name}: DjangoType over "
@@ -263,8 +317,8 @@ def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> No
             "declare at least one field.",
         )
     by_camel: dict[str, list[str]] = {}
-    for name in names:
-        by_camel.setdefault(to_camel_case(str(name)), []).append(str(name))
+    for python_name, graphql_name in names.items():
+        by_camel.setdefault(graphql_name, []).append(python_name)
     collisions = {camel: sorted(ns) for camel, ns in by_camel.items() if len(ns) > 1}
     if not collisions:
         return
@@ -673,12 +727,12 @@ def _synthesize_relation_connections() -> None:
                 # through its registered identity-safe teardown instead.
                 _record_relation_connection(definition, generated, name)
                 continue
-            existing = set(_annotation_names(type_cls))
-            existing.update(f.name for f in definition.selected_fields)
-            existing.update(k for k, v in vars(type_cls).items() if isinstance(v, StrawberryField))
+            existing = _field_surface_names(type_cls)
             camel = to_camel_case(generated)
             colliding = sorted(
-                n for n in existing if n == generated or to_camel_case(str(n)) == camel
+                name
+                for name, graphql_name in existing.items()
+                if name == generated or graphql_name == camel
             )
             if colliding:
                 collides_with = ", ".join(_safe_arg_repr(n) for n in colliding)
@@ -1407,6 +1461,41 @@ def _format_owner_get_queryset_mismatch_error(
     )
 
 
+def _format_owner_set_model_mismatch_error(
+    set_cls: type,
+    owner: DjangoTypeDefinition,
+    *,
+    family: str,
+    meta_key: str,
+    set_model: type | None,
+    article: str,
+    dash: str,
+    purpose: str,
+) -> str:
+    """Return the first-bind owner/set model-mismatch message for either family.
+
+    The branch-free template both FilterSet and OrderSet first-bind guards
+    share. Family words (noun, sidecar key, article, dash around the
+    "or a base" clause, lookup purpose) are the ONLY divergence, so the
+    sentence is spelled once and each ``_format_owner_*_model_mismatch_error``
+    wrapper passes its words. Messages stay byte-identical to the family
+    originals (spec-051 Decision 7).
+    """
+    set_model_name = _safe_class_name(set_model) if set_model is not None else "<unset>"
+    noun = family.lower()
+    return (
+        f"{family} {_safe_class_name(set_cls, qualified=True)} is declared as the {meta_key} "
+        f"of {_safe_class_name(owner.origin, qualified=True)} "
+        f"(model {_safe_class_name(owner.model)}), but its own "
+        f"Meta.model is {set_model_name}. {article} {noun}'s Meta.model must be its "
+        f"owner's model{dash}or a base the owner derives from{dash}so the "
+        f"{noun}'s {purpose} resolve against the owner's queryset. Key "
+        f"{_safe_class_name(set_cls, qualified=True)} on "
+        f"{_safe_class_name(owner.model)}, or attach it to a "
+        f"{set_model_name} type."
+    )
+
+
 def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDefinition) -> str:
     """Return the first-bind owner/filterset model-mismatch message.
 
@@ -1418,15 +1507,15 @@ def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDef
     wiring. Grep-stable alongside the other ``_format_*`` finalize-error
     helpers.
     """
-    return (
-        f"FilterSet {_safe_class_name(filterset_cls, qualified=True)} is declared as the "
-        f"filterset_class of {_safe_class_name(owner.origin, qualified=True)} "
-        f"(model {_safe_class_name(owner.model)}), but its own "
-        f"Meta.model is {_safe_class_name(filterset_cls._meta.model)}. A filterset's Meta.model "
-        f"must be its owner's model - or a base the owner derives from - so the "
-        f"filterset's lookups resolve against the owner's queryset. Key "
-        f"{_safe_class_name(filterset_cls, qualified=True)} on {_safe_class_name(owner.model)}, "
-        f"or attach it to a {_safe_class_name(filterset_cls._meta.model)} type."
+    return _format_owner_set_model_mismatch_error(
+        filterset_cls,
+        owner,
+        family="FilterSet",
+        meta_key="filterset_class",
+        set_model=filterset_cls._meta.model,
+        article="A",
+        dash=" - ",
+        purpose="lookups",
     )
 
 
@@ -1541,20 +1630,15 @@ def _format_owner_orderset_model_mismatch_error(
     model's queryset. Grep-stable alongside the other ``_format_*``
     finalize-error helpers.
     """
-    orderset_model = getattr(getattr(orderset_cls, "Meta", None), "model", None)
-    orderset_model_name = (
-        _safe_class_name(orderset_model) if orderset_model is not None else "<unset>"
-    )
-    return (
-        f"OrderSet {_safe_class_name(orderset_cls, qualified=True)} is declared as the orderset_class "
-        f"of {_safe_class_name(owner.origin, qualified=True)} "
-        f"(model {_safe_class_name(owner.model)}), but its own "
-        f"Meta.model is {orderset_model_name}. An orderset's Meta.model must be its "
-        f"owner's model -- or a base the owner derives from -- so the orderset's "
-        f"order_by(...) lookups resolve against the owner's queryset. Key "
-        f"{_safe_class_name(orderset_cls, qualified=True)} on "
-        f"{_safe_class_name(owner.model)}, or attach it to a "
-        f"{orderset_model_name} type."
+    return _format_owner_set_model_mismatch_error(
+        orderset_cls,
+        owner,
+        family="OrderSet",
+        meta_key="orderset_class",
+        set_model=getattr(getattr(orderset_cls, "Meta", None), "model", None),
+        article="An",
+        dash=" -- ",
+        purpose="order_by(...) lookups",
     )
 
 

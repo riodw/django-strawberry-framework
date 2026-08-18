@@ -328,3 +328,14 @@ def test_incomplete_registry_registration_is_typed_at_finalize():
         match="registered DjangoType PrimaryType has no DjangoTypeDefinition",
     ):
         finalize_django_types()
+
+
+def test_owner_model_mismatch_formatters_ride_shared_template():
+    """FilterSet and OrderSet first-bind model-mismatch messages share one template."""
+    from django_strawberry_framework.types.finalizer import (
+        _format_owner_model_mismatch_error,
+        _format_owner_orderset_model_mismatch_error,
+    )
+
+    for fn in (_format_owner_model_mismatch_error, _format_owner_orderset_model_mismatch_error):
+        assert "_format_owner_set_model_mismatch_error" in fn.__code__.co_names

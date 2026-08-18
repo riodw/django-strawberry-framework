@@ -203,8 +203,7 @@ boundary as the rest of the application, and it deletes code rather than adding 
   audit's own conditional). Rejected: it means package-owned exact routing, Host
   validation, cookie-auth CSRF, cache variation, body limits, response security headers,
   and IDE/GET controls — a partial re-implementation of `MIDDLEWARE` that must track
-  Django's security releases forever. [`AGENTS.md`][agents] #"always recommend the
-  root-cause fix over the surface patch" settles it.
+  Django's security releases forever. [`AGENTS.md`][agents] #"Always give the root-cause fix even when slower" settles it.
 - **Keep the Channels HTTP route but wrap it in Django's middleware chain manually.**
   Rejected: Django's middleware is written against `HttpRequest` / `HttpResponse`, not an
   ASGI scope; the adapter layer needed to make that true *is* `ASGIHandler`, which is
@@ -223,8 +222,7 @@ Spec: [Decision 3][s65-d3].
 
 **Alternatives rejected.**
 
-- **Keep it optional and warn.** Rejected: [`AGENTS.md`][agents] #"never propose
-  ship-it-today-defer-the-real-fix sequencing" — and the audit's own closing line, "Do
+- **Keep it optional and warn.** Rejected: [`AGENTS.md`][agents] #"never offer defer-the-real-fix sequencing" — and the audit's own closing line, "Do
   not split these into 'ship the warning now, fix the architecture later' work."
 - **Derive it internally with a lazy `get_asgi_application()` call.** Rejected on the
   initialization-order ambiguity in the spec's *Why deriving it internally is wrong*; a
@@ -973,8 +971,7 @@ after its actor was revoked.
   one **connection**-scoped latch and needs no ledger — and it closes the socket as well.
 - **Admission-only, with the S11 claim weakened to match.** Rejected: the stronger contract
   is achievable at this seam, with one derived class and one lock, so weakening the claim
-  would be choosing a documented gap over a fix. [`AGENTS.md`][agents] #"always recommend the
-  root-cause fix over the surface patch" settles it, and the review is right that maximum
+  would be choosing a documented gap over a fix. [`AGENTS.md`][agents] #"Always give the root-cause fix even when slower" settles it, and the review is right that maximum
   connection lifetime would otherwise become security-relevant again.
 - **A package maximum-connection-lifetime timer as the answer to active-operation
   revocation.** Rejected in

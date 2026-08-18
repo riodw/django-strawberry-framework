@@ -4050,7 +4050,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Note
 
-- tiny `AppConfig` (two class attributes, no `ready()` body in 0.0.7) + tests.
+- tiny `AppConfig` (two class attributes, no `ready()` body in this card's own diff) + tests; the `ready()` body that ships in `0.0.7` arrived with sibling card `DONE-024-0.0.7`, dispatching the single Django patch applier, and the Strawberry and `cross_web` appliers followed at `0.0.11`.
 
 <a id="djangolistfield_non_relay_list"></a>
 ### [DONE-020-0.0.7 - `DjangoListField` (non-Relay list)](KANBAN.html#djangolistfield_non_relay_list)

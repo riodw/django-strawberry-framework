@@ -236,8 +236,7 @@ Project conventions to follow:
   [Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models));
   the settings-keys-only-when-needed rule (this card adds no settings key); the
   no-pytest-after-edits rule; the CHANGELOG-edit-permission rule at
-  [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
-  instructed" — Slice 4's release-note edit must be named in its maintainer
+  [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" — Slice 4's release-note edit must be named in its maintainer
   prompt.
 - [`START.md`][start] — the "behaviorally we copy `strawberry-graphql-django`'s
   good ideas, surface-wise we copy `django-graphene-filters`" rule (this card
@@ -1510,8 +1509,7 @@ over a `tmp_path` storage), with no live fakeshop surface
 
 ## Doc updates
 
-Each slice owns its doc edits. [`AGENTS.md`][agents] #"Do not update
-CHANGELOG.md unless explicitly instructed" requires `CHANGELOG.md` edits to be
+Each slice owns its doc edits. [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" requires `CHANGELOG.md` edits to be
 explicitly instructed — and a standing design doc cannot itself grant that
 permission. This spec only *describes* the release-note work; the **Slice 4
 maintainer prompt must explicitly include the `CHANGELOG.md` edit** for it to be

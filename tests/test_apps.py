@@ -34,13 +34,12 @@ def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
 
 
 def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes():
-    # ``ready`` IS allowed (and present) - the package ships a
-    # ``ready()`` body that dispatches the three upstream patch
-    # modules' ``apply()`` calls. The spec-017 "no ready() body in
-    # 0.0.7" stance is deliberately superseded by the package's
-    # adoption of the upstream patches. See
-    # ``django_strawberry_framework/apps.py`` ``ready()`` docstring
-    # and the three ``_*_patches`` module docstrings.
+    # ``ready`` is deliberately absent from this set: it is required on
+    # this class, not forbidden. The package ships a ``ready()`` body
+    # that dispatches the three upstream patch modules' ``apply()``
+    # calls, and the ``ready`` tests below pin it positively. See
+    # ``django_strawberry_framework/apps.py`` ``ready()`` docstring and
+    # the three ``_*_patches`` module docstrings.
     forbidden = {
         "label": "Decision 2 (default last-segment label is already unique)",
         "default_auto_field": "Decision 5 (package ships zero Django models)",

@@ -236,7 +236,7 @@ Project conventions to follow:
   [Decision 12](#decision-12--live-coverage-products-grows-a-modelform-and-a-plain-form-mutation));
   the settings-keys-only-when-needed rule (this card adds no settings key); the
   no-pytest-after-edits rule; the CHANGELOG-edit-permission rule at
-  [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed" —
+  [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" —
   Slice 5's release-note edit must be named in its maintainer prompt.
 - [`START.md`][start] — "Meta classes everywhere on consumer surfaces. If you find
   yourself writing stacked Strawberry decorators on a consumer-facing class, stop."
@@ -2097,8 +2097,7 @@ behavior reachable through `/graphql/`, package tests own internals.
 
 ## Doc updates
 
-Each slice owns its doc edits. [`AGENTS.md`][agents] #"Do not update CHANGELOG.md
-unless explicitly instructed" requires `CHANGELOG.md` edits to be explicitly
+Each slice owns its doc edits. [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" requires `CHANGELOG.md` edits to be explicitly
 instructed — and a standing design doc cannot itself grant that permission. This
 spec only *describes* the release-note work; the **Slice 5 maintainer prompt must
 explicitly include the `CHANGELOG.md` edit** for it to be authorized.

@@ -841,7 +841,7 @@ cannot reach.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- `Meta.search_fields` — `TODO-BETA-055-0.1.2` ([`spec-054`][spec-054]).
+- `Meta.search_fields` — `TODO-BETA-055-0.1.2` ([`spec-054`][spec-055]).
 - `AggregateSet` / `Meta.aggregate_class` — the `0.1.3` aggregate card.
 - Layer-3 Meta key promotion machinery (dispatched binding form) —
   `TODO-BETA-058-0.1.3`.
@@ -945,7 +945,7 @@ cannot reach.
 [spec-050]: spec-050-debug_extraction-0_0_15.md
 [spec-051]: spec-051-boundary_dry_squeeze-0_0_15.md
 [spec-052]: spec-052-beta_release-0_1_0.md
-[spec-054]: spec-055-search_fields-0_1_2.md
+[spec-055]: spec-055-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

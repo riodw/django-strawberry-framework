@@ -469,8 +469,7 @@ the decision hygiene around the two upstream flavors.
         `version` entry in `uv.lock`), the GLOSSARY status flips to `shipped
         (0.0.14)`, the [`README.md`][readme] / [`docs/README.md`][docs-readme]
         "Coming next" → "Shipped today" moves, and the `CHANGELOG.md` bullets.
-        Per [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless
-        explicitly instructed", the `CHANGELOG.md` edit additionally requires
+        Per [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", the `CHANGELOG.md` edit additionally requires
         the joint-cut slice's maintainer prompt to grant it explicitly; this
         spec describes the edit but cannot grant the permission.
 
@@ -1999,7 +1998,7 @@ wire-shape-exemption comment. The implementation worker **records the exact
 pytest commands** (e.g. `uv run pytest tests/testing/test_client.py` and the
 converted `test_query/` files) for the maintainer to run, and does not run
 the suite itself unless the maintainer explicitly authorizes pytest for the
-slice — the [`AGENTS.md`][agents] #"Do not run pytest" workflow rule; this
+slice — the [`AGENTS.md`][agents] #"No pytest after edits" workflow rule; this
 spec describes the verification but does not override it.
 
 Coverage: the package gate is `fail_under = 100` and `testing/client.py` is

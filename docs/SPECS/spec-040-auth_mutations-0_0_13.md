@@ -66,8 +66,7 @@ joint-cut release flips `039` deferred: the [`docs/GLOSSARY.md`][glossary]
 [`README.md`][readme] / [`docs/README.md`][docs-readme] "Coming next" → "Shipped
 today" moves, and the `CHANGELOG.md` release bullets for **both** `0.0.13` cards
 (the `CHANGELOG.md` edit lands only when the slice's maintainer prompt explicitly
-requests it — [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
-instructed"; this spec describes the edit but cannot grant the permission).
+requests it — [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told"; this spec describes the edit but cannot grant the permission).
 
 Status: **SHIPPED (`0.0.13`) — all slices final-accepted; cross-slice integration pass + final test-run gate green.**
 Three slices: Slice 1 (**the auth substrate + `login` / `logout`, earned live** — the
@@ -527,7 +526,7 @@ Project conventions to follow:
   land their live tests in the same commit as their resolvers); the
   settings-keys-only-when-needed rule (this card adds **no** settings key); the
   no-pytest-after-edits rule; the CHANGELOG-edit-permission rule at
-  [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed" —
+  [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" —
   Slice 3's release-note edit must be named in its maintainer prompt.
 - [`START.md`][start] — "Meta classes everywhere on consumer surfaces"; the auth
   factories keep the consumer surface decorator-free (one class-attribute assignment
@@ -2122,8 +2121,7 @@ main, releasing in `0.0.13`" to `shipped (0.0.13)`; [`docs/README.md`][docs-read
 [`README.md`][readme] move the serializer flavor **and** the new auth surface from
 "Coming next" to "Shipped today" (README **Status** version line → `0.0.13`); and
 [`CHANGELOG.md`][changelog] carries the `0.0.13` release bullets covering **both**
-cards. Per [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
-instructed", the `CHANGELOG.md` edit must be explicitly named in the Slice 3
+cards. Per [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", the `CHANGELOG.md` edit must be explicitly named in the Slice 3
 maintainer prompt — this spec describes it but cannot authorize it. `0.0.13` is a
 routine patch cut, not a milestone (`X.Y.0`) rollover, so no `alpha constraint`
 lifts or milestone-prose flips apply. The bump moves only in Slice 3 — after the
@@ -2524,8 +2522,7 @@ aligned with the standing test-placement contract without weakening live coverag
 
 ## Doc updates
 
-Each slice owns its doc edits. [`AGENTS.md`][agents] #"Do not update CHANGELOG.md
-unless explicitly instructed" requires the `CHANGELOG.md` edit to be explicitly
+Each slice owns its doc edits. [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" requires the `CHANGELOG.md` edit to be explicitly
 named in the Slice 3 maintainer prompt — this spec describes the edit but cannot
 itself grant the permission.
 

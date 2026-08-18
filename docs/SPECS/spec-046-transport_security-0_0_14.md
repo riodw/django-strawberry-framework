@@ -565,8 +565,7 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
 - **No transport settings key exists.** `conf.py`'s `DJANGO_STRAWBERRY_FRAMEWORK` block
   carries `APPLY_UPSTREAM_PATCHES`, `NESTED_CONNECTION_STRATEGY`,
   `SINGLE_PARENT_FAST_PATH`, `TESTING_ENDPOINT`, `HIDE_FLAT_FILTERS`, and
-  `RELAY_GLOBALID_STRATEGY`. Per [`AGENTS.md`][agents] #"Add settings keys only when the
-  feature that needs them lands", this card adds exactly one.
+  `RELAY_GLOBALID_STRATEGY`. Per [`AGENTS.md`][agents] #"Add a settings key only when the feature that needs it lands", this card adds exactly one.
 - **The `0.0.14` line carries several cards.** Cards 041-045 landed there before this
   one, and its three program siblings (047, 048, 049) target it too, so the
   [joint version cut][glossary-joint-version-cut] rule applies

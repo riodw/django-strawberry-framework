@@ -89,7 +89,7 @@ Dependency and forward-composition surfaces a reader will hit:
 
 Project conventions to follow:
 
-- [`AGENTS.md`][agents] — the test-placement rule (package tests under `tests/` mirroring source; example-project non-HTTP tests under `examples/fakeshop/tests/`; live HTTP tests under `examples/fakeshop/test_query/`); the live-HTTP-priority coverage rule; the no-pytest-after-edits rule; the settings-keys rule; the CHANGELOG-edit-permission rule at [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed" — each slice's doc-update step grants the explicit per-slice permission.
+- [`AGENTS.md`][agents] — the test-placement rule (package tests under `tests/` mirroring source; example-project non-HTTP tests under `examples/fakeshop/tests/`; live HTTP tests under `examples/fakeshop/test_query/`); the live-HTTP-priority coverage rule; the no-pytest-after-edits rule; the settings-keys rule; the CHANGELOG-edit-permission rule at [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told" — each slice's doc-update step grants the explicit per-slice permission.
 - [`CONTRIBUTING.md`][contributing] — 100% coverage target; coverage is earned through fakeshop live-HTTP flows where practical (Slice 3's nullability flip) and through in-process `call_command` tests where the surface is a management command (Slice 2).
 - [`docs/TREE.md`][tree] — tests mirror source one-to-one; Slice 2 adds [`django_strawberry_framework/management/commands/inspect_django_type.py`][inspect-cmd] alongside the shipped `export_schema.py`.
 - [`START.md`][start] — markdown link convention (reference-style for cross-file links, all defs at the bottom under the 10 canonical group headers).
@@ -621,7 +621,7 @@ The migration is behavior-preserving: the singleton-factory `extensions=[lambda:
 
 ## Doc updates
 
-Each slice owns its own doc edits (the slices ship independently). The CHANGELOG-edit permission for each slice comes from its doc-update step per the explicit-instruction rule at [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed".
+Each slice owns its own doc edits (the slices ship independently). The CHANGELOG-edit permission for each slice comes from its doc-update step per the explicit-instruction rule at [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told".
 
 - **Slice 1**
   - [`docs/README.md`][docs-readme] / [`docs/GLOSSARY.md`][glossary]: rewrite the `extensions=[DjangoOptimizerExtension()]` snippets to the module-level-singleton factory (`_optimizer = DjangoOptimizerExtension(); extensions=[lambda: _optimizer]`) with a one-line "preserves the instance-bound [Plan cache][glossary-plan-cache], no deprecation warning" note, per [Decision 3](#decision-3--slice-1-adopts-the-singleton-factory-extensions-form).
@@ -701,7 +701,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 
 15. [`KANBAN.md`][kanban] records the card as `DONE-NNN-0.0.9` (moved from [`WIP-ALPHA-029-0.0.9`][kanban]) with the card body's spec reference pointing at [`docs/spec-029-consumer_dx_cleanup-0_0_9.md`][spec-029].
 16. **No version bump lands in this card** per [Decision 11](#decision-11--version-bumps-are-owned-by-the-joint-009-cut): `pyproject.toml`, [`__version__`][package-init], [`tests/base/test_init.py::test_version`][test-base-init], and `uv.lock` are unchanged; no [`CHANGELOG.md`][changelog] release heading is promoted (the joint `0.0.9` cut owns that).
-17. Package coverage stays at 100% (`fail_under = 100`). Routine per-slice work does not run pytest locally — that is owned by CI per the no-pytest-after-edits rule at [`AGENTS.md`][agents] #"Do not run pytest after edits".
+17. Package coverage stays at 100% (`fail_under = 100`). Routine per-slice work does not run pytest locally — that is owned by CI per the no-pytest-after-edits rule at [`AGENTS.md`][agents] #"No pytest after edits".
 18. Worker-local validation: `uv run ruff format .` and `uv run ruff check --fix .` pass. The worker does not run pytest as part of routine slice work.
 
 <!-- LINK DEFINITIONS -->

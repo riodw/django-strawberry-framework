@@ -459,7 +459,7 @@ in-process fakeshop request tests.
         `uv run pytest tests/middleware/test_debug_toolbar.py`) for the
         maintainer to run, and does not run the suite itself unless the
         maintainer explicitly authorizes pytest for this slice — the
-        [`AGENTS.md`][agents] #"Do not run pytest" workflow rule; this spec
+        [`AGENTS.md`][agents] #"No pytest after edits" workflow rule; this spec
         describes the verification but does not override that rule. When the
         floor is checked, the three-places-that-must-agree rule applies — the
         dev-group specifier, the `_DEBUG_TOOLBAR_INSTALL_HINT` string, and the
@@ -584,8 +584,7 @@ in-process fakeshop request tests.
         `uv.lock`), the GLOSSARY status flip to `shipped (0.0.14)`, the
         [`README.md`][readme] / [`docs/README.md`][docs-readme] "Coming next" →
         "Shipped today" moves, and the `CHANGELOG.md` bullets. Per
-        [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
-        instructed", the `CHANGELOG.md` edit additionally requires the joint-cut
+        [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", the `CHANGELOG.md` edit additionally requires the joint-cut
         slice's maintainer prompt to grant it explicitly; this spec describes the
         edit but cannot grant the permission.
 

@@ -649,8 +649,7 @@ genuinely-unreachable-live case, not a live-first weakening
         `uv.lock`), the GLOSSARY status flip to `shipped (0.0.14)`, the
         [`README.md`][readme] / [`docs/README.md`][docs-readme] "Coming next" →
         "Shipped today" moves, and the `CHANGELOG.md` bullets. Per
-        [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
-        instructed", the `CHANGELOG.md` edit additionally requires the joint-cut
+        [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", the `CHANGELOG.md` edit additionally requires the joint-cut
         slice's maintainer prompt to grant it explicitly; this spec describes the
         edit but cannot grant the permission.
 

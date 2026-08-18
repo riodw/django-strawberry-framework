@@ -499,8 +499,7 @@ doc breadth.
         established shipped-tense shape (there is no "planned" phrasing to
         flip); the file's products-centric scope is otherwise untouched.
   - [ ] `CHANGELOG.md` — the `0.0.14` release section covering all four
-        cards. Per [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless
-        explicitly instructed", this edit needs explicit permission: **this
+        cards. Per [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", this edit needs explicit permission: **this
         spec's Slice 3 grants it** for exactly the `0.0.14` release section,
         per the [`docs/SPECS/NEXT.md`][next] convention that the owning
         spec's release slice carries the grant; the maintainer's commit
@@ -2183,7 +2182,7 @@ hook refactor (e.g. the [Risks](#risks-and-open-questions) facade fallback)
 does not churn the overlap-safety suite.
 Per the repo rule the implementation worker records the exact pytest
 commands for the maintainer and does not run the suite unless explicitly
-authorized — the [`AGENTS.md`][agents] #"Do not run pytest" workflow rule;
+authorized — the [`AGENTS.md`][agents] #"No pytest after edits" workflow rule;
 this spec describes the verification but does not override it. The
 **targeted** development commands must replace `pytest.ini`'s `addopts`
 (which always adds `--cov`, while `pyproject.toml` enforces

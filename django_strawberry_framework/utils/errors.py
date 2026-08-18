@@ -145,6 +145,15 @@ def _validation_codes(error: Any) -> list[Any]:
     return [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
 
 
+def _empty_validation_error(path: str = "") -> FieldError:
+    """Build the fail-closed leaf for a validation failure carrying no details."""
+    return field_error(
+        path,
+        "Validation failed without error details.",
+        codes="invalid",
+    )
+
+
 def _error_dict_entry(item: Any) -> tuple[Any, Any] | None:
     """Unpack one ``ValidationError.error_dict`` item without trusting its shape."""
     try:
@@ -223,8 +232,13 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                 # message (``error.error_list`` is the flattened leaf list ``error.messages``
                 # reads; a ``None`` code is dropped).
                 codes = [code for error in field_error_items for code in _validation_codes(error)]
-                errors.append(field_error(path, messages, codes=codes))
-            return errors
+                errors.append(
+                    field_error(path, messages, codes=codes)
+                    if messages
+                    else _empty_validation_error(path),
+                )
+            if errors:
+                return errors
     try:
         error_list = tuple(exc.error_list)
     except BaseException:
@@ -234,7 +248,7 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
         messages = list(exc.messages)
     except BaseException:
         messages = [exc]
-    return [field_error("", messages, codes=codes)]
+    return [field_error("", messages, codes=codes) if messages else _empty_validation_error()]
 
 
 def integrity_error_field_errors() -> list[FieldError]:

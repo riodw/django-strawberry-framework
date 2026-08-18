@@ -1,5 +1,6 @@
 """Shared mutation-error constructors remain total over hostile metadata."""
 
+import pytest
 from django.core.exceptions import ValidationError
 
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
@@ -165,3 +166,15 @@ def test_validation_error_mapper_drops_an_unreadable_leaf_code():
     assert error.field == NON_FIELD_ERROR_KEY
     assert error.messages == ["invalid value"]
     assert error.codes == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [({}, NON_FIELD_ERROR_KEY), ([], NON_FIELD_ERROR_KEY), ({"name": []}, "name")],
+)
+def test_validation_error_mapper_never_returns_an_empty_envelope(payload, field):
+    (error,) = validation_error_to_field_errors(ValidationError(payload))
+
+    assert error.field == field
+    assert error.messages == ["Validation failed without error details."]
+    assert error.codes == ["invalid"]

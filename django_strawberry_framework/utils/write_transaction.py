@@ -409,7 +409,13 @@ _READ_ONLY_SQL_PREFIXES = (
 
 def _sql_statement_token(sql: Any) -> str:
     """Return the first meaningful (comment-stripped, uppercased) token of ``sql``."""
-    text = sql if isinstance(sql, str) else str(sql)
+    # ``execute_wrapper`` receives the object handed to ``cursor.execute``.
+    # A consumer can supply a ``str`` subclass whose indexing / slicing methods
+    # lie about the statement while the database adapter still executes the
+    # subclass's base string content. Normalize through ``str.__str__`` before
+    # lexical inspection so the phase guard classifies exactly the text the
+    # adapter sees, never consumer-controlled string behavior.
+    text = str.__str__(sql) if isinstance(sql, str) else str(sql)
     index = 0
     length = len(text)
     while index < length:

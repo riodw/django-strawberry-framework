@@ -1269,6 +1269,20 @@ def test_is_read_only_sql_uses_a_comment_stripped_allow_list():
     assert not is_read_only_sql("")
 
 
+def test_is_read_only_sql_uses_base_string_content_for_subclasses():
+    """A string subclass cannot disguise write SQL as an allowed read token."""
+    from django_strawberry_framework.utils.write_transaction import is_read_only_sql
+
+    class DisguisedWriteSQL(str):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return "SELECT 1"
+            return str.__getitem__("SELECT 1", key)
+
+    sql = DisguisedWriteSQL("DELETE FROM protected_rows")
+    assert not is_read_only_sql(sql)
+
+
 @pytest.mark.django_db
 def test_pinned_alias_guard_rejects_writes_outside_the_write_phase():
     """On the PINNED alias, write SQL is rejected in the read-only phase and allowed inside it."""

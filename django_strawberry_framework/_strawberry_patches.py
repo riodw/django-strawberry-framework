@@ -177,7 +177,7 @@ body/multipart sites. Because the shield is a *reimplementation* rather
 than a delegating wrapper, ``_validate_upstream_shape`` pins the
 superseded upstream body source (the reimplementer's contract
 established by
-``_django_patches._UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE``) so an
+``_django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES``) so an
 upstream body change fails loudly at ``apply()`` time instead of being
 silently superseded. The shield shares the envelope guard's lifecycle:
 retire both together when upstream #3398 lands.
@@ -254,7 +254,6 @@ errors at its HTTP boundary).
 Three lifecycles, and one that left
 -----------------------------------
 
-independent upstream *bugs* that do not retire together:
 Read the retirement question per concern, because this module carries three
 independent upstream *bugs* that do not retire together:
 

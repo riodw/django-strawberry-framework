@@ -2,7 +2,7 @@
 
 Deliberative companion to [`spec-023-multi_db-0_0_7.md`][spec-023]. The spec is the contract and states only what it requires; everything that explains **how it got there** lives here: the five-revision inline changelog the spec carried, the justification and rejected alternatives behind each of the nine Decisions, and every claim a Decision once made and may no longer make.
 
-Created by the [`docs/builder/BUILD.md`][build] `## Spec rationale extraction` pass, run late — as a residual-completion cycle rather than at the card's own pre-flight, because the original `023` cycle never performed step 7. It was produced by Slice 1 of `docs/builder/build-023-multi_db-0_0_7.md`. Slice 2 of that plan reconciled the spec against `HEAD` and appended its own record below, under `## Slice 2 — spec reconciliation`; every forward pointer in the Slice 1 text is closed there.
+Created by the [`docs/builder/BUILD.md`][build] `## Spec rationale extraction` pass, run late — as a residual-completion cycle rather than at the card's own pre-flight, because the original `023` cycle never performed step 7. It was produced by Slice 1 of `docs/builder/DONE/build-023-multi_db-0_0_7.md`. Slice 2 of that plan reconciled the spec against `HEAD` and appended its own record below, under `## Slice 2 — spec reconciliation`; every forward pointer in the Slice 1 text is closed there.
 
 ## Provenance of this record
 
@@ -475,7 +475,7 @@ Two further broken in-page anchors nobody had reported turned up in the same swe
 
 ## Verified against the shipped code
 
-- **The code shipped the spec exactly.** Worker 0's pre-dispatch verification read every Definition-of-done item against `HEAD` before this cycle was dispatched: all six package-internal tests and both live `/graphql/` tests exist under the spec-pinned names, the Slice 3 doc edits all landed, and the four contract axes still hold in source. Nothing was skipped at build time — which is why this cycle changes no code and no tests. The evidence table is in `docs/builder/build-023-multi_db-0_0_7.md` `## Pre-dispatch verification`.
+- **The code shipped the spec exactly.** Worker 0's pre-dispatch verification read every Definition-of-done item against `HEAD` before this cycle was dispatched: all six package-internal tests and both live `/graphql/` tests exist under the spec-pinned names, the Slice 3 doc edits all landed, and the four contract axes still hold in source. Nothing was skipped at build time — which is why this cycle changes no code and no tests. The evidence table is in `docs/builder/DONE/build-023-multi_db-0_0_7.md` `## Pre-dispatch verification`.
 - **Every count stated above was measured at the time of writing**, with the instrument named alongside it.
 - **The two byte figures were measured after the last edit either file received** and re-measured whenever one of them moved.
 - **The post-move sweep returned zero.** `grep -cE 'rev[0-9]' docs/SPECS/spec-023-multi_db-0_0_7.md` reports 0, `scripts/check_spec_glossary.py` still exits 0 at 18 terms, and every reference-style id used in the spec body still resolves to a definition.

@@ -84,10 +84,12 @@ Worker 1 owns whether each of D1-D13 is a spec edit, a rationale entry, or both.
 
 ## Artifact list
 
-- `docs/builder/bld-slice-1-023-rationale_extraction.md`
-- `docs/builder/bld-slice-2-023-spec_reconciliation.md`
-- `docs/builder/bld-integration-023.md`
-- `docs/builder/bld-final-023.md`
+- `docs/builder/bld-slice-1-023-rationale_extraction.md` — DELETED at closeout
+- `docs/builder/bld-slice-2-023-spec_reconciliation.md` — DELETED at closeout
+- `docs/builder/bld-integration-023.md` — DELETED at closeout
+- `docs/builder/bld-final-023.md` — DELETED at closeout
+
+All four are per-cycle scratchpads and were deleted after the work committed at `f466863a`; they are recoverable from that commit (`git show f466863a:<path>`). Every load-bearing measurement they carried is folded into `## Final gate record` below, so no statement in this plan depends on reading them. Citations to them elsewhere in this file are records of what the cycle produced, not live pointers.
 
 ## Checklist
 
@@ -96,9 +98,51 @@ Worker 1 owns whether each of D1-D13 is a spec edit, a rationale entry, or both.
 - [x] Cross-slice integration pass -> `docs/builder/bld-integration-023.md`
 - [x] Final gate -> `docs/builder/bld-final-023.md`
 
+## Final gate record
+
+Folded out of `docs/builder/bld-final-023.md` before that artifact was deleted. These are the four things it carried that exist nowhere else; the rest of it duplicated this plan, was already carded, or described a tree state that has since moved.
+
+### Gate commands, as run
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `uv run ruff format --check .` | PASS — `424 files already formatted`, exit 0 |
+| 2 | `uv run ruff check .` | PASS — `All checks passed!`, exit 0 |
+| 3 | `git diff --check` | PASS — no output, exit 0, across this cycle's files and the concurrent session's |
+| 4 | `uv run python scripts/check_trailing_commas.py --check` | FAIL repo-wide on ONE violation, attributed below; PASS scoped |
+| 5 | `uv run python scripts/check_spec_glossary.py --spec docs/SPECS/spec-023-multi_db-0_0_7.md` | PASS — `OK: 18 terms - all have glossary entries and at least one spec link.`, exit 0 |
+
+Command 4 scoped twice, and both are the runs that actually cover this cycle: over every tracked candidate (`$(git ls-files '*.md' '*.py' '*.csv')`, **859 files**) -> exit **0**; over the cycle's own diff -> exit **0**. Ruff is Python-only and this diff is Markdown and CSV, so command 4 is the only lint that reads the diff at all.
+
+The single repo-wide violation is a **git-ignored non-repository file** — an agent's local auto-memory topic file under `.claude/`, untracked, matched by `.gitignore:170`, with an mtime four days before this cycle. The checker's directory walk does not consult `.gitignore`. Attributed, not fixed. This is a known false red already carded on `TODO-ALPHA-052-0.1.0`, which owns teaching the walker to skip ignored paths or declaring the script scoped-run-only.
+
+### Commands deliberately NOT run, and the authority
+
+Decided answers, not omissions. `uv run pytest --no-cov`, `examples/fakeshop/manage.py check`, and `makemigrations --check --dry-run` were all skipped: `AGENTS.md` #"No pytest after edits" governs, `docs/builder/worker-1.md` `## Required reading` says an instruction conflicting with `AGENTS.md` or `START.md` loses, and `START.md` names all three in one breath. **`docs/builder/BUILD.md`'s gate is the conflicting instruction and it loses.** Independently of precedence, the diff contains zero Python, so no test's behaviour is reachable from it and a green sweep would have been evidence about the concurrent session's tree rather than this build. No `--cov*` flag was passed by any pass in the cycle.
+
+### The rationale MOVE, proved mechanically
+
+The cycle's central act is Slice 1's claim that the deliberative layer was **moved**, not copied and not summarized, and `docs/builder/worker-1.md` requires the claim be proved rather than accepted. Measured at the integration pass over the spec / rationale pair: exact long-sentence overlap **0**, and the longest shared word-shingle run **33 words**, each one read and accounted for as a link-definition tail, a quoted out-of-scope enumeration, or a short mechanism restatement the rationale needs verbatim. Text that landed in the rationale left the spec. Slice 1's mechanism is consistent with the measurement — its cut script captured each excised block to JSON and deleted it in the same run, so no block was retyped and none could survive in both files.
+
+### Postcondition measurements on the spec / rationale pair
+
+Re-verified at the gate rather than accepted from the integration pass:
+
+- Anchors and references, both files: in-page unresolved **none**, used-not-defined **none**, defined-not-used **none**; **0** missing definition paths; **0** broken cross-file `#fragment`.
+- Duplicate link-definition targets: **0** in both files (7 in the rationale before the integration pass fixed them).
+- `#"substring"` citations: spec **47**, **0** broken. Rationale **22**, **1** broken — the dead `KANBAN.md` locator homed on `TODO-ALPHA-052-0.1.0` above.
+- `grep -oE 'rev[0-9]'`: **0** in the spec, **0** in the terms CSV (202 in the spec before Slice 1).
+- `four axes` **6** occurrences; `five axes` / `fifth axis` **0**. The framing the shipped GLOSSARY and CHANGELOG share survived the reconciliation.
+- `grep -oE '\([a-g]\)'` in the spec: **40** occurrences, `(g)` **0**, all resolving to the six-test a-f layout.
+- Staged anchors naming this build (`TODO(spec-023`, `TODO-(ALPHA|BETA|STABLE)-023`): **0 lines** repo-wide, before any exclusion.
+
+### Closeout
+
+Not performed, by maintainer instruction: no edit to `docs/builder/BUILD.md`, `docs/builder/ARTIFACT.md`, or any `docs/builder/worker-*.md` role file; no retrospective; no KANBAN or CHANGELOG movement.
+
 ## Deferred-work homing
 
-The final gate catalogued three deferrals (`docs/builder/bld-final-023.md` `## Deferred work catalog`); a fourth was measured after that artifact reached `final-accepted` and is recorded here rather than back-dated into it. Each of the four was **re-derived against the working tree at homing time**, not carried from the pass that raised it — the spec-020 cycle's homing found two wrong claims in its own catalog, so a catalog is a claim and re-derivation is the precondition for moving one.
+The final gate catalogued three deferrals, restated in full below; a fourth was measured after that gate closed `final-accepted` and is recorded here rather than back-dated into it. Each of the four was **re-derived against the working tree at homing time**, not carried from the pass that raised it — the spec-020 cycle's homing found two wrong claims in its own catalog, so a catalog is a claim and re-derivation is the precondition for moving one.
 
 The homing itself is a kanban-DB edit plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate, which is outside this cycle's spec-and-`.py` scope and outside the concurrent-writer freeze on `examples/fakeshop/db.sqlite3`. This section is the record the homing pass works from; no card body was edited by this cycle.
 

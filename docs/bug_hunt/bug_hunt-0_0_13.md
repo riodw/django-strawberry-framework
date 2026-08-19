@@ -1,6 +1,6 @@
 # Bug hunt: 0.0.13
 
-Status: paused — maintainer wrap-up mid-hunt (resume at `optimizer/field_meta.py`)
+Status: in-progress
 Mode: autonomous
 Baseline commit: `1eb99b967a0ed223380bf3402919160ccff62893`
 
@@ -387,29 +387,42 @@ target is narrow; the investigation and root-cause fix may cross files.
     - Prompt:
         - Use django_strawberry_framework/optimizer/extension.py as the entry point. Read docs/shadow/current/django_strawberry_framework__optimizer__extension.stripped.py and docs/shadow/current/django_strawberry_framework__optimizer__extension.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
 
-- [ ] django_strawberry_framework/optimizer/field_meta.py
-    - Status: pending
+- [x] django_strawberry_framework/optimizer/field_meta.py
+    - Status: no-bugs
+    - Cycle baseline: HEAD `f466863a` (hunt baseline `1eb99b96`); ignore concurrent dirty paths; do not revert verified hunt fixes.
+    - Result: No bugs. Evidence: FieldMeta from_django_field / _from_field_shape invariants, cardinality nullability, FK-ID elision rules, _target_pk_name defensive paths, resolver fallback integration all match specifications. 22 permanent + 9 scratch tests passed.
+    - Verification: Passed. Source unchanged; reran 9 scratch probes + 22 permanent tests -> green. Unrelated work preserved.
+    - Cleanup: Removed docs/bug_hunt/temp-tests/optimizer_field_meta/; unrelated work preserved.
     - docs/shadow/current/django_strawberry_framework__optimizer__field_meta.stripped.py
     - docs/shadow/current/django_strawberry_framework__optimizer__field_meta.overview.md
     - Prompt:
         - Use django_strawberry_framework/optimizer/field_meta.py as the entry point. Read docs/shadow/current/django_strawberry_framework__optimizer__field_meta.stripped.py and docs/shadow/current/django_strawberry_framework__optimizer__field_meta.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
 
-- [ ] django_strawberry_framework/optimizer/hints.py
-    - Status: pending
+- [x] django_strawberry_framework/optimizer/hints.py
+    - Status: verified
+    - Cycle baseline: HEAD `f466863a` (hunt baseline `1eb99b96`); ignore concurrent dirty paths; do not revert verified hunt fixes.
+    - Result: Fixed Low. `OptimizerHint.strategy(None)` silently accepted `None` and collapsed into empty default hint without raising `ConfigurationError`. Fix: `_require_strategy` helper rejects `None` with `ConfigurationError` and routes through `resolve_strategy`. Files: `optimizer/hints.py`, `tests/optimizer/test_hints.py`.
+    - Verification: Passed. Pre-fix `strategy(None)` proof failed; restored -> 50 hints tests pass. Fix at correct owner.
+    - Cleanup: Removed docs/bug_hunt/temp-tests/optimizer_hints/; unrelated work preserved.
     - docs/shadow/current/django_strawberry_framework__optimizer__hints.stripped.py
     - docs/shadow/current/django_strawberry_framework__optimizer__hints.overview.md
     - Prompt:
         - Use django_strawberry_framework/optimizer/hints.py as the entry point. Read docs/shadow/current/django_strawberry_framework__optimizer__hints.stripped.py and docs/shadow/current/django_strawberry_framework__optimizer__hints.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
 
-- [ ] django_strawberry_framework/optimizer/join_taxonomy.py
-    - Status: pending
+- [x] django_strawberry_framework/optimizer/join_taxonomy.py
+    - Status: no-bugs
+    - Cycle baseline: HEAD `f466863a` (hunt baseline `1eb99b96`); ignore concurrent dirty paths; do not revert verified hunt fixes.
+    - Result: No bugs. Evidence: `classify_relation_join` taxonomy, `LateralJoinShape` invariants, defensive containment helpers (`_safe_getattr`, `_safe_truthy`, `_safe_flag`), M2M through-links, GenericRelation and reverse O2O/FK mapping verified. 15 permanent + 7 scratch tests passed.
+    - Verification: Passed. Source unchanged; reran 7 scratch probes + 15 permanent tests -> green. Unrelated work preserved.
+    - Cleanup: Removed docs/bug_hunt/temp-tests/optimizer_join_taxonomy/; unrelated work preserved.
     - docs/shadow/current/django_strawberry_framework__optimizer__join_taxonomy.stripped.py
     - docs/shadow/current/django_strawberry_framework__optimizer__join_taxonomy.overview.md
     - Prompt:
         - Use django_strawberry_framework/optimizer/join_taxonomy.py as the entry point. Read docs/shadow/current/django_strawberry_framework__optimizer__join_taxonomy.stripped.py and docs/shadow/current/django_strawberry_framework__optimizer__join_taxonomy.overview.md for baseline orientation, then hunt the connected live system and implement every confirmed root-cause fix.
 
 - [ ] django_strawberry_framework/optimizer/lateral_fetch.py
-    - Status: pending
+    - Status: hunting
+    - Cycle baseline: HEAD `f466863a` (hunt baseline `1eb99b96`); ignore concurrent dirty paths; do not revert verified hunt fixes.
     - docs/shadow/current/django_strawberry_framework__optimizer__lateral_fetch.stripped.py
     - docs/shadow/current/django_strawberry_framework__optimizer__lateral_fetch.overview.md
     - Prompt:

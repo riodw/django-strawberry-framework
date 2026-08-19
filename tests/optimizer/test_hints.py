@@ -125,6 +125,13 @@ class TestStrategyFactory:
         assert hint.nested_strategy == "windowed"
         assert hint.force_prefetch is True
 
+    def test_none_rejected(self) -> None:
+        """``None`` must not collapse into the empty no-op hint."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="strategy name"):
+            OptimizerHint.strategy(None)  # type: ignore[arg-type]
+
     def test_bad_name_raises_at_construction(self) -> None:
         """A typo'd strategy name fails loud through ``resolve_strategy``."""
         from django_strawberry_framework.exceptions import ConfigurationError

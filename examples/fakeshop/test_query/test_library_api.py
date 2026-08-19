@@ -749,9 +749,7 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
 def test_library_branches_via_djangolistfield_nullable_outer_renders_and_resolves():
     """A ``list[BranchType] | None`` DjangoListField renders nullable-outer and still resolves.
 
-    Live counterpart of the (removed) package test
-    ``tests/test_list_field.py::test_djangolistfield_nullable_outer_via_consumer_annotation``,
-    promoted to this tier per ``test_query/README.md`` (the shape is reachable from a live
+    Live-tier coverage promoted per ``test_query/README.md`` (the shape is reachable from a live
     ``/graphql/`` introspection query). The consumer's ``list[BranchType] | None`` class
     annotation - NOT a constructor argument - must drive the rendered GraphQL type to
     ``[BranchType!]`` (a ``LIST`` whose outer ``NON_NULL`` wrapper is ABSENT, vs the sibling
@@ -6355,7 +6353,7 @@ def test_create_shelf_via_form_visible_branch_resolves_by_to_field_name_and_writ
 
 @pytest.mark.django_db
 def test_create_shelf_model_mutation_hidden_branch_is_field_error():
-    """The MODEL pipeline's raw-pk relation decode hides a Branch live (``_raw_pk_relation_error``).
+    """The MODEL pipeline's raw-pk relation decode hides a Branch live (``utils/write_values.py::decode_visible_relation``).
 
     The model-path twin of the form decoder's raw-pk visibility fix: a raw-pk FK to
     the non-Relay ``BranchType`` is visibility-checked through its ``get_queryset``,
@@ -6377,7 +6375,7 @@ def test_create_shelf_model_mutation_hidden_branch_is_field_error():
 
 @pytest.mark.django_db
 def test_create_shelf_model_mutation_hidden_alt_branch_m2m_is_field_error():
-    """The MODEL pipeline's raw-pk M2M decode hides a Branch live (``_raw_pk_relation_error``, multi).
+    """The MODEL pipeline's raw-pk M2M decode hides a Branch live (``utils/write_values.py::decode_visible_relation_ids``, multi).
 
     Rounds out the model-path raw-pk arm: ``createShelf`` accepts ``altBranches`` (a
     raw-pk M2M to the non-Relay ``BranchType``), so a hidden (restricted) member is a

@@ -395,7 +395,7 @@ def serializer_errors_to_field_errors(
     """Depth-first flatten DRF nested ``serializer.errors`` into the ``FieldError`` envelope (NET-NEW).
 
     The recursive analog of the flat ``036``
-    ``mutations/resolvers.py::validation_error_to_field_errors`` - both terminate in
+    ``utils/errors.py::validation_error_to_field_errors`` - both terminate in
     the SAME ``field_error`` leaf ctor, so the ``"__all__"`` sentinel
     + the message coercion cannot drift. DRF's ``serializer.errors`` (and a DRF
     ``ValidationError.detail``) is a nested structure of dicts (per-field), lists

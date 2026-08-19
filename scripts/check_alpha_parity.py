@@ -4,7 +4,7 @@ The rule is recorded in the board itself as the `decision-alpha-cards-require-pa
 reference `BoardDoc` (rendered into ``KANBAN.md``). The board data lives in the
 fakeshop example DB (``examples/fakeshop/db.sqlite3``, app ``apps.kanban``); this gate
 reads it through the same Django bootstrap the KANBAN exporters use
-(``scripts/build_kanban_html.py::configure_django``).
+(``scripts/_kanban_lib.py::configure_django``).
 
 A card is compliant when it has at least one ``ParityClaim`` (against ``graphene_django``
 and/or ``strawberry_django``) AND at least one ``CardItem`` in the ``verified_upstream``

@@ -227,7 +227,7 @@ Every attribute the spec adds is one the test plan has to pin; every attribute t
 
 `DjangoStrawberryFrameworkConfig` overrides `ready()`, and the override does exactly one thing: it dispatches the package's three defensive upstream-patch appliers, in this order — `django_strawberry_framework/_django_patches.py::apply`, then `django_strawberry_framework/_strawberry_patches.py::apply`, then `django_strawberry_framework/_cross_web_patches.py::apply` (`django_strawberry_framework/apps.py::DjangoStrawberryFrameworkConfig.ready`). The three imports are **function-local**, so importing `django_strawberry_framework.apps` outside Django pulls in no patch module.
 
-One patch module per third-party dependency the package has to patch. **Each module's own docstring is the single source of truth for exactly which upstream bugs it hardens**, and `ready()` deliberately repeats none of that inventory — so does this Decision, for the same reason: a second copy of the inventory is a second thing to keep true.
+One patch module per third-party dependency the package has to patch — the mechanism as a whole is [Upstream patches][glossary-upstream-patches]. **Each module's own docstring is the single source of truth for exactly which upstream bugs it hardens**, and `ready()` deliberately repeats none of that inventory — so does this Decision, for the same reason: a second copy of the inventory is a second thing to keep true.
 
 Every applier self-gates on the `APPLY_UPSTREAM_PATCHES` setting (`django_strawberry_framework/conf.py::upstream_patches_enabled`, default on). A consumer who sets `DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}` gets none of them; the per-dependency mapping form `{"APPLY_UPSTREAM_PATCHES": {"django": False}}` disables one dependency's patches and leaves the others installed. **The gate lives inside each `apply()`, not in `ready()`** — the dispatcher is unconditional, so a consumer reading `ready()` sees three unguarded calls and must follow them to `conf.py` for the gate. That placement is deliberate: the gate is per dependency, and a `ready()`-level gate could only be all-or-nothing.
 
@@ -418,6 +418,7 @@ The card is complete when all of the following are true:
 [glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
 [glossary-schema-export-management-command]: ../GLOSSARY.md#schema-export-management-command
 [glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upstream-patches]: ../GLOSSARY.md#upstream-patches
 [readme]: ../README.md
 [tree]: ../TREE.md
 

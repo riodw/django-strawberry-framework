@@ -455,8 +455,6 @@ def test_scalar_specimen_introspects_json_scalar_in_both_shapes():
 
     Pins the ``JSONField -> strawberry.scalars.JSON`` converter table entry at
     the GraphQL introspection layer over a live ``/graphql/`` request.
-    Migrated from ``tests/types/test_converters.py::test_json_field_maps_to_json_scalar_in_schema``
-    (and supersedes the sibling ``test_json_field_nullable_in_schema``).
     """
     required_fields = _introspect_field_types("ScalarSpecimenType")
     nullable_fields = _introspect_field_types("NullableScalarSpecimenType")
@@ -682,8 +680,7 @@ def test_scalar_specimen_bigint_input_decimal_string_argument_over_http():
     the consumer passes ``signedBig: "9223372036854775000"`` (string form,
     safe for values past the JS safe-integer boundary) and the resolver
     must receive ``9223372036854775000`` as an int so the ORM lookup finds
-    the seeded row. Migrated from
-    ``tests/types/test_converters.py::test_bigint_parses_string_argument_via_schema_execution``.
+    the seeded row.
     """
     target = _seed_specimen(label="target", signed_big=_SIGNED_BIG)
     _seed_specimen(label="other", signed_big=42)
@@ -717,8 +714,7 @@ def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
     Pins ``BigInt.parse_value``'s int acceptance end-to-end: when the
     requested value fits in JSON's safe-integer range the consumer can
     pass it as a bare int literal (``signedBig: 42``) and the resolver
-    must receive ``42`` as an int. Migrated from
-    ``tests/types/test_converters.py::test_bigint_parses_int_argument_via_schema_execution``.
+    must receive ``42`` as an int.
     """
     _seed_specimen(label="target", signed_big=42)
     _seed_specimen(label="other", signed_big=_SIGNED_BIG)
@@ -753,10 +749,6 @@ def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
     by ``test_library_api.py::test_library_optimizer_selects_book_shelf_in_http_query``
     (book -> shelf). Proves the walker's planner does not loop or
     double-resolve when the relation target is the source model itself.
-    Migrated from
-    ``tests/optimizer/test_extension.py::test_optimizer_applies_select_related_for_forward_fk``
-    (whose synthetic ``schema.execute_sync`` against ``Item -> Category`` is
-    redundant with the library HTTP test plus this self-FK shape).
     """
     parent = _seed_specimen(label="root")
     _seed_specimen(label="child_a", parent=parent)
@@ -797,8 +789,6 @@ def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query():
     ``test_library_api.py::test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http``
     (shelf -> books). Proves the prefetch planner does not loop or
     double-prefetch when the source and target model coincide.
-    Migrated from
-    ``tests/optimizer/test_extension.py::test_optimizer_applies_prefetch_related_for_reverse_fk``.
     """
     root = _seed_specimen(label="root")
     _seed_specimen(label="leaf_a", parent=root)
@@ -836,7 +826,7 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
     and synthesizes the stub at resolver time. Distinct from the
     cross-model FK case; previously unreachable from any HTTP test.
     Behavioral half of the migration from
-    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection``;
+    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection_plan_shape``;
     the plan-state assertions (``plan.fk_id_elisions``, ``plan.only_fields``,
     ``ctx.dst_optimizer_fk_id_elisions``) stay package-internal in the same
     test, slimmed of the now-redundant query-count and data-correctness
@@ -966,11 +956,10 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
     the relation - it must plan ``select_related("parent")`` and issue a
     JOIN. Otherwise the resolver-time FK-id stub would carry only the id
     and the extra scalar would resolve to ``None``. Exercised against the
-    self-FK ``ScalarSpecimen.parent``. Behavioral half of the migration from
-    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected``;
-    the plan-state half (``select_related == ("parent",)``,
-    ``fk_id_elisions == ()``, full ``only_fields``) stays package-internal
-    in the slimmed sibling test.
+    self-FK ``ScalarSpecimen.parent``. This is the behavioral half; the
+    plan-state half (``select_related == ("parent",)``, ``fk_id_elisions == ()``,
+    full ``only_fields``) stays package-internal in
+    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_shape``.
     """
     root = _seed_specimen(label="root")
     child = _seed_specimen(label="child", parent=root)
@@ -1109,11 +1098,10 @@ def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_h
     id-only selection. It must plan a ``Prefetch(queryset=cls.get_queryset(...))``
     so the consumer's filter survives end-to-end. Observable as 2 SQL
     queries (root SELECT + prefetched tag SELECT) rather than 1 SQL query
-    via JOIN or elision. Behavioral half of the migration from
-    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset``;
-    the plan-state half (``plan.select_related``, ``plan.fk_id_elisions``,
-    ``plan.only_fields``, ``plan.prefetch_related``) stays package-internal
-    in the slimmed sibling test.
+    via JOIN or elision. This is the behavioral half; the plan-state half
+    (``plan.select_related``, ``plan.fk_id_elisions``, ``plan.only_fields``,
+    ``plan.prefetch_related``) stays package-internal in
+    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset_plan_shape``.
     """
     active = _seed_tag(label="active-tag", active=True)
     _seed_specimen(label="tagged", tag=active)
@@ -1235,11 +1223,10 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
     pass through unoptimized and the consumer would pay N+1 on any
     forward-FK selection. ``apps.scalars.schema.Query.all_scalar_specimens_via_manager``
     deliberately returns the bare Manager so the live HTTP query
-    exercises this path end-to-end. Behavioral half of the migration
-    from ``tests/optimizer/test_extension.py::test_optimize_coerces_manager_through_all``;
-    the cache-state half (``ext.cache_info().misses == 1`` - proof the
-    plan was actually built) stays package-internal in the slimmed
-    sibling test.
+    exercises this path end-to-end. This is the behavioral half; the
+    cache-state half (``ext.cache_info().misses == 1`` - proof the plan was
+    actually built) stays package-internal in
+    ``tests/optimizer/test_extension.py::test_optimize_coerces_manager_through_all_records_cache_miss``.
 
     Distinct from ``DjangoListField``'s own Manager coercion path
     exercised by ``apps.library.schema._branches_manager_resolver``:

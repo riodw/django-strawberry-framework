@@ -289,7 +289,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
-    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -414,7 +414,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
-    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters.
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -649,6 +649,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
+├── test_products_visibility_api.py  # Live GraphQL proof that generated relations enforce target visibility themselves.
 ├── test_resource_policy_api.py   # Live ``/graphql/`` execution-resource-policy acceptance tests (spec-047).
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.

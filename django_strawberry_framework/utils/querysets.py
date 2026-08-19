@@ -3049,7 +3049,7 @@ def related_visibility_queryset(
     ``DjangoType.get_queryset`` visibility hook, else no contract" branch that four
     relation surfaces open with (``visible_related_object`` /
     ``visible_related_objects`` here, the model
-    ``mutations/resolvers.py::_raw_pk_relation_error``, and the serializer
+    ``utils/write_values.py::decode_visible_relation``, and the serializer
     ``rest_framework/resolvers.py::_scope_specs_over_serializer``). ``None`` means
     "the related model has no registered primary ``DjangoType``" - a raw-pk relation
     with no visibility contract - and each caller keeps its OWN None-handling
@@ -3103,7 +3103,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
 
     The ``{str(pk) for pk in queryset.filter(pk__in=...).values_list("pk", flat=True)}``
     lookup the relation membership checks share (spec-039 Md4): the model
-    ``mutations/resolvers.py::_relation_membership_error`` and the serializer
+    ``utils/write_values.py::decode_visible_relation_ids`` and the serializer
     ``visible_related_objects`` both build this present-set in one query, stringifying
     each pk for a type-agnostic membership compare (an int pk and its ``"3"`` string
     form compare equal). Single-sites the query + the str-coercion so the
@@ -3126,7 +3126,7 @@ def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
     """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039 Md4).
 
     The subset-membership test the model relation guard
-    (``mutations/resolvers.py::_relation_membership_error``) and the serializer M2M
+    (``utils/write_values.py::decode_visible_relation_ids``) and the serializer M2M
     decoder (``rest_framework/resolvers.py::_decode_relation_multi``) share: a
     ``declared`` set is fully present iff its stringified members are a subset of the
     ``present`` set (typically from ``stringified_pks_present``). A missing / hidden
@@ -3144,10 +3144,9 @@ def visible_related_object(
 ) -> Any | None:
     """Resolve the VISIBLE related object by pk through the related primary's ``get_queryset``.
 
-    The object-returning visibility-on-every-branch query, promoted from
-    ``forms/resolvers.py::_visible_related_object`` so the form AND
-    serializer relation decoders share ONE implementation rather than forking a
-    second object-returning decoder. Resolves the related model's primary
+    The object-returning visibility-on-every-branch query, single-sited so the
+    form AND serializer relation decoders share ONE implementation rather than
+    forking a second object-returning decoder. Resolves the related model's primary
     ``DjangoType`` via the registry and runs the SAME visibility hook every read
     surface applies (``visibility_scoped_related_queryset`` =
     ``apply_type_visibility_sync(initial_queryset(...))``), so a writer cannot

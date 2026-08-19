@@ -534,8 +534,8 @@ def is_forward_many_to_many(field: object) -> bool:
 
     Single-sited here so the predicate cannot drift across the write surfaces
     that select editable / attestable M2M fields - the model-mutation input
-    generator (``mutations/inputs.py::_select_editable_fields``), the
-    relation-field index (``mutations/resolvers.py::_index_relation_fields``),
+    generator (``mutations/inputs.py::editable_input_fields``), the
+    relation-field index (``mutations/inputs.py::_relation_field_index``),
     and the DRF attestation filter
     (``rest_framework/resolvers.py::_attestable_m2m_fields``). ``getattr``
     defaults defend against field shapes that omit a flag, matching

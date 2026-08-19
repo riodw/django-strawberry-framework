@@ -11,3 +11,4 @@ Debug-toolbar middleware,debug-toolbar-middleware,Planned for `0.0.12`; listed i
 Response-extensions debug middleware,response-extensions-debug-middleware,Planned for `0.0.12`; listed in Out of scope.
 TestClient,testclient,Planned for `0.0.12`; listed in Out of scope.
 GraphQLTestCase,graphqltestcase,Planned for `0.0.12`; listed in Out of scope.
+Upstream patches,upstream-patches,The app-load patch mechanism Decision 4's `ready()` dispatches; covers the Strawberry and `cross_web` appliers that `Django Trac #37064 hardening` does not.

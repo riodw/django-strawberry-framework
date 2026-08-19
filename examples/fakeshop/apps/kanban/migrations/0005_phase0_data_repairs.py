@@ -103,7 +103,7 @@ def _dedupe_and_renumber_references(apps, schema_editor):
                 CardItem.objects.using(alias).filter(pk=item.pk).update(text=new_text)
         # ``CardReference.raw_text`` is the third prose surface carrying
         # ``{{card_ref:N}}`` placeholders (the exporter resolves them at
-        # build_kanban_md.py::card_reference_lines), so it renumbers too.
+        # build_kanban_md.py::resolve_card_refs_for_card), so it renumbers too.
         for reference in manager.filter(source_card=source_id):
             new_raw = _remap_card_ref_placeholders(reference.raw_text or "", old_to_new)
             if new_raw != (reference.raw_text or ""):

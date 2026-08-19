@@ -1313,7 +1313,7 @@ def test_djangolistfield_non_nullable_outer_default_via_consumer_annotation() ->
 
 # -----------------------------------------------------------------------------
 # Group G (continued) - FK-id elision (mirrors
-# ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection``).
+# ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection_plan_shape``).
 # -----------------------------------------------------------------------------
 
 
@@ -1325,7 +1325,7 @@ def test_djangolistfield_fk_id_elision_survives(django_assert_num_queries) -> No
     ``category { id }`` selection: no JOIN, no prefetch, ``only_fields``
     includes ``category_id``, and the plan's ``fk_id_elisions`` tuple
     carries the resolver key. Mirrors the existing integration pattern at
-    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection`` (spec #"test_djangolistfield_fk_id_elision_survives").
+    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection_plan_shape`` (spec #"test_djangolistfield_fk_id_elision_survives").
     """
     services.seed_data(1)
 

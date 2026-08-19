@@ -197,7 +197,7 @@ task from a ``finally``, and settlement is its TERMINAL owner, so a cancelled or
 failing teardown can neither skip it nor leave it running past the connection.
 
 **A same-connection ``logout`` is a revocation event, and the socket ends.** The
-package's own ``auth/mutations.py::logout`` mutation runs on the connection it is
+package's own ``auth/mutations.py::logout_mutation`` mutation runs on the connection it is
 sent over, and it both flushes the durable session and replaces ``scope["user"]``
 with ``AnonymousUser``. That is an actor transition, not a downgrade to an
 anonymous socket, so the connection's next protected checkpoint - which is

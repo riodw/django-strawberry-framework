@@ -181,7 +181,7 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
 
     The plan-time/resolve-time contract shared - like the sidecar-kwarg family
     above - by everything that must agree on "ambiguous": the window builders
-    that ADD the marker rows (``plans.py::window_range_plan``, feeding both
+    that ADD the marker rows (``utils/connections.py::window_range_plan``, feeding both
     ``apply_window_pagination`` and the lateral SQL) and the resolver that
     CONSUMES rows as marker-classified (``connection.py::_resolve_from_window``).
     The count decision is a SEPARATE axis owned by ``FetchMode`` /

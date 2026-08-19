@@ -69,6 +69,25 @@ def _require_prefetch(obj: object) -> Prefetch:
     return obj
 
 
+def _require_strategy(name: object) -> StrategySelection:
+    """Return ``name`` when it is a valid strategy selection; else raise ``ConfigurationError``.
+
+    Single owner for the strategy-selection invariant shared by
+    ``OptimizerHint.strategy`` (factory argument) and ``__post_init__``
+    (direct ``nested_strategy=`` construction). The factory must call this
+    before ``cls(nested_strategy=...)`` because ``None`` is the dataclass's
+    legitimate "no strategy override" default - without a factory-side
+    check, ``strategy(None)`` would become a silent no-op.
+    """
+    if name is None:
+        raise ConfigurationError(
+            "OptimizerHint.strategy(name) requires a strategy name ('windowed' | 'lateral' | 'auto') "
+            f"or a NestedConnectionStrategy instance; got {_safe_type_name(name)}.",
+        )
+    resolve_strategy(name)
+    return name  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class OptimizerHint:
     """Typed optimization directive for a single relation field.
@@ -162,9 +181,9 @@ class OptimizerHint:
                     "with SKIP (skip=True), prefetch(obj), or select_related(); force_prefetch "
                     "is redundant but allowed.",
                 )
-            # Route the name through ``resolve_strategy`` for typo-loud
+            # Route the name through ``_require_strategy`` for typo-loud
             # ConfigurationError parity (module-level import above; no cycle).
-            resolve_strategy(self.nested_strategy)
+            _require_strategy(self.nested_strategy)
 
     # ------------------------------------------------------------------
     # Factory classmethods
@@ -176,13 +195,13 @@ class OptimizerHint:
 
         ``name`` is a registered strategy name (``"windowed"`` / ``"lateral"``),
         ``"auto"``, or a ``NestedConnectionStrategy`` instance. It is validated
-        at construction time through
-        ``optimizer/nested_fetch.py::resolve_strategy`` (see ``__post_init__``),
-        so a typo raises ``ConfigurationError`` at ``Meta.optimizer_hints``
-        build time rather than at query time. Applies only to Relay connection
-        fields; a non-connection field silently ignores the override.
+        at construction time through ``_require_strategy`` (and
+        ``optimizer/nested_fetch.py::resolve_strategy``), so a typo or ``None``
+        raises ``ConfigurationError`` at ``Meta.optimizer_hints`` build time
+        rather than at query time. Applies only to Relay connection fields; a
+        non-connection field silently ignores the override.
         """
-        return cls(nested_strategy=name)
+        return cls(nested_strategy=_require_strategy(name))
 
     @classmethod
     def select_related(cls) -> OptimizerHint:

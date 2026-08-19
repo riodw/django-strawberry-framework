@@ -829,11 +829,11 @@ def _build_input_fields(
     # shown, BOTH the flat and nested shapes appear (graphene-django parity).
     # Upstream achieves this with a throwaway trimmed-subclass + a separate
     # flat-args merge on the connection field
-    # (``connection_field.py::_get_trimmed_filterset_class``); because this
-    # package emits a single Strawberry input type here, the same
+    # (``django_graphene_filters/connection_field.py::_get_trimmed_filterset_class``);
+    # because this package emits a single Strawberry input type here, the same
     # ``is_expanded_child`` rule is just a skip in this loop, so the hidden
-    # operator-bag classes are never built in the first place. The key is
-    # read through its ``conf.py`` named reader; truthiness coercion is this
+    # operator-bag classes are never built in the first place. The key is read
+    # through its ``conf.py`` named reader; truthiness coercion is this
     # consumer's own semantics (the reader stays thin).
     hide_flat_filters = bool(hide_flat_filters_setting())
 
@@ -844,9 +844,11 @@ def _build_input_fields(
         ``entries__property__category__name``) is an "expanded child" of a
         declared ``RelatedFilter`` - its first path segment names the relation.
         Such paths are reachable through the nested branch already; hide them
-        when ``HIDE_FLAT_FILTERS`` is set (upstream parity:
-        ``connection_field.py:238-242``). This pre-filter stays filter-family
-        semantics, BEFORE the shared emission scaffold.
+        when ``HIDE_FLAT_FILTERS`` is set -- the same ``is_expanded_child``
+        skip upstream applies inside
+        ``django_graphene_filters/connection_field.py::_get_trimmed_filterset_class``.
+        This pre-filter stays filter-family semantics, BEFORE the shared
+        emission scaffold.
         """
         for top_name, lookup_bag in grouped.items():
             if (

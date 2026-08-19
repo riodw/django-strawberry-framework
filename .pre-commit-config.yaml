@@ -14,7 +14,13 @@ repos:
         name: kanban tracked path constants
         entry: uv run python scripts/build_kanban_tracked_path_constants.py
         language: system
-        files: ^(django_strawberry_framework/|tests/|examples/fakeshop/(test_query|tests)/|examples/fakeshop/apps/[^/]+/tests/)
+        # `always_run` because pre-commit's staged-file list omits DELETED paths:
+        # a commit that only removes a tracked file would otherwise never fire the
+        # hook and would land stale constants for the NEXT contributor's hook (or
+        # CI) to trip over. The script reads the whole tracked set from git and
+        # skips the write when nothing changed, so a non-matching commit costs one
+        # `git ls-files`.
+        always_run: true
         pass_filenames: false
         require_serial: true
 
@@ -23,6 +29,10 @@ repos:
         entry: uv run python scripts/check_trailing_commas.py --fix
         language: system
         files: \.(py|md|json|graphql|gql)$
+        # Redundant with EXCLUDE_DIRS in the script, but load-bearing here: the
+        # script now REPORTS any file it was handed and then excluded (so a
+        # silently-unenforced file cannot read as a clean pass), and without this
+        # every commit touching a migration would print a skip line.
         exclude: /migrations/
         require_serial: true
 
@@ -38,4 +48,19 @@ repos:
         entry: uv run ruff check --fix
         language: system
         types: [python]
+        require_serial: true
+
+      - id: check-citations
+        name: citations resolve (AGENTS.md rule 27 path::Symbol refs)
+        entry: uv run python scripts/check_citations.py
+        language: system
+        # Runs last: it resolves citations against the tree the earlier hooks have
+        # finished rewriting. `pass_filenames: false` is required, not an
+        # optimization -- renaming a symbol in the file you are committing rots
+        # citations in files you are not, so only a full sweep can see it. And
+        # `always_run` because DELETING a .py file is a prime rot source yet a
+        # deleted path never appears in pre-commit's staged-file list; the sweep
+        # costs under a second.
+        always_run: true
+        pass_filenames: false
         require_serial: true

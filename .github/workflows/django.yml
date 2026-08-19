@@ -45,6 +45,13 @@ jobs:
       - name: Trailing-comma layout (>=4 elements; models.py >=2)
         run: uv run python scripts/check_trailing_commas.py --check
 
+      - name: Citations resolve (AGENTS.md rule 27 path::Symbol refs)
+        # Every `path.py::Symbol` reference in first-party source and on the board
+        # must name a file that exists and a symbol that file still defines. The
+        # `check-citations` pre-commit hook runs the same sweep on every commit;
+        # this step is the backstop for commits made with hooks skipped.
+        run: uv run python scripts/check_citations.py --check
+
       - name: Kanban tracked-path constants
         # Parity with the `kanban-tracked-path-constants` pre-commit hook, which
         # REWRITES the constants module rather than reporting on it. A commit

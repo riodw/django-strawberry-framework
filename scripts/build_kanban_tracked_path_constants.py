@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections.abc import Sequence
@@ -46,10 +47,20 @@ def path_root(path: str) -> str | None:
 
 
 def tracked_file_paths() -> tuple[str, ...]:
-    """Return tracked repo-relative file paths under every tracked root."""
+    """Return tracked repo-relative file paths under every tracked root.
+
+    ``-z`` (with ``core.quotePath=false``) keeps a path with a non-ASCII byte,
+    a quote or an embedded newline intact instead of C-quoting or splitting it;
+    ``--deduplicate`` collapses the three index stages an unmerged path reports
+    during a conflicted merge, which would otherwise triplicate its entry.
+    """
     output = run_git(
         [
+            "-c",
+            "core.quotePath=false",
             "ls-files",
+            "-z",
+            "--deduplicate",
             "django_strawberry_framework",
             "tests",
             "examples/fakeshop/test_query",
@@ -57,7 +68,7 @@ def tracked_file_paths() -> tuple[str, ...]:
             "examples/fakeshop/apps",
         ],
     )
-    return tuple(sorted(line for line in output.splitlines() if line and path_root(line)))
+    return tuple(sorted(path for path in output.split("\0") if path and path_root(path)))
 
 
 def derived_directory_paths(file_paths: Sequence[str]) -> tuple[str, ...]:
@@ -65,6 +76,8 @@ def derived_directory_paths(file_paths: Sequence[str]) -> tuple[str, ...]:
     directories: set[str] = set()
     for file_path in file_paths:
         root = path_root(file_path)
+        if root is None:
+            raise ConstantsRenderError(f"{file_path} lies under no tracked root.")
         parent = file_path.rsplit("/", 1)[0] + "/"
         while len(parent) >= len(root):
             directories.add(parent)
@@ -81,10 +94,10 @@ def render_constants(file_paths: Sequence[str]) -> str:
         '"""Generated kanban allowlist of tracked repository paths (files + directories)."""',
         "",
         "TRACKED_FILE_PATHS = (",
-        *(f'    "{path}",' for path in file_paths),
+        *(f"    {json.dumps(path)}," for path in file_paths),
         ")",
         "TRACKED_DIRECTORY_PATHS = (",
-        *(f'    "{path}",' for path in directory_paths),
+        *(f"    {json.dumps(path)}," for path in directory_paths),
         ")",
         "TRACKED_PATHS = TRACKED_DIRECTORY_PATHS + TRACKED_FILE_PATHS",
         "TRACKED_PATH_SET = frozenset(TRACKED_PATHS)",
@@ -112,12 +125,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def current_text(output: Path) -> str | None:
+    """Return the constants file's text, or ``None`` when it does not exist yet."""
+    if not output.is_file():
+        return None
+    return output.read_text(encoding="utf-8")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Render or check the constants module."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
     rendered = render_constants(tracked_file_paths())
+    unchanged = current_text(args.output) == rendered
     if args.check:
-        if not args.output.is_file() or args.output.read_text() != rendered:
+        if not unchanged:
             print(
                 f"{args.output} is stale; run scripts/build_kanban_tracked_path_constants.py.",
                 file=sys.stderr,
@@ -125,8 +146,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
 
+    # Writing an identical file still bumps its mtime, which dirties git's stat
+    # cache and -- because pre-commit stashes unstaged work around the hooks --
+    # turns a no-op run into a candidate for a stash conflict. Skip the write.
+    if unchanged:
+        return 0
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(rendered)
+    args.output.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"Wrote {args.output}")
     return 0
 

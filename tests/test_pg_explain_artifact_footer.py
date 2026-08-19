@@ -37,14 +37,15 @@ def test_footer_constant_has_all_canonical_headers_in_order():
         assert nxt >= pos, f"{header!r} missing or out of order"
         pos = nxt + len(header)
     # The scaffold validator that gates every standing doc accepts the constant.
-    assert _scaffold_in_canonical_order(LINK_DEFINITIONS_FOOTER)
+    # It names the first missing/out-of-order marker, so ``None`` is the pass.
+    assert _scaffold_in_canonical_order(LINK_DEFINITIONS_FOOTER) is None
 
 
 def test_checked_in_artifact_passes_link_block_validation():
     """The checked-in artifact validates and its tail matches the emitted footer."""
     text = ARTIFACT_PATH.read_text(encoding="utf-8")
     # Same standing-doc link-block validation ``check_trailing_commas`` runs.
-    assert _scaffold_in_canonical_order(text)
+    assert _scaffold_in_canonical_order(text) is None
     # The generator composes ``"\n".join(lines) + "\n" + LINK_DEFINITIONS_FOOTER``;
     # ``"\n".join(lines)`` ends in a newline, so a regenerated file ends in exactly
     # this tail. Asserting it proves the footer emission is byte-identical to the

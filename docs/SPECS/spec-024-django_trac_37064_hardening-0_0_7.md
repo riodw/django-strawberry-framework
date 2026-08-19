@@ -292,9 +292,9 @@ One module, one helper, one dispatch line, three test modules:
 
 ## Test plan
 
-**This card owns 31 tests**, all in the package tree, all under the default single-database invocation: the whole of `tests/test_django_patches.py` (21), the whole of `tests/testing/test_wrap.py` (7), and three of the eight tests in `tests/test_apps.py`.
+**This card owns 28 tests**, all in the package tree, all under the default single-database invocation: the whole of `tests/test_django_patches.py` (21) and the whole of `tests/testing/test_wrap.py` (7). No test in `tests/test_apps.py` is claimed here.
 
-**The focused scope those three modules collect is wider — 36 tests** — because `tests/test_apps.py` runs whole, and its other five tests pin the `AppConfig` shape owned by [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-021]. The two numbers answer different questions and are not interchangeable: 36 is the scope a run executes (it is what [Floor verification](#floor-verification) and [Definition of done](#definition-of-done) item 9 name as a run), and 31 is the population this card is responsible for (it is what every ownership claim here is stated against).
+**The focused scope those three modules collect is wider — 36 tests** — because `tests/test_apps.py` runs whole, and all eight of its tests belong to [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-021]. The two numbers answer different questions and are not interchangeable: 36 is the scope a run executes (it is what [Floor verification](#floor-verification) and [Definition of done](#definition-of-done) item 9 name as a run), and 28 is the population this card is responsible for (it is what every ownership claim here is stated against).
 
 ### `tests/test_django_patches.py` — 21 tests
 
@@ -310,11 +310,11 @@ One module, one helper, one dispatch line, three test modules:
 
 The five contract clauses of [Decision 8](#decision-8--the-wrap-time-half-degrades-where-the-unwrap-time-half-aborts) — install into a free slot, decline on a `_DatabaseFailure`, install on private-symbol drift, work on an arbitrary method name, compose end-to-end with the unwrap-time patch — plus the two guarding the `TypeError` boundary (`…_raises_on_non_callable_wrapper`, `…_keeps_type_error_boundary_for_hostile_repr`).
 
-### `tests/test_apps.py` — 3 of the module's 8 tests
+### `tests/test_apps.py` — collected whole, owned by the sibling card
 
-The module's other five tests pin the `AppConfig` shape — importability, subclass, `name` / `verbose_name`, registry pickup, and the consolidated forbidden-attribute negative — and belong to [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-021]; they carry no relation to Trac #37064 and are not claimed here. The three below are this card's.
+All eight of the module's tests belong to [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-021]. Five pin the `AppConfig` shape — importability, subclass, `name` / `verbose_name`, registry pickup, and the consolidated forbidden-attribute negative. The other three pin `ready()`'s dispatch, and they are that card's too: each asserts a contract over **all three** patch appliers — `_django_patches`, `_strawberry_patches` and `_cross_web_patches` — while this card ships only the first, so the contract they pin is the dispatcher's, specified at that spec's `#"Decision 4"`. This card's commits authored those three tests because it was the first card to give `ready()` work to do; authoring is not ownership.
 
-`ready` is permitted on the `AppConfig` (it is required on this class, not forbidden) and its presence is pinned by `test_djangostrawberryframeworkconfig_defines_ready_for_django_patches`. `test_ready_dispatches_all_three_patch_appliers_and_refires_safely` pins the dispatch deterministically — a per-module installed-at-collection assertion is masked by earlier direct `apply()` calls on the same worker, so a dropped dispatch line would otherwise pass the gate. `test_ready_reinstalls_patches_after_their_modules_reload` pins [Decision 7](#decision-7--idempotent-self-healing-and-reload-safe)'s reload contract.
+They are described here because this card depends on them: they are the only deterministic proof that `ready()` installs this card's applier at all. `ready` is permitted on the `AppConfig` (it is required on this class, not forbidden) and its presence is pinned by `test_djangostrawberryframeworkconfig_defines_ready_for_django_patches`. `test_ready_dispatches_all_three_patch_appliers_and_refires_safely` pins the dispatch deterministically — a per-module installed-at-collection assertion is masked by earlier direct `apply()` calls on the same worker, so a dropped dispatch line would otherwise pass the gate. `test_ready_reinstalls_patches_after_their_modules_reload` pins [Decision 7](#decision-7--idempotent-self-healing-and-reload-safe)'s reload contract.
 
 ### Floor verification
 
@@ -350,7 +350,7 @@ The subject is a Django integration seam pinned to exact upstream source text, s
 6. `apply()` is idempotent, self-healing, and reload-safe.
 7. `django_strawberry_framework/testing/_wrap.py::safe_wrap_connection_method` ships with the documented return contract, the non-interpolating `TypeError`, and the deliberate private-symbol-drift asymmetry; it is exported from `django_strawberry_framework.testing`.
 8. `django_strawberry_framework/__init__.py`'s `__all__` is unchanged by this card; no symbol from this work is re-exported from the package root.
-9. This card's 31 tests — all of `tests/test_django_patches.py`, all of `tests/testing/test_wrap.py`, and the three `ready()` tests in `tests/test_apps.py` — are green under the default invocation, under `FAKESHOP_SHARDED=1`, and at the supported floor, as is the 36-test focused scope those three modules collect whole (see [Test plan](#test-plan)).
+9. This card's 28 tests — all of `tests/test_django_patches.py` and all of `tests/testing/test_wrap.py` — are green under the default invocation, under `FAKESHOP_SHARDED=1`, and at the supported floor, as is the 36-test focused scope those three modules collect whole (see [Test plan](#test-plan)).
 10. No repo-root `conftest.py` workaround and no base test class is required of any consumer, at any point.
 11. `uv run ruff format --check .` and `uv run ruff check .` both pass.
 12. Docs updated per [Doc updates](#doc-updates); card `DONE-024-0.0.7` in `Done` at the joint `0.0.7` cut.

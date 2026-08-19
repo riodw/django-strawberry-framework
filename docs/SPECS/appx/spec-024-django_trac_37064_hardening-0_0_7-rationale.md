@@ -325,6 +325,16 @@ No `FAKESHOP_SHARDED=1` gate, because the hardening protects every consumer rath
 
 - **That the negative test holds "a verbatim copy of Django's upstream body".** It holds the live capture.
 - **"No real Django connection state is mutated for these tests."** False at HEAD and **false at the ship commit too** — `300e2811`'s own happy-path test assigned `connection.cursor`. The claim was never true; the part of the decision that does hold is the sentinel technique (`_DatabaseFailure(sentinel, …)` for the happy path, a plain callable with no `.wrapped` for the bug path). At HEAD the mutation is wider still: the connection-feature test writes `disallowed_simple_test_case_connection_methods` on every alias and deletes it in `finally`.
+- **That this card owns 31 tests, three of them the `ready()` tests in `tests/test_apps.py`.** It owns
+  **28** — `tests/test_django_patches.py` (21) and `tests/testing/test_wrap.py` (7). All eight of
+  `tests/test_apps.py` belong to [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-021]. The reconciliation that
+  produced the 31 corrected an earlier 36 by separating run scope from ownership, then stopped one step
+  short: it asked "population of what?" of the five `AppConfig`-shape tests and not of the three it kept.
+  The three are the sibling card's because each asserts a contract over **all three** patch appliers —
+  `_django_patches`, `_strawberry_patches`, `_cross_web_patches` — while this card ships only the first;
+  the dispatcher contract they pin is specified at that spec's `#"Decision 4"`. This card's commits
+  `300e2811`, `136c5476` and `18550f5d` authored them, which is provenance, not ownership. Under 28 the
+  focused-run arithmetic also closes without overlap: 28 owned + 8 sibling-owned = the 36 a run collects.
 - **"The repo-root `conftest.py` workaround has been deleted."** A definition-of-done item satisfiable only vacuously: `git log --all --oneline --diff-filter=D -- conftest.py tests/conftest.py` is **empty** — no `conftest.py` has ever been deleted in this repository, on any ref. The workaround lived in a *different* repository. The repo-root `conftest.py` that exists today was created at `57cbd32a` (2026-07-07), six weeks after this card shipped, and belongs to the Postgres tier. Recorded so a future reader does not read it as the workaround's survival.
 
 ## Decision 11 — Joint `0.0.7` cut
@@ -352,6 +362,7 @@ Consolidated so a reader can see at a glance which statements were once asserted
 7. The public import path is `django_strawberry_framework.test`; the root `__all__` is unqualifiedly unchanged ([Decision 9](#decision-9--the-helper-is-a-submodule-export-only)).
 8. The replacement is a verbatim copy of upstream's body ([Decision 3](#decision-3--the-replacement-reimplements-the-loop-behind-one-guard)); the negative test holds a verbatim copy; no real connection state is mutated by the tests; the repo-root `conftest.py` workaround was deleted ([Decision 10](#decision-10--coverage-lives-in-the-package-test-tree)).
 9. The patch is "~30 lines of code with a 30-line rationale docstring", and additional patches land as more functions in the same module ([Decision 1](#decision-1--a-private-patch-module-per-dependency-applied-from-ready)).
+10. This card owns 31 tests, three of them in `tests/test_apps.py` ([Decision 10](#decision-10--coverage-lives-in-the-package-test-tree)).
 
 ## Verified against the shipped code
 
@@ -369,6 +380,7 @@ The floor was executed rather than asserted: the focused scope runs green at Dja
 
 <!-- docs/SPECS/ -->
 [spec-020]: ../spec-020-list_field-0_0_7.md
+[spec-021]: ../spec-021-apps-0_0_7.md
 [spec-020-decision-10--joint-007-cut]: ../spec-020-list_field-0_0_7.md#decision-10--joint-007-cut
 [spec-024]: ../spec-024-django_trac_37064_hardening-0_0_7.md
 [spec-024-d1]: ../spec-024-django_trac_37064_hardening-0_0_7.md#decision-1--a-private-patch-module-per-dependency-applied-from-ready

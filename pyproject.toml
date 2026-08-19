@@ -80,7 +80,7 @@ dev = [
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the
 # default sqlite workflow carries no compiled Postgres dependency.
 pg = [
-    "psycopg[binary]>=3.2",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [build-system]

@@ -603,19 +603,18 @@ def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
 def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
     """Deleting the partner target detaches the source row via ``on_delete=SET_NULL``.
 
-    Pins the only ``SET_NULL`` ondelete in the example tree (the
-    ``NullableScalarSpecimen.partner`` FK) end-to-end. The
-    setup-trigger-observe shape uses live ``/graphql/`` requests for the
-    consumer-visible halves (BEFORE the delete and AFTER) and a plain
-    ORM ``target.delete()`` call for the trigger - same pattern every
-    seed call uses, just on the other end of the row lifecycle.
+    Pins ``NullableScalarSpecimen.partner``'s ``SET_NULL`` ondelete
+    end-to-end. The setup-trigger-observe shape uses live ``/graphql/``
+    requests for the consumer-visible halves (BEFORE the delete and AFTER)
+    and a plain ORM ``target.delete()`` call for the trigger - same pattern
+    every seed call uses, just on the other end of the row lifecycle.
 
     Asserts three things the post-delete query must prove:
-    1. ``partner`` resolves to ``None`` after the cascade (the optimizer's
+    1. ``partner`` resolves to ``None`` after the delete (the optimizer's
        prefetched row reflects post-delete state - no stale cache, no
        orphaned FK-id stub).
-    2. The source ``NullableScalarSpecimen`` row itself survives (cascade
-       is ``SET_NULL``, not ``CASCADE``).
+    2. The source ``NullableScalarSpecimen`` row itself survives (the
+       ondelete is ``SET_NULL``, not ``CASCADE``).
     3. ``partner_id`` is cleared at the column level (``SET_NULL``
        actually nulled the FK column, not just hid the relation from
        GraphQL).
@@ -641,8 +640,8 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
         {"label": "linked", "partner": {"label": "target"}},
     ]
 
-    # TRIGGER - delete the partner target via ORM (mutations aren't in the
-    # example schema yet; deletion goes through the same path every seed
+    # TRIGGER - delete the partner target via ORM (the scalars app exposes
+    # no delete mutation; deletion goes through the same path every seed
     # uses, just in reverse).
     target.delete()
 

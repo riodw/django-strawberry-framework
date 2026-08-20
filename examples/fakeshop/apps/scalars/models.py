@@ -146,9 +146,11 @@ class NullableScalarSpecimen(models.Model):
     ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` is
     exercised over a live ``/graphql/`` request. ``partner`` is a nullable
     cross-model FK to ``ScalarSpecimen`` (``on_delete=SET_NULL``) - distinct
-    from the intra-model self-FK on ``ScalarSpecimen.parent``, and the only
-    place in the example tree that exercises ``SET_NULL`` ondelete planning
-    under the optimizer.
+    from the intra-model self-FK on ``ScalarSpecimen.parent``. Deleting the
+    target clears ``partner_id`` and leaves this row in place, so a later
+    query resolves ``partner`` as ``null`` with the source row still
+    present; that end-to-end shape is pinned by
+    ``test_query/test_scalars_api.py::test_scalars_set_null_ondelete_detaches_partner_in_http_query``.
     """
 
     label = models.TextField(unique=True, null=True, blank=True)
@@ -168,9 +170,9 @@ class NullableScalarSpecimen(models.Model):
     signed_big = models.BigIntegerField(null=True, blank=True)
     unsigned_big = models.PositiveBigIntegerField(null=True, blank=True)
     # Cross-model link: a ``NullableScalarSpecimen`` may point at one
-    # ``ScalarSpecimen``. ``SET_NULL`` so deleting a partner detaches the
-    # row instead of cascading - the only ``SET_NULL`` ondelete in the
-    # example tree.
+    # ``ScalarSpecimen``. ``SET_NULL`` rather than ``CASCADE`` because every
+    # field this model declares is ``null=True``: losing the target must
+    # clear the FK, never delete the mirror row.
     partner = models.ForeignKey(
         "scalars.ScalarSpecimen",
         null=True,

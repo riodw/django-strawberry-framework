@@ -296,3 +296,70 @@ Verified by Worker 0 across all 50 changed `.py` files at once:
 **Open and deliberately not fixed**, carried for `TODO-ALPHA-051-0.0.15` / `TODO-ALPHA-052-0.1.0`: the ~243-site case-insensitive spaced-`Decision N` orphan tail; 52 capital-S `Spec-NNN` occurrences in `.py` and 166 in tracked `docs/`; 56 stale `TODO-ALPHA-`/`TODO-BETA-` occurrences across specs 034-039; 7 wrapped citations in `docs/builder/` artifacts; `types/relay.py:680`'s retired `WIP-ALPHA-032-0.0.9`, where the SPEC is correct and the code is the defect; and the five-spec population (029-032, 034-036, 038-040) still carrying its deliberative layer inline with no rationale companion.
 
 **One cross-cohort disagreement resolved against a decision Worker 0 had endorsed:** cohort H kept `spec-033:564`'s pre-move board id as a decided non-edit and Worker 0 agreed in writing. Cohort J then measured the archive's five reconciled shipped records (020, 021, 022, 025, 027) and found **zero** carrying a pre-move id -- the spelling survives only in unreconciled specs. Cohort J's position is the evidenced one; the `spec-033` site is left as cohort H wrote it and is the minority spelling in the archive.
+
+## Surviving items migrated out of `bld-final-027.md` before its deletion
+
+`docs/builder/DONE/` holds only `build-*` documents, so every `bld-*` artifact in this cycle is deleted at wrap while this file is archived. The `bld-final-027.md` deferred-work catalog is the only place the items below existed. Each is re-derived here against the tree at commit `8bab7ea8`, not transcribed.
+
+**Still live, each measured:**
+
+- **`django_strawberry_framework/types/base.py` names a build-process phase in shipped source.** 1 occurrence of `spec-032 integration pass`. Never attempted: the file was baseline-dirty to a concurrent session for this cycle's whole duration. A spec Decision pointer is the KEEP class; a build-cycle phase name is the banned class. -> `TODO-ALPHA-051-0.0.15`, whose WP batches open this file.
+- **`docs/TREE.md` renders `(spec-021)` for the library filters module, and `KANBAN.md` carries a second live `spec-021` reference to this card.** 1 occurrence each. `spec-021` today names the unrelated AppConfig spec, so both are actively wrong rather than merely stale. `docs/TREE.md` is script-rendered -- the fix is `uv run python scripts/build_tree_md.py`, never a hand edit; the `KANBAN.md` row is DB-backed and needs an ORM edit plus a regenerate. **Maintainer only:** both surfaces are fenced out of this cycle.
+- **`README.md` carries zero occurrences of `filter_input_type`.** Re-derived: 0. This is the cycle's one genuinely undischarged `## Doc updates` obligation, against a bullet that names the helper alongside `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, all three of which are present. **Maintainer only.**
+- **Two `tests/test_registry.py` docstrings still describe the retired cycle-safe-local-import clear mechanism.** Re-derived: 2 occurrences of `cycle-safe local import` (down from 3 -- one was discharged by the concurrent spec-028 session). `TypeRegistry.clear` performs no import and `registry.py` carries no `except ImportError`; the callbacks are bound at owner-import time through `register_subsystem_clear`. Never attempted: the file was baseline-dirty to a concurrent session. -> `TODO-ALPHA-051-0.0.15`.
+- **The PEP-563 deferred-annotation path for `filter_input_type` has no dedicated test.** Re-derived: 0 occurrences of `test_filter_input_type_under_future_annotations`. The spec's `## Test plan` licenses the absence as a coverage boundary, and the repeat-safety property PEP 563 depends on is covered by `test_filter_input_type_is_idempotent_under_repeated_calls`. -> `TODO-BETA-068-0.1.8`.
+
+**Discharged since the catalog was written, recorded so a later sweep does not re-open them as new:** the wrapped-`#"substring"` class in `.py` (0 repo-wide over 425 tracked modules) and in the spec archive (0 across `docs/SPECS/` + `appx/`); the raw `path:NN` and spec-line class in `orders/`, `mutations/`, `forms/` and the fakeshop suites; the bare and hyphenated `Decision N` attribution class across `rest_framework/`, `optimizer/`, `connection.py`, `utils/inputs.py` and the router / permission / walker suites; `spec-055`'s three wrong references; and `tests/orders/test_inputs.py`'s raw-reference cluster, which the concurrent spec-028 session closed (re-derived: 0).
+
+**Two method findings no gate in this repository holds, and the reason to keep them:**
+
+- **No instrument here can see a citation wrapped across a line break.** `scripts/check_citations.py` matches one line at a time and resolves only `path::Symbol`, with `docs/` out of scope by design. A census of this class must scan **every** `#"` on a line, not the first -- testing only the first hides every later citation on any line whose earlier one closes, which is how one real site survived four separate measurements. And the target side wraps too: a substring can be absent from every single line of its target while present in the flattened text, so a sweep must flatten before matching.
+- **Every card-reference census in this cycle under-counted, and the causes are enumerable.** Six spellings exist -- spaced `Decision N`, hyphenated `Decision-N`, a `DN` short form, newline-wrapped, `Spec Decision`, and capital-S `Spec-NNN` (52 in `.py`, 166 in tracked `docs/`). A line-scoped census of the bare-reference class measured a **61%**, **37%** and **29%** false-positive rate in three independent runs, while simultaneously missing real orphans whose own token wrapped. Block-scoped -- whole docstring or contiguous comment run as the unit -- is the only reading that holds. Two further traps: `grep -c` counts matching lines, not occurrences, which produced three separate wrong figures in this cycle including two of Worker 0's; and a working-tree `grep -r` over `docs/` counts the measuring cycle's own untracked artifacts, so tracked-only is the reproducible corpus.
+
+## Cycle outcome, folded in from `bld-final-027.md` at its deletion
+
+### Gate results (Worker 1 final gate, baseline `5c6fdd71`)
+
+Nothing failed, so nothing routed back through a slice loop.
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Full sweep, all three test trees | `uv run pytest --no-cov` | `6179 passed, 40 skipped`, exit 0. `--no-cov` is required because `pytest.ini`'s `addopts` auto-applies `--cov`; no line-coverage figure was ever read, coverage being the maintainer's gate |
+| Django system checks | `manage.py check` | `System check identified no issues (0 silenced).` |
+| Migration drift | `manage.py makemigrations --check --dry-run` | `No changes detected` |
+| Format, read-only | `uv run ruff format --check .` | `425 files already formatted` (never `--fix`) |
+| Lint, read-only | `uv run ruff check .` | `All checks passed!` (never `--fix`) |
+| Whitespace / conflict markers | `git diff --check` | clean |
+| Spec glossary | `check_spec_glossary.py --spec spec-027…` | `OK: 48 terms` |
+| Citation gate | `check_citations.py` | `OK: 742 citations resolve (665 in 422 .py files, 77 in KANBAN.md)` |
+| Source layout / ASCII-only, whole tree | `check_trailing_commas.py --check` | exit 0 |
+| Floor verification | none | `Floor-verification scope: none` -- no slice touches a Django / Strawberry / channels integration seam |
+
+**Why the full sweep is the backstop and not a formality:** `docs/builder/BUILD.md` names two staleness classes a focused run structurally cannot see (a stranded schema-module list, and test staleness), and both hide the same way -- the affected file is never in the focused selection.
+
+### Executable-token identity, the cycle's load-bearing claim
+
+**IDENTICAL for all 20 `.py` files modified by slices 1-4; divergent: 0.** Re-derived at the gate with its own instrument rather than read from a prior pass. **The instrument was proved failable before its zero was trusted:** run unchanged against a mutated `HEAD` copy of `filters/factories.py` (`FilterArgumentsFactory` -> `MUTANT`, one executable token) it reports DIVERGENT.
+
+This doubles as attribution evidence: a diff containing no executable token cannot change a test outcome, so a gate-1 failure would have pointed away from this cycle by construction.
+
+The catalog-discharge cohorts (slices 6-16) extended the same proof to **50** `.py` files at commit `8bab7ea8`, also 0 divergent, with the full sweep again at `6179 passed, 40 skipped`.
+
+### What the cycle delivered
+
+Figures measured with `wc -c -l`, never `len(text)` -- the two instruments diverge by roughly 1,900 bytes on this cycle's em-dash-heavy prose, an error the cycle paid for once.
+
+| File | `HEAD` (`5c6fdd71`) | At wrap | Delta |
+| --- | --- | --- | --- |
+| `docs/SPECS/spec-027-filters-0_0_8.md` | 324,436 bytes / 1,303 lines | 258,176 bytes / 1,117 lines | -66,260 bytes / -186 lines |
+| `docs/SPECS/appx/spec-027-filters-0_0_8-rationale.md` | did not exist | 149,253 bytes / 772 lines | +149,253 bytes |
+
+- **Slice 1** created the archive's last missing rationale companion and MOVED the deliberative layer into it: the whole `rev1`-`rev8` inline review history, twelve `Justification:` blocks, twelve `Alternatives considered (and rejected):` lists.
+- **Slice 2** retired every citation and provenance defect in this card's owned `.py` surface -- 19 files, ~59 sites: 30 pre-renumber card ids, 17 raw spec line numbers deleted rather than renumbered, 20 build-process provenance tokens.
+- **Slice 3** rewrote the spec to state the current contract, closing D2-D11 plus six further defects that two whole-population instruments found and no finding had named.
+- **The integration pass** found the seam no slice owned: a `#"unique substring"` citation from `.py` into the spec, gated by nothing -- and its mirror, the spec citing a `GOAL.md` sentence this card's own Slice 5 had removed.
+- **The consolidation cohort** (five build passes, four reviews, two final verifications) repaired seven `.py` citation sites, four spec edits, three rationale edits.
+- **Slice 5** corrected two test docstrings describing the retired local-import clear mechanism, one of which stated a premise its own call path could no longer reach.
+- **Slices 6-16** discharged the deferred-work catalog wherever this cycle's fence reached: the wrapped-citation class to 0 in `.py` and in the spec archive, the raw-line-reference class, the bare and hyphenated `Decision N` attribution class, `spec-055`'s three wrong references, `spec-040` Decision 9's falsified mechanism, and nine shipped specs realigned from five divergent unshipped spellings onto one convention.
+
+**The load-bearing verification result: no code gap.** Every contract-bearing claim the spec makes was verified against `HEAD` before dispatch -- every module, primitive, classmethod, named helper, `Meta`-key promotion, finalizer subpass, fakeshop declaration, and all 14 contracted live HTTP tests present. Slice 6 of the original plan was correctly closed as carried by a sibling. Nothing was skipped in the code; every defect this cycle found was in the spec's description of the code, or in a citation pointing at it.

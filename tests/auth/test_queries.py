@@ -261,7 +261,7 @@ def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string():
 async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary():
     """The gate's ``instance=request.user`` forces the ``SimpleLazyObject`` in-boundary.
 
-    The Decision-10 async-gate fix: computing the gate argument forces the lazy
+    The spec-040 Decision 10 async-gate fix: computing the gate argument forces the lazy
     user (a sync ORM touch that would raise ``SynchronousOnlyOperation`` outside
     a sync context); because the whole gate-then-return body runs inside the ONE
     ``sync_to_async(thread_sensitive=True)`` worker, the forced load succeeds and

@@ -291,8 +291,8 @@ sealed source can mutate `_result_cache` / `_query` / `model` / `_db` and return
 the same object, so identity licenses no shortcut.
 
 **Enforcing symbols.**
-[`utils/querysets.py::apply_type_visibility_sync`][querysets] #"No identity fast
-path"; [`::apply_type_visibility_async`][querysets] #"No identity fast path";
+[`utils/querysets.py::apply_type_visibility_sync`][querysets] #"No identity fast path";
+[`::apply_type_visibility_async`][querysets] #"No identity fast path";
 [`::_seal_or_defect`][querysets] #"Reproduce exactly what" (the rebuild copies
 forward MINUS `_result_cache` / `_known_related_objects`).
 

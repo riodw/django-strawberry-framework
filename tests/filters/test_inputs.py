@@ -80,7 +80,7 @@ def _isolate_registry():
 
 
 def test_lookup_name_map_full_table_matches_spec():
-    """Pin the Decision-3 Layer-5 table verbatim against accidental drift."""
+    """Pin the spec-027 Decision 3 Layer-5 table verbatim against accidental drift."""
     expected = {
         "exact": ("exact", "exact"),
         "iexact": ("i_exact", "iExact"),
@@ -1333,7 +1333,7 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
     ``ClassBasedTypeNameMixin.type_name_for`` routes through ``pascal_case``. A
     non-injective Pascal collapse (``field_2`` / ``field2`` both -> ``Field2``)
     made both bags claim ``<FilterSet>Field2FilterInputType``. Those nested
-    classes are embedded in annotations (not the Decision-9 ledger), so
+    classes are embedded in annotations (not the spec-027 Decision 9 ledger), so
     Strawberry silently kept one bag and dropped the other -- wrong lookups on
     the wire. Top-level field attrs stay distinct via ``graphql_camel_name``;
     the type-name stem must preserve the same digit boundary.
@@ -1374,7 +1374,7 @@ def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
         ok: int
 
     # Register the bags directly (same pattern as the scoped-range collision pin);
-    # a root input with ``strawberry.lazy`` self-refs needs Decision-9 materialization.
+    # a root input with ``strawberry.lazy`` self-refs needs spec-027 Decision 9 materialization.
     sdl = str(strawberry.Schema(query=Query, types=[bag_underscore, bag_plain]))
     bag_defs = set(re.findall(r"input (DigitBoundaryFilterField_?2FilterInputType)", sdl))
     assert bag_defs == {

@@ -737,7 +737,7 @@ def serializer_only_relation_annotation(
     whose ``source`` names no concrete column) resolves its related model from
     ``field.queryset.model`` (the single ``PrimaryKeyRelatedField``) or
     ``field.child_relation.queryset.model`` (a ``ManyRelatedField``). The id type
-    rides ``annotate_queryset_relation`` after ``_require_relation_primary`` (M3:
+    rides ``annotate_queryset_relation`` after ``_require_relation_primary`` (spec-039 M3:
     a missing primary is a class-creation error, not a raw-pk fallback).
 
     A relation with neither a backing column NOR a concrete ``queryset.model``
@@ -989,7 +989,7 @@ def resolve_serializer_field(
             _reject_unsupported_relation_field(field)
             related_model = column.related_model
             _reject_relation_cardinality_mismatch(field, column)
-            # M3: the serializer flavor requires a registered primary DjangoType for
+            # spec-039 M3: the serializer flavor requires a registered primary DjangoType for
             # the target (stricter than the model fallback). Resolve + validate it
             # via ``primary_of`` so the id type is the SAME Relay-vs-raw-pk decision
             # the read side makes (a non-Relay target still legitimately uses the

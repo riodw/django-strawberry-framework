@@ -29,8 +29,9 @@ The per-operation argument signature is ``data: <Model>Input!`` (create), ``id``
 + ``data: <Model>PartialInput!`` (update), ``id`` only (delete) - spec-036
 Decision 14. The ``id`` argument is the raw ``strawberry.ID`` string - the
 ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` also uses
-(``relay.py`` line 287), so the package decodes the GlobalID **server-side**
-rather than letting Strawberry's argument conversion own it. The SDL renders
+(``relay.py::DjangoNodeField`` #"is the Relay-spec signature"), so the package
+decodes the GlobalID **server-side** rather than letting Strawberry's argument
+conversion own it. The SDL renders
 ``id: ID!`` by design (the Relay-spec / node-field contract), and the resolver
 decodes the id and type-checks it against the mutation's target model -
 ``resolvers.py::coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a

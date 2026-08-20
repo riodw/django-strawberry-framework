@@ -1,7 +1,6 @@
 # Spec: DRF serializer mutations — `SerializerMutation` on the DRF-shaped `class Meta` surface, reusing the frozen `FieldError` envelope and the `DjangoMutation` foundation, with `djangorestframework` as a soft dependency
 
-Implemented on main; release deferred to the joint `0.0.13` cut (card
-[`DONE-039-0.0.13`][kanban]). This card adds the
+Shipped in `0.0.13` (card [`DONE-039-0.0.13`][kanban]). This card adds the
 **serializer-validated** write flavor on top of the model-driven mutation
 foundation [`DONE-036-0.0.11`][kanban] ([`spec-036`][spec-036]) and the form-validated
 flavor [`DONE-038-0.0.12`][kanban] ([`spec-038`][spec-038]) already shipped: one new
@@ -232,15 +231,17 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 >   input nesting, and pathological fan-out ends in one `"__all__"`-keyed
 >   `truncated` marker instead of unbounded work.
 
-Status: **IMPLEMENTED ON MAIN** — all five slices (Slice 0 + Slices 1-4) are
-final-accepted and on main; the implemented-on-main docs + the card wrap landed in
-Slice 4 ([`DONE-039-0.0.13`][kanban]). **Release deferred to the joint `0.0.13` cut**
-shared with [`WIP-ALPHA-040-0.0.13`][kanban], which still owns the version bump
-(`0.0.12` → `0.0.13`) and the public release-status flip (the GLOSSARY `shipped (0.0.13)`
-status, the `README.md` / [`docs/README.md`][docs-readme] "Shipped today" move, the
-`CHANGELOG.md` bullets) — **F8** / [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut).
-The card was authored for `TODO-ALPHA-039-0.0.13` via the
-[`docs/SPECS/NEXT.md`][next] flow. The card's hard dependency was
+Status: **SHIPPED (`0.0.13`)** — card [`DONE-039-0.0.13`][kanban], released
+under the [`CHANGELOG.md`][changelog] `## [0.0.13]` heading; all five slices
+(Slice 0 + Slices 1-4) final-accepted, the docs + card wrap landed in Slice 4. The
+`0.0.13` version bump and the public release-status flip (the GLOSSARY
+`shipped (0.0.13)` status, the `README.md` / [`docs/README.md`][docs-readme] "Shipped
+today" move, the `CHANGELOG.md` bullets) belong to the joint cut shared with
+[`DONE-040-0.0.13`][kanban], not to this card — **F8** /
+[Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut). The
+[Slice checklist](#slice-checklist) below stays unticked because the `Status:` line
+is the completion source of truth (the shipped-spec convention). The card was
+authored via the [`docs/SPECS/NEXT.md`][next] flow. The card's hard dependency was
 satisfied: [`DONE-036-0.0.11`][kanban] (the mutation foundation this card subclasses)
 has shipped, and [`DONE-038-0.0.12`][kanban] (which generalized the field factory and
 proved the flavor-on-the-base pattern) has shipped too. **A pre-Slice-1 dependency gate
@@ -354,7 +355,7 @@ Revision history (kept inline so the spec is self-contained):
   fixes: (1) the resolver pipeline is reordered to **locate → authorize → decode** so
   write authorization runs **before** any relation decode — the package security
   invariant the `038` form pipeline pins
-  ([`forms/resolvers.py`][forms-resolvers] #"Authorize BEFORE decoding relations"),
+  ([`forms/resolvers.py`][forms-resolvers] #"Authorize runs BEFORE the relation decode"),
   closing a relation-visibility-probe-by-id regression
   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload));
   (2) schema-time field discovery goes through an overridable
@@ -610,12 +611,7 @@ Revision history (kept inline so the spec is self-contained):
   docs (TREE / TODAY / GOAL crit-6 / the GLOSSARY body marked **"implemented on main,
   releasing in 0.0.13"** with the `status` FK kept `planned`) and the card wrap
   ([`DONE-039-0.0.13`][kanban] → Done, all 7 DoD items ticked) landed in Slice 4 (F8 /
-  [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)). Reconciled
-  the stale header to reality: the body line 3 "Planned for `0.0.13`" and the Status block
-  "**IN PROGRESS** … no slice built yet" now read **IMPLEMENTED ON MAIN; release deferred
-  to the joint `0.0.13` cut** shared with [`WIP-ALPHA-040-0.0.13`][kanban], which still owns
-  the version bump and the public release-status flip (GLOSSARY `shipped (0.0.13)`,
-  `README.md` / `docs/README.md` "Shipped today", `CHANGELOG.md` bullets). No version bump,
+  [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)). No version bump,
   no `CHANGELOG.md` / `README.md` Status / `docs/README.md` edit (joint-cut deferrals, F8 —
   confirmed absent from the build diff).
 
@@ -2344,8 +2340,8 @@ the `036` / `038` promoted helpers (`locate_instance` / `coerce_lookup_id` /
    relation-specific `FieldError` for a missing / hidden / malformed / wrong-type
    related id (most visible on `create`, which needs no instance lookup at all before
    authorization). The `038` form pipeline pins exactly this
-   ([`forms/resolvers.py`][forms-resolvers] `_run_modelform_pipeline_sync` #"Authorize
-   BEFORE decoding relations": *"the decode issues visibility-scoped `get_queryset`
+   ([`forms/resolvers.py`][forms-resolvers] #"Authorize runs BEFORE the relation decode":
+   *"the decode issues visibility-scoped `get_queryset`
    queries, so running it pre-auth would let an unauthorized caller probe related-object
    visibility by id … Matches the `036` model path's locate → authorize → decode
    order"*); the serializer pipeline obeys the same **locate → authorize → decode**

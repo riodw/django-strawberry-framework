@@ -1,7 +1,7 @@
 """Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 
 Re-exports the foundational primitives from `base.py`, the `FilterSet`
-+ `FilterSetMetaclass` pair from `sets.py`, and the Decision-11
++ `FilterSetMetaclass` pair from `sets.py`, and the spec-027 Decision 11
 consumer helper `filter_input_type`. The finalizer's phase 2.5 wires
 the orphan check that compares `_helper_referenced_filtersets` against
 the set of `Meta.filterset_class`-wired filtersets.
@@ -36,7 +36,7 @@ from .base import (
 from .inputs import INPUTS_MODULE_PATH, _input_type_name_for
 from .sets import FilterSet, FilterSetMetaclass
 
-# Ledger of `FilterSet`s referenced through the Decision-11
+# Ledger of `FilterSet`s referenced through the spec-027 Decision 11
 # `filter_input_type(...)` consumer helper. Cleared via the
 # `register_subsystem_clear` row below (owner
 # ``filters.helper_references``) so ``registry.clear()`` replays
@@ -77,7 +77,7 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
     Raises:
         TypeError: ``filterset_class`` is not a ``FilterSet`` subclass.
     """
-    # Decision-11 consumer-helper body shared with ``orders/__init__.py::
+    # spec-027 Decision 11 consumer-helper body shared with ``orders/__init__.py::
     # order_input_type`` via ``utils/inputs.py::build_lazy_input_annotation``
     # The ForwardRef-wrapped ``Annotated[<runtime str>,
     # strawberry.lazy(...)]`` form is pinned by

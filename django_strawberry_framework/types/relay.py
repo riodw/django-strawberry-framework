@@ -140,8 +140,8 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
         ConfigurationError: an exception from ``cls.__bases__`` assignment is
             wrapped with the offending interface named in the message so
             consumers see "cannot add interface X" rather than a raw layout
-            or hostile-metaclass exception (spec-015 Risk note #"surface any
-            `TypeError` as a `ConfigurationError`").
+            or hostile-metaclass exception
+            (spec-015 Decision 1 #"never as a raw layout error").
     """
     additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
     if not additions:

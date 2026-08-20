@@ -145,7 +145,7 @@ _LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("no
 # from the prior build; the filter test files' ``_isolate_registry`` autouse
 # fixture clears this map explicitly for exactly that reason.
 #
-# Decision-9 namespace lifecycle. Mechanics live in
+# spec-027 Decision 9 namespace lifecycle. Mechanics live in
 # ``utils/inputs.py::make_set_input_namespace`` (heavy clear: ledger +
 # field_specs + factory caches + ``_lifecycle`` binding). This module keeps
 # the spec-named public wrappers and the disjoint per-subsystem ledgers.

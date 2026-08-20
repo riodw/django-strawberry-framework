@@ -2,8 +2,8 @@
 
 Covers the metaclass (`FilterSetMetaclass`), `FilterSet`'s class-creation
 behavior (cycle-safe `get_filters` expansion + `_get_fields` narrowing),
-the Decision-4 owner-aware Relay-vs-scalar conditional in
-`filter_for_field`, and the Decision-8 apply pipeline
+the spec-027 Decision 4 owner-aware Relay-vs-scalar conditional in
+`filter_for_field`, and the spec-027 Decision 8 apply pipeline
 (`apply_sync` / `apply_async` / `apply` + the five named helpers).
 """
 
@@ -428,7 +428,7 @@ def test_filterset_get_fields_does_not_alter_explicit_dict_meta():
 
 
 # ---------------------------------------------------------------------------
-# Decision-4 owner-aware filter_for_field
+# spec-027 Decision 4 owner-aware filter_for_field
 # ---------------------------------------------------------------------------
 
 

@@ -130,7 +130,7 @@ _MAX_PLAN_CACHE_SIZE = 256
 # The Relay pagination argument names whose variable-supplied values must key
 # the plan cache when they appear on a NON-ROOT field node (the planner bakes
 # those resolved values into windowed prefetch querysets, so two requests differing
-# only in a nested ``first: $n`` value need distinct cached plans -- Decision 7).
+# only in a nested ``first: $n`` value need distinct cached plans -- spec-033 Decision 7).
 # Single source of truth for the four argument names; a future ``search:``
 # extension (``0.1.2``) would extend the family here, not re-spell it inline.
 _PAGINATION_ARG_NAMES = frozenset(
@@ -213,7 +213,7 @@ def _walk_cache_relevant_vars(
 
     Depth increments only when descending into a **field** node's selection set;
     descending into a resolved fragment definition keeps the SPREAD-SITE depth (a
-    fragment is a transparent wrapper at its spread site -- Decision 7's "depth at
+    fragment is a transparent wrapper at its spread site -- spec-033 Decision 7's "depth at
     the spread SITE, not raw fragment-definition nesting"), so a spread at the
     root contributes root-depth fields and a spread inside a nested node
     contributes nested-depth fields. The cycle guard keys ``visited_fragments``
@@ -223,7 +223,7 @@ def _walk_cache_relevant_vars(
     a name-only guard would let the first-visited spread site (e.g. a root spread,
     where pagination is excluded) suppress a later nested spread of the same
     fragment and silently drop its nested pagination variable from the cache key
-    -- a correctness bug (Decision 7: "under-collection would serve wrong data").
+    -- a correctness bug (spec-033 Decision 7: "under-collection serves wrong data").
     Termination still holds: graphql-core rejects fragment cycles before the
     optimizer runs, and a defensive cycle that does not cross a field node keeps
     depth constant, so ``(name, depth)`` repeats and the descent stops.
@@ -262,7 +262,7 @@ def _walk_cache_relevant_vars(
         # the shared AST-adapter guard keys ``visited_fragments`` on
         # ``(name, depth)`` rather than name alone. A name-only key would drop
         # nested pagination variables when an earlier root-depth spread visited
-        # the fragment first (Decision 7).
+        # the fragment first (spec-033 Decision 7).
         frag_def = resolve_unvisited_fragment(
             child,
             fragments,
@@ -322,7 +322,7 @@ def _collect_nested_pagination_var_names(
     bakes those resolved pagination values into windowed prefetch querysets, so
     two requests sharing a printed AST (``booksConnection(first: $n)``) but
     differing in ``$n`` must NOT share a cached plan -- a correctness rule
-    (Decision 7). The collection is a syntactic SUPERSET by design: any non-root
+    (spec-033 Decision 7). The collection is a syntactic SUPERSET by design: any non-root
     field's pagination-named variable is collected; over-collection costs cheap
     duplicate cache entries, under-collection would serve wrong data.
     """
@@ -668,7 +668,7 @@ class CacheInfo(NamedTuple):
 # The active ``DjangoOptimizerExtension`` instance for the operation's
 # lifetime, published by ``on_execute`` so the connection field's
 # ``apply_connection_optimization`` helper can discover it and SHARE the
-# instance-bound plan cache (Decision 11). ``None`` (the default) means
+# instance-bound plan cache (spec-030 Decision 11). ``None`` (the default) means
 # either no optimizer is installed for this execution or the helper is being
 # called outside an ``on_execute`` lifecycle; the helper then short-circuits
 # and returns the queryset unoptimized (the connection field follows the same
@@ -698,7 +698,7 @@ _active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
 # ``ContextVar`` lifecycle as the plan memo below: set to an empty dict in
 # ``on_execute`` and reset on the way out, ``None`` (the default) when
 # ``_build_cache_key`` is called outside an ``on_execute`` lifecycle so the
-# lookup falls back to recomputing -- Decision 7.
+# lookup falls back to recomputing -- spec-033 Decision 7.
 _cache_key_parts_cache: ContextVar[dict[int, tuple[str, frozenset[tuple[str, Any]]]] | None] = (
     ContextVar(
         "django_strawberry_framework_optimizer_cache_key_parts_cache",
@@ -988,7 +988,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         execution_context = getattr(self, "execution_context", None)
         _clear_optimizer_context(getattr(execution_context, "context", None))
         # Publish this instance so ``apply_connection_optimization`` can
-        # discover it and share the instance-bound plan cache (Decision 11).
+        # discover it and share the instance-bound plan cache (spec-030 Decision 11).
         instance_token = _active_optimizer.set(self)
         # Publish the instance's nested-connection fetch strategy for the
         # walker (which cannot import this module - the dependency points the
@@ -1078,7 +1078,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         5. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
            the resolved ``origin`` / ``model`` explicitly - the SAME helper
            the connection field's ``apply_connection_optimization`` calls, so
-           the two share one plan-application implementation (Decision 11).
+           the two share one plan-application implementation (spec-030 Decision 11).
            The middleware path is behavior-identical: ``_optimize`` only adds
            the return-type resolution the connection field does NOT need
            (the connection field's return type is the connection type, not the
@@ -1121,9 +1121,9 @@ class DjangoOptimizerExtension(SchemaExtension):
     ) -> models.QuerySet:
         """Build and apply the O2 plan to ``queryset`` given ``target_type`` / ``target_model``.
 
-        The plan-build-and-apply tail extracted from ``_optimize`` (Decision
-        11). Takes the node type / model **directly** rather than inferring
-        them from ``info.return_type`` - the connection field's root return
+        The plan-build-and-apply tail extracted from ``_optimize``
+        (spec-030 Decision 11). Takes the node type / model **directly** rather than
+        inferring them from ``info.return_type`` - the connection field's root return
         type is the connection type, not the node type, so the inference the
         middleware path uses would resolve the wrong model.
 
@@ -1440,7 +1440,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         # per-execution ``ContextVar`` dict installed by ``on_execute``; if the
         # extension is invoked outside an ``on_execute`` lifecycle (some test
         # fixtures call ``_build_cache_key`` directly), fall back to
-        # recomputing -- Decision 7.
+        # recomputing -- spec-033 Decision 7.
         memo = _cache_key_parts_cache.get()
         parts = memo.get(id(operation)) if memo is not None else None
         if parts is None:
@@ -1496,7 +1496,7 @@ def apply_connection_optimization(
 ) -> models.QuerySet:
     """Apply the optimizer plan to a connection field's pre-slice queryset.
 
-    The connection field's own optimizer cooperation point (Decision 11), also
+    The connection field's own optimizer cooperation point (spec-030 Decision 11), also
     reused by the mutation re-fetch (spec-036 Decision 9). Strawberry's
     ``ConnectionExtension`` returns a connection object, so the schema middleware
     (``DjangoOptimizerExtension.resolve``) never sees the pre-slice queryset and

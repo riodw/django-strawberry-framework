@@ -713,7 +713,7 @@ def test_interfaces_is_shipped_not_deferred():
     ``_validate_interfaces`` shape error happens to contain the substring
     ``"interfaces"``, so the deferred-key ``match=`` regex was satisfied by a
     shape-validation message rather than a deferred-key message. The
-    ``_validate_interfaces`` Decision-4 validator is the full shipped contract.
+    ``_validate_interfaces`` spec-015 Decision 4 validator is the full shipped contract.
     """
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 

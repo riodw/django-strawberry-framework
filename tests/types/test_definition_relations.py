@@ -3,7 +3,7 @@
 Three surfaces, all reached through a directly constructed or
 registry-resolved ``DjangoTypeDefinition``:
 
-- ``related_target_for``: the lookup powering the Decision-4 owner-aware
+- ``related_target_for``: the lookup powering the spec-027 Decision 4 owner-aware
   FK/PK conditional in ``FilterSet.filter_for_field`` /
   ``filter_for_lookup``. Covers forward FK, forward M2M, reverse FK (via
   ``Book.loans`` -> ``Loan.book`` with ``related_name="loans"``),
@@ -496,7 +496,7 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
     chain. The collapse is safe only because ``registry.get`` itself
     honors ``_primaries`` as its first return state; this test pins
     that end-to-end so a future change that breaks the primary-first
-    rule in ``registry.get`` surfaces here before the Decision-4
+    rule in ``registry.get`` surfaces here before the spec-027 Decision 4
     owner-aware FK/PK lookup silently swings to the wrong target.
     """
 

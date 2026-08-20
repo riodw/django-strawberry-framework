@@ -681,8 +681,7 @@ def test_update_item_wrong_type_global_id_on_id_is_field_error():
     well-formed ``Category`` GlobalID (the wrong model) - or a GlobalID naming an
     unregistered type - is rejected as a ``FieldError`` on ``id`` BEFORE any
     lookup, never silently coerced to a bare pk that would target the same-pk
-    ``Item``. ``node`` is null and the row is untouched (spec-036 Decision 10 /
-    finding-#1 hardening).
+    ``Item``. ``node`` is null and the row is untouched (spec-036 Decision 10).
     """
     create_users(1)
     seed_data(1)
@@ -729,7 +728,7 @@ def test_delete_item_wrong_type_global_id_on_id_is_field_error():
     The same top-level ``id:`` type-check guards ``delete``: a ``Category``
     GlobalID with a pk that collides with a real ``Item`` does not delete that
     ``Item`` - it returns a ``FieldError`` on ``id`` and the row survives (spec-036
-    Decision 10 / finding-#1 hardening).
+    Decision 10).
     """
     create_users(1)
     seed_data(1)
@@ -2945,8 +2944,9 @@ def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel():
 
     The model's `unique_item_per_category` constraint surfaces through the `ModelForm`'s
     `_post_clean` -> `validate_constraints()` as a `NON_FIELD_ERRORS` entry mapped to the
-    `"__all__"` sentinel - identical to the `036` model-driven path (line 388). `node` is
-    null, exactly one `errors` entry, no second row written.
+    `"__all__"` sentinel - identical to the `036` model-driven path
+    (`test_products_api.py::test_create_item_unique_constraint_envelope_uses_all_sentinel`).
+    `node` is null, exactly one `errors` entry, no second row written.
     """
     create_users(1)
     seed_data(1)
@@ -2981,7 +2981,8 @@ def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write():
     The `ModelForm` flavor inherits the `DjangoModelPermission` default, which denies a
     caller with no authenticated user. The denial RAISES a top-level `GraphQLError` on
     the non-null payload field (so GraphQL nulls `data`), NOT a `FieldError` envelope
-    entry - identical to the `036` anonymous denial (line 458).
+    entry - identical to the `036` anonymous denial
+    (`test_products_api.py::test_create_item_anonymous_is_denied_top_level_error_no_write`).
     """
     create_users(1)
     seed_data(1)
@@ -3012,7 +3013,8 @@ def test_create_item_via_form_missing_model_perm_is_denied_no_write():
 
     `view_item_1` holds only `products.view_item` and LACKS `add_item`, so the inherited
     `DjangoModelPermission` denies the create - a top-level `GraphQLError`, no row written
-    (mirror line 493). Isolates the model-perm codename denial from the anonymous case.
+    (mirrors `test_products_api.py::test_create_item_missing_model_perm_is_denied_no_write`).
+    Isolates the model-perm codename denial from the anonymous case.
     """
     create_users(1)
     seed_data(1)
@@ -3048,7 +3050,8 @@ def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found(
     `change_item` cannot see `item_under_private` (the `ItemType.get_queryset` cascade
     hides it), so the `updateItemViaForm` LOCATE misses -> a not-found `FieldError` on
     `id`, row unchanged; the same update succeeds for `item_under_public`. The write perm
-    is HELD, isolating the visibility miss from an authorization denial (mirror line 528).
+    is HELD, isolating the visibility miss from an authorization denial (mirrors
+    `test_products_api.py::test_visibility_scoped_update_delete_hidden_private_row_is_not_found`).
     """
     create_users(1)
     chain = seed_cascade_split()
@@ -3094,8 +3097,9 @@ def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
     caller's create against the VISIBLE public category SUCCEEDS - the contrast proving
     the decode visibility query, not the form queryset, is the guard. The submitted
     GlobalID is well-formed-but-hidden, so the test can only exercise the
-    visibility-decode path, not a parse-failure path. The headline slice invariant
-    (mirror line 694).
+    visibility-decode path, not a parse-failure path. The headline slice invariant,
+    mirroring
+    `test_products_api.py::test_create_item_relation_id_for_hidden_category_is_field_error`.
     """
     create_users(1)
     chain = seed_cascade_split()

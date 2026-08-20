@@ -13,7 +13,7 @@ The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
   shares (the cookbook uses it for filterset, orderset, AND aggregateset).
 - ``LazyRelatedClassMixin`` -- string / callable class-reference resolution
   used by ``RelatedFilter`` / ``RelatedOrder``.
-- ``ActiveInputPermissionMixin`` -- the Decision-8 permission facade
+- ``ActiveInputPermissionMixin`` -- the spec-027 / spec-028 Decision 8 permission facade
   (``_request_from_info`` / ``_run_permission_checks`` / active-field
   walkers) parameterized by ``ActiveInputPermissionAttrs``. Mechanics live
   in ``utils/permissions.py``; this mixin is the one wrapper layer both
@@ -419,7 +419,7 @@ class ActiveInputPermissionAttrs:
 
 
 class ActiveInputPermissionMixin:
-    """Decision-8 permission facade shared by ``FilterSet`` and ``OrderSet``.
+    """spec-027 / spec-028 Decision 8 permission facade shared by ``FilterSet`` and ``OrderSet``.
 
     Subclasses declare one ``_permission: ActiveInputPermissionAttrs`` and
     inherit the request / branch / active-field / invoke / run surface that

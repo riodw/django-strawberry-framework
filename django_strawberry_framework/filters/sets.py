@@ -1501,7 +1501,7 @@ class FilterSet(
         return fields
 
     # ------------------------------------------------------------------
-    # Decision-4 owner-aware Relay-vs-scalar conditional.
+    # spec-027 Decision 4 owner-aware Relay-vs-scalar conditional.
     # ------------------------------------------------------------------
 
     @classmethod
@@ -2071,7 +2071,7 @@ class FilterSet(
         return registry.primary_for(related_model) or registry.get(related_model)
 
     # ------------------------------------------------------------------
-    # Decision-8 apply pipeline.
+    # spec-027 Decision 8 apply pipeline.
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -2903,7 +2903,7 @@ class FilterSet(
     def filter_queryset(self, queryset: models.QuerySet) -> models.QuerySet:
         """Compose the tree-form ``and`` / ``or`` / ``not`` keys on top of the leaves.
 
-        Decision-8 step 8 + Definition-of-done item 4(d). The flat leaf
+        spec-027 Decision 8 step 8 + Definition-of-done item 4(d). The flat leaf
         clauses are applied by ``self._apply_flat_leaves(queryset)`` -- a
         framework-owned loop that mirrors ``BaseFilterSet.filter_queryset``
         while routing eligible framework-generated to-many leaves through the

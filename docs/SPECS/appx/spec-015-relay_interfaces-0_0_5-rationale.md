@@ -677,8 +677,8 @@ cited `READY-004`, `READY-002`, `READY-003`, `READY-005`, `NEXT-005`, `NEXT-006`
 `IN-PROGRESS-001`, and `DONE-011`. All predate the board's renumbering, and each now names a
 different card or nothing.
 
-*Why the ids were not simply renumbered.* [`worker-0.md`][worker-0] #"Verify card/glossary references
-against the DB" forbids the partial fix, and the reason is visible in this very list: eight of the
+*Why the ids were not simply renumbered.* [`worker-0.md`][worker-0] #"Verify card/glossary references against the DB"
+forbids the partial fix, and the reason is visible in this very list: eight of the
 sixteen name deferrals that have since **shipped**, so a correct renumber would point at a `DONE`
 card while the surrounding sentence still says "planned for a later slice". Renumbering buys a
 correct pointer to a wrong claim. Stating the current contract fixes both, and needs no board id at
@@ -875,12 +875,27 @@ renaming a symbol retires a `::QualifiedName`, and the reconciliation rewrote fo
 | `is removed from synthesized scalar annotations` | `tests/types/test_relay_interfaces.py::test_relay_node_strips_django_id_annotation` | restored in Decision 2 (the rewrite had inserted one word, "the") |
 | `Composite primary keys (Django 5.2+) are explicitly out of scope` | `types/relay.py::_check_composite_pk_for_relay_node`, `tests/types/test_relay_interfaces.py::test_relay_node_with_composite_pk_raises` | restored in Decision 2 ("explicitly" had been dropped) |
 | `injection (Decision-1 borrow) is added unconditionally` | `types/relay.py::install_is_type_of`, `tests/types/test_relay_interfaces.py::test_is_type_of_injected_for_all_djangotypes` | restored in Decision 6 (the parenthetical had been dropped as borrowing-posture residue) |
-| ``surface any `TypeError` as a `ConfigurationError` `` | `types/relay.py::apply_interfaces`, `tests/types/test_relay_interfaces.py` (the `ConfigurationError`-wrap row) | **not** restored to the spec — the sentence belongs to the moved risk register, and putting deliberation back would undo the move. Quoted verbatim below instead, so the citation resolves inside this companion. |
+| ``surface any `TypeError` `` … `` as a `ConfigurationError` `` | `tests/types/test_relay_interfaces.py::test_apply_interfaces_wraps_typeerror_as_configuration_error` | **not** restored to the spec — the sentence belongs to the moved risk register, and putting deliberation back would undo the move. The verbatim risk bullet below carries the sentence and is the anchor's one occurrence in this companion, so the citation resolves there; this row elides the middle of the anchor so the catalogue is not a second occurrence. `types/relay.py::apply_interfaces` cites Decision 1 `#"never as a raw layout error"` instead, which resolves in the spec. |
 
 Restoring three wordings costs the spec nothing: each sentence is otherwise unchanged and each
 remains true at `HEAD`. The general lesson is the cheap one — **a spec sentence that shipped source
-quotes is an interface, and rewording it is a breaking change to that interface.** Sweep
-`git grep 'spec-<NNN> #"'` before and after any reconciliation pass.
+quotes is an interface, and rewording it is a breaking change to that interface.** Sweep every anchor
+before and after any reconciliation pass, and sweep it on **flattened** text. A citation whose
+opening `#` + quote sits on one line and whose closing quote sits on the next is the same anchor with
+a newline inside it, and every line-scoped matcher — `git grep` included — reports it as absent, so
+the sites most in need of repair are the ones a per-line sweep cannot see. Flatten first, then match:
+
+```shell
+git ls-files '*.py' '*.md' | while read -r f; do
+  tr '\n' ' ' <"$f" | grep -oE 'spec-[0-9]{3}[^"]{0,120}#"[^"]+"' | sed "s|^|$f: |"
+done
+```
+
+The companion sweep finds the split anchors themselves: an occurrence of `#` immediately followed by
+a double quote, with no further double quote later on the same line, is a citation broken across a
+line break. It resolves in no target, and no gate reports it —
+[`scripts/check_citations.py`][check-citations] matches `path::Symbol` within a single line and holds
+`docs/` out of scope by design.
 
 *The verbatim risk bullet, so the fourth citation resolves.* From the moved
 `## Risks and open questions`:
@@ -1005,6 +1020,7 @@ shipped code, and it is checkable by reading the row it names.
 [test-products-api]: ../../../examples/fakeshop/test_query/test_products_api.py
 
 <!-- scripts/ -->
+[check-citations]: ../../../scripts/check_citations.py
 
 <!-- .venv/ -->
 

@@ -363,21 +363,21 @@ def test_factory_raises_when_reachable_related_orderset_is_empty():
 
 
 # ---------------------------------------------------------------------------
-# Pop-time ``if os_class in seen: continue`` guard
+# Pop-time ``if set_cls in seen: continue`` skip
 # ---------------------------------------------------------------------------
 
 
 def test_factory_dedupes_double_enqueued_target_via_seen_check():
-    """Closes ``orders/factories.py:138`` -- pop-time ``if os_class in seen: continue``.
+    """Covers ``utils/inputs.py::GeneratedInputArgumentsFactory._ensure_built`` #"if set_cls in seen:".
 
-    The existing ``test_factory_handles_cycles_via_seen_set`` pins the
-    enqueue-time ``target not in seen`` gate (line 159); this test pins
-    the pop-time gate (line 138). To force a double-enqueue, declare an
+    The existing ``test_factory_handles_cycles_via_seen_set`` pins the same
+    helper's enqueue-time #"if target is not None and target not in seen:"
+    gate; this test pins the pop-time one. To force a double-enqueue, declare an
     orderset with TWO ``RelatedOrder`` instances pointing to the SAME
     target -- both walk the ``related_orders.values()`` loop while the
     target is not yet in ``seen`` (the parent class is still in flight),
     so both enqueue. The first pop processes the target; the second pop
-    hits the ``if os_class in seen: continue`` guard.
+    hits the ``if set_cls in seen: continue`` skip.
     """
 
     class ChildOrderDedup(OrderSet):

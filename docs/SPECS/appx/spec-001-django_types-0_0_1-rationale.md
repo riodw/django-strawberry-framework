@@ -666,8 +666,8 @@ visibility-filtered too. Both are now in spec-001's `## N+1 strategy`:
 - **The projection rule with its reason.** A projection over a joined relation must carry the source
   row's local FK column alongside the joined columns; masking the FK column makes Django treat the
   joined attributes as deferred and re-query on first access. Verified at HEAD rather than restored
-  from the deleted paragraph: `optimizer/plans.py` #"including the FK columns required to
-  materialize" states the rule, and `optimizer/walker.py::_record_relation_access` states the
+  from the deleted paragraph: `optimizer/plans.py` #"including the FK columns required to materialize"
+  states the rule, and `optimizer/walker.py::_record_relation_access` states the
   consequence of dropping it ("reintroduce the N+1") as the reason its call must precede the
   FK-elision check.
 - **Visibility filtering on every branch the planner builds.** The deleted paragraph's own wording —

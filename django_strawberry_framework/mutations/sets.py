@@ -500,13 +500,14 @@ def resolver_seams(
 
 # Per-finalize-pass build cache keyed by generated-input shape identity
 # (``(model, operation_kind, frozenset(effective field names))``, spec-036
-# Decision 6 line 334). The key is the EFFECTIVE field set, NOT the raw
+# Decision 6 #"Type identity and naming"). The key is the EFFECTIVE field set, NOT the raw
 # ``(fields, exclude)`` declaration: two declarations that resolve to the same
 # effective shape via different ``fields`` / ``exclude`` spellings (e.g.
 # ``fields=("name",)`` vs the complementary ``exclude=(<the rest>)``, or a
 # ``fields`` list naming the full editable set vs an un-narrowed create) must
-# dedupe to one type (spec-036 Edge cases line 509). Keying on the effective set
-# mirrors ``mutations.inputs.mutation_input_shape``'s identity tuple (cache_key /
+# dedupe to one type (spec-036 Edge cases #"Two mutations over one model").
+# Keying on the effective set mirrors
+# ``mutations.inputs.mutation_input_shape``'s identity tuple (cache_key /
 # type_name), so the cache key, the generated name, the field name seam, and the
 # spec identity are single-sourced and cannot drift - two mutations with the same
 # effective shape reuse one class object so the materialize ledger dedupes
@@ -559,9 +560,8 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
     The model flavor and the plain-form flavor (``forms/sets.py``) each instantiate
     this over their OWN list, so the dedup / reject / clear logic is single-sourced
     while the two ledgers stay disjoint (different ``bind_*`` bodies, different
-    ``registry.clear()`` rows - the over-consolidation trap Decision 13 names is
-    avoided by
-    keeping the storage separate).
+    ``registry.clear()`` rows - the over-consolidation trap spec-038 Decision 13
+    names is avoided by keeping the storage separate).
     """
     store: list[type] = []
 
@@ -668,7 +668,8 @@ def _validate_input_class(
 ) -> None:
     """Validate a consumer ``input_class`` / ``partial_input_class``.
 
-    Two checks (spec-036 Decision 5 error-shapes + Decision 6 line 336):
+    Two checks (spec-036 Decision 5 error-shapes + Decision 6
+    #"Custom inputs follow the generated field-naming scheme"):
 
     1. It is a ``@strawberry.input``-decorated type - a class carrying
        ``__strawberry_definition__`` with ``is_input`` True. A plain class or a
@@ -1245,8 +1246,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         An ``async def has_permission`` entry returns a coroutine, which is truthy:
         a naive ``if not has_permission(...)`` would never deny it, so an async
         deny-check would be silently treated as ALLOW - an authorization bypass. The pipeline
-        is synchronous (Decision 15), so the coroutine can never be awaited here; it is closed
-        and raised as a ``SyncMisuseError``, the same discipline
+        is synchronous (spec-036 Decision 15), so the coroutine can never be awaited here;
+        it is closed and raised as a ``SyncMisuseError``, the same discipline
         ``apply_type_visibility_sync`` applies to an async ``get_queryset``. (An async
         ``check_permission`` override is caught by the resolver's ``authorize_or_raise`` one
         level up.)
@@ -1336,8 +1337,9 @@ def _materialize_input_for(
     # Derive the shape ONCE: ``mutation_input_shape`` single-sources the
     # cache key (the EFFECTIVE field set, NOT the raw ``(fields, exclude)``
     # spelling - two narrowings to one effective shape must dedupe, spec-036
-    # Edge cases line 509) AND the generated name, so the bind cache key and the
-    # generated type name cannot drift. The same descriptor is handed to
+    # Edge cases #"Two mutations over one model") AND the generated name, so the
+    # bind cache key and the generated type name cannot drift. The same
+    # descriptor is handed to
     # ``build_mutation_input`` so it does not re-walk the editable fields.
     shape = mutation_input_shape(
         meta.model,
@@ -1431,7 +1433,7 @@ def _validate_relation_override_types(
     *,
     attr_name: str,
 ) -> None:
-    """Type- and shape-lock a consumer relation override to the generated id (Decision 10).
+    """Type- and shape-lock a relation override to the generated id (spec-036 Decision 10).
 
     A relation column whose related model HAS a primary Relay-Node type generates a
     ``relay.GlobalID`` (forward FK / OneToOne) or ``list[relay.GlobalID]`` (M2M) input

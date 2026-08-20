@@ -26,7 +26,7 @@ search honors the declaring type's existing FilterSet permission gates
 Both dependencies have shipped (`DONE-027-0.0.8`
 Filtering, `DONE-030-0.0.9` `DjangoConnectionField`) and the landing seams
 already exist in the tree: `filters/inputs.py::LOOKUP_PREFIXES` +
-`construct_search` (landed by spec-027 Decision 3 Layer 5 under a broad
+`construct_search` (landed by spec-027 Decision 2 under a broad
 future-search reservation that Slice 1 retargets to card 056) and the
 `connection.py::_synthesized_signature` docstring's "The `search:` argument
 is NOT generated (search is `0.1.2`)" reservation.
@@ -192,14 +192,13 @@ viewer cannot see.
   (`exceptions.py` names `search_fields` in its reserved-key docstring).
 - `filters/inputs.py::LOOKUP_PREFIXES` (`^` → `istartswith`, `=` → `iexact`,
   `@` → `search`, `$` → `iregex`) and `filters/inputs.py::construct_search`
-  landed with spec-027 Decision 3 Layer 5 under a broad future-search
+  landed with spec-027 Decision 2 under a broad future-search
   reservation. Canonical card 055 subsequently narrowed this card to basic
   OR'd `icontains`; card 056 owns the shortcut parity decision and its
   Postgres guard. Slice 1 retargets the stale reservation wording.
 - `filters/sets.py::FilterSet.get_filters` carries a
-  `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)` comment at
-  the point where prefix translation was originally imagined to wire in.
-  This spec supersedes that placement
+  `TODO(spec-055 Slice 1)` comment directing prefix translation to wire in
+  there. This spec supersedes that placement
   ([Decision 1](#decision-1--search-support-lives-in-filterssearchpy-not-inside-filterset));
   Slice 1 removes the TODO.
 - `connection.py::_synthesized_signature` generates `filter:` / `orderBy:`
@@ -825,7 +824,7 @@ pipeline applies it end-to-end"). The DoD's parenthetical "(per
 `TODO-BETA-058-0.1.3`)" is read as pointing at card 058's *generalized
 promotion machinery* for the remaining deferred keys
 (`aggregate_class`), not as deferring this key's promotion to 058 — the
-same reading spec-053 Decision 8 pinned for `fields_class`, and 057's own
+same reading spec-054 Decision 8 pinned for `fields_class`, and 058's own
 title ("Layer 3 Meta key promotion") describes the sweep, not ownership of
 each key. Ambiguity + fallback recorded in Risks. `aggregate_class`
 remains the sole `DEFERRED_META_KEYS` member after this card and

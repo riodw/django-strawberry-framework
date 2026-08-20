@@ -1,6 +1,6 @@
 """Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 
-The Decision-8 permission facade lives on ``ActiveInputPermissionMixin``;
+The spec-027 / spec-028 Decision 8 permission facade lives on ``ActiveInputPermissionMixin``;
 family apply pipelines stay distinct (visibility/form vs ``order_by``).
 """
 

@@ -44,7 +44,7 @@ windowed body: a performance downgrade, never a correctness cliff.
 Plan-time shapes the lateral SQL cannot express (``select_related``, child
 annotations, expression ordering, a composite primary key, or selected/ordered
 columns from a multi-table inheritance parent) downgrade INSIDE the strategy to
-the windowed plan - the selection is still planned, so Decision-6 strictness
+the windowed plan - the selection is still planned, so spec-033 Decision 6 strictness
 visibility is unaffected. A child ``get_queryset`` visibility scope is the one
 filter it CAN express when it is a single-table plain-column WHERE on the
 DIRECT_FK non-keyset shape: that WHERE rides the spec, is compiled at fetch

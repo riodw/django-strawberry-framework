@@ -277,8 +277,8 @@ carried its dataclass sketch and a five-behavior borrow list. `### Decision 3`, 
 `types/fields.py` were the same claim's other five sites.
 
 It was never built, is absent from `docs/TREE.md`'s target layout, and has now been declined three
-times, the last decisively (`spec-054-fieldset-0_1_1.md` #"a custom `DjangoModelField` field class is
-unnecessary machinery"). The parity test it fails is **consumer-visible capability, not symbol
+times, the last decisively (`spec-054-fieldset-0_1_1.md` #"field class is unnecessary machinery").
+The parity test it fails is **consumer-visible capability, not symbol
 presence**: `StrawberryDjangoField` is upstream *internal plumbing*, graphene-django has no analogue
 class at all, and every capability the class was to carry already ships through this package's own
 grain — annotation via `types/converters.py::resolved_relation_annotation`, access and N+1 cooperation

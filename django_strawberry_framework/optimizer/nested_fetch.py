@@ -91,14 +91,14 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     - ``combined``: union/intersection/difference querysets cannot take
       window annotations or per-partition filters.
     - ``distinct``: the window ``Count(1) OVER`` would over-count
-      pre-DISTINCT rows (the historical Decision-6 shape 4 guard, now
+      pre-DISTINCT rows (the historical spec-033 Decision 6 shape 4 guard, now
       centralized here).
     - ``values``: a ``values()``/``values_list()`` iterable has no model
       instances to carry the window attributes.
 
     Returns a short reason string (stable, test/telemetry-friendly) or
     ``None`` for a plain windowable queryset. The walker treats any reason
-    as a fully-unplanned Decision-6 fallback: no prefetch, no resolver keys,
+    as a fully-unplanned spec-033 Decision 6 fallback: no prefetch, no resolver keys,
     so the per-parent resolution stays strictness-visible and any truly
     invalid consumer shape raises ITS OWN error at the field with normal
     error locality.
@@ -253,7 +253,7 @@ class NestedConnectionStrategy(Protocol):
     ``plan`` attaches fetch directives for ``request`` to ``plan`` and
     returns ``True``; returning ``False`` leaves the selection UNPLANNED
     (the walker then records no resolver identities, so the per-parent
-    access stays visible to strictness - the Decision-6 fallback
+    access stays visible to strictness - the spec-033 Decision 6 fallback
     discipline). Implementations must satisfy the ``to_attr`` row contract
     described in the module docstring.
     """

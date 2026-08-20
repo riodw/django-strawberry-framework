@@ -2141,7 +2141,7 @@ def test_both_package_views_resolve_parse_json_to_the_one_shared_mixin_method():
 # the suite the same single failure and neither was really pinned:
 #
 #   * the declared charset            -> ``..._is_refused_even_when_django_would_decode_utf8``
-#     (plus the alias matrix below, and the M1 row for the masking direction)
+#     (plus the alias matrix below, and the masking-direction row)
 #   * ``request.encoding``            -> ``..._non_utf8_request_encoding_is_refused_on_its_own``
 #     and ``..._does_not_mask_a_middleware_set_request_encoding``
 #   * ``settings.DEFAULT_CHARSET``    -> ``..._reconfigured_default_charset_is_refused_...``

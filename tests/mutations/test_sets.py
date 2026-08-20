@@ -1525,7 +1525,7 @@ def test_make_declaration_registry_dedupes_and_rejects_post_finalize():
 def test_make_meta_validating_metaclass_validates_registers_and_skips_abstract():
     """The metaclass factory single-sources validate-then-register over a register callback.
 
-    ``make_meta_validating_metaclass`` is the Decision-13 twin of
+    ``make_meta_validating_metaclass`` is the spec-038 Decision 13 twin of
     ``make_declaration_registry``: a fresh metaclass over a probe register still
     skips a no-``Meta`` base, validates + registers a concrete subclass, and keeps
     ledgers disjoint when two metaclasses close over different registers.

@@ -1369,7 +1369,7 @@ def plan_connection_relation(
     # request per response key under that key's namespaced ``to_attr`` (the
     # graph-node model - O(aliases) batched queries instead of
     # O(parents x aliases) per-parent fallbacks). A strategy returning
-    # ``False`` leaves that window unplanned, keeping the Decision-6
+    # ``False`` leaves that window unplanned, keeping the spec-033 Decision 6
     # strictness contract (no resolver identities recorded for it).
     # Per-field strategy selection: a
     # ``OptimizerHint.strategy(name)`` overrides the extension default; otherwise
@@ -1449,7 +1449,7 @@ def plan_connection_relation(
     # Success path: absorb the child metadata the sub-plan collected into the
     # parent only now - a strategy that refused every window (like each earlier
     # fallback shape) must leak no child resolver keys / fk-id elisions /
-    # cacheable flip into the parent plan (the Decision-6 no-leakage contract).
+    # cacheable flip into the parent plan (the spec-033 Decision 6 no-leakage contract).
     # The child queryset / node selections / order were built ONCE from the
     # merged UNION children and are shared by every per-key window, so one
     # absorb covers all planned keys.

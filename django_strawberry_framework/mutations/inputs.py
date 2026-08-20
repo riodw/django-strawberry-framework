@@ -322,7 +322,7 @@ def relation_id_scalar(related_model: type, related_primary_type: type | None) -
     used to re-spell: model-backed ``relation_input_annotation`` and
     column-less ``annotate_queryset_relation`` (form + serializer).
     Primary-required vs raw-pk fallback stays at those call sites (serializer
-    M3 raises before calling this; form / model pass ``registry.get``, which
+    spec-039 M3 raises before calling this; form / model pass ``registry.get``, which
     may be ``None``).
     """
     if related_primary_type is not None and implements_relay_node(related_primary_type):

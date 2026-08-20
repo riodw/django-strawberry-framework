@@ -2,7 +2,7 @@
 
 Re-exports the foundational primitives from ``base.py``, the
 ``OrderSet`` + ``OrderSetMetaclass`` pair from ``sets.py``, the
-``Ordering`` enum from ``inputs.py``, and the Decision-11 consumer
+``Ordering`` enum from ``inputs.py``, and the spec-028 Decision 11 consumer
 helper ``order_input_type``. The finalizer's phase 2.5 wires
 the orphan check that compares ``_helper_referenced_ordersets``
 against the set of ``Meta.orderset_class``-wired ordersets.
@@ -29,7 +29,7 @@ from .base import RelatedOrder
 from .inputs import INPUTS_MODULE_PATH, Ordering, _input_type_name_for
 from .sets import OrderSet, OrderSetMetaclass
 
-# Ledger of ``OrderSet``s referenced through the Decision-11
+# Ledger of ``OrderSet``s referenced through the spec-028 Decision 11
 # ``order_input_type(...)`` consumer helper. Cleared via the
 # ``register_subsystem_clear`` row below (owner
 # ``orders.helper_references``) so ``registry.clear()`` replays
@@ -57,7 +57,7 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
     Per spec-028, consumers wrap the helper's return as
     ``list[order_input_type(MyOrder)] | None`` at the resolver site so
     the GraphQL argument shape is ``orderBy: [MyOrderInputType!]``
-    (list-of-non-null per Spec Decision 5).
+    (list-of-non-null per spec-028 Decision 5).
 
     Strawberry collects the annotation at ``@strawberry.type``
     decoration time, defers resolution, and resolves it via
@@ -74,7 +74,7 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
     Raises:
         TypeError: ``orderset_class`` is not an ``OrderSet`` subclass.
     """
-    # Decision-11 consumer-helper body shared with ``filters/__init__.py::
+    # spec-028 Decision 11 consumer-helper body shared with ``filters/__init__.py::
     # filter_input_type`` via ``utils/inputs.py::build_lazy_input_annotation``
     # The return is the **element type** -- consumers wrap as
     # ``list[order_input_type(MyOrder)] |

@@ -18,7 +18,7 @@ class GenreFilter(FilterSet):
     """Genre filterset bound to ``GenreType`` at finalize phase 2.5.
 
     ``GenreType`` declares ``Meta.interfaces = (relay.Node,)`` so the
-    Decision-4 own-PK branch fires for ``id`` here: the resulting filter
+    spec-027 Decision 4 own-PK branch fires for ``id`` here: the resulting filter
     is ``GlobalIDFilter`` (not the scalar default), and the wire shape is
     a Strawberry Relay GlobalID string.
     """

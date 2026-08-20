@@ -352,7 +352,7 @@ def _model_less_relation_annotation(
     rule as the model-backed path). The ``<name>_id`` (single) / ``list[<id>]``
     (multi) ``036`` scheme is reused so the wire contract is uniform across the
     model-backed and model-less relation paths. A missing primary still falls
-    back to the raw pk scalar (unlike serializer M3, which raises).
+    back to the raw pk scalar (unlike serializer spec-039 M3, which raises).
 
     A ``ModelChoiceField`` whose ``queryset`` is assigned in ``__init__`` (a valid
     Django idiom) has ``queryset is None`` in the uninstantiated ``base_fields``

@@ -1,6 +1,6 @@
 # Spec: Form-based mutations — `DjangoFormMutation` / `DjangoModelFormMutation` on the DRF-shaped `class Meta` surface, reusing the frozen `FieldError` envelope and the `DjangoMutation` foundation
 
-Planned for `0.0.12` (card [`TODO-ALPHA-038-0.0.12`][kanban]). This card adds the
+Shipped in `0.0.12` (card [`DONE-038-0.0.12`][kanban]). This card adds the
 **form-validated** write flavor on top of the model-driven mutation foundation
 [`DONE-036-0.0.11`][kanban] ([`spec-036`][spec-036]) shipped: two new bases —
 [`DjangoFormMutation`][glossary-djangoformmutation] (a Django `Form`) and
@@ -39,11 +39,14 @@ card targets `0.0.12` — so the `pyproject.toml` / `__version__` /
 `0.0.12` **lands here**, exactly as [`spec-037`][spec-037] Decision 10 owned the
 final `0.0.11` cut.
 
-Status: **IN PROGRESS** — authored for [`TODO-ALPHA-038-0.0.12`][kanban] via the
-[`docs/SPECS/NEXT.md`][next] flow; Slices 1–4 built and accepted (the form
+Status: **SHIPPED (`0.0.12`)** — card [`DONE-038-0.0.12`][kanban], released
+under the [`CHANGELOG.md`][changelog] `## [0.0.12]` heading; authored via the
+[`docs/SPECS/NEXT.md`][next] flow, **all five slices final-accepted** (the form
 converter + form-derived inputs; the two bases + `Meta` validation + the phase-2.5
 bind; the resolver pipeline + `DjangoMutationField` exposure; the products live form
-surface), only Slice 5 remains. Slice 5 flips this line to shipped at the `0.0.12` cut.
+surface; docs + the `0.0.12` version cut + card wrap). The
+[Slice checklist](#slice-checklist) below stays unticked because the `Status:` line
+is the completion source of truth (the shipped-spec convention).
 Five slices: Slice 1
 (**form-field → Strawberry input mapping** — `forms/converter.py` + the
 form-derived input generator;
@@ -988,9 +991,8 @@ frozen [`FieldError`][glossary-fielderror-envelope] envelope. But "exposed throu
 hardwired to the model write path on three axes, each of which this card must
 generalize into an overridable seam on the mutation base (the seam set is the spine
 of [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling),
-and the future `0.0.13` [`SerializerMutation`][glossary-serializermutation] flavor is
-designed to reuse every one of them — though `039` is not yet specced, so that reuse
-is a forward intent, not a commitment this card can bind):
+and the `0.0.13` [`SerializerMutation`][glossary-serializermutation] flavor is
+designed to reuse every one of them):
 
 1. **Target check.** [`mutations/fields.py`][mutations-fields] `_validate_mutation_target`
    asserts `issubclass(mutation_cls, DjangoMutation)`. The `ModelForm` flavor passes
@@ -1893,7 +1895,7 @@ seams + the `types/finalizer.py` wiring) is a real, named part of that delta —
 "single additive target-check edit" an earlier draft budgeted; it is justified because
 the seams default to today's model behavior (no model-flavor regression) **and** are
 the same extension points the `0.0.13` [`SerializerMutation`][glossary-serializermutation]
-flavor is designed to reuse (a forward intent — `039` is not yet specced). Staged-but-not-implemented seams follow the [`AGENTS.md`][agents]
+flavor is designed to reuse. Staged-but-not-implemented seams follow the [`AGENTS.md`][agents]
 design-doc anchor discipline (a source-site `TODO(spec-038 Slice N)` comment naming
 this spec, removed in the slice that ships it).
 

@@ -89,12 +89,12 @@ _STRAWBERRY_CHANNELS_BROKEN_HINT = (
     "`strawberry.channels` consumer (GraphQLWSConsumer) importable."
 )
 
-# The construction-time failure for an unusable ``django_application`` (spec-046
-# Decision 3 / Error shapes). Names all three facts a migrant needs: what the
-# removed mode was actually doing, that it is REMOVED rather than flagged, and
-# the two-place repair (the asgi.py argument AND the URLconf entry - migration is
-# no longer one line). Omitting the argument entirely is Python's own
-# ``TypeError``, deliberately, so a required parameter fails as one.
+# The construction-time failure for an unusable ``django_application``
+# (spec-046 Decision 3 / Error shapes). Names all three facts a migrant needs:
+# what the removed mode was actually doing, that it is REMOVED rather than
+# flagged, and the two-place repair (the asgi.py argument AND the URLconf
+# entry - migration is no longer one line). Omitting the argument entirely is
+# Python's own ``TypeError``, deliberately, so a required parameter fails as one.
 _MISSING_DJANGO_APPLICATION_HINT = (
     "DjangoGraphQLProtocolRouter requires a usable Django ASGI application for its `http` "
     "branch. A 0.0.14 deployment that passed `django_application=None` (or omitted it) "
@@ -144,10 +144,10 @@ _ASYNC_FACTORY_HINT = (
 )
 
 # Rejecting the combination rather than ignoring the window: a knob that does
-# nothing is worse than an error (spec-046 Edge cases
-# #"``websocket_revalidation_window`` is meaningless when a custom class is
-# injected"). An explicit ``0.0`` alongside an injected class stays legal - it
-# configures nothing either way.
+# nothing is worse than an error
+# (spec-046 Edge cases #"is meaningless when a custom class"). An explicit
+# ``0.0`` alongside an injected class stays legal - it configures nothing
+# either way.
 _WINDOW_WITH_INJECTED_CONSUMER_HINT = (
     "websocket_revalidation_window configures the package's own WebSocket consumer, so "
     "it cannot be combined with a positive value and websocket_consumer_class: an "

@@ -20,7 +20,7 @@ P1.5), and this flavor supplies only the serializer ``decode_step`` /
 
 The serializer-specific invariants this module owns:
 
-- **The decode produces a SERIALIZER-FIELD-keyed ``provided_data``** (Decision 8
+- **The decode produces a SERIALIZER-FIELD-keyed ``provided_data``** (spec-039 Decision 8
   step 1). DRF serializers are keyed by DECLARED field name and read uploads from
   ``data`` like any other value (the deliberate contrast with Django forms, which
   split ``files=``). The reverse map
@@ -44,19 +44,19 @@ The serializer-specific invariants this module owns:
   ``PrimaryKeyRelatedField`` expects. A hidden / wrong-model / uncoercible id is a
   field-keyed ``FieldError`` keyed to ``spec.graphql_name`` (the GraphQL wire name
   the client sent, e.g. ``categoryId``). The generated input field exposes exactly
-  ONE strategy-dependent shape (Decision 7 - a ``GlobalID`` for a Relay target,
+  ONE strategy-dependent shape (spec-039 Decision 7 - a ``GlobalID`` for a Relay target,
   else the raw-pk scalar); the shared decode helper accepts BOTH only because
   package tests drive the raw-pk / non-Relay branch by direct call.
 
 - **A relation ``GlobalID`` is decoded against the target type's RECORDED
   ``effective_globalid_strategy``** via ``decode_model_global_id`` (which takes the
   expected model and reads the recorded state), NOT a live settings read / a
-  strategy re-validation on the query path (the config-assessment grep-guard,
-  Decision; the strategy is resolved once at finalization, never re-read per
+  strategy re-validation on the query path (the spec-039 config-assessment
+  grep-guard; the strategy is resolved once at finalization, never re-read per
   request).
 
 - **The serializer is constructed via the CONSTRUCTOR-ONLY ``get_serializer_kwargs``
-  hook + the framework merge** (Decision 8 step 4 / hardened). The framework
+  hook + the framework merge** (spec-039 Decision 8 step 4 / hardened). The framework
   builds the authoritative serializer ``data`` ITSELF - decoded client data plus the
   ``get_serializer_injected_data`` injection (whose keys must EXACTLY match
   ``Meta.injected_fields``) - then calls ``get_serializer_kwargs(info, data=<copy>,
@@ -90,7 +90,7 @@ The serializer-specific invariants this module owns:
   the shared ``036`` integrity mapper - three separate ``except`` branches (DRF
   first), never a top-level ``GraphQLError``.
 
-- **The re-fetch rides the ``036`` ``refetch_optimized`` G2 path** (Decision 9 /
+- **The re-fetch rides the ``036`` ``refetch_optimized`` G2 path** (spec-039 Decision 9 /
   G2): the shared skeleton re-fetches the saved object by pk WITHOUT the visibility
   filter, routed through the optimizer so the spec-035 G2 gate keeps
   ``select_related`` / ``prefetch_related`` and applies NO ``.only(...)`` under the
@@ -223,7 +223,7 @@ def _decode_relation_single(
     through unchanged so the serializer's own validation decides (a required
     relation raises its field-keyed required error via ``is_valid()``, an optional
     one clears). The generated GraphQL input field exposes only the one
-    strategy-dependent shape (Decision 7); this helper accepts BOTH a ``GlobalID``
+    strategy-dependent shape (spec-039 Decision 7); this helper accepts BOTH a ``GlobalID``
     and a raw pk because package tests drive the raw-pk / non-Relay branch by direct
     call.
     """
@@ -420,7 +420,7 @@ def serializer_errors_to_field_errors(
     re-keys with its OWN field map. A segment with no entry (a numeric index, the ``"__all__"``
     sentinel, or a non-mapped field) is kept verbatim.
 
-    **Iterative, cycle- and budget-aware** (the hardening pass): the error structure mirrors a
+    **Iterative, cycle- and budget-aware**: the error structure mirrors a
     client-controlled input (a deeply-nested ``JSONField`` payload reproduces its nesting in
     ``serializer.errors`` / a DRF ``ValidationError.detail``), so a recursive walk would let a
     deep payload crash the pipeline with a ``RecursionError`` at the ERROR path - the exact
@@ -786,7 +786,7 @@ def _injected_serializer_data(
 ) -> dict[str, Any]:
     """Collect the ``Meta.injected_fields`` values through ``get_serializer_injected_data``.
 
-    The declared-injection half of the final serializer data (the hardening pass):
+    The declared-injection half of the final serializer data:
     the framework builds the authoritative data itself from the DECODED client data
     plus this hook's return - a ``get_serializer_kwargs`` override can no longer
     replace or extend ``data``. The hook receives the FROZEN view of the decoded
@@ -831,8 +831,8 @@ def _merged_serializer_kwargs(
     """Construct the serializer kwargs through ``get_serializer_kwargs`` + the framework merge.
 
     Calls the overridable CONSTRUCTOR-ONLY hook ``get_serializer_kwargs(info,
-    data=<frozen view>, hook_context=<frozen context>)`` (the spec D8 step-4
-    hook), then OWNS the non-overridable framework rules. ``data``, ``instance``,
+    data=<frozen view>, hook_context=<frozen context>)`` (the spec-039 Decision 8
+    step-4 hook), then OWNS the non-overridable framework rules. ``data``, ``instance``,
     ``partial``, ``context["request"]``, and ``context["write_alias"]`` are
     FRAMEWORK-OWNED:
 
@@ -1314,7 +1314,7 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
     The per-serializer body of ``_scope_relation_querysets_to_visibility``, factored out so it
     serves both the top-level input specs and each nested serializer's specs. A relation field's
     final queryset is **author queryset AND target visibility, pinned to the write alias, and
-    locked when ``Meta.select_for_update`` locks** (the hardening pass):
+    locked when ``Meta.select_for_update`` locks**:
 
     - the author's queryset (an intentional ``PrimaryKeyRelatedField(queryset=...)``
       restriction) stays the base contract, PINNED to the pipeline's write alias - an author
@@ -1403,7 +1403,7 @@ def _assert_save_kwargs_no_shadow(
 
 
 def _assert_save_kwargs_not_model_fields(mutation_cls: type, save_kwargs: dict[str, Any]) -> None:
-    """Raise if a ``get_serializer_save_kwargs`` key names ANY model field (the hardening pass).
+    """Raise if a ``get_serializer_save_kwargs`` key names ANY model field.
 
     DRF merges save kwargs into the write with no validation and no visibility check, so a
     save kwarg naming a model column / relation (``category=<hidden row>``,
@@ -1447,7 +1447,7 @@ def _write_surface_specs(mutation_cls: type) -> list:
 
 
 class _RelationIntentLedger:
-    """The per-write record of the EXACT objects each relation field resolved (hardening pass).
+    """The per-write record of the EXACT objects each relation field resolved.
 
     ``records`` maps a dotted spec path (``category`` / ``shelves.branch``) to the ordered
     list of values that field's ``run_validation()`` returned - one entry per call, so a
@@ -1888,7 +1888,7 @@ def _write_witness(
     model: type,
     alias: str,
 ) -> Iterator[list[tuple[Any, Any, bool, str | None]]]:
-    """Observe + police the ORM writes of the consumer-controlled write phase (the hardening pass).
+    """Observe + police the ORM writes of the consumer-controlled write phase.
 
     Two guards scoped to the write phase (hooks, validation, and ``serializer.save()``),
     on THIS thread only (concurrent requests in other threads are untouched - each request
@@ -1961,7 +1961,7 @@ def _checked_saved_result(
     alias: str,
     written: list[tuple[Any, Any, bool, str | None]],
 ) -> Any:
-    """Validate the ``serializer.save()`` result before the pipeline trusts it (the hardening pass).
+    """Validate the ``serializer.save()`` result before the pipeline trusts it.
 
     The re-fetch, the payload, and (on update) the whole authorization story key off the saved
     object, so a custom ``save()`` / ``create()`` / ``update()`` whose return drifted is a
@@ -2095,7 +2095,7 @@ def _serializer_write_step(
     if authorized_pk is None and instance is not None:
         authorized_pk = instance.pk
     # The frozen hook context every consumer hook receives INSTEAD of the live,
-    # mutable located instance (the hardening pass): the operation kind, the
+    # mutable located instance: the operation kind, the
     # pinned alias, and the authorized pk snapshot.
     hook_context = SerializerHookContext(
         operation=mutation_cls._mutation_meta.operation,
@@ -2138,7 +2138,7 @@ def _guarded_serializer_write(
     hook_context: SerializerHookContext,
     written: list[tuple[Any, Any, bool, str | None]],
 ) -> Any | list[FieldError]:
-    """The write-step body, run inside the ``_write_witness`` guards (the hardening pass)."""
+    """The write-step body, run inside the ``_write_witness`` guards."""
     # The pre-save M2M membership snapshot (update only), taken at write-step
     # entry - strictly AFTER authorization (relation membership is data an
     # unauthorized caller must never make the pipeline query) and strictly
@@ -2150,7 +2150,7 @@ def _guarded_serializer_write(
     # (immutable containers; uploads as metadata) - built once, shared by the
     # injected-data and save-kwargs hooks.
     frozen_provided = _frozen_hook_view(provided_data)
-    # The framework builds the authoritative serializer data ITSELF (the hardening pass):
+    # The framework builds the authoritative serializer data ITSELF:
     # decoded client data + the exact-match ``Meta.injected_fields`` injection - a
     # ``get_serializer_kwargs`` override can no longer replace or extend it.
     injected = _injected_serializer_data(
@@ -2194,7 +2194,7 @@ def _guarded_serializer_write(
     # queryset to the same alias before validation so uniqueness cannot consult
     # another shard or escape the transaction.
     _pin_validator_querysets(serializer, alias)
-    # The relation-intent ledger (the hardening pass): record the EXACT objects
+    # The relation-intent ledger: record the EXACT objects
     # each relation field's ``run_validation()`` resolves - top-level AND nested -
     # BEFORE field-level or object-level validators get a chance to replace them.
     ledger = _instrument_relation_intent(mutation_cls, serializer)

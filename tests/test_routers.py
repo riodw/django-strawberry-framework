@@ -1487,7 +1487,7 @@ def test_repeated_access_returns_the_cached_class_which_is_subclassable():
         pass
 
     assert issubclass(Extended, ProtocolTypeRouter)
-    # The star surface is pinned to the one public symbol (Decision 3).
+    # The star surface is pinned to the one public symbol (spec-041 Decision 3).
     assert routers_module.__all__ == ("DjangoGraphQLProtocolRouter",)
 
 
@@ -1988,7 +1988,7 @@ def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected)
     ``1e300``-second window is operationally "never revalidate
     again", and it is **accepted**: the package rejects values it cannot *use*, not
     values it disapproves of, and it imposes no ceiling for the same reason it
-    imposes no maximum connection lifetime (Decision 12) - there is no correct
+    imposes no maximum connection lifetime (spec-046 Decision 12) - there is no correct
     default and any constant would be invented rather than derived. They also mark
     where ``int`` stops having a ``float`` image: these convert, and the
     ``10**10000`` row above does not, which is the whole distinction the guarded
@@ -2238,7 +2238,7 @@ def _django_http_host_verdict(*, host=None, forwarded_host=None, server=None):
     The oracle for every delegation row. A real ``WSGIRequest``, built by Django's
     own ``RequestFactory``, answering the public ``HttpRequest.get_host()`` under
     whatever settings the calling row has overridden - never a second expectation
-    typed out here. That distinction is the whole point of Decision 19: a
+    typed out here. That distinction is the whole point of spec-046 Decision 19: a
     hand-written expectation would pass just as happily against a package-local
     reimplementation of ``ALLOWED_HOSTS`` matching, so it could not prove the
     package delegates. ``None`` means ``DisallowedHost``, i.e. "Django refuses this
@@ -2266,7 +2266,7 @@ def _handshake_scope(headers, server=None):
     adapter can never be handed subtly different inputs. The four HTTP-only keys
     (``method`` / ``path`` / ``query_string`` / ``type``) exist solely because
     ``ASGIRequest.__init__`` reads them; ``_host_validation_request`` reads neither,
-    which is the asymmetry Decision 19 cites for projecting into a plain
+    which is the asymmetry spec-046 Decision 19 cites for projecting into a plain
     ``HttpRequest`` instead.
     """
     scope = {
@@ -2443,7 +2443,7 @@ async def test_the_websocket_host_and_origin_checks_are_independent(
     """The direction the shipped suite never supplied.
 
     An allowed ``Origin`` with a hostile ``Host`` is the row that was missing, and
-    it is the row that failed before Decision 19: ``OriginValidator`` loops the
+    it is the row that failed before spec-046 Decision 19: ``OriginValidator`` loops the
     scope headers for ``b"origin"`` and never looks at ``Host``, so the handshake
     connected. Its converse (allowed ``Host``, hostile or missing ``Origin``) and
     the both-allowed control are here too, so neither check can be shown to be
@@ -2859,7 +2859,7 @@ def _recording_websocket_application(reached):
 
 @pytest.mark.django_db
 async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(monkeypatch):
-    """Decision 19 #"before authentication": the ordering, with two sentinels.
+    """spec-046 Decision 19 #"before authentication": the ordering, with two sentinels.
 
     "Outermost" is a structural claim; this is the behavioral one. Two sentinels
     that MUST fire on an allowed ``Host`` and MUST NOT fire on a hostile one:
@@ -2971,7 +2971,7 @@ def test_root_package_and_star_import_stay_channels_free(_simulate_channels_abse
     exec("from django_strawberry_framework import *", namespace)
     assert "DjangoGraphQLProtocolRouter" not in namespace
     # ``__all__`` names the lazy symbol, so ``import *`` reaches for it and
-    # fires the guard (Decision 3).
+    # fires the guard (spec-041 Decision 3).
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         exec("from django_strawberry_framework.routers import *", {})
 
@@ -3012,7 +3012,7 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
         django_strawberry_framework.routers is sys.modules["django_strawberry_framework.routers"]
     )
     assert django_strawberry_framework.routers is routers_module
-    # No stale negative caching (Helper-reuse D3): the present path works again
+    # No stale negative caching (spec-041 Helper-reuse D3): the present path works again
     # in the same process, through both access paths, yielding one class.
     assert _router_class() is routers_module.DjangoGraphQLProtocolRouter
 
@@ -3874,7 +3874,7 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
 async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revocation(
     monkeypatch,
 ):
-    """Decision 11, the lease held through the send: the sibling race.
+    """spec-046 Decision 11, the lease held through the send: the sibling race.
 
     The race the design exists to close: two operations on one socket, both
     authorized when they started. Operation ``a`` reaches the outbound checkpoint
@@ -3949,7 +3949,7 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
 async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_checkpoint(
     monkeypatch,
 ):
-    """Decision 11, the accepted idle consequence: event-driven, not polled.
+    """spec-046 Decision 11, the accepted idle consequence: event-driven, not polled.
 
     The contract's honest limit, pinned so it stays a decision rather than an
     accident. Detection is event-boundary-driven: nothing polls, so a revoked
@@ -3960,7 +3960,7 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
     nothing, and the very next protected checkpoint closes the connection.
 
     A row asserting only the close would be satisfied by a background monitor,
-    which Decision 11 rejects (it makes freshness a function of a detection
+    which spec-046 Decision 11 rejects (it makes freshness a function of a detection
     interval and multiplies reads by idle connection count); the ``reads`` assertion
     across the idle window is what rules one out.
     """
@@ -3994,7 +3994,7 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
 
 @pytest.mark.django_db(transaction=True)
 async def test_the_connection_lock_never_serializes_a_second_connection(monkeypatch):
-    """Decision 16, the lease's blast radius: one socket, not the process.
+    """spec-046 Decision 16, the lease's blast radius: one socket, not the process.
 
     The other half of the head-of-line tradeoff, and the half that makes it
     acceptable. While socket 1 is parked INSIDE its critical section - holding its
@@ -4054,7 +4054,7 @@ async def test_the_connection_lock_never_serializes_a_second_connection(monkeypa
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_positive_window_defers_the_close_on_a_running_subscription(monkeypatch):
-    """Decision 16, the window at the frame checkpoint: one read per window.
+    """spec-046 Decision 16, the window at the frame checkpoint: one read per window.
 
     The window's expanded meaning, measured where it is hardest to get right - a
     subscription that is already running. Result 1 goes out on the read its
@@ -4104,7 +4104,7 @@ async def test_a_positive_window_defers_the_close_on_a_running_subscription(monk
 
 @pytest.mark.django_db(transaction=True)
 async def test_connection_control_frames_never_reach_the_outbound_checkpoint(monkeypatch):
-    """Decision 16, frame-type discrimination: the negative half, on a valid socket.
+    """spec-046 Decision 16, frame-type discrimination: the negative half, on a valid socket.
 
     The fixture is deliberately a **valid** connection with a read counter, not a
     revoked one: on a revoked connection every frame is refused for a reason that

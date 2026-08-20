@@ -406,8 +406,8 @@ rather than contingent:
    the one route that accepts credentials. The audit's probe recorded
    `POST /graphql` with `Host: evil.example` returning `200` with `content-type` as its
    only response header. The package's own documentation already concedes half of this
-   in [`docs/README.md`][docs-readme] #"the Channels GraphQL consumers do not enforce
-   CSRF" — a documented gap is still a gap.
+   in [`docs/README.md`][docs-readme] #"runs no `CsrfViewMiddleware`, so on that protocol"
+   — a documented gap is still a gap.
 2. **The route overmatches.** `url_pattern="^graphql"` is a prefix regex with no
    right anchor, so `/graphql-admin` and `/graphqlanything` are claimed by the GraphQL
    consumer *before* the Django fallback can see them. A deployment can believe a Django

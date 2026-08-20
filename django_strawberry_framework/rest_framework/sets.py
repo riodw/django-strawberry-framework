@@ -16,7 +16,7 @@ The DRF-serializer write surface, riding the ``036`` mutation seams
   ``result`` slot) through the same phase-2.5 path as the ``036`` model mutation
   and the ``038`` ``ModelForm`` mutation.
 
-The serializer ``_validate_meta`` (Decision 6 / Decision 10 / Decision 11):
+The serializer ``_validate_meta`` (spec-039 Decision 6 / Decision 10 / Decision 11):
 ``Meta.serializer_class`` is required and must be a DRF ``serializers.Serializer``
 subclass; for the ``ModelSerializer``-driven contract it must be a
 ``serializers.ModelSerializer`` with a resolvable ``Meta.model`` (a
@@ -32,7 +32,7 @@ unchanged, Decision 11), and DROPS ``model`` / ``input_class`` /
 exclusive. Field narrowing + ``optional_fields`` reuse the
 ``rest_framework/inputs.py`` machinery, never a re-spelled copy.
 
-**The whole module is behind the DRF soft-import guard (Decision 12).** It
+**The whole module is behind the DRF soft-import guard (spec-039 Decision 12).** It
 ``import``s ``rest_framework.serializers`` at module top, so importing this module
 requires DRF; the root ``__getattr__`` (and ``rest_framework/__init__.py``'s
 ``require_drf()``) gate that import for a DRF-absent consumer.
@@ -484,7 +484,7 @@ class SerializerMutation(DjangoMutation):
 
         ``permission_classes`` is validated + normalized by the shared
         ``_validate_permission_classes`` (the ``DjangoModelPermission`` default when
-        unset - the ``036`` write-auth seam, Decision 11). The snapshot carries
+        unset - the ``036`` write-auth seam, spec-039 Decision 11). The snapshot carries
         ``serializer_class`` + the resolved ``model``; ``Meta.fields`` /
         ``Meta.exclude`` are stored RAW (``build_input`` re-resolves them - the form
         flavor's validate-then-store-raw precedent, D1). ``Meta.optional_fields`` is
@@ -561,7 +561,7 @@ class SerializerMutation(DjangoMutation):
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
         # empty-set guard), which calls the shared
         # ``normalize_field_name_sequence(flavor="SerializerMutation")`` is
-        # single-sited by ``normalize_meta_field_selection`` above (P2.7). The
+        # single-sited by ``normalize_meta_field_selection`` above (spec-039 P2.7). The
         # snapshot stores the normalized tuples so the bind cannot consume a
         # one-shot declaration a second time.
         effective = resolve_effective_serializer_fields(
@@ -740,7 +740,7 @@ class SerializerMutation(DjangoMutation):
         read DjangoType's choice enums are cached per (model, field)), so building a shape
         that then dedupes is harmless.
 
-        **P1.7 reuse is partial here, by necessity.** This seam rides the promoted
+        **spec-039 P1.7 reuse is partial here, by necessity.** This seam rides the promoted
         ``build_and_stash_input`` (the materialize-then-stash-``_input_field_specs`` tail,
         shared with the form flavor) but does NOT route the cache lookup through
         ``cached_build_input``: that helper looks up its key BEFORE building, which the

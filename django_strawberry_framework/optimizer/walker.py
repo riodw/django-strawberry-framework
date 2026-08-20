@@ -575,7 +575,7 @@ def _walk_selections(
         # resolver under the consumer's OWN returned instances, silencing a
         # real N+1 under strictness. Leaving the selection unplanned (no
         # ``Prefetch``, no resolver keys, no connector column) is the
-        # Decision-6 fallback discipline: strictness SEES the per-parent
+        # spec-033 Decision 6 fallback discipline: strictness SEES the per-parent
         # accesses, and a delegating resolver opts back in with an explicit
         # ``OptimizerHint`` (``force_select`` / ``force_prefetch`` /
         # ``prefetch(...)``) - the hint dispatch below runs when one is

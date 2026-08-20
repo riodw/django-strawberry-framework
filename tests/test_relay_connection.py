@@ -382,7 +382,7 @@ def test_generated_name_collision_raises():
 
 
 def test_generated_name_graphql_camel_collision_raises():
-    """A camelCase consumer attribute collides on the GraphQL surface (Revision 3 P3).
+    """A camelCase consumer attribute collides on the GraphQL surface.
 
     ``itemsConnection`` and the generated ``items_connection`` are distinct
     Python names but the SAME default-camel-cased GraphQL name; the guard
@@ -864,7 +864,7 @@ def test_relation_connection_first_overrun(shape):
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", ["both", "connection"])
 def test_relation_connection_stale_after_no_error(shape):
-    """A deleted-row ``after`` cursor does NOT error (Revision 2 P1).
+    """A deleted-row ``after`` cursor does NOT error.
 
     Pins ONLY the no-error property - offset cursors encode a position, not
     row identity, so no skip / duplicate / next-row assertion is made.
@@ -937,9 +937,9 @@ def test_relation_connection_page_info_four_fields(shape):
 def test_relation_connection_has_next_page_when_edges_unrequested(shape):
     """A nested ``pageInfo``-only selection still computes ``hasNextPage``.
 
-    Revision 6 P3: the observable inverse of an unrequested field - a
-    windowed page reports true, an exact page reports false, with no
-    ``edges`` selection in either query.
+    The observable inverse of an unrequested field - a windowed page
+    reports true, an exact page reports false, with no ``edges``
+    selection in either query.
     """
     _seed_library_books(["a", "b", "c"])
     schema = _shelf_books_connection_schema(shape)
@@ -1617,7 +1617,7 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
     the pk tiebreaker (``ORDER BY <title>, <pk>``) instead of the single
     ``Meta.ordering`` column, which is what keeps fast-path cursors stable across
     rows that tie on ``title``. This asserts that two-column outer order directly
-    on the prefetch SQL (the deterministic regression, Revision 3) and pins
+    on the prefetch SQL (the deterministic-order regression) and pins
     optimizer-on vs optimizer-off wire parity for the distinct-title case.
     """
     from django.test.utils import CaptureQueriesContext
@@ -2565,10 +2565,9 @@ def test_strictness_silent_when_off():
 def test_strictness_silent_no_optimizer():
     """No optimizer installed -> no sentinel stashed -> ``_check_n1`` is a no-op.
 
-    The byte-identical pre-card behavior (and the root-shaped no-op of
-    Implementation step 5): with no extension, ``DST_OPTIMIZER_PLANNED`` is never
+    The root-shaped no-op: with no extension, ``DST_OPTIMIZER_PLANNED`` is never
     stashed, so the prelude returns before any probe - the per-parent pipeline
-    runs exactly as before, no flag.
+    runs byte-identically to a tree with no optimizer installed, no flag.
     """
     _seed_library_books(["apple", "banana", "avocado"])
     # No-optimizer variant: the plain list schema installs no extension at all,
@@ -2585,11 +2584,11 @@ def test_strictness_silent_no_optimizer():
 def test_strictness_silent_when_planned():
     """A planned connection key short-circuits BEFORE the ``to_attr`` probe.
 
-    The load-bearing resolver-key parity (Implementation step 2): the resolver-
-    side ``_check_n1`` builds ``resolver_key(declaring_type, relation_field_name,
-    runtime_path)`` - the IDENTICAL shape the walker emits
-    (``walker.py::_plan_connection_relation`` #"resolver_key(type_cls,
-    relation_field_name, runtime_path)"). When that exact key is in
+    The load-bearing resolver-key parity: the resolver-side ``_check_n1`` builds
+    ``resolver_key(declaring_type, relation_field_name, runtime_path)`` - the
+    IDENTICAL shape the walker emits for a nested connection
+    (``walker.py::_resolver_identities_for #"resolver_key(type_cls, relation_field_name"``,
+    reached from ``_plan_connection_relation``). When that exact key is in
     ``DST_OPTIMIZER_PLANNED`` the resolver is silent even with the ``to_attr``
     ABSENT on ``root`` (the planned short-circuit beats the connection probe), so
     a window-planned connection never false-flags. A divergent key

@@ -657,7 +657,7 @@ def _synthesize_relation_connections() -> None:
     Pre-``033`` strictness posture (spec-032 Decision 12 / Non-goals): the
     synthesized resolver consults NO ``DST_OPTIMIZER_*`` sentinels and
     derives an empty optimizer plan; wiring strictness/planning into the
-    connection pipeline is ``WIP-ALPHA-033-0.0.9``'s scope.
+    connection pipeline is ``DONE-033-0.0.9``'s scope.
     """
     # Function-local plain imports: cycle-safe cross-module reads (the
     # ``_node_fields_declared`` precedent in ``finalize_django_types``). A
@@ -1380,11 +1380,12 @@ def _format_owner_target_mismatch_error(
     ``_format_ambiguity_error`` above; the formatters live at the top of
     this module so consumer error matching stays grep-stable. Names both
     owners' qualified names, the offending set class, the offending field,
-    and both resolved target type names per spec-027 #"owning `FilterSet`'s
-    target `DjangoType`". ``family`` is the family noun (``"FilterSet"`` /
-    ``"OrderSet"``); ``suffix`` is the order side's spec pointer (the family
-    words are the ONLY divergence, so the message logic is spelled once and
-    each ``_bind_*_owner`` passes its words via ``functools.partial``).
+    and both resolved target type names
+    per spec-027 #"owning `FilterSet`'s target `DjangoType`". ``family`` is
+    the family noun (``"FilterSet"`` / ``"OrderSet"``); ``suffix`` is the
+    order side's spec pointer (the family words are the ONLY divergence, so
+    the message logic is spelled once and each ``_bind_*_owner`` passes its
+    words via ``functools.partial``).
     """
     prev_name = (
         _safe_class_name(prev_target[0].origin, qualified=True)

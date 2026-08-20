@@ -1249,9 +1249,9 @@ the spike is still ahead of implementation.
   one of the six carries the error, in three escalating shapes.
   - **It credits spec-035 with the work.** #"Both are later hardening" hands it both the
     finalize-frozenset short-circuit and the single named reader for `_prefetch_related_lookups`;
-    #"the plan is finalized before handoff" hands it the tuple swap; #"plan immutability, the
-    projection gate" lists it among that spec's extensions (only the projection-gate item on that
-    line is sound — it is [`spec-035`][spec-035] Decision 4).
+    #"the plan is finalized before handoff" hands it the tuple swap;
+    #"plan immutability, the projection gate" lists it among that spec's extensions (only the
+    projection-gate item on that line is sound — it is [`spec-035`][spec-035] Decision 4).
   - **It asserts spec-035 has already stated it.** #"each already stated once in its own document"
     says so outright, and #"for the rest" points there for the remaining plan fields.
   - **It instructs a future pass to make it true.** #"'s to state", of the single-reader discipline,

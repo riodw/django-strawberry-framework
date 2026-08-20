@@ -194,7 +194,7 @@ class TestClient(BaseGraphQLTestClient):
 
         The un-colored tail both ``query()`` colors share: only
         the ``request()`` call is sync/async-colored, so the ``_decode`` ->
-        ``Response`` construction -> Decision-5 guard (an EXPLICIT raise, not a
+        ``Response`` construction -> spec-043 Decision 5 guard (an EXPLICIT raise, not a
         bare ``assert``, so it survives ``python -O``) is written once. This
         factors BELOW the not-calling-``super().query()`` decision, not around
         it - the async color still owns its own ``await self.request(...)``.

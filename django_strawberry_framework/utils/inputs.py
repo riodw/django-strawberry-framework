@@ -397,11 +397,11 @@ def make_set_input_namespace(
 ]:
     """Return the set-family ``(ledger, field_specs, materialize_fn, clear_fn)`` quartet.
 
-    The heavy Decision-9 sibling of ``make_input_namespace``. Filter and order
-    ``inputs`` modules grew the same four-part shape (a ``_materialized_names``
-    ledger, a ``_field_specs`` provenance table, a ``materialize_input_class``
-    wrapper, a ``clear_*_input_namespace`` that resets factory caches +
-    ``_lifecycle`` binding). This single-sites it:
+    The heavy spec-027 / spec-028 Decision 9 sibling of ``make_input_namespace``.
+    Filter and order ``inputs`` modules grew the same four-part shape (a
+    ``_materialized_names`` ledger, a ``_field_specs`` provenance table, a
+    ``materialize_input_class`` wrapper, a ``clear_*_input_namespace`` that resets
+    factory caches + ``_lifecycle`` binding). This single-sites it:
 
     - ``ledger`` - ``name -> input_class`` dict the caller stores as
       ``_materialized_names``.
@@ -1438,7 +1438,7 @@ def build_lazy_input_annotation(
 ) -> object:
     """Return the ``Annotated[..., strawberry.lazy(...)]`` forward-ref for a set's input class.
 
-    The Decision-11 consumer-helper body shared by
+    The spec-027 / spec-028 Decision 11 consumer-helper body shared by
     ``filters/__init__.py::filter_input_type`` and
     ``orders/__init__.py::order_input_type``. Validates
     ``set_class`` is an ``expected_base`` subclass -- raising ``TypeError`` with
@@ -1705,7 +1705,7 @@ class GeneratedInputArgumentsFactory:
             # ``rest_framework`` ``inputs.py``). The filter family never reaches
             # this branch -- its ``_build_input_triples`` always appends the
             # ``and_`` / ``or_`` / ``not_`` operator bag -- so in practice only the
-            # order family (no operator bag, Spec Decision 8) can be empty; the
+            # order family (no operator bag, spec-028 Decision 8) can be empty; the
             # guard lives at this single set-family build site so every present and
             # future family inherits it.
             raise ConfigurationError(
@@ -1730,6 +1730,6 @@ class GeneratedInputArgumentsFactory:
 
         The filter family appends ``_build_logic_fields`` (the ``and_`` /
         ``or_`` / ``not_`` operator bag); the order family returns the field
-        triples as-is (no operator bag, Spec Decision 8).
+        triples as-is (no operator bag, spec-028 Decision 8).
         """
         raise NotImplementedError  # family hook

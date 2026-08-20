@@ -12,10 +12,9 @@ shipped ``0.0.9``) reads the wrapped type's already-resolved
 ``Meta.filterset_class`` sidecar directly and never builds a FilterSet
 from ``model`` / ``fields``. Auto-generation of a ``FilterSet`` from
 ``Meta.fields`` without an explicit class is a standing deferred
-Non-goal (``spec-027`` Non-goals #"Auto-generation of ``FilterSet`` from
-``Meta.fields``"); the cache plumbing was landed ahead of that consumer,
-which is not yet built. Layer 6 stays build-and-test-only until that
-surface ships.
+Non-goal (``spec-027`` Non-goals #"Auto-generation of `FilterSet`");
+the cache plumbing was landed ahead of that consumer, which is not yet
+built. Layer 6 stays build-and-test-only until that surface ships.
 
 The BFS factory consumes resolved ``django-filter`` filter instances --
 NOT a parallel ``FILTER_DEFAULTS`` map -- so the runtime filter shape
@@ -145,11 +144,11 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
     name-collision note). The function trusts its caller. It has no source
     consumer yet: the auto-FilterSet surface that would call it (a field
     targeting a model without an explicit ``filterset_class``) is a
-    standing deferred Non-goal (``spec-027`` Non-goals #"Auto-generation of
-    ``FilterSet`` from ``Meta.fields``"). ``DjangoConnectionField``
-    (spec-030, ``0.0.9``) consumes the already-resolved
-    ``Meta.filterset_class`` sidecar directly and does not route through
-    here. Built-and-tested ahead of that consumer.
+    standing deferred Non-goal
+    (``spec-027`` Non-goals #"Auto-generation of `FilterSet`").
+    ``DjangoConnectionField`` (spec-030, ``0.0.9``) consumes the
+    already-resolved ``Meta.filterset_class`` sidecar directly and does not
+    route through here. Built-and-tested ahead of that consumer.
 
     Args:
         filterset_class: An optional pre-declared ``FilterSet`` subclass.

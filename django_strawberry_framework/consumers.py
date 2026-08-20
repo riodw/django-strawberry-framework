@@ -884,12 +884,12 @@ async def _actor_is_current(consumer: Any) -> bool:
     try:
         refreshed = await _refreshed_actor(scope)
     except Exception:
-        # Fail closed (spec-046 Edge cases #"A revalidation database error must
-        # fail closed"): a store or auth failure denies the checkpoint - and so
-        # terminates the connection - and is never a fall back to the cached
-        # actor. ``Exception``, not ``BaseException`` - an
-        # ``asyncio.CancelledError`` from task teardown must propagate rather
-        # than be converted into a denial.
+        # Fail closed (spec-046 Edge cases #"A revalidation database error must fail closed"):
+        # a store or auth failure denies the checkpoint - and so terminates the
+        # connection - and is never a fall back to the cached actor.
+        # ``Exception``, not ``BaseException`` - an ``asyncio.CancelledError``
+        # from task teardown must propagate rather than be converted into a
+        # denial.
         logger.exception(
             "GraphQLWebSocketConsumer: the WebSocket session revalidation failed; the "
             "connection is revoked and closed (fail-closed) rather than continuing on "

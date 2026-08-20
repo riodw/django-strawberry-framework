@@ -131,7 +131,7 @@ NodeType = TypeVar("NodeType")
 # Field name carried on the connection instance for the captured ``totalCount``;
 # ``None`` (the default) means the count was not requested / not run, which the
 # ``total_count`` field resolver returns verbatim per the selection-gating
-# contract (Decision 4).
+# contract (spec-030 Decision 4).
 _TOTAL_COUNT_ATTR = "_django_total_count"
 
 
@@ -231,7 +231,7 @@ def _empty_page_connection(
 class _WindowedConnectionRows:
     """Internal marker handing windowed prefetch rows to ``resolve_connection``.
 
-    The synthesized relation-connection resolver (Decision 5) returns this in
+    The synthesized relation-connection resolver (spec-033 Decision 5) returns this in
     place of the per-parent node iterable when the walker's windowed prefetch
     fired: ``rows`` is the ``_dst_<field>_connection`` ``to_attr`` list of
     annotated model instances (each carrying ``_dst_row_number`` /
@@ -309,7 +309,7 @@ def _resolve_from_window(
     """Build the Relay connection straight from the windowed prefetch rows.
 
     The single edge / cursor / ``pageInfo`` / ``totalCount`` derivation shared
-    by both ``resolve_connection`` paths (Decision 5).
+    by both ``resolve_connection`` paths (spec-033 Decision 5).
 
     The historically-ambiguous empty shapes (``offset > 0`` overshot ``after:``,
     ``limit == 0`` ``first: 0``) are served from MARKER rows (connection window
@@ -634,7 +634,7 @@ def _consume_window(
     ``resolve_connection`` receives (the resolver never sees them) using the
     same ``SliceMetadata`` engine and ``relay_max_results`` cap the walker used,
     so the resolve-time window matches the plan-time window by construction (the
-    cursor-parity invariant's resolve-time half, Decision 4 / Decision 5). When
+    cursor-parity invariant's resolve-time half, spec-033 Decision 4 / Decision 5). When
     the window is consumable, builds the Relay object via ``_resolve_from_window``;
     marker rows directly serve ``first: 0``, overshot offset ``after:``, and
     corresponding forward keyset empty pages. The carried per-parent fallback
@@ -1093,7 +1093,7 @@ def _resolve_keyset_connection(
 def _guard_first_and_last(first: int | None, last: int | None) -> None:
     """Raise ``GraphQLError`` when both ``first`` and ``last`` are supplied.
 
-    The package's own pagination guard (Decision 3): Strawberry's
+    The package's own pagination guard (spec-030 Decision 3): Strawberry's
     ``SliceMetadata.from_arguments`` applies ``first`` then ``last`` without a
     mutual-exclusivity check, so the package enforces it here - a query-runtime
     error landing in the GraphQL ``errors`` array, NOT a construction-time
@@ -1136,7 +1136,7 @@ def _total_count_requested(info: Info) -> bool:
     level still counts) and does NOT descend into a regular field's selections.
     A node-level ``totalCount`` deep inside ``edges { node { ... } }`` must not
     make the OUTER connection's predicate fire (a spurious ``COUNT`` and, on a
-    non-queryset source, a spurious M1-guard raise).
+    non-queryset source, a spurious spec-030 Decision 7 guard raise).
 
     Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_total_count_selected`` - the SAME
@@ -1169,7 +1169,7 @@ def _has_next_page_requested(info: Info) -> bool:
 class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
     """Generic Relay connection base owning package pagination dispatch.
 
-    Adds the Decision-3 ``first`` + ``last`` guard, consumes optimized nested
+    Adds the spec-030 Decision 3 ``first`` + ``last`` guard, consumes optimized nested
     windows, and dispatches ``Meta.cursor_field`` sources to the framework-owned
     keyset slicer. Ordinary non-window offset sources still delegate cursor
     encoding, ``pageInfo``, edge wrapping, and slicing to
@@ -1201,7 +1201,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
     ) -> AwaitableOrValue[Any]:
         """Guard pagination, consume optimized windows, then dispatch by cursor mode.
 
-        The fast path (Decision 5): after the guard and before Strawberry's list
+        The fast path (spec-033 Decision 5): after the guard and before Strawberry's list
         slicing, detect the internal ``_WindowedConnectionRows`` wrapper the
         synthesized relation-connection resolver returns when the walker's
         windowed prefetch fired, and build the Relay object straight from the
@@ -1226,7 +1226,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         as an annotated optimized source: ``totalCount`` is read from
         ``_dst_total_count`` inside ``_resolve_from_window`` rather than counted,
         bypassing ``_guard_total_count_countable`` / ``.count()`` entirely
-        (Decision 5). Marker rows directly serve planned ``limit == 0`` /
+        (spec-033 Decision 5). Marker rows directly serve planned ``limit == 0`` /
         overshot-``offset`` pages; only unservable wrappers recover through
         ``_consume_fallback``. Pins:
         ``test_fast_path_total_count_marker_bypasses_non_queryset_guard`` /
@@ -1346,14 +1346,14 @@ def _build_total_count_connection(target_type: type) -> type:
     ``totalCount`` is in the selection set. Optimized windows read the count
     annotation, keyset pages count through the framework slicer, and ordinary
     non-window offset querysets use sync ``.count()`` / async ``.acount()`` before
-    or after delegating slicing to the base (Decision 4).
+    or after delegating slicing to the base (spec-030 Decision 4).
     """
 
     @strawberry.field(description="Total number of nodes in the connection.")
     def total_count(self: Any) -> int:
         # The field renders ``Int!`` (the ``__annotations__`` below win for the
         # SDL); ``-> int`` is the honest return type because the count path is
-        # QuerySet-only (the connection field's M1 rule raises a ``GraphQLError``
+        # QuerySet-only (the connection field's spec-030 Decision 7 rule raises a ``GraphQLError``
         # before a non-queryset return can reach ``totalCount``). The attribute
         # is always set by ``resolve_connection`` when the field is selected
         # over a queryset source.
@@ -1379,7 +1379,7 @@ def _build_total_count_connection(target_type: type) -> type:
 def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
     """Raise ``GraphQLError`` when ``totalCount`` is selected over a non-queryset.
 
-    Decision 7: ``totalCount`` renders ``Int!``, and a
+    spec-030 Decision 7: ``totalCount`` renders ``Int!``, and a
     non-queryset iterable cannot be ``.count()``-ed. Rather than skip the count
     and let the ``Int!`` field return ``None`` (which surfaces as the engine's
     opaque ``Cannot return null for non-nullable field ...totalCount`` violation),
@@ -1407,7 +1407,7 @@ def _attach_count_sync(conn: Any, nodes: Any, *, want_count: bool) -> Any:
 async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bool) -> Any:
     """Attach the post-filter pre-slice count to a resolved connection (async)."""
     # Await-before-raise (mirrors the close-before-raise discipline in
-    # ``utils/querysets.py::apply_type_visibility_sync``, Decision 10): resolve the
+    # ``utils/querysets.py::apply_type_visibility_sync``, spec-030 Decision 10): resolve the
     # queued connection coroutine BEFORE the guard can raise, so a guard-raise
     # never leaves ``conn_awaitable`` unawaited (which would emit a
     # ``RuntimeWarning`` - a hard failure under ``-W error``). The guard's
@@ -1431,7 +1431,7 @@ def _connection_type_for(target_type: type) -> type:
     slot (the validated ``Meta.connection`` value) only controls the shape:
     opting into ``total_count`` adds the ``totalCount`` members; otherwise the
     subclass adds nothing over the base. Cached on ``target_type`` identity -
-    one connection shape per node type, no per-field override (Decision 5), so
+    one connection shape per node type, no per-field override (spec-030 Decision 5), so
     the generated name is unique and regeneration is avoided.
     """
     cached = _connection_type_cache.get(target_type)
@@ -1469,7 +1469,7 @@ def _connection_type_for(target_type: type) -> type:
 def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input: bool) -> None:
     """Raise ``GraphQLError`` when ``filter:`` / ``orderBy:`` is supplied over a non-queryset.
 
-    The consumer-``resolver=`` contract (Decision 7): a non-queryset iterable
+    The consumer-``resolver=`` contract (spec-030 Decision 7): a non-queryset iterable
     (list / generator) may be paginated only when NO ``filter:`` / ``orderBy:``
     input is supplied. The advertised Meta-driven filter/order behavior is a
     queryset operation and cannot apply to a plain iterable, so supplying
@@ -1614,7 +1614,7 @@ def _pipeline_sync(
     filter_input: Any,
     order_by_input: Any,
 ) -> Any:
-    """Run the composition pipeline on the sync path (Decision 7 / Decision 10).
+    """Run the composition pipeline on the sync path (spec-030 Decision 7 / Decision 10).
 
     ``source`` is the base value (the consumer ``resolver=`` return or the
     default ``initial_queryset``). A ``Manager`` is coerced to a ``QuerySet``;
@@ -1682,7 +1682,7 @@ async def _pipeline_async(
 def _synthesized_signature(target_type: type) -> tuple[inspect.Signature, dict[str, Any]]:
     """Build the resolver ``__signature__`` + ``__annotations__`` carrying the sidecar args.
 
-    Decision 6: the resolver's signature is the SDL contract. The return
+    spec-030 Decision 6: the resolver's signature is the SDL contract. The return
     annotation is ``Iterable[target_type]`` (which ``ConnectionExtension.apply``
     requires); ``info`` is included so the resolver receives it; ``filter`` /
     ``order_by`` are added only for the sidecars the type declares, with the
@@ -1749,7 +1749,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
 
     The body pops ``filter`` / ``order_by`` (forwarded by ``ConnectionExtension``
     as ``**kwargs``) and runs the composition pipeline. Sync-vs-async dispatch is
-    committed per-construction (Decision 10), because Strawberry freezes a
+    committed per-construction (spec-030 Decision 10), because Strawberry freezes a
     field's resolver sync/async handling at schema-build time AND, unlike a plain
     field, ``ConnectionExtension`` only awaits an awaitable inner-resolver return
     when the field is async (``ConnectionExtension.resolve`` - the sync path -
@@ -1882,7 +1882,7 @@ def _build_relation_connection_resolver(
     Identical pipeline tail to ``_build_connection_resolver``'s default branch,
     but the source queryset seeds from the PARENT'S relation manager
     (``getattr(root, accessor_name).all()``) - keeping Django's prefetch caches
-    reachable as the cooperation seam ``WIP-ALPHA-033-0.0.9``'s
+    reachable as the cooperation seam ``DONE-033-0.0.9``'s
     window-pagination planning uses - instead of
     ``model._default_manager.all()``. ``accessor_name`` is the same
     ``field.name`` the shipped many-side list resolver reads
@@ -2020,13 +2020,13 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
 ) -> Any:
     """Factory for a Relay connection field over a Relay-Node-shaped ``DjangoType``.
 
-    Meta-only derivation (Decision 5): the ``filter:`` / ``orderBy:`` arguments
+    Meta-only derivation (spec-030 Decision 5): the ``filter:`` / ``orderBy:`` arguments
     come from the type's ``Meta.filterset_class`` / ``Meta.orderset_class``, the
     ``totalCount`` opt-in from ``Meta.connection`` - there are no ``filters=`` /
     ``order=`` / ``total_count=`` keyword arguments. Runs the four
     ``DjangoListField``-style guards plus a Relay-Node guard, then returns
     ``relay.connection(_connection_type_for(target_type), resolver=<synthesized>,
-    ...)`` (Decision 6 / Decision 7).
+    ...)`` (spec-030 Decision 6 / Decision 7).
 
     Consumer ``resolver=`` contract: the resolver is invoked as
     ``resolver(root, info)`` and returns only the BASE queryset / manager /

@@ -675,7 +675,7 @@ def test_node_null_paths_issue_equal_queries(django_assert_num_queries):
     "bad_id",
     [
         # Malformed base64 / non-`type:id` payload. Reachable ONLY because the
-        # argument is ``strawberry.ID`` (Revision 7 P1): a ``relay.GlobalID``
+        # argument is ``strawberry.ID`` (spec-032 Revision 7 P1): a ``relay.GlobalID``
         # argument would be parsed upstream by Strawberry's convert_argument
         # and surface the engine's error with no GLOBALID_INVALID code.
         "this-is-not-base64",
@@ -1215,7 +1215,7 @@ def test_nodes_consumer_resolve_nodes_generator_return_accepted():
 def test_node_sync_async_get_queryset_raises_sync_misuse():
     """An async ``get_queryset`` under sync execution surfaces SyncMisuseError, NOT GLOBALID_INVALID.
 
-    Discriminating (Revision 7 P2): ``SyncMisuseError`` IS-A
+    Discriminating (spec-032 Revision 7 P2): ``SyncMisuseError`` IS-A
     ``ConfigurationError``, so a blanket catch-convert around the resolver
     body would mislabel this server misconfiguration a client id error; the
     boundary scopes the decode call only.

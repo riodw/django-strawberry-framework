@@ -10,13 +10,13 @@ On top of that skeleton the module carries:
 - The ``"__all__"`` expansion via the
   ``_get_concrete_field_names_for_order`` walk per spec-028.
 - The resolver-facing classmethod pair ``apply_sync`` /
-  ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
+  ``apply_async`` (no ``apply(...)`` dispatcher per spec-028 DoD 4(c)).
 - The classmethod permission pipeline, inherited from
   ``ActiveInputPermissionMixin`` (``_run_permission_checks`` /
   ``_active_permission_targets`` / ``_active_permission_field_paths`` /
   ``_invoke_permission_method`` / ``_request_from_info``) that drives
   active-input-only per-field ``check_<field>_permission`` dispatch per
-  Spec Decision 8 step 6.
+  spec-028 Decision 8 step 6.
 - The cookbook-style ``get_flat_orders`` classmethod walking the
   normalized data structure.
 """
@@ -91,7 +91,8 @@ class OrderSetMetaclass(type):
         # plain ``type`` metaclass does no MRO merge, so
         # ``inherit_from_bases=True`` copies each base's ``related_orders``
         # first (reverse iteration lets earlier bases win) before the class
-        # body's own ``attrs`` override - the cookbook lines 30-38 behavior.
+        # body's own ``attrs`` override - the behavior of
+        # ``django_graphene_filters/orderset.py::OrderSetMetaclass.__new__``.
         collect_related_declarations(
             new_class,
             bases,
@@ -117,7 +118,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     ``apply_async`` per spec-028 Decision 8 step 7. Each carries ``info``
     end-to-end so per-field ``check_<field>_permission`` gates and
     active-input-only scope run consistently. There is **no**
-    ``apply(...)`` dispatcher (Spec DoD 4(c) -- the filter side's
+    ``apply(...)`` dispatcher (spec-028 DoD 4(c) -- the filter side's
     ``apply`` exists to translate a sync-misuse ``RuntimeError`` raised
     when a ``RelatedFilter`` target declares an async ``get_queryset``;
     the order side has no equivalent code path).
@@ -176,7 +177,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         Direct port of
         ``django_graphene_filters/orderset.py::AdvancedOrderSet.get_fields``
-        (cookbook lines 265-285) with the same two-condition cache write
+        with the same two-condition cache write
         gate the filter side uses at ``FilterSet.get_filters``:
 
         - ``cls.__dict__.get("_expanded_fields")`` is checked directly
@@ -253,10 +254,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             for name in _get_concrete_field_names_for_order(model):
                 fields[name] = None
             return fields
-        # Cookbook line 279-280: "Works for both dict (iterates keys) and
-        # list/tuple (iterates values)." Order's ``Meta.fields`` is
-        # list-only per spec-028 Decision 3 Layer 4, but the iteration
-        # pattern works either way.
+        # Cookbook parity with
+        # ``django_graphene_filters/orderset.py::AdvancedOrderSet.get_fields``
+        # #"Works for both dict (iterates keys)" - one loop covers a dict (it
+        # iterates keys) and a list/tuple (it iterates values). Order's
+        # ``Meta.fields`` is list-only per spec-028 Decision 3 Layer 4, but
+        # the iteration pattern works either way.
         model = getattr(meta, "model", None)
         for field_path in meta_fields:
             if model is not None:
@@ -309,13 +312,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         Port of
         ``django_graphene_filters/orderset.py::AdvancedOrderSet.get_flat_orders``
-        (cookbook lines 115-170) with two adaptations:
+        with two adaptations:
 
         - cookbook's DISTINCT ON tuple-half dropped (spec-028 Decision 12
           -- no DISTINCT ON surface ships).
         - return shape changed from ``list[str]`` (cookbook's
           ``"-name"`` bare-string form) to
-          ``list[tuple[str, Ordering | None]]`` (Spec Decision 5's
+          ``list[tuple[str, Ordering | None]]`` (spec-028 Decision 5's
           ``OrderBy``-via-``Ordering.resolve`` discipline).
 
         ``prefix`` exists for cookbook-shape symmetry: callers who pass
@@ -448,8 +451,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         1. Resolve the request via ``_request_from_info``.
         2. Run per-field / per-branch permission checks BEFORE any
-           ``order_by(...)`` clause touches the queryset (Spec Decision
-           8 step 6 -- denial gates raise pre-mutation).
+           ``order_by(...)`` clause touches the queryset
+           (spec-028 Decision 8 step 6 -- denial gates raise pre-mutation).
         3. Normalize the input into a flat
            ``[(field_path, Ordering | None), ...]`` list.
         4. Convert each ``(field_path, direction)`` pair into a Django
@@ -458,7 +461,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
            ``direction.resolve(field_path)``, while a to-many path orders by an
            aggregate annotation (``Min`` / ``Max``) so the parent row is not
            multiplied (``spec-030-connection_field-0_0_9`` P1-B); ``None``
-           directions are filtered (Spec Decision 13 -- null-direction
+           directions are filtered (spec-028 Decision 13 -- null-direction
            edge case).
         5. ``annotate(**annotations)`` (when any to-many term produced one) then
            ``order_by(*expressions)`` when at least one expression survived;

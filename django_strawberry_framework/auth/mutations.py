@@ -1141,7 +1141,7 @@ def register_mutation(
     ``Register`` rider and exposes it through the unchanged
     ``DjangoMutationField``. EVERY call - cached or not - re-records the rider
     into BOTH declaration ledgers (the mutation ledger, so ``bind_mutations()``
-    re-binds it after a ``registry.clear()``; the auth ledger, so the Decision-8
+    re-binds it after a ``registry.clear()``; the auth ledger, so the spec-040 Decision 8
     register-arm validation still covers it on a post-clear second finalize),
     identity-deduped on both. A second call with a DIFFERENT
     ``permission_classes`` raises ``ConfigurationError`` (the fixed

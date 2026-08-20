@@ -232,7 +232,7 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
     ``id_attr`` (via ``type_cls.resolve_id_attr()``) and project that
     column into ``only()`` so ``_resolve_id_default`` reads the loaded
     value from ``root.__dict__`` instead of falling back to ``getattr``
-    and triggering a lazy load (Decision 7).
+    and triggering a lazy load (spec-015 Decision 7).
 
     Simulates the custom-pk shape without adding a new fakeshop model:
     monkey-patches ``Category._meta.pk.attname`` and the registered
@@ -2423,7 +2423,7 @@ def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
 
     The pk-only variant cannot catch a refactor that special-cases pk ordering;
     this pins that a real ``Meta.ordering`` column propagates to the queryset's
-    own ``ORDER BY`` (spec-033 Decision 11, cursor-parity / Revision 3).
+    own ``ORDER BY`` (spec-033 Decision 11, cursor-parity).
     """
     registry.clear()
     try:
@@ -2452,7 +2452,7 @@ def test_scalar_only_window_projects_non_pk_order_column():
 
     Covers ``_concrete_order_columns`` against a real ``Meta.ordering`` column:
     the projection must carry pk + reverse-FK connector + the ``title`` order
-    column, not the full row (spec-033 Decision 6 / Revision 3).
+    column, not the full row (spec-033 Decision 6).
     """
     registry.clear()
     try:
@@ -3580,7 +3580,7 @@ def _prefetch_by_to_attr(plan):
 def test_divergent_aliases_plan_one_window_per_response_key():
     """Divergent aliased pagination args plan ONE window PER RESPONSE KEY.
 
-    The idea-#2 inversion of the historical Decision-6 fallback: Django
+    The idea-#2 inversion of the historical spec-033 Decision 6 fallback: Django
     accepts multiple ``Prefetch`` objects on one relation with distinct
     ``to_attr``s, so ``a: books(first:2)`` + ``b: books(first:5)`` become two
     batched window queries (O(aliases)) instead of O(parents x aliases)
@@ -4326,7 +4326,7 @@ def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch(
         # consumer's bare "books" string, while the window (prefetch_to
         # "_dst_books_connection", a distinct lookup) passes through untouched. The
         # delta must therefore STILL carry both lookups un-merged - the
-        # exact-match/absorption claim the Decision-4 ``to_attr``-isolation edge
+        # exact-match/absorption claim the spec-033 Decision 4 ``to_attr``-isolation edge
         # case makes - not collapse one of them.
         consumer_qs = Genre.objects.prefetch_related("books")
         delta, _qs = diff_plan_for_queryset(plan.finalize(), consumer_qs)
@@ -4868,7 +4868,7 @@ def test_enable_only_defaults_enabled_without_info():
 
 
 def test_mutation_id_only_relation_still_records_elision():
-    """The walker half of Decision 5: elision stays recorded under a mutation.
+    """The walker half of spec-035 Decision 5: elision stays recorded under a mutation.
 
     A mutation ``{ category { id } }`` selection still records the FK-id elision
     (elision stays enabled - it is operation-independent) while the
@@ -4895,7 +4895,7 @@ def test_mutation_id_only_relation_still_records_elision():
 # stay unconditional, and connection-wrapped sibling fragments narrow at the
 # node walk.
 
-# Helper-move (Decision 9) no-regression lives in test_extension.py (unmodified).
+# Helper-move (spec-033 Decision 9) no-regression lives in test_extension.py (unmodified).
 
 
 # ---------------------------------------------------------------------------
@@ -4945,7 +4945,7 @@ def test_consumer_assigned_relation_left_fully_unplanned():
     ``consumer_assigned_relation_fields``) - paying a speculative Prefetch the
     consumer's resolver may never consume AND recording
     ``planned_resolver_keys`` for the walked subtree, which silenced the
-    subtree's real N+1 under strictness. The Decision-6 fallback discipline
+    subtree's real N+1 under strictness. The spec-033 Decision 6 fallback discipline
     applies instead: fully unplanned, strictness-visible. Sibling scalars keep
     their projection.
     """
@@ -5058,7 +5058,7 @@ def _mutate_every_plan_field(plan, label):
 def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
     """A dirty strategy returning ``False`` leaks no directives or metadata.
 
-    The seam's Decision-6 discipline (``optimizer/nested_fetch.py``): the
+    The seam's spec-033 Decision 6 discipline (``optimizer/nested_fetch.py``): the
     nested planner gives the strategy an isolated candidate and discards it
     after refusal, so even a callback that mutates every plan field behaves
     exactly like the other fallback shapes.
@@ -5402,7 +5402,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
     slice has been taken") before any fallback, and ``select_for_update`` /
     combined querysets cannot be represented by either strategy's SQL. The
     shared gate (``nested_fetch.py::unwindowable_child_queryset_reason``)
-    runs BEFORE strategy dispatch, so the outcome is the Decision-6
+    runs BEFORE strategy dispatch, so the outcome is the spec-033 Decision 6
     fully-unplanned fallback - no prefetch, no resolver keys, strictness
     sees the per-parent access - identically under both built-in strategies.
     """
@@ -5464,7 +5464,7 @@ def test_last_zero_connection_left_fully_unplanned():
     empty and was discarded at resolve time - a dead query per request whose
     recorded resolver keys silenced strictness over the real per-parent
     fallback. The walker now treats the shape like ``UnwindowableConnection``
-    (fully unplanned, Decision-6 discipline).
+    (fully unplanned, spec-033 Decision 6 discipline).
     """
     registry.clear()
     try:

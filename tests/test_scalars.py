@@ -609,7 +609,7 @@ def test_upload_field_resolves_under_strawberry_config_schema():
 def test_upload_field_resolves_under_plain_strawberry_config():
     """An ``Upload``-typed field builds + appears in the SDL under a plain ``StrawberryConfig``.
 
-    This is the load-bearing Decision-5 pin: ``Upload`` rides Strawberry's
+    This is the load-bearing spec-037 Decision 5 pin: ``Upload`` rides Strawberry's
     ``DEFAULT_SCALAR_REGISTRY``, so it resolves with NO package config / scalar map.
     """
     schema = strawberry.Schema(query=_UploadQuery, config=StrawberryConfig())

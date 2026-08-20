@@ -182,11 +182,13 @@ def test_validate_orderset_class_uses_local_import():
 
 
 def test_related_order_orderset_setter_assigns_underscore_orderset():
-    """Closes ``orders/base.py:82`` -- ``@orderset.setter`` body.
+    """Covers ``orders/base.py::RelatedOrder.orderset`` #"self._set_target(value)".
 
-    The setter mutates ``self._orderset``. Re-assignment via the property
-    setter is the cookbook contract that lets a caller substitute the
-    target after construction (e.g., the lazy-resolution cache write at
+    The setter delegates to
+    ``sets_mixins.py::RelatedSetTargetMixin._set_target``, which assigns
+    ``self._orderset``. Re-assignment via the property setter is the
+    cookbook contract that lets a caller substitute the target after
+    construction (e.g., the lazy-resolution cache write at
     ``RelatedOrder.orderset.fget`` re-stores the resolved class through
     this setter).
     """

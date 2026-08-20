@@ -169,7 +169,7 @@ def _cascade_only(cls, qs, info):
 
 
 # =============================================================================
-# Cascade foundation (per Decision 5 / 9 / 10), hardened: recursive
+# Cascade foundation (per spec-034 Decision 5 / 9 / 10), hardened: recursive
 # graphs fail closed with a path-rich error; traversal state is immutable and
 # token-reset on every root, edge, and nested application.
 # =============================================================================
@@ -826,7 +826,7 @@ def test_cascadable_edge_metadata_scan_is_cached():
 )
 @pytest.mark.django_db(databases=["default", "shard_b"])
 def test_multi_db_subquery_pinned_to_caller_alias():
-    """A ``.using("shard_b")`` caller pins every cascade subquery to ``"shard_b"`` (Decision 8).
+    """A ``.using("shard_b")`` caller pins every cascade subquery to ``"shard_b"`` (spec-034 Decision 8).
 
     Assert (via the composed subquery's ``.db``) that the cascade subquery binds to
     the caller's *resolved* alias - ``queryset.db``, the property that falls back to
@@ -854,7 +854,7 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     # the queryset the hook receives carries the load-bearing alias. Observing that
     # REAL RHS - rather than reconstructing a fresh ``.using(result.db)`` queryset in
     # the assertion, which would still pass against a broken default-alias build - is
-    # what actually pins Decision 8.
+    # what actually pins spec-034 Decision 8.
     received_dbs = []
 
     def _record_alias_hook(cls, qs, info):
@@ -935,7 +935,7 @@ def test_nullable_fk_rows_preserved():
 
 @pytest.mark.django_db(transaction=True)
 def test_cascade_excludes_rows_with_hidden_targets():
-    """A parent row whose FK targets a hook-hidden row is excluded (Decision 6)."""
+    """A parent row whose FK targets a hook-hidden row is excluded (spec-034 Decision 6)."""
 
     class HideTarget(models.Model):
         name = models.TextField()
@@ -972,7 +972,7 @@ def test_cascade_excludes_rows_with_hidden_targets():
 
 @pytest.mark.django_db(transaction=True)
 def test_hidden_and_missing_targets_indistinguishable():
-    """A hidden-target row and a missing-target row are equally absent (Decision 6)."""
+    """A hidden-target row and a missing-target row are equally absent (spec-034 Decision 6)."""
 
     class IndistTarget(models.Model):
         name = models.TextField()
@@ -1852,7 +1852,7 @@ def test_fields_scopes_walk():
 
 
 def test_fields_unknown_name_raises():
-    """An unknown ``fields=`` name raises ConfigurationError naming field/model/set (Decision 9)."""
+    """An unknown ``fields=`` name raises ConfigurationError naming field/model/set (spec-034 Decision 9)."""
     _make_type("UnkItemType", Item)
     entry_type = _make_type("UnkEntryType", Entry, primary=False)
     finalize_django_types()
@@ -1868,7 +1868,7 @@ def test_fields_unknown_name_raises():
 
 
 def test_fields_non_cascadable_name_raises():
-    """A known-but-non-cascadable ``fields=`` name (M2M / reverse / scalar) raises (Decision 9)."""
+    """A known-but-non-cascadable ``fields=`` name (M2M / reverse / scalar) raises (spec-034 Decision 9)."""
     entry_type = _make_type("NonCascItemEntryType", Entry, primary=False)
     finalize_django_types()
 
@@ -1903,7 +1903,7 @@ def test_fields_valid_but_unregistered_target_accepted():
 
 
 def test_fields_bare_string_raises():
-    """``fields="item"`` (a bare string) raises before any name lookup (Decision 9, Revision 3).
+    """``fields="item"`` (a bare string) raises before any name lookup (spec-034 Decision 9).
 
     Without the ``isinstance(fields, str)`` guard the walk would validate ``'i'``,
     ``'t'``, ``'e'``, ``'m'`` as field names and surface a misleading "'i' is not
@@ -2004,7 +2004,7 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
     """A target ``async def get_queryset`` reached from the sync walk raises SyncMisuseError.
 
     Coroutine closed first (no ``RuntimeWarning``); message names the target type.
-    Decision 10. The unawaited coroutine is closed by ``apply_type_visibility_sync``
+    spec-034 Decision 10. The unawaited coroutine is closed by ``apply_type_visibility_sync``
     before the raise, so no "coroutine was never awaited" ``RuntimeWarning`` fires -
     the suite's ``filterwarnings = error`` policy (pytest.ini) would turn any such
     warning into a hard error, so a leaked coroutine fails this test by construction.
@@ -2035,7 +2035,7 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
 
 
 async def test_aapply_runs_walk_off_event_loop():
-    """``aapply_cascade_permissions`` runs the sync walk via ``sync_to_async`` (Decision 10).
+    """``aapply_cascade_permissions`` runs the sync walk via ``sync_to_async`` (spec-034 Decision 10).
 
     Assert the walk executes and the ``ContextVar`` seen-set installed inside the
     worker (asgiref ``copy_context``) does not leak back into the awaiting task -
@@ -2341,7 +2341,7 @@ async def test_aapply_gather_restores_task_contexts():
 
 # =============================================================================
 # N+1 audit (permissions-owned pins; optimizer-plan pins live in
-# tests/optimizer/test_extension.py). Per Decision 7.
+# tests/optimizer/test_extension.py). Per spec-034 Decision 7.
 # =============================================================================
 
 
@@ -2349,7 +2349,7 @@ async def test_aapply_gather_restores_task_contexts():
 def test_cascaded_traversal_adds_zero_queries(django_assert_num_queries):
     """A cascaded 2-deep shape executes in the same query count as its uncascaded twin.
 
-    The ``__in`` subqueries compile into the caller's single ``SELECT`` (Decision 7),
+    The ``__in`` subqueries compile into the caller's single ``SELECT`` (spec-034 Decision 7),
     so a cascaded ``Entry -> Item/Property -> Category`` list evaluation costs the
     SAME one query as its identity-hook twin - the cascade adds zero round-trips.
 
@@ -2409,7 +2409,7 @@ def test_cascaded_traversal_adds_zero_queries(django_assert_num_queries):
     assert len(uncascaded_rows) == 2  # both entries are visible without the cascade
 
     # The cascaded shape costs the same one query as its uncascaded twin: zero
-    # added round-trips (Decision 7), distinguishing subquery composition from a
+    # added round-trips (spec-034 Decision 7), distinguishing subquery composition from a
     # would-be per-FK extra query.
 
 
@@ -2424,7 +2424,7 @@ def test_fk_id_elision_falls_back_for_cascading_target():
     custom hook, so the relation falls back to a ``Prefetch`` instead of eliding -
     the inverse of ``test_optimizer_elides_forward_fk_id_only_selection_plan_shape``.
     This re-affirms the shipped safety rule against the new cascade hook shape
-    (Decision 12 / Edge case "FK-id elision interaction").
+    (spec-034 Decision 12 / Edge case "FK-id elision interaction").
     """
     from django.db.models import Prefetch
 
@@ -2510,7 +2510,7 @@ def test_strictness_raise_silent_across_cascaded_shape():
 
 # =============================================================================
 # Gate-composition pins (connection / node / list pins live in their
-# own files). Per Decision 11 / 12.
+# own files). Per spec-034 Decision 11 / 12.
 # =============================================================================
 
 
@@ -2600,7 +2600,7 @@ def test_cascade_then_filter_gate_composition():
     """Cascade narrows rows first, ``FilterSet.check_<field>_permission`` judges input second.
 
     Pin BOTH shapes (card DoD): a gated-field input is denied regardless of cascade
-    state; passing input operates only on cascade-narrowed rows. (Decision 11.)
+    state; passing input operates only on cascade-narrowed rows. (spec-034 Decision 11.)
 
     Composition is observed at its consequence (the plan's accepted lighter shape):
     the cascade lives in ``get_queryset`` (here ``_exclude_private``) and runs at the
@@ -2650,7 +2650,7 @@ def test_cascade_then_filter_gate_composition():
 
 @pytest.mark.django_db
 def test_cascade_then_order_gate_composition():
-    """Same composition matrix for ``OrderSet`` ``check_<field>_permission`` gates (Decision 11)."""
+    """Same composition matrix for ``OrderSet`` ``check_<field>_permission`` gates (spec-034 Decision 11)."""
     category_type = _make_type("OgCategoryType", Category, get_queryset=_exclude_private)
     finalize_django_types()
 
@@ -2684,7 +2684,7 @@ def test_cascade_then_order_gate_composition():
 def test_gate_denial_no_existence_leak():
     """A gate denial fires on input shape alone - identical error with/without hidden rows.
 
-    The no-existence-leak property (Decision 11): a field denial and the
+    The no-existence-leak property (spec-034 Decision 11): a field denial and the
     cascade-hidden-row result are produced by independent layers, so the denial
     cannot reveal whether a hidden row exists. Two fixtures differing only in
     whether a hidden-target row exists must yield a byte-identical ``GraphQLError``.
@@ -2736,7 +2736,7 @@ def test_gate_denial_no_existence_leak():
 
 @pytest.mark.django_db
 def test_nested_relation_traversal_respects_target_cascade():
-    """A nested relation's target hook cascades via the ``Prefetch`` downgrade (Decision 12).
+    """A nested relation's target hook cascades via the ``Prefetch`` downgrade (spec-034 Decision 12).
 
     The connection-DoD's "every edge's nested relations" half at the traversal-result
     level. The transitivity is exercised over a **to-many** nested relation

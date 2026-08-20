@@ -1,6 +1,6 @@
 # Spec: Upload scalar and file / image field mapping — `FileField` / `ImageField` output objects, mutation `Upload` inputs, and the final `0.0.11` cut
 
-Planned for `0.0.11` (card [`DONE-037-0.0.11`][kanban]). This card
+Shipped in `0.0.11` (card [`DONE-037-0.0.11`][kanban]). This card
 completes the package's file/image story across both directions of the wire
 contract: on the **read** side it replaces the placeholder `FileField` /
 `ImageField` → `str` mapping (the earliest [`spec-001`][spec-001] "URL/path
@@ -12,8 +12,8 @@ plugs Strawberry's [`Upload` scalar][glossary-upload-scalar] into the
 [auto-generated mutation `Input` types][glossary-input-type-generation] that
 [`DONE-036-0.0.11`][kanban] ([`spec-036`][spec-036]) built — turning the
 staged-seam `NotImplementedError` that card left at
-[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam
-(TODO-ALPHA-037-0.0.11)" into a real `Upload`-typed input field. It is a
+[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam (TODO-ALPHA-037-0.0.11)"
+into a real `Upload`-typed input field. It is a
 Required [`strawberry-graphql-django`][upstream-field-types] parity item (the
 card's own 🍓 Required tag): upstream's `field_type_map` maps `files.FileField` →
 `DjangoFileType`, `files.ImageField` → `DjangoImageType`, and both → `Upload` in
@@ -35,11 +35,11 @@ and so deferred), this card is the **last** `0.0.11` card — `036` is already
 [`tests/base/test_init.py::test_version`][test-base-init] bump that `036`
 deferred to the joint cut **lands here**.
 
-Status: **IN PROGRESS** — authored for `TODO-ALPHA-037-0.0.11` via the
-[`docs/SPECS/NEXT.md`][next] flow; **all four slices final-accepted** (the
-in-spec build is complete; the cross-slice integration pass + final gate still
-follow). The `docs/TREE.md` summary anchor that blocked Slice 4 was discharged
-(summaries updated, anchor removed); see the Slice 4 build artifact. Slices: Slice
+Status: **SHIPPED (`0.0.11`)** — card [`DONE-037-0.0.11`][kanban], released under
+the [`CHANGELOG.md`][changelog] `## [0.0.11]` heading; authored via the
+[`docs/SPECS/NEXT.md`][next] flow, **all four slices final-accepted**. The
+[Slice checklist](#slice-checklist) below stays unticked because the `Status:`
+line is the completion source of truth (the shipped-spec convention). Slices: Slice
 1 (**read-side output objects** — `DjangoFileType` / `DjangoImageType`, the two
 `SCALAR_MAP` rows, and the empty-file resolver guard;
 [Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
@@ -483,8 +483,8 @@ A true description of the repo as this spec is authored:
   is the shared scalar/filter-input map — the read change cannot simply rewrite
   its rows ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 - **The write generator refuses file columns.**
-  [`mutations/inputs.py`][mutations-inputs] #"Upload staged seam
-  (TODO-ALPHA-037-0.0.11)" raises `NotImplementedError` for a `FileField` /
+  [`mutations/inputs.py`][mutations-inputs] #"Upload staged seam (TODO-ALPHA-037-0.0.11)"
+  raises `NotImplementedError` for a `FileField` /
   `ImageField`, with a `TODO(spec-036 Slice 1)` comment naming this card;
   [`tests/mutations/test_inputs.py`][test-mutations] pins that fail-loud
   behavior. The `036` review (CR-6) pinned that file columns are "the one
@@ -1119,8 +1119,8 @@ Alternatives considered (and rejected):
 ### Decision 6 — Write-side input mapping: the mutation seam becomes `Upload`
 
 The [`spec-036`][spec-036] fail-loud branch in
-[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam
-(TODO-ALPHA-037-0.0.11)" is removed and replaced with a real mapping:
+[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam (TODO-ALPHA-037-0.0.11)"
+is removed and replaced with a real mapping:
 `FileField` / `ImageField` → `Upload`, required per the shipped per-field rule
 (a `blank=False` / `null=False` / no-default file column is required in the
 create `<Model>Input`, optional with `strawberry.UNSET` otherwise and in
@@ -1652,8 +1652,8 @@ implementation reveals it is wrong.
   this card edits [`mutations/inputs.py`][mutations-inputs] /
   [`mutations/resolvers.py`][mutations-resolvers] in place.
 - **Card conflict — stale `TODO-ALPHA-035-0.0.11` in the `scalars.py`
-  docstring.** [`scalars.py`][scalars] #"Future scalars (e.g. ``Upload`` per
-  TODO-ALPHA-035-0.0.11) land here." names `035`, but `035` is the
+  docstring.** [`scalars.py`][scalars] #"Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here."
+  names `035`, but `035` is the
   optimizer-hardening card; the real `Upload` owner is this card, `037`.
   Preferred reading: a stale number — Slice 2 corrects the docstring to
   `TODO-ALPHA-037-0.0.11`. (The [`mutations/inputs.py`][mutations-inputs] seam

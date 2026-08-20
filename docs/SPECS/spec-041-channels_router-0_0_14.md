@@ -670,8 +670,8 @@ Django ASGI fallback belongs on the HTTP branch only).
 [`strawberry_django/routers.py`][upstream-routers]: `AuthGraphQLProtocolTypeRouter`,
 a ~30-line `ProtocolTypeRouter` subclass with the exact composition above, consumed
 as one import in the project's `asgi.py`. The card carries the Required 🍓 parity tag
-for exactly that module (the [`KANBAN.md`][kanban] #"Decision: Alpha cards must claim
-upstream parity" rule; `graphene-django` predates the Strawberry Channels story and
+for exactly that module (the [`KANBAN.md`][kanban] #"Decision: Alpha cards must claim upstream parity"
+rule; `graphene-django` predates the Strawberry Channels story and
 ships **no** router, so this is single-upstream parity — honest, not fabricated).
 [`GOAL.md`][goal] confirms the same boundary from the north-star side: its working
 reference — the `django-graphene-filters` cookbook

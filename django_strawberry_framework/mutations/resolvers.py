@@ -49,8 +49,8 @@ and the load-bearing invariants this module owns:
 - **The post-write re-fetch is by pk WITHOUT the visibility filter** (spec-036)
   and routes through ``apply_connection_optimization`` so the
   ``spec-035`` G2 gate keeps ``select_related`` / ``prefetch_related`` and applies
-  NO ``.only(...)`` deferral under the mutation operation (Decision 9 comes for
-  free). ``delete`` materializes the snapshot fully (relations loaded) BEFORE
+  NO ``.only(...)`` deferral under the mutation operation (spec-036 Decision 9
+  comes for free). ``delete`` materializes the snapshot fully (relations loaded) BEFORE
   the row is deleted; the deletion runs against the
   located instance, NOT the returned snapshot, so the snapshot keeps its ``pk`` /
   ``id`` for the delete payload's cache-eviction contract.
@@ -711,7 +711,8 @@ def refetch_optimized(
     write back to them is not an existence leak. Routes through ``apply_connection_optimization`` so
     the active optimizer plans the response selection; because the operation is a
     ``MUTATION``, the spec-035 G2 gate keeps ``select_related`` /
-    ``prefetch_related`` and applies NO ``.only(...)`` - Decision 9 comes for free.
+    ``prefetch_related`` and applies NO ``.only(...)`` - spec-036 Decision 9 comes
+    for free.
 
     ``force_load=True`` (the delete path) materializes the
     snapshot fully BEFORE the row is deleted: evaluating the queryset loads
@@ -1062,12 +1063,12 @@ def authorize_or_raise(
     *,
     instance: Any,
 ) -> None:
-    """Run ``check_permission``; a ``False`` return raises a top-level ``GraphQLError`` (Decision 15).
+    """Run ``check_permission``; a ``False`` return raises a top-level ``GraphQLError``.
 
     Delegates to the mutation's ``check_permission`` method (which iterates
     ``Meta.permission_classes``); the resolver only maps a denial to a raised
-    ``GraphQLError`` (the authorization-failure surface, distinct from the
-    field-keyed validation envelope - Decision 15). The mutation instance
+    ``GraphQLError`` (the spec-036 Decision 15 authorization-failure surface,
+    distinct from the field-keyed validation envelope). The mutation instance
     is constructed once so an object-level ``check_permission`` override can hold
     per-request state.
 
@@ -1147,9 +1148,10 @@ def coerce_lookup_id(
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
     ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` uses
-    (``relay.py`` line 287), so the package decodes the GlobalID **server-side**
-    rather than letting Strawberry's argument coercion own it. The wire value
-    therefore arrives as a base64 GlobalID string; it is run through the shared
+    (``relay.py::DjangoNodeField`` #"is the Relay-spec signature"), so the package
+    decodes the GlobalID **server-side** rather than letting Strawberry's argument
+    coercion own it. The wire value therefore arrives as a base64 GlobalID
+    string; it is run through the shared
     ``decode_model_global_id`` primitive against the mutation's target
     model - the same decode + model-check + pk-coercion contract the relation
     ``<field>_id`` decode uses, and the identity guard the typed ``DjangoNodeField``
@@ -1196,7 +1198,7 @@ def _invalid_lookup_id_error() -> FieldError:
     A ``GlobalID`` whose decoded type is not the mutation's target model (or whose
     type cannot be resolved) is rejected here rather than coerced to a bare pk; the
     failure is determined from the id's type slot alone, without a DB read, so it
-    reveals nothing about row existence (spec-036 Decision 10 / finding-#1).
+    reveals nothing about row existence (spec-036 Decision 10).
     """
     return field_error("id", "Invalid id.", codes="invalid")
 

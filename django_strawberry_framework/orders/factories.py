@@ -6,7 +6,7 @@ reachable Strawberry input class via ``_build_input_fields`` +
 resolved ``OrderSet.get_fields()`` results -- NOT a parallel
 ``OrderSet.Meta.fields`` map -- so the runtime order shape and the
 GraphQL input shape stay downstream of one decision site (mirror of
-``filters/factories.py``'s Layer 5 + Decision 4 H1).
+``filters/factories.py``'s Layer 5 + spec-027 Decision 4).
 
 The finalizer materializes the built classes as module globals at
 finalize time; this module owns build-only. Layer 6 (dynamic
@@ -100,7 +100,7 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
         type_name: str,
         owner_definition: Any,
     ) -> list[tuple[str, Any, dict[str, Any]]]:
-        """Order input triples -- no operator bag (Spec Decision 8)."""
+        """Order input triples -- no operator bag (spec-028 Decision 8)."""
         del type_name  # the order side has no ``and_`` / ``or_`` / ``not_`` bag.
         return _build_input_fields(set_cls, owner_definition)
 

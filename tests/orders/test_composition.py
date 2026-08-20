@@ -30,7 +30,7 @@ the complementary implementation-contract altitude:
    subsystems.
 
 Fixture choice: reuses the fakeshop library ``Book`` model (per
-``AGENTS.md`` line 8 carve-out -- "Library acceptance tests use inline
+``AGENTS.md`` carve-out -- "Library acceptance tests use inline
 Model.objects.create; the library app has no services.py", so the
 seed-helper rule does not apply here) but declares LOCAL ``BookFilter``,
 ``BookOrder``, and ``BookType`` classes inside each test function body
@@ -206,7 +206,7 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
     # Dict-shape input is supported by ``FilterSet._normalize_input`` -- a
     # scalar value for a single-lookup field maps to the form's default
     # ``exact`` lookup. The order side receives a list of Strawberry
-    # input dataclass instances per Spec Decision 5 list-of-non-null.
+    # input dataclass instances per spec-028 Decision 5 list-of-non-null.
     filter_input = {"title": "Foundation"}
     order_input = [order_input_cls(title=Ordering.ASC)]
     info = _make_info()

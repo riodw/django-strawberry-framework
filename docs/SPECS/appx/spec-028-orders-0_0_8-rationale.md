@@ -6,7 +6,7 @@ Read this when checking a finished implementation against the reasoning that pro
 
 ## Provenance of this record
 
-Created by the `028` residual-reconciliation cycle's Slice 1 (`docs/builder/bld-slice-1-028-rationale_extraction.md`). `spec-028` was the last spec in `docs/SPECS/` with no `-rationale.md` sibling; `001` through `027` all had one.
+Created by the `028` residual-reconciliation cycle's Slice 1 (recorded in `docs/builder/DONE/build-028-orders-0_0_8.md`). `spec-028` was the last spec in `docs/SPECS/` with no `-rationale.md` sibling; `001` through `027` all had one.
 
 Measured against the spec at `HEAD` before the move (289,080 bytes, 1,354 lines):
 
@@ -160,7 +160,7 @@ Measured against `HEAD` by the `028` cycle's pre-dispatch verification. Each is 
 
 ### Corrections this Decision received after ship
 
-Written by the `028` cycle's Slice 3 (`docs/builder/bld-slice-3-028-spec_reconciliation.md`), which rewrote [Decision 2][spec-028-d2] to state `HEAD`'s contract. What the Decision used to claim, what it says now, and why the shipped shape is the right one:
+Written by the `028` cycle's Slice 3, which rewrote [Decision 2][spec-028-d2] to state `HEAD`'s contract. What the Decision used to claim, what it says now, and why the shipped shape is the right one:
 
 - **`sets.py` ships a `check_permissions` instance method.** It shipped in `11d9fbe0` and was deleted in `9e864f59`; the same diff rewrote the module docstring from "the `check_permissions` instance method + the classmethod pipeline" to "the classmethod permission pipeline", so the deletion was deliberate, not an oversight. The Decision now names the inherited classmethod pipeline only. **Why the deletion is right:** the delegate existed for cookbook call-shape compatibility, reading an input parked on `self._input_value` and forwarding to the classmethod. It had no caller in the package, no test that exercised it through a real resolver, and it required the instance to carry mutable per-request state purely so a second spelling of the gate walk could exist. One entry point means the active-input-only scope cannot be bypassed by reaching for the other one.
 - **`RelatedOrder`'s direct base is `LazyRelatedClassMixin`.** At `HEAD` it is [`sets_mixins.py::RelatedSetTargetMixin`][sets-mixins], itself a `LazyRelatedClassMixin` subclass, which owns `_bind_owner` / `_resolved_target` / `_set_target`. **Why:** the target-binding plumbing was identical on both set families and the intermediate class is where it became single-sited; the Decision's normative claim (the mixin is shared through the neutral module, never duplicated into `orders/base.py`) is unchanged and is in fact more true than when it was written.
@@ -599,7 +599,7 @@ Corrections Slice 3 landed that the pre-dispatch verification did not name, or n
 
 ## Discharged by Slice 3
 
-Slice 3 (`docs/builder/bld-slice-3-028-spec_reconciliation.md`) rewrote the spec so it reads as the current contract, discharging build-plan findings **D3-D16** plus five findings routed to it after the plan was written. Every correction is recorded above: keyed to its Decision under that Decision's `### Corrections this Decision received after ship`, or under `## Claims the spec may no longer make` when it belongs to no single Decision. The spec itself states only the corrected contract — no amendment block, no retraction paragraph, no chronology a reader must apply.
+Slice 3 rewrote the spec so it reads as the current contract, discharging build-plan findings **D3-D16** plus five findings routed to it after the plan was written. Every correction is recorded above: keyed to its Decision under that Decision's `### Corrections this Decision received after ship`, or under `## Claims the spec may no longer make` when it belongs to no single Decision. The spec itself states only the corrected contract — no amendment block, no retraction paragraph, no chronology a reader must apply.
 
 **Two findings came back negative and are recorded as re-derivations rather than edits**, because recording a negative is the only thing that stops the next pass re-opening it:
 
@@ -614,7 +614,7 @@ Slice 3 (`docs/builder/bld-slice-3-028-spec_reconciliation.md`) rewrote the spec
 - **Seven link definitions were removed by Slice 1** because the move took their only uses: `[next-step-8]`, `[spec-019]`, `[spec-021]`, `[spec-022]`, `[spec-023]`, `[spec-025]`, and `[upstream-cookbook-filterset-factories]`. All seven are defined in this file instead.
 - **Nine link definitions were added or repointed by Slice 3** as the corrected prose acquired new citation targets: `[utils-inputs]`, `[utils-permissions]`, `[utils-querysets]`, `[utils-relations]`, `[orders-sets]`, `[test-orders-inputs]`, `[test-sets-mixins]`, `[test-utils-permissions]`, `[build-tree]`, plus `[fakeshop-test-conftest]` replacing the duplicate-target `[fakeshop-test-library-reload]`. Every path was disk-exists-checked.
 
-**`KANBAN.md` and `docs/GLOSSARY.md` were out of this cycle's scope**, so the spec's corrected quotations of the KANBAN past-tense body now differ from the rendered card, and the `OrderSet` glossary entry still carries no position-side-channel note where its `RelatedOrder` sibling does. Both are routed to `docs/builder/bld-final-028.md`'s `### Deferred work catalog` as DB edits plus a regenerate, not as spec work.
+**`KANBAN.md` and `docs/GLOSSARY.md` were out of this cycle's scope**, so the spec's corrected quotations of the KANBAN past-tense body now differ from the rendered card, and the `OrderSet` glossary entry still carries no position-side-channel note where its `RelatedOrder` sibling does. Both are routed to `docs/builder/DONE/build-028-orders-0_0_8.md`'s `## Surviving items migrated out of bld-final-028.md before its deletion` as DB edits plus a regenerate, not as spec work.
 
 <!-- LINK DEFINITIONS -->
 

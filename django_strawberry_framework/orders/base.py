@@ -1,6 +1,6 @@
 """``RelatedOrder`` - the nested-path ordering primitive.
 
-Layer 2 of the spec-028 six-layer plan. ``RelatedOrder`` is the collapsed
+Layer 1 of the spec-028 six-layer plan. ``RelatedOrder`` is the collapsed
 port of the cookbook's ``django_graphene_filters/orders.py::BaseRelatedOrder``
 + ``::RelatedOrder`` pair (per spec-028 Decision 2 - single-symbol public
 surface). ``LazyRelatedClassMixin`` is reused from the neutral
@@ -31,10 +31,10 @@ class RelatedOrder(RelatedSetTargetMixin):
     """Target another ``OrderSet`` to enable nested-relation ordering.
 
     Collapsed port of ``django_graphene_filters/orders.py::BaseRelatedOrder``
-    + ``::RelatedOrder`` into a single consumer-facing class per spec-028
-    Decision 2. The lazy-resolution logic (``bind_orderset``, ``.orderset``
-    property, string-resolution through the shared mixin) carries over
-    from the cookbook unchanged.
+    + ``::RelatedOrder`` into a single consumer-facing class
+    per spec-028 Decision 2. The lazy-resolution logic (``bind_orderset``,
+    ``.orderset`` property, string-resolution through the shared mixin)
+    carries over from the cookbook unchanged.
 
     Target acceptance shapes:
 

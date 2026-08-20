@@ -1737,9 +1737,11 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
 # ---------------------------------------------------------------------------
 # Live HTTP order coverage (spec-028 test plan), plus the row-preserving
 # to-many aggregate cases from ``spec-030-connection_field-0_0_9`` P1-B.
-# 16 test functions / 19 test rows -- the three extra rows come from
-# ``test_library_books_order_by_subtitle_null_positioning``, parametrized
-# over four NULLS directions.
+# ``test_library_books_order_by_subtitle_null_positioning`` is parametrized
+# over the four NULLS directions.
+# The two out-of-card additions are
+# ``test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplication``
+# and ``test_library_genres_connection_pages_by_to_many_aggregate``.
 # ---------------------------------------------------------------------------
 
 

@@ -1,13 +1,17 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Five ordersets mirror the relation shape ``apps.library.schema`` exposes
-through the live ``/graphql/`` endpoint. Inter-orderset references use
-the same-module unqualified-name form (e.g. ``RelatedOrder("ShelfOrder")``)
-so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
-to end; the ``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
+Seven ordersets mirror the relation shape ``apps.library.schema`` exposes
+through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
+``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
+``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
+fingerprinted to THAT order, and ``PeriodicalOrder`` is the related target
+``IssueOrder.periodical`` reaches. Inter-orderset references use the
+same-module unqualified-name form (e.g. ``RelatedOrder("ShelfOrder")``) so
+the lazy-resolution Layer-2 prefix-with-owner branch is exercised end to end; the
+``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
 declaration deliberately uses the absolute-import-path form so the
 Layer-2 ``import_string`` first-attempt branch is also exercised
-(spec-028 + Decision 11).
+(spec-028 Decision 3 Layer 2).
 
 ``GenreOrder`` lives in the sibling ``orders_genre.py`` module so the
 absolute-import-path resolution path has a real cross-module target;
@@ -43,12 +47,15 @@ class BranchOrder(OrderSet):
 
     @classmethod
     def check_name_permission(cls, request: Any) -> None:
-        """Active-input-only scalar gate fired by Test 9 (denies) + quiet for Test 10.
+        """Active-input-only scalar gate: denies an anonymous order by ``name``.
 
-        The split-pair gate fires ONLY when the consumer's input names
-        ``name`` (Test 9's input is
-        ``orderBy: [{ name: ASC }]``); the input ``orderBy: [{ city:
-        ASC }]`` (Test 10) does NOT fire this gate.
+        The gate fires ONLY when the consumer's input names ``name``
+        (``orderBy: [{ name: ASC }]``); an input naming another scalar
+        (``orderBy: [{ city: ASC }]``) leaves it quiet. Both halves are
+        pinned live by
+        ``test_library_api.py::test_order_check_permission_denies_for_active_field``
+        and
+        ``test_library_api.py::test_order_check_permission_quiet_for_inactive_field``.
         """
         user = getattr(request, "user", None)
         if user is None or not getattr(user, "is_staff", False):
@@ -59,13 +66,14 @@ class BranchOrder(OrderSet):
 
     @classmethod
     def check_shelves_permission(cls, request: Any) -> None:
-        """Active-related-branch gate fired by Test 11 (denies).
+        """Active-related-branch gate: denies an anonymous order through ``shelves``.
 
         Active-branch dispatch: the gate fires ONLY when the consumer's
-        input names the ``shelves`` RelatedOrder branch (Test 11 first-half
-        input ``orderBy: [{ shelves: { code: ASC } }]``). Test 11's
-        second-half input uses ``city`` (an unguarded scalar) so it does NOT
-        fire this gate or the ``check_name_permission`` gate.
+        input names the ``shelves`` RelatedOrder branch
+        (``orderBy: [{ shelves: { code: ASC } }]``); an input naming the
+        unguarded ``city`` scalar fires neither this gate nor
+        ``check_name_permission``. Both halves are pinned live by
+        ``test_library_api.py::test_order_check_permission_denies_active_related_branch``.
         """
         user = getattr(request, "user", None)
         if user is None or not getattr(user, "is_staff", False):
@@ -96,11 +104,15 @@ class BookOrder(OrderSet):
 
     ``BookOrder.Meta.fields`` carries the path-shorthand ``"shelf__code"``
     which renders as ``shelfCode: Ordering`` on the input type per
-    spec-028 test plan (flat-shorthand path). The explicit
-    ``shelf = RelatedOrder("ShelfOrder", field_name="shelf")``
+    spec-028 test plan (flat-shorthand path), pinned live by
+    ``test_library_api.py::test_library_books_order_by_flat_shorthand_path``.
+    The explicit ``shelf = RelatedOrder("ShelfOrder", field_name="shelf")``
     declaration produces the nested-shape ``shelf: ShelfOrderInputType``
-    surface used by Tests 3, 7, 8, and 12. Both surfaces coexist on
-    the same input type.
+    surface, pinned live by
+    ``test_library_api.py::test_library_books_order_by_forward_fk_relation``
+    and
+    ``test_library_api.py::test_library_books_order_by_multi_field_priority``.
+    Both surfaces coexist on the same input type.
     """
 
     shelf = RelatedOrder("ShelfOrder", field_name="shelf")

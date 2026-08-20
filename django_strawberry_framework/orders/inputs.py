@@ -164,9 +164,8 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     """Return every column-backed field name for ``model``.
 
     Backs ``OrderSet._expand_meta_fields`` when ``Meta.fields = "__all__"``
-    per spec-028 Decision 3 line 452. The
-    cookbook's ``get_concrete_field_names`` at
-    ``django_graphene_filters/mixins.py`` uses ``hasattr(f, "column")``
+    per spec-028 Decision 3. The cookbook's ``get_concrete_field_names``
+    at ``django_graphene_filters/mixins.py`` uses ``hasattr(f, "column")``
     alone, but Django's virtual ``GenericRelation`` and
     ``GenericForeignKey`` descriptors also expose ``column = None``.
     Checking that the column is a real database column (rather than merely
@@ -219,12 +218,12 @@ def _build_input_fields(
     - ``RelatedOrder`` -> forward-reference ``Annotated[...,
       strawberry.lazy(INPUTS_MODULE_PATH)] | None`` keyed on the target
       orderset's class-derived input type name.
-    - leaf -> ``Ordering | None`` (Spec Decision 5).
+    - leaf -> ``Ordering | None`` (spec-028 Decision 5).
 
     Populates ``_field_specs`` so the runtime ``normalize_input_value``
     walker can reconstruct the ORM path from each Strawberry input
     dataclass attribute. The ``shelf__code`` flat-shorthand path (per
-    Spec Edge cases line 980) maps python attr ``shelf_code`` ->
+    spec-028 Edge cases) maps python attr ``shelf_code`` ->
     GraphQL alias ``shelfCode`` -> django source path ``shelf__code``.
 
     Mirror of ``filters/inputs.py::_build_input_fields`` with three
@@ -238,7 +237,7 @@ def _build_input_fields(
 
     def _leaf_of(top_name: str, _python_attr: str, _entry: Any) -> tuple[Any, str]:
         # Leaf field: ``Ordering | None`` regardless of model-field type per
-        # Spec Decision 5. ``model_field`` discovery is a future-extension
+        # spec-028 Decision 5. ``model_field`` discovery is a future-extension
         # affordance the converter ignores today.
         return convert_order_field_to_input_annotation(None, None), top_name
 
@@ -272,13 +271,13 @@ def normalize_input_value(
     deserialization, post-Strawberry-type-coercion) and produces a flat
     ``[(field_path, Ordering | None), ...]`` list. ``None`` directions
     are preserved -- the apply pipeline filters them in its
-    ``direction.resolve(...)`` comprehension. Per Spec Decision 13:
+    ``direction.resolve(...)`` comprehension. Per spec-028 Decision 13:
 
     - top-level ``list[<T>OrderInputType] | None`` -> recurse on each
       element and concatenate.
     - per-element ``<T>OrderInputType`` -> walk the dataclass's fields
       via the ``_field_specs`` map; ``None`` attribute values short-
-      circuit (active-input-only scope per Spec Decision 8 step 6). Thus
+      circuit (active-input-only scope per spec-028 Decision 8 step 6). Thus
       an omitted field and an explicit GraphQL ``null`` direction have
       identical no-op semantics: neither contributes an ordering term
       nor fires that field's permission gate.
@@ -290,7 +289,7 @@ def normalize_input_value(
     operator-bag layer removed (no ``GlobalIDFilter`` /
     ``BaseCSVFilter`` / ``RangeFilter`` / ``ChoiceFilter`` /
     ``ListFilter`` branches -- ordering has no leaf-shape divergence
-    per Spec Decision 5).
+    per spec-028 Decision 5).
 
     The dataclass-vs-dict walk, the top-level ``list[<T>]`` flattening, the
     ``None`` active-input skip, the ``_field_specs`` lookup, and the
@@ -362,8 +361,8 @@ def materialize_input_class(name: str, input_cls: type) -> None:
     Thin family wrapper over the ``make_set_input_namespace`` materializer.
     See ``utils/inputs.py::materialize_generated_input_class`` for the
     Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
-    idempotency clause, and the distinct-class collision raise (spec-028
-    Decision 9).
+    idempotency clause, and the distinct-class collision raise
+    (spec-028 Decision 9).
     """
     _materialize_input(name, input_cls)
 

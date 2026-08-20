@@ -1620,9 +1620,11 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
     Every subsystem binds its own teardown callback at ITS import time via
     ``register_subsystem_clear``, and ``clear()`` replays the already-resolved
     callables. That replay is the only place a poisoned ``sys.modules`` can be
-    reached at all, and every submodule lookup it makes is best-effort, so
-    poisoning the filter modules (done here) cannot make ``clear()`` raise:
-    the registry's own state is dropped either way (spec-027 Decision 9).
+    reached at all, and it imports neither poisoned name directly; the two
+    submodule lookups it does make are best-effort
+    (``utils/inputs.py::_safe_import``). So neither the poisoned package nor the
+    poisoned ``inputs`` module can make ``clear()`` raise: the registry's own
+    state is dropped either way (spec-027 Decision 9).
     """
     import sys
 
@@ -1636,8 +1638,9 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
     try:
         # ``None`` in ``sys.modules`` is the shape that makes an import of
         # either module raise ImportError. ``clear()`` itself runs no import,
-        # so the poisoning can only reach a replayed callback's own
-        # best-effort lookup, which skips rather than propagates.
+        # and the replayed callbacks look up neither poisoned name directly.
+        # The two submodule lookups they do make are best-effort, so nothing
+        # on the teardown path can raise OUT of ``clear()``.
         sys.modules[inputs_name] = None
         sys.modules[filters_name] = None
         fresh_registry.register(Category, CategoryType)
@@ -1661,10 +1664,11 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
     ``clear_order_input_namespace`` and
     ``_clear_helper_referenced_ordersets`` -- and ``clear()`` replays the
     already-resolved callables. That replay is the only place a poisoned
-    ``sys.modules`` can be reached at all, and every submodule lookup it
-    makes is best-effort, so poisoning the order modules (done here) cannot
-    make ``clear()`` raise: the registry's own state is dropped either way
-    (spec-028 Decision 9).
+    ``sys.modules`` can be reached at all, and it imports neither poisoned
+    name directly; the two submodule lookups it does make are best-effort
+    (``utils/inputs.py::_safe_import``). So neither the poisoned package nor
+    the poisoned ``inputs`` module can make ``clear()`` raise: the registry's
+    own state is dropped either way (spec-028 Decision 9).
     """
     import sys
 
@@ -1678,8 +1682,9 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
     try:
         # ``None`` in ``sys.modules`` is the shape that makes an import of
         # either module raise ImportError. ``clear()`` itself runs no import,
-        # so the poisoning can only reach a replayed callback's own
-        # best-effort lookup, which skips rather than propagates.
+        # and the replayed callbacks look up neither poisoned name directly.
+        # The two submodule lookups they do make are best-effort, so nothing
+        # on the teardown path can raise OUT of ``clear()``.
         sys.modules[inputs_name] = None
         sys.modules[orders_name] = None
         fresh_registry.register(Category, CategoryType)

@@ -147,7 +147,7 @@ def _validate_set_sidecar(
 
     The type-gate skeleton ``Meta.filterset_class`` and ``Meta.orderset_class``
     share. Wrappers keep the cycle-safe local import of ``FilterSet`` /
-    ``OrderSet`` in their own body (spec-028 N3) and the ``None``-means-unset
+    ``OrderSet`` in their own body and the ``None``-means-unset
     short-circuit; this owns only the subclass check and the
     ``must be {article} {expected.__name__} subclass`` wording.
     """

@@ -26,7 +26,7 @@ each model's own ``id`` is a Relay GlobalID over the wire -- so the ``id``
 ``GlobalIDMultipleChoiceFilter`` conversion across the PK's lookups.
 
 ``check_<field>_permission(self, request)`` is the filter subsystem's
-(``DONE-021-0.0.8``) per-field permission gate; the permissions subsystem
+(``DONE-027-0.0.8``) per-field permission gate; the permissions subsystem
 (``DONE-034-0.0.10``) composes with it unchanged (its Decision 11 keeps the
 filter/order gates as-is). The queryset-scoping
 ``check_<field>_permission(self, queryset, request)`` variant below is a

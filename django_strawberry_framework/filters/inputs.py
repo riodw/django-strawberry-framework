@@ -78,7 +78,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.filters.inputs"
 
 
 # Search-prefix vocabulary for the future `Meta.search_fields` card per
-# spec-027 Decision 3 Layer 5; consumed by `construct_search` below.
+# spec-027 Decision 2; consumed by `construct_search` below.
 LOOKUP_PREFIXES: dict[str, str] = {
     "^": "istartswith",
     "=": "iexact",
@@ -257,7 +257,7 @@ def _scalar_from_form_field(form_field: Any) -> type:
         return uuid.UUID
     # Both ``CharField`` and the catch-all map to ``str``. The explicit
     # ``CharField`` branch is kept for documentation: the conversion
-    # table at spec-027 Decision 4 M1 lists CharField as a recognized
+    # table in spec-027 Decision 4 lists ``CharFilter`` as a recognized
     # shape, and a future reader who inspects this function should see
     # that the mapping is intentional, not an accidental fallthrough.
     if isinstance(form_field, forms.CharField):
@@ -291,8 +291,8 @@ def _choice_enum_from_filter(
 ) -> Any:
     """Derive a Strawberry enum from a ``ChoiceFilter``'s underlying choice source.
 
-    Per spec-027 Decision 4 M5 (line 591), a ``ChoiceFilter`` whose source
-    is not a Django ``Choices``-derived enum raises ``ConfigurationError``
+    Per spec-027 Decision 4, a ``ChoiceFilter`` whose source is not a
+    Django ``Choices``-derived enum raises ``ConfigurationError``
     (the consumer is expected to wrap the choices through the existing
     converter pipeline). When the underlying model field is available
     the pipeline at ``types.converters.convert_choices_to_enum`` is
@@ -408,7 +408,7 @@ def convert_filter_to_input_annotation(
 ) -> Any:
     """Return the Strawberry annotation for a resolved ``django-filter`` filter.
 
-    Implements the Decision-4 M1 conversion table. Kind order is
+    Implements the spec-027 Decision 4 conversion table. Kind order is
     ``_FILTER_INPUT_KIND_TYPES`` (most-specific first): Relay-aware primitives,
     then Range / List / Array, then bare ``TypedFilter``, then
     ``ChoiceFilter``, then the ``object`` catch-all (the original ``else``).
@@ -458,7 +458,7 @@ def convert_filter_to_input_annotation(
     def _catchall(matched: Filter) -> Any:
         # Catch-all scalar branch. ``Filter(method=...)`` filters land
         # here when their ``field_class`` is a recognized form field; an
-        # unknown form-field shape raises per spec-027 line 595.
+        # unknown form-field shape raises per spec-027 Decision 4.
         form_field = getattr(matched, "field", None)
         method = getattr(matched, "method", None)
         if method is not None and form_field is None:
@@ -519,7 +519,7 @@ def normalize_input_value(
     fire. ``None`` from unwrap (an enum member whose ``.value`` is
     ``None``) is a successful result, not a continue signal.
 
-    Per the spec-027 Implementation-discretion item, the
+    Per spec-027 Decision 4's ``normalize_input_value`` contract, the
     multi-key return shape lets the ``_normalize_input`` caller merge
     the patch without inventing a sentinel-pair object.
     """
@@ -589,7 +589,7 @@ def _encode_global_id_input(value: Any) -> Any:
     ``apply_sync`` / ``apply_async`` caller passes) MUST keep its
     ``type_name`` so ``GlobalIDFilter.filter`` /
     ``GlobalIDMultipleChoiceFilter.filter`` can validate it against the
-    target GraphQL type (spec-027 L603) before any queryset clause runs.
+    target GraphQL type (spec-027 Decision 4) before any queryset clause runs.
     The previous implementation eagerly decoded the object down to its
     bare ``node_id`` here -- stripping the ``type_name`` *before*
     validation, so a wrong-type GlobalID object silently passed the gate.
@@ -685,7 +685,7 @@ def _normalize_range_value(
 ) -> dict[str, Any]:
     """Return the positional form-data patch ``{<name>_0, <name>_1}`` for a RangeFilter.
 
-    Per spec-027 Decision 4 line 594: Django's ``RangeWidget.value_from_datadict``
+    Per spec-027 Decision 4: Django's ``RangeWidget.value_from_datadict``
     reads positional keys ``name_0`` / ``name_1`` (NOT named ``_from`` /
     ``_to`` keys). The patch's key prefix is the form-data field name
     (``filter_instance.field_name`` for direct filters; the caller may
@@ -867,8 +867,8 @@ def _build_input_fields(
 
     def _leaf_of(top_name: str, python_attr: str, lookup_bag: Any) -> tuple[Any, str]:
         # Leaf path: build a per-field operator-bag input class. Every
-        # operator-bag leaf is optional (``optional_field_kwargs`` - the
-        # Finding 2 required-by-default rule).
+        # operator-bag leaf is optional (``optional_field_kwargs``); an
+        # omitted ``default`` would build a REQUIRED field.
         sample_filter = next(iter(lookup_bag.values()))
         bag_name = filterset_cls.type_name_for(python_attr)
         bag_specs: list[tuple[str, Any, dict[str, Any]]] = []

@@ -20,8 +20,8 @@ surface ships.
 The BFS factory consumes resolved ``django-filter`` filter instances --
 NOT a parallel ``FILTER_DEFAULTS`` map -- so the runtime filter shape
 and the GraphQL input shape stay downstream of one decision site
-(Decision 4 H1 / spec-027 lines 579-584). The finalizer materializes the
-BFS factory's built input classes as module globals at finalize time;
+(spec-027 Decision 4). The finalizer materializes the BFS factory's
+built input classes as module globals at finalize time;
 this module owns build-only. (Layer 6's dynamic FilterSet classes are
 plain ``type(...)`` products cached below, never materialized as module
 globals.) Hashing, Meta canonicalize, and the ``type(...)`` skeleton live
@@ -92,7 +92,7 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory):
 
     The factory does NOT materialize built classes as module globals; that is
     the finalizer's phase-2.5 contract. ``arguments`` returns the built input
-    class for the root filterset (per Implementation discretion item 5).
+    class for the root filterset (per spec-027 Decision 6 subpass 4).
 
     Subclassing is rejected at class-creation time (the caches are shared
     mutable dicts a subclass would inherit rather than isolate, silently

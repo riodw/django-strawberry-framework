@@ -4,7 +4,7 @@ Because every categorical card field is a foreign key into a lookup table,
 filtering "by status / priority / size / milestone / version" is done with a
 ``RelatedFilter`` onto a small lookup filterset that matches on ``key`` (or
 ``label``). So this is the most ``RelatedFilter``-dense surface in the example
-tree -- it exercises the cross-relation filter path from ``DONE-021-0.0.8`` far
+tree -- it exercises the cross-relation filter path from ``DONE-027-0.0.8`` far
 harder than the other apps, while still meaning something concrete ("all
 ``done`` cards in milestone ``alpha`` sized ``xl`` with a ``strawberry_django``
 parity claim").

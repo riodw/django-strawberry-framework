@@ -918,7 +918,7 @@ class ExpansionSnapshot:
     an inspection of the live instance at request time.
 
     The snapshot slot is registered in ``FilterSet._lifecycle.extra`` so
-    ``registry.clear()`` resets filters and metadata together (finding 3). It is
+    ``registry.clear()`` resets filters and metadata together. It is
     read only from a class's OWN ``__dict__`` (via ``_expansion_snapshot``) so a
     subclass never inherits its parent's classification.
     """
@@ -948,7 +948,7 @@ def _candidate_metadata_for(model: type, filter_instance: Any) -> CandidateFilte
       caught);
     - an EXPANDED leaf carries a relation PREFIX composed of one or more declared
       ``RelatedFilter`` ``field_name`` segments, any of which may legitimately be
-      a non-model path (finding 1 -- a declared field_name must never turn a
+      a non-model path (a declared ``field_name`` must never turn a
       working declaration into a finalization failure). An unresolvable expanded
       path therefore FAILS CLOSED (returns ``None`` -- no row), matching the
       overriding invariant that the failure mode is a missed optimization, never
@@ -1200,7 +1200,7 @@ class FilterSet(
         cache="_expanded_filters",
         guard="_is_expanding_filters",
         # The candidate-metadata snapshot rides the same clear as the filter
-        # cache so filters + metadata reset together (finding 3).
+        # cache so filters + metadata reset together.
         extra=("_expanded_snapshot",),
     )
 
@@ -1366,9 +1366,11 @@ class FilterSet(
                         row,
                         routable=capable and row.eligible and row.provenance.generation_capable,
                     )
-            # TODO(spec-027-filters-0_0_8 Meta.search_fields):
-            # wire `construct_search(all_filters)` from
+            # TODO(spec-055 Slice 1): Meta.search_fields - wire
+            # `construct_search(all_filters)` from
             # `django_strawberry_framework.filters.inputs.LOOKUP_PREFIXES` here.
+            # The prefix map and `construct_search` landed with spec-027
+            # Decision 2; spec-055 owns the consumer surface.
 
             # The two-condition cache-write gate (own `related_filters` +
             # no unresolved string lazy targets) is single-sited in
@@ -1521,7 +1523,7 @@ class FilterSet(
         OneToOne); non-Relay targets and non-relation fields defer to the
         upstream default unchanged.
 
-        Own-PK branch (spec-027 L566-567 + L607): when ``field`` is the
+        Own-PK branch (spec-027 Decision 4): when ``field`` is the
         owning model's primary key AND the owning ``DjangoType`` itself
         implements ``relay.Node``, the field becomes ``GlobalIDFilter`` -
         the OWNER is the Relay node so its PK column is a GlobalID over
@@ -1671,7 +1673,7 @@ class FilterSet(
         # ``base.py::_relation_uses_non_pk_to_field`` / ``_GLOBALID_RELATION_PK_ATTR``).
         # A boolean (not a frozen absolute path) survives ``_expand_related_filter``'s
         # deepcopy + ``field_name`` rebase, so an expanded leaf compiles against the
-        # rebased relation path instead of a stale ``"target__pk"`` (Finding 2). The
+        # rebased relation path instead of a stale ``"target__pk"``. The
         # common FK-to-pk / M2M / reverse case is not marked and keeps the raw
         # ``{field_name__lookup_expr: node_id}`` predicate byte-identical.
         if _relation_uses_non_pk_to_field(field):
@@ -1852,7 +1854,7 @@ class FilterSet(
 
         Non-relation fields defer to the upstream pair-return shape unless
         the field is the owner's own PK and the owner is Relay-Node-shaped
-        (own-PK branch per spec-027 L566-567). For relation fields a
+        (own-PK branch per spec-027 Decision 4). For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
         relations); a non-Relay target passes the upstream return through.
@@ -1986,7 +1988,7 @@ class FilterSet(
     def _is_own_pk_under_relay_owner(cls, field: Any) -> bool:
         """Return True iff ``field`` is the owning model's PK and owner is Relay.
 
-        Own-PK branch per spec-027 L566-567 + L607: when a ``FilterSet``
+        Own-PK branch per spec-027 Decision 4: when a ``FilterSet``
         whose owning ``DjangoType`` implements ``relay.Node`` filters on
         its own primary key, the wire shape is a Relay GlobalID - so the
         filter for that PK is ``GlobalIDFilter`` rather than the scalar
@@ -2214,7 +2216,7 @@ class FilterSet(
                 # not the parent form.
                 continue
             django_source_path = field.spec.django_source_path if field.spec is not None else None
-            # Per spec-027 L518-605 (per-field operator bag), top-
+            # Per spec-027 Decision 3 Layer 5 (per-field operator bag), top-
             # level scalar fields wrap a nested ``<Field>FilterInputType``
             # dataclass whose attrs map to ``django-filter`` lookups
             # (``exact`` / ``i_contains`` / ``in_`` / ...). Iterate the bag
@@ -2462,7 +2464,7 @@ class FilterSet(
         ``apply_sync`` is invoked against the visibility-scoped queryset
         so nested input clauses (e.g. ``shelves: { code: { iContains:
         "A" } }``) narrow the child queryset BEFORE the parent's
-        ``<rel>__in=<intersected>`` clause is computed (spec-027 L668-678).
+        ``<rel>__in=<intersected>`` clause is computed (spec-027 Decision 8).
 
         The child ``apply_sync`` runs with ``run_permissions=False``: this
         step only needs the child's filtered, visibility-scoped queryset,
@@ -3436,8 +3438,8 @@ class FilterSet(
         Decision 8 - catches the typed ``SyncMisuseError``
         raised by ``apply_type_visibility_sync`` and rethrows as
         ``RuntimeError`` with the actionable "use apply_async instead"
-        message consumers can match on. Class-based dispatch closes the
-        round-3 loop: no substring-matching against a constant string.
+        message consumers can match on. Class-based dispatch, not
+        substring-matching against a constant string.
         """
         try:
             return cls.apply_sync(input_value, queryset, info)

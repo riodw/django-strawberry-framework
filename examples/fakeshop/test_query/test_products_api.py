@@ -6,7 +6,7 @@ wired in ``apps.products.schema`` end to end:
 * optimizer SQL-shape contracts that are reachable through the real
   products GraphQL API;
 * the per-field ``check_name_permission`` gate on ``CategoryFilter`` (a
-  ``DONE-021-0.0.8`` filter permission hook) -- including the regression
+  ``DONE-027-0.0.8`` filter permission hook) -- including the regression
   guard that the gate now fires for NON-``exact`` lookups (``iContains``),
   not just ``exact``;
 * own-PK Relay ``GlobalID`` filtering (``id: { in: [...] }``) now that the

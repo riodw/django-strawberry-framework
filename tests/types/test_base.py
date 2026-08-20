@@ -396,7 +396,7 @@ def test_definition_fields_class_slot_is_reserved_but_unpopulated():
 
 
 def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
-    """``Meta.filterset_class`` ships in spec-021 (Decision-7 promotion gate)."""
+    """``Meta.filterset_class`` ships per spec-027 Decision 7 (promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
 
     assert "filterset_class" in ALLOWED_META_KEYS
@@ -757,9 +757,9 @@ def test_meta_filterset_class_rejects_non_filterset_value():
 def test_filterset_and_orderset_meta_validators_ride_validate_set_sidecar():
     """Both DjangoType sidecar Meta gates share ``_validate_set_sidecar``.
 
-    The wrappers keep the cycle-safe local imports (spec-028 N3); the
-    subclass check and ``must be {article} {Name} subclass`` wording live
-    once in the shared helper.
+    The wrappers keep the cycle-safe local imports; the subclass check
+    and ``must be {article} {Name} subclass`` wording live once in the
+    shared helper.
     """
     import inspect
 

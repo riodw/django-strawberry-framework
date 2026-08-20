@@ -3,7 +3,7 @@
 ``GenreFilter`` lives in its own module so the
 ``BookFilter.genres = RelatedFilter("apps.library.filters_genre.GenreFilter")``
 declaration in ``filters.py`` exercises Layer-2 absolute-import-path
-resolution per spec-021. The single same-module unqualified-name branch is
+resolution per spec-027. The single same-module unqualified-name branch is
 exercised by every other ``RelatedFilter("XFilter")`` declaration in
 ``filters.py``.
 """

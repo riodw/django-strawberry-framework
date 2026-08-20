@@ -833,7 +833,7 @@ def test_library_relay_node_global_id_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# Live HTTP filter coverage for the library FilterSet declarations (spec-021).
+# Live HTTP filter coverage for the library FilterSet declarations (spec-027).
 # ---------------------------------------------------------------------------
 
 
@@ -858,7 +858,7 @@ def _post_graphql_as_staff(query: str):
 
 @pytest.mark.django_db
 def test_library_branches_filter_by_name_icontains():
-    """Spec-021: scalar-field filter clause + ``iContains`` lookup name."""
+    """Spec-027: scalar-field filter clause + ``iContains`` lookup name."""
     models.Branch.objects.create(name="Andromeda Main", city="Boston")
     models.Branch.objects.create(name="Side Branch", city="Cambridge")
 
@@ -982,7 +982,7 @@ def test_library_branches_not_filter_respects_root_visibility_over_http():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_choice_enum():
-    """Spec-021: choice-enum filter clause coerces via Strawberry enum."""
+    """Spec-027: choice-enum filter clause coerces via Strawberry enum."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     models.Book.objects.create(
@@ -1045,7 +1045,7 @@ def test_library_books_filter_by_choice_enum_in():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_non_relay_fk_scalar_id():
-    """Spec-021: ``ShelfType`` is non-Relay so ``shelf.id`` is a scalar PK."""
+    """Spec-027: ``ShelfType`` is non-Relay so ``shelf.id`` is a scalar PK."""
     branch_a = models.Branch.objects.create(name="Branch A", city="Boston")
     branch_b = models.Branch.objects.create(name="Branch B", city="Cambridge")
     shelf_a = models.Shelf.objects.create(code="A-1", topic="general", branch=branch_a)
@@ -1067,7 +1067,7 @@ def test_library_books_filter_by_non_relay_fk_scalar_id():
 
 @pytest.mark.django_db
 def test_library_books_filter_by_relay_m2m_global_id():
-    """Spec-021: ``GenreType`` is Relay-Node so ``genres.id`` is a GlobalID."""
+    """Spec-027: ``GenreType`` is Relay-Node so ``genres.id`` is a GlobalID."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1350,11 +1350,11 @@ def test_library_genres_filter_mixed_empty_id_in_list_rejects_whole_input_at_ind
 
 @pytest.mark.django_db
 def test_library_branches_filter_by_reverse_fk_lookup():
-    """Spec-021: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
+    """Spec-027: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")
     branch_without = models.Branch.objects.create(name="Without Match", city="Boston")
     # ``BranchFilter.shelves`` carries the explicit ``queryset=Shelf.objects.filter(
-    # topic="permanent collection")`` constraint per spec-021 - seed both
+    # topic="permanent collection")`` constraint per spec-027 - seed both
     # shelves under that topic so only the per-shelf code clause narrows the
     # result; the topic-scope test (#8) inverts this pattern.
     models.Shelf.objects.create(code="A-Main", topic="permanent collection", branch=branch_with)
@@ -1382,7 +1382,7 @@ def test_library_branches_filter_by_reverse_fk_lookup():
 
 @pytest.mark.django_db
 def test_library_books_filter_combines_and_or_not():
-    """Spec-021: ``and_`` / ``not_`` Python attrs surface as ``and`` / ``not``."""
+    """Spec-027: ``and_`` / ``not_`` Python attrs surface as ``and`` / ``not``."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     models.Book.objects.create(
@@ -1420,7 +1420,7 @@ def test_library_books_filter_combines_and_or_not():
 
 @pytest.mark.django_db
 def test_library_books_filter_preserves_optimizer_cooperation():
-    """Spec-021: ``select_related`` / ``prefetch_related`` survive ``.filter(...)``."""
+    """Spec-027: ``select_related`` / ``prefetch_related`` survive ``.filter(...)``."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1461,7 +1461,7 @@ def test_library_books_filter_preserves_optimizer_cooperation():
     # SELECT, a ``select_related("shelf")`` JOINed pull, and the
     # ``prefetch_related("genres")`` SELECT. The filter clause itself
     # adds no additional queries - the count survives ``.filter(...)``
-    # per spec-021.
+    # per spec-027.
     assert len(captured) == 3
     joined_sql = "\n".join(query["sql"] for query in captured)
     assert "library_book" in joined_sql
@@ -1471,7 +1471,7 @@ def test_library_books_filter_preserves_optimizer_cooperation():
 
 @pytest.mark.django_db
 def test_library_branches_filter_respects_related_queryset_boundary_on_parent():
-    """Spec-021: ``RelatedFilter(queryset=...)`` scopes the parent only."""
+    """Spec-027: ``RelatedFilter(queryset=...)`` scopes the parent only."""
     branch_a = models.Branch.objects.create(name="Branch A", city="Cambridge")
     branch_b = models.Branch.objects.create(name="Branch B", city="Cambridge")
     models.Shelf.objects.create(code="A-1", topic="permanent collection", branch=branch_a)
@@ -1502,7 +1502,7 @@ def test_library_branches_filter_respects_related_queryset_boundary_on_parent():
 
 @pytest.mark.django_db
 def test_book_genres_uses_absolute_import_path_related_filter():
-    """Spec-021: ``BookFilter.genres`` resolves via the Layer-2 absolute path."""
+    """Spec-027: ``BookFilter.genres`` resolves via the Layer-2 absolute path."""
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     sci_fi = models.Genre.objects.create(name="SciFi")
@@ -1735,7 +1735,11 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
 
 
 # ---------------------------------------------------------------------------
-# Live HTTP order coverage (spec-028 - 14 acceptance tests).
+# Live HTTP order coverage (spec-028 test plan), plus the row-preserving
+# to-many aggregate cases from ``spec-030-connection_field-0_0_9`` P1-B.
+# 16 test functions / 19 test rows -- the three extra rows come from
+# ``test_library_books_order_by_subtitle_null_positioning``, parametrized
+# over four NULLS directions.
 # ---------------------------------------------------------------------------
 
 
@@ -1785,10 +1789,10 @@ def test_library_branches_order_by_name_asc():
 
     Uses staff context because ``BranchOrder.check_name_permission``
     (declared in ``apps.library.orders``) denies anonymous requests
-    that order by ``name``; the gate is load-bearing for Test 9, and
-    the spec's intent for Test 1 is to assert the ASC ordering
-    contract -- the bypass-on-staff path is the canonical way to
-    exercise the contract while leaving the gate intact.
+    that order by ``name``. That gate is what
+    ``test_order_check_permission_denies_for_active_field`` pins; this
+    test pins the ASC ordering contract instead, so it bypasses the
+    gate on staff rather than re-asserting the denial.
     """
     models.Branch.objects.create(name="Bravo", city="Boston")
     models.Branch.objects.create(name="Alpha", city="Boston")
@@ -2203,18 +2207,12 @@ def test_root_get_queryset_runs_before_order_apply():
     anonymous users so the DESC order clause sees only the visible
     rows. Staff bypass the gate and see all rows ordered.
 
-    Spec line 1038 names ``name: DESC`` as the order field, but
-    ``BranchOrder.check_name_permission`` (declared per spec line
-    1039) denies anonymous queries on ``name`` -- the gate fires
-    before ``get_queryset`` returns rows would matter. To pin the
-    visibility-scope-before-order-arrangement contract without
-    colliding with the ``name`` permission gate, this test orders by
-    ``city: DESC`` (an unguarded scalar). The same Branch+city
-    fixture pinned by the spec proves the contract: the
-    ``city="restricted"`` row is hidden by ``get_queryset`` and so
-    does NOT appear at the head of the descending order list. The
-    relation-gate test's quiet half substitutes ``city`` for ``name``
-    for the same reason - the ``name`` gate would denial-trigger.
+    Orders by ``city`` (an unguarded scalar) rather than ``name``:
+    ``BranchOrder.check_name_permission`` would deny the anonymous
+    half before any row reached the order clause, and the staff client
+    cannot substitute because staff bypass the very ``get_queryset``
+    hook under test. The relation-gate test's quiet half substitutes
+    ``city`` for ``name`` for the same reason.
     """
     models.Branch.objects.create(name="Alpha", city="Boston")
     models.Branch.objects.create(name="Zeta", city="restricted")

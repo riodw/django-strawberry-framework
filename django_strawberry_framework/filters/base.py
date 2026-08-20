@@ -10,7 +10,7 @@ five parity-floor primitives (spec-027 Decision 4):
   annotation is derived later by `convert_filter_to_input_annotation`).
 - `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`: ports of the matching
   Graphene primitive with the decode step substituted to
-  `strawberry.relay.GlobalID.from_id(value)` per Decision 4 M6.
+  `strawberry.relay.GlobalID.from_id(value)` per spec-027 Decision 4.
 - `LazyRelatedClassMixin`: re-exported from the package-root
   `sets_mixins` module (shared with the future order / aggregate sets);
   imported here so `RelatedFilter` and the `filters` public surface keep
@@ -248,9 +248,8 @@ def _marked_pk_field_name(filter_instance: Filter) -> str | None:
     ``f"{self.field_name}__pk"`` DERIVED from the LIVE ``field_name`` at filter time
     (immune to ``_expand_related_filter`` rebasing, per ``_GLOBALID_RELATION_PK_ATTR``);
     every other target keeps the raw ``{field_name__lookup_expr: node_id}`` predicate
-    (``None``). Sharing the derivation keeps the two siblings from drifting apart the
-    way an earlier per-method copy let the empty-``node_id`` guard reach only one of
-    them (round-6 Finding 1).
+    (``None``). Sharing the derivation keeps the two siblings from drifting apart: a
+    per-method copy would let the empty-``node_id`` guard reach only one of them.
     """
     if getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False):
         return f"{filter_instance.field_name}__pk"
@@ -551,7 +550,7 @@ def _decode_and_validate_global_id(
     """Decode `value` to a node id and validate its type and target PK per strategy.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
-    spec-027 #"accept both raw". The accepted `type_name` payload(s) are
+    spec-027 #"Accepts both raw". The accepted `type_name` payload(s) are
     strategy-aware (spec-031 Decision 13): under the resolved owner/target
     definition's recorded `effective_globalid_strategy`, an emitted model-label
     ID round-trips while the old bare GraphQL type name is rejected (and vice
@@ -684,13 +683,13 @@ class GlobalIDFilter(Filter):
 
     Port of `graphene_django/filter/filters/global_id_filter.py::GlobalIDFilter`
     with the decode substituted to `strawberry.relay.GlobalID.from_id(value)`
-    per spec-027 Decision 4 M6. The Graphene-only
+    per spec-027 Decision 4. The Graphene-only
     `GlobalIDFormField` / `GlobalIDMultipleChoiceField` dependencies drop
     away; the default `forms.CharField` (inherited via `Filter.field_class`)
     is used.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
-    spec-027 #"accept both raw". Validates the decoded `type_name` against
+    spec-027 #"Accepts both raw". Validates the decoded `type_name` against
     the strategy-aware accepted set (resolved through the parent filterset's
     `_owner_definition.related_target_for(field_name)`, or the owner
     itself when the filter targets the own PK) per spec-031 Decision 13; a

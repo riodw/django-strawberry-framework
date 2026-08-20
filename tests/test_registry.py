@@ -1615,12 +1615,14 @@ def test_unregister_raises_after_finalize():
 
 
 def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
-    """Both ``except ImportError`` guards in ``clear()`` are best-effort.
+    """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
-    The filter-namespace co-clear uses cycle-safe local imports. If either
-    submodule cannot be imported (forced here by poisoning ``sys.modules``),
-    ``clear()`` skips that block and still clears the registry's own state
-    rather than raising.
+    Every subsystem binds its own teardown callback at ITS import time via
+    ``register_subsystem_clear``, and ``clear()`` replays the already-resolved
+    callables. That replay is the only place a poisoned ``sys.modules`` can be
+    reached at all, and every submodule lookup it makes is best-effort, so
+    poisoning the filter modules (done here) cannot make ``clear()`` raise:
+    the registry's own state is dropped either way (spec-027 Decision 9).
     """
     import sys
 
@@ -1632,8 +1634,10 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
         pass
 
     try:
-        # ``None`` in ``sys.modules`` makes ``from <name> import ...`` raise
-        # ImportError, exercising both guards.
+        # ``None`` in ``sys.modules`` is the shape that makes an import of
+        # either module raise ImportError. ``clear()`` itself runs no import,
+        # so the poisoning can only reach a replayed callback's own
+        # best-effort lookup, which skips rather than propagates.
         sys.modules[inputs_name] = None
         sys.modules[filters_name] = None
         fresh_registry.register(Category, CategoryType)
@@ -1649,14 +1653,18 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
 
 
 def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
-    """Both order-side ``except ImportError`` guards in ``clear()`` are best-effort.
+    """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
-    Order twin of ``test_clear_tolerates_unimportable_filter_submodules``. The
-    order-namespace co-clear (``clear_order_input_namespace`` +
-    ``_helper_referenced_ordersets.clear()``) uses cycle-safe local imports per
-    spec-028 Decision 9. If either order submodule cannot be imported (forced
-    here by poisoning ``sys.modules``), ``clear()`` skips that block and still
-    clears the registry's own state rather than raising.
+    Order twin of ``test_clear_tolerates_unimportable_filter_submodules``.
+    Every subsystem binds its own teardown callback at ITS import time via
+    ``register_subsystem_clear`` -- the order side registers
+    ``clear_order_input_namespace`` and
+    ``_clear_helper_referenced_ordersets`` -- and ``clear()`` replays the
+    already-resolved callables. That replay is the only place a poisoned
+    ``sys.modules`` can be reached at all, and every submodule lookup it
+    makes is best-effort, so poisoning the order modules (done here) cannot
+    make ``clear()`` raise: the registry's own state is dropped either way
+    (spec-028 Decision 9).
     """
     import sys
 
@@ -1668,8 +1676,10 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
         pass
 
     try:
-        # ``None`` in ``sys.modules`` makes ``from <name> import ...`` raise
-        # ImportError, exercising both order-side guards.
+        # ``None`` in ``sys.modules`` is the shape that makes an import of
+        # either module raise ImportError. ``clear()`` itself runs no import,
+        # so the poisoning can only reach a replayed callback's own
+        # best-effort lookup, which skips rather than propagates.
         sys.modules[inputs_name] = None
         sys.modules[orders_name] = None
         fresh_registry.register(Category, CategoryType)

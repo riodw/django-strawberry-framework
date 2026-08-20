@@ -155,8 +155,8 @@ def test_build_logic_fields_uses_inside_list_annotated_for_and_or():
 def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
     """`and` / `or` / `not` are Python keywords -- they ride through `strawberry.field(name=...)`.
 
-    Each carries an explicit ``default=None`` so it stays OPTIONAL under the
-    Finding 2 rule that an omitted ``default`` now builds a REQUIRED field.
+    Each carries an explicit ``default=None`` so it stays OPTIONAL: an
+    omitted ``default`` builds a REQUIRED field.
     """
     triples = _build_logic_fields("X")
     by_attr = {python_attr: kwargs for python_attr, _, kwargs in triples}
@@ -1302,7 +1302,7 @@ def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_
     """A flat ``<rel>__<field>`` whose root is NOT a declared ``RelatedFilter`` survives.
 
     The guard only trims expansions of declared ``RelatedFilter`` relations; an explicit
-    ``Meta.fields`` traversal with no nested alternative (spec-021's intentional flat
+    ``Meta.fields`` traversal with no nested alternative (spec-027's intentional flat
     shape) stays visible even when ``HIDE_FLAT_FILTERS=True``.
     """
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
@@ -1415,15 +1415,21 @@ def test_range_input_type_name_preserves_digit_boundary_in_field_name():
 
 
 def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
-    """Both ImportError guards are best-effort: a broken import is skipped."""
+    """Both submodule lookups on the clear path are best-effort: skip, never raise.
+
+    The heavy clear reaches ``FilterArgumentsFactory`` and ``FilterSet``
+    through ``utils/inputs.py::_safe_import``, so an unimportable module
+    yields ``None`` and only its dependent reset is skipped; the reachable
+    ledger reset still completes (spec-027 Decision 9).
+    """
     import sys
 
     factories_name = "django_strawberry_framework.filters.factories"
     sets_name = "django_strawberry_framework.filters.sets"
     saved = {name: sys.modules.get(name) for name in (factories_name, sets_name)}
     try:
-        # Setting the module entry to ``None`` makes ``from ... import ...``
-        # raise ImportError, exercising both ``except ImportError`` guards.
+        # Setting the module entry to ``None`` makes the best-effort lookup of
+        # each module raise ImportError internally, exercising both skips.
         sys.modules[factories_name] = None
         sys.modules[sets_name] = None
         # Must not raise even though neither submodule can be imported.

@@ -772,8 +772,8 @@ def create_dynamic_set_class(
 
     Replaces graphene-django's ``custom_filterset_factory`` (which the cookbook
     reaches for) with a plain ``type(name, (set_base_class,), {"Meta": meta})``
-    call. Spec-027 line 247 explicitly drops the ``replace_csv_filters`` rewrap
-    -- Strawberry's typed input handles ``list[T]`` natively. The order twin
+    call. Spec-027 explicitly drops the ``replace_csv_filters`` rewrap --
+    Strawberry's typed input handles ``list[T]`` natively. The order twin
     uses the same ``type(...)`` construction (no cookbook counterpart).
     """
     model = safe_meta.get("model")

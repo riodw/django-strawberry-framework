@@ -1223,7 +1223,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     First binding writes ``filterset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(filterset_cls, definition)``
     pair is idempotent (supports partial-finalize recovery per spec-027
-    Decision 6 #"Partial-finalize lifecycle"). A second, distinct owner triggers the
+    Decision 9). A second, distinct owner triggers
     the strict-equality check (``_check_filterset_owner_axes``) across the
     owner-dependent axes:
 

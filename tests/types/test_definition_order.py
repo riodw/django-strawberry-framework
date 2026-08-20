@@ -1444,9 +1444,9 @@ def test_filterset_class_resolves_across_module_boundary():
     Imports both fixture modules under fresh ``sys.modules`` keys so the
     module bodies (which declare ``DjangoType`` plus ``FilterSet`` and
     register them against the global registry) run inside this test
-    after the autouse-fixture ``registry.clear()``. Pins spec-021
-    The contract that the finalizer's filter-binding pass works
-    across module boundaries without ``ImportError``.
+    after the autouse-fixture ``registry.clear()``. Pins the spec-027
+    contract that the finalizer's filter-binding pass works across
+    module boundaries without ``ImportError``.
     """
     # Drop any previously-imported fixture module objects so the next
     # import triggers a fresh execution that re-registers under the

@@ -1,7 +1,7 @@
 """Cross-module fixture declaring ShelfType and ShelfFilter together.
 
 Paired with ``branch_module`` to exercise the cross-module
-``Meta.filterset_class`` resolution path under spec-021.
+``Meta.filterset_class`` resolution path under spec-027.
 """
 
 from __future__ import annotations

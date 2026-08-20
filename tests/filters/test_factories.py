@@ -528,7 +528,7 @@ def test_dynamic_filterset_cache_collapses_exclude_order():
 
 @pytest.mark.django_db
 def test_dynamic_filterset_cache_does_not_replace_csv_filters():
-    """Per spec line 247, the cookbook's ``replace_csv_filters`` rewrap is dropped.
+    """The cookbook's ``replace_csv_filters`` rewrap is dropped per spec-027.
 
     `Meta.fields = {"name": ["in"]}` -> the resulting filter is the
     upstream `django-filter` default (with the inherited list shape),

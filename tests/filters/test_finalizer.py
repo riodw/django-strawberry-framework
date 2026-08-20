@@ -15,7 +15,7 @@ Covers:
   ``_helper_referenced_filtersets`` set, and the ``_field_specs`` map.
 - ``registry.clear()`` runs without ``ImportError`` when the filters
   package was never imported (subprocess test pins the cycle-safe
-  contract per spec-021 line 822).
+  contract per spec-027 Decision 9).
 - Unresolved ``RelatedFilter`` propagates as ``ConfigurationError``.
 """
 
@@ -310,10 +310,9 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
 def test_phase_2_5_accepts_multi_owner_with_identical_target():
     """Two distinct owner definitions sharing one ``FilterSet`` succeed when targets match.
 
-    Pins the strict-equality walk through ``related_filters``
-    (per spec-021 line 1030's companion to
-    ``test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity``). The
-    pre-existing
+    Pins the strict-equality walk through ``related_filters`` (the companion to
+    `tests/filters/test_finalizer.py::test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity`).
+    The pre-existing
     ``test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair``
     only exercises the ``previous is definition`` identity short-circuit
     in ``_bind_filterset_owner``; this test forces two distinct
@@ -330,8 +329,8 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     ``(ShelfDefinition, <ForeignKey>)`` from both owner contexts, the
     target ``DjangoTypeDefinition`` identity matches, and the
     ``_graphql_type_name`` strings match. Assert: no raise, and the
-    ``_owner_definition`` slot stores the FIRST binding per spec-021
-    line 665.
+    ``_owner_definition`` slot stores the FIRST binding
+    (`django_strawberry_framework/types/finalizer.py::_bind_filterset_owner`).
     """
 
     class ShelfFilter(FilterSet):
@@ -392,9 +391,10 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     # the strict-equality walk - not the ``previous is definition``
     # short-circuit - is what accepted the second binding.
     assert primary_definition is not secondary_definition
-    # The ``_owner_definition`` slot stores the FIRST binding per spec-021
-    # line 665. Iteration order from ``registry.iter_definitions()`` is
-    # registration order, so ``PrimaryBookType`` (declared first) wins.
+    # The ``_owner_definition`` slot stores the FIRST binding
+    # (`django_strawberry_framework/types/finalizer.py::_bind_filterset_owner`).
+    # Iteration order from ``registry.iter_definitions()`` is registration
+    # order, so ``PrimaryBookType`` (declared first) wins.
     assert BookFilter._owner_definition is primary_definition
 
 
@@ -792,13 +792,13 @@ def test_registry_clear_works_without_filters_imported():
 def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     """A ``RelatedFilter("UnknownFilter")`` propagates as ``ConfigurationError``.
 
-    ``LazyRelatedClassMixin.resolve_lazy_class`` raises
-    ``ImportError`` at Layer-2 resolution time. The phase-2.5 binding
-    pass re-wraps the ``ImportError`` as ``ConfigurationError`` per
-    spec-021 lines 416 + 1030 and the package's "finalize-time errors
-    are ``ConfigurationError``" convention; the original
-    ``ImportError`` is preserved on ``__cause__`` so the failure mode
-    is loud AND grep-stable against the sibling formatter convention.
+    ``LazyRelatedClassMixin.resolve_lazy_class`` raises ``ImportError``
+    at Layer-2 resolution time (spec-027 Decision 3 Layer 2). The
+    phase-2.5 binding pass re-wraps it as ``ConfigurationError`` per the
+    package's "finalize-time errors are ``ConfigurationError``"
+    convention; the original ``ImportError`` is preserved on
+    ``__cause__`` so the failure mode is loud AND grep-stable against
+    the sibling formatter convention.
     """
 
     class BookFilter(FilterSet):

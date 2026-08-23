@@ -345,7 +345,7 @@ def _collect_exceptions(execution_result: Any) -> "list[_DebugExceptionRow]":
     """
     if execution_result is None:
         return []
-    errors = execution_result.errors
+    errors = getattr(execution_result, "errors", None)
     if errors is None:
         return []
     rows: list[_DebugExceptionRow] = []

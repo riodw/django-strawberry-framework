@@ -1828,3 +1828,51 @@ def test_djangolistfield_max_rows_narrows_the_request_policy() -> None:
     result = schema.execute_sync("{ allCategories { id name } }")
     assert result.errors is None, result.errors
     assert len(result.data["allCategories"]) == 1
+
+
+@pytest.mark.django_db
+def test_djangolistfield_consumer_resolver_returning_none_sync() -> None:
+    """Consumer resolver returning None on a nullable list field resolves to None without error."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _resolver(root, info):
+        return None
+
+    @strawberry.type
+    class Query:
+        categories: list[CategoryType] | None = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ categories { id name } }")
+    assert result.errors is None, result.errors
+    assert result.data == {"categories": None}
+
+
+@pytest.mark.django_db
+async def test_djangolistfield_consumer_resolver_returning_none_async() -> None:
+    """Async consumer resolver returning None on a nullable list field resolves to None without error."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    async def _resolver(root, info):
+        return None
+
+    @strawberry.type
+    class Query:
+        categories: list[CategoryType] | None = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ categories { id name } }")
+    assert result.errors is None, result.errors
+    assert result.data == {"categories": None}

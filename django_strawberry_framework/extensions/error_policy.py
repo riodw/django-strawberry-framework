@@ -73,14 +73,17 @@ __all__ = [
 ]
 
 
-def _is_unexpected(error: GraphQLError) -> bool:
+def _is_unexpected(error: Any) -> bool:
     """Whether ``error`` reached the wire by accident (spec-048 Decision 8).
 
     Three cases, in the order graphql-core produces them:
 
-    - ``original_error is None`` - a parse, syntax, or validation error, or an
-      error graphql-core constructed itself with nothing behind it. Nothing
-      raised it; its message describes the client's own request. Not masked.
+    - non-``GraphQLError`` - any arbitrary error object or plain Python exception
+      present in ``errors``. Masked.
+    - ``original_error is None`` on a ``GraphQLError`` - a parse, syntax, or
+      validation error, or an error graphql-core constructed itself with
+      nothing behind it. Nothing raised it; its message describes the client's
+      own request. Not masked.
     - ``original_error`` IS a ``GraphQLError`` - something raised a GraphQL error
       deliberately. Every framework rejection does this (the invalid-GlobalID
       boundary, the resource bounds, the connection / keyset / filter argument
@@ -108,13 +111,15 @@ def _is_unexpected(error: GraphQLError) -> bool:
     site and fails OPEN when it is not, while this fails CLOSED for every new
     exception type the package or a consumer ever raises.
     """
-    original = error.original_error
+    if not isinstance(error, GraphQLError):
+        return True
+    original = getattr(error, "original_error", None)
     if original is None:
         return False
     return not isinstance(original, GraphQLError)
 
 
-def _masked(error: GraphQLError, policy: ErrorPolicy) -> GraphQLError:
+def _masked(error: Any, policy: ErrorPolicy) -> GraphQLError:
     """Return the client-safe replacement for one unexpected ``error``.
 
     The location information - ``nodes``, ``source``, ``positions``, and ``path``
@@ -125,18 +130,21 @@ def _masked(error: GraphQLError, policy: ErrorPolicy) -> GraphQLError:
     the parts written by whatever raised.
     """
     correlation_id = new_correlation_id()
+    original_error = getattr(error, "original_error", None) or (
+        error if isinstance(error, Exception) else None
+    )
     logger.error(
         "Unhandled exception during GraphQL execution; the client received the "
         "policy message and correlation id %s.",
         correlation_id,
-        exc_info=error.original_error,
+        exc_info=original_error,
     )
     return GraphQLError(
         message=policy.message,
-        nodes=error.nodes,
-        source=error.source,
-        positions=error.positions,
-        path=error.path,
+        nodes=getattr(error, "nodes", None),
+        source=getattr(error, "source", None),
+        positions=getattr(error, "positions", None),
+        path=getattr(error, "path", None),
         original_error=None,
         extensions={policy.correlation_extension_key: correlation_id},
     )
@@ -152,7 +160,8 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     because there is no exception this one could be resolved to in the log. The
     server-side log record names the failure instead.
     """
-    return GraphQLError(message=policy.message)
+    message = getattr(policy, "message", "An unexpected error occurred.")
+    return GraphQLError(message=message)
 
 
 def masking_is_active(policy: ErrorPolicy) -> bool:
@@ -204,7 +213,10 @@ def schema_error_policy(schema: Any) -> ErrorPolicy:
     must not become a no-op because it could not find its configuration.
     ``DjangoSchema`` always supplies a valid one, validated at construction.
     """
-    policy = getattr(schema, "error_policy", None)
+    try:
+        policy = getattr(schema, "error_policy", None)
+    except Exception:
+        return DEFAULT_ERROR_POLICY
     return policy if isinstance(policy, ErrorPolicy) else DEFAULT_ERROR_POLICY
 
 
@@ -233,8 +245,9 @@ def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
         errors = result.errors
         if not errors:
             return result
-        replacements = [_replacement_for(error, policy) for error in errors]
-        if all(new is old for new, old in zip(replacements, errors, strict=True)):
+        errors_list = list(errors)
+        replacements = [_replacement_for(error, policy) for error in errors_list]
+        if all(new is old for new, old in zip(replacements, errors_list, strict=True)):
             return result
         masked = copy.copy(result)
         masked.errors = replacements
@@ -277,7 +290,8 @@ class DjangoErrorPolicyExtension(SchemaExtension):
 
     def _policy(self) -> ErrorPolicy:
         """The schema's resolved policy, or the package default."""
-        return schema_error_policy(self.execution_context.schema)
+        schema = getattr(getattr(self, "execution_context", None), "schema", None)
+        return schema_error_policy(schema)
 
     def _process_result(self, result: Any, policy: ErrorPolicy) -> None:
         """Adopt the masked result onto the value the transport will render.
@@ -321,9 +335,27 @@ class DjangoErrorPolicyExtension(SchemaExtension):
         what it excludes.
         """
         yield
-        policy = self._policy()
-        if not masking_is_active(policy):
-            return
-        result = self.execution_context.result
-        if is_maskable_result(result):
-            self._process_result(result, policy)
+        try:
+            policy = self._policy()
+            if not masking_is_active(policy):
+                return
+            result = getattr(getattr(self, "execution_context", None), "result", None)
+            if is_maskable_result(result):
+                self._process_result(result, policy)
+        except Exception:
+            logger.exception(
+                "The error policy encountered an unhandled exception during teardown; "
+                "the response degrades to the policy message alone (fail closed).",
+            )
+            try:
+                policy = self._policy()
+            except Exception:
+                policy = DEFAULT_ERROR_POLICY
+            try:
+                if hasattr(self, "execution_context") and self.execution_context is not None:
+                    self.execution_context.result = StrawberryExecutionResult(
+                        data=None,
+                        errors=[_degraded(policy)],
+                    )
+            except Exception:
+                pass

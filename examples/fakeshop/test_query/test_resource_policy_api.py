@@ -424,6 +424,31 @@ def test_membership_list_at_the_bound_is_not_rejected():
 
 
 @pytest.mark.django_db
+def test_variable_default_value_in_operation_header_is_rejected_when_omitted():
+    """Variable default values written in document operation header must be charged if omitted from variables."""
+    query = (
+        'query MyQuery($ids: [String!] = ["1", "2", "3", "4", "5"]) { '
+        "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
+        "}"
+    )
+    extensions = _rejection(_post("/rp-values/", query, {}))
+    assert extensions["bound"] == "max_membership_items"
+    assert extensions["charged"] == MAX_MEMBERSHIP + 1
+
+
+@pytest.mark.django_db
+def test_variable_default_value_in_operation_header_ignored_when_overridden():
+    """When a variable is explicitly passed, its runtime value is charged instead of the default value."""
+    query = (
+        'query MyQuery($ids: [String!] = ["1", "2", "3", "4", "5"]) { '
+        "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
+        "}"
+    )
+    # Explicit 2 items passed should pass max_membership_items=4:
+    _no_rejection(_post("/rp-values/", query, {"ids": ["1", "2"]}))
+
+
+@pytest.mark.django_db
 def test_a_wide_filter_tree_is_charged_by_container_width():
     """An ``and``/``or`` tree's WIDTH is bounded, not only its depth."""
     branches = ", ".join('{ name: { exact: "x" } }' for _ in range(MAX_CONTAINER_WIDTH + 1))

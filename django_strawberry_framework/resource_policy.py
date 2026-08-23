@@ -130,6 +130,20 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         self.bound = bound
         self.limit = limit
         self.charged = charged
+        self.detail = detail
+
+    def __reduce__(self) -> tuple[object, ...]:
+        """Preserve constructor arguments and instance state across pickle roundtrips."""
+        return (
+            self.__class__,
+            (
+                self.bound,
+                self.limit,
+                self.charged,
+                self.detail,
+            ),
+            self.__dict__,
+        )
 
 
 @dataclass(frozen=True)
@@ -456,6 +470,8 @@ def bounded_rows(
     values that make it larger.
     """
     check_deadline(info)
+    if result is None:
+        return None
     limit = effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
     try:
         return result[:limit]

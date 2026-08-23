@@ -354,8 +354,16 @@ class _ValueBudget:
             width,
             "a list argument is wider than the policy allows",
         )
-        item_type = node_type.of_type if isinstance(node_type, GraphQLList) else None
-        self._charge_list_family(item_type, width, in_mutation=in_mutation, argument=argument)
+        if isinstance(node_type, GraphQLList):
+            self._charge_list_family(
+                node_type.of_type,
+                width,
+                in_mutation=in_mutation,
+                argument=argument,
+            )
+            item_type = node_type.of_type
+        else:
+            item_type = None
         child_path = (*path, value)
         stack.extend((item_type, item, child_path) for item in value)
         return True
@@ -441,6 +449,12 @@ class _ValueBudget:
             self._reject(
                 "max_scalar_bytes",
                 len(value.encode("utf-8", errors="surrogatepass")),
+                "a scalar value is larger than the policy allows",
+            )
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            self._reject(
+                "max_scalar_bytes",
+                getattr(value, "nbytes", len(value)),
                 "a scalar value is larger than the policy allows",
             )
 
@@ -557,7 +571,7 @@ def _field_definition(graphql_schema: Any, parent_type: Any, name: str) -> Any:
     """
     if name == _TYPENAME_META_FIELD:
         return TypeNameMetaFieldDef
-    if graphql_schema.query_type is parent_type:
+    if parent_type is not None and graphql_schema.query_type is parent_type:
         if name == _SCHEMA_META_FIELD:
             return SchemaMetaFieldDef
         if name == _TYPE_META_FIELD:
@@ -642,8 +656,8 @@ def charge_document(
     policy: ResourcePolicy,
     graphql_schema: Any,
     document: Any,
-    variables: Mapping[str, Any],
-    operation_name: str | None,
+    variables: Mapping[str, Any] | None = None,
+    operation_name: str | None = None,
 ) -> None:
     """Charge one request's document shape and argument values, iteratively.
 
@@ -653,6 +667,7 @@ def charge_document(
     which this pass may meet under a schema that disabled validation - terminates
     instead of looping.
     """
+    safe_variables = variables if variables is not None else {}
     fragments = {
         definition.name.value: definition
         for definition in document.definitions
@@ -670,6 +685,11 @@ def charge_document(
         root = _root_type(graphql_schema, operation.operation)
         if root is None:
             continue
+        op_variables = dict(safe_variables)
+        for var_def in operation.variable_definitions or ():
+            var_name = var_def.variable.name.value
+            if var_name not in op_variables and var_def.default_value is not None:
+                op_variables[var_name] = value_from_ast_untyped(var_def.default_value)
         in_mutation = operation.operation is OperationType.MUTATION
         # (node, parent type, cost multiplier, fragment spread path)
         stack: list[tuple[Any, Any, int, frozenset[str]]] = [
@@ -725,12 +745,12 @@ def charge_document(
                     continue
                 values.charge(
                     argument_def.type,
-                    value_from_ast_untyped(argument.value, variables),
+                    value_from_ast_untyped(argument.value, op_variables),
                     in_mutation=in_mutation,
                     argument=argument.name.value,
                 )
             child_multiplier = multiplier
-            rows = _collection_rows(policy, parent, field_def.type, node, variables)
+            rows = _collection_rows(policy, parent, field_def.type, node, op_variables)
             if rows is not None:
                 child_multiplier = multiplier * rows
                 budget.charge_collection(child_multiplier)

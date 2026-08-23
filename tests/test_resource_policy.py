@@ -29,7 +29,9 @@ where they matter. What is left here is the surface a request cannot express:
 
 from __future__ import annotations
 
+import copy
 import math
+import pickle
 import time
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
@@ -502,6 +504,18 @@ async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_erro
         await bounded_rows_async(BrokenCleanupRows(), info)
 
 
+def test_bounded_rows_preserves_none():
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    assert bounded_rows(None, info) is None
+
+
+async def test_bounded_rows_async_preserves_none():
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    assert await bounded_rows_async(None, info) is None
+
+
 # ---------------------------------------------------------------------------
 # The pre-parse text scan
 # ---------------------------------------------------------------------------
@@ -926,3 +940,175 @@ def test_a_measurable_upload_is_charged_its_bytes():
             policy=ResourcePolicy(max_upload_file_bytes=9),
         )
     assert caught.value.charged == 10
+
+
+def test_resource_limit_exceeded_pickle_and_copy_fidelity():
+    """ResourceLimitExceeded roundtrips through pickle, copy, and deepcopy preserving attributes."""
+    exc = ResourceLimitExceeded("max_depth", 10, 15, "query depth 15 exceeds 10")
+    exc.custom_tag = "tagged"
+
+    # Pickle serialization roundtrip
+    restored = pickle.loads(pickle.dumps(exc))
+    assert isinstance(restored, ResourceLimitExceeded)
+    assert restored.bound == "max_depth"
+    assert restored.limit == 10
+    assert restored.charged == 15
+    assert restored.detail == "query depth 15 exceeds 10"
+    assert getattr(restored, "custom_tag", None) == "tagged"
+    assert str(restored) == str(exc)
+
+    # copy and deepcopy
+    copied = copy.copy(exc)
+    assert isinstance(copied, ResourceLimitExceeded)
+    assert copied.bound == "max_depth"
+    assert copied.limit == 10
+    assert copied.charged == 15
+    assert copied.detail == "query depth 15 exceeds 10"
+    assert getattr(copied, "custom_tag", None) == "tagged"
+
+    deep_copied = copy.deepcopy(exc)
+    assert isinstance(deep_copied, ResourceLimitExceeded)
+    assert deep_copied.bound == "max_depth"
+    assert deep_copied.limit == 10
+    assert deep_copied.charged == 15
+    assert deep_copied.detail == "query depth 15 exceeds 10"
+    assert getattr(deep_copied, "custom_tag", None) == "tagged"
+
+
+def test_an_untyped_container_list_is_not_classified_as_membership_list():
+    """An untyped JSON list is not a typed GraphQL list, so it carries no membership bound."""
+    document = "query B($p: JSON!) { blob(payload: $p) }"
+    # 4 items > max_membership_items (2), but <= max_container_width (10)
+    _charge(
+        document,
+        {
+            "p": [
+                1,
+                2,
+                3,
+                4,
+            ],
+        },
+        policy=ResourcePolicy(max_membership_items=2, max_container_width=10),
+    )
+    # Exceeding max_container_width (3) is rejected under max_container_width
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            document,
+            {
+                "p": [
+                    1,
+                    2,
+                    3,
+                    4,
+                ],
+            },
+            policy=ResourcePolicy(max_membership_items=2, max_container_width=3),
+        )
+    assert caught.value.bound == "max_container_width"
+
+
+def test_binary_scalar_values_are_bounded_by_max_scalar_bytes():
+    """bytes, bytearray, and memoryview scalar payloads are bounded by byte length."""
+    document = "query B($p: JSON!) { blob(payload: $p) }"
+    _charge(document, {"p": b"short"}, policy=ResourcePolicy(max_scalar_bytes=10))
+    _charge(document, {"p": bytearray(b"short")}, policy=ResourcePolicy(max_scalar_bytes=10))
+    _charge(document, {"p": memoryview(b"short")}, policy=ResourcePolicy(max_scalar_bytes=10))
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(document, {"p": b"0123456789abcde"}, policy=ResourcePolicy(max_scalar_bytes=10))
+    assert caught.value.bound == "max_scalar_bytes"
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            document,
+            {"p": bytearray(b"0123456789abcde")},
+            policy=ResourcePolicy(max_scalar_bytes=10),
+        )
+    assert caught.value.bound == "max_scalar_bytes"
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            document,
+            {"p": memoryview(b"0123456789abcde")},
+            policy=ResourcePolicy(max_scalar_bytes=10),
+        )
+    assert caught.value.bound == "max_scalar_bytes"
+
+
+def test_charge_document_accepts_none_variables():
+    """charge_document safely accepts variables=None."""
+    charge_document(
+        DEFAULT_RESOURCE_POLICY,
+        _PROBE_SCHEMA._schema,
+        parse("{ echo }"),
+        None,
+        None,
+    )
+
+
+def test_field_definition_with_none_parent_type():
+    """_field_definition safely handles None parent_type when schema query_type is None."""
+    from django_strawberry_framework.extensions.resource_policy import _field_definition
+
+    fake_schema = SimpleNamespace(query_type=None)
+    assert _field_definition(fake_schema, None, "__schema") is None
+
+
+def test_variable_default_values_are_charged_when_variable_omitted():
+    """Default values declared in operation variable definitions are charged if omitted from runtime variables."""
+    document = (
+        'query WithDefaults($tags: [String!] = ["a", "b", "c", "d", "e"]) { echo(tags: $tags) }'
+    )
+    _charge(document, variables={}, policy=ResourcePolicy(max_membership_items=5))
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(document, variables={}, policy=ResourcePolicy(max_membership_items=4))
+    assert caught.value.bound == "max_membership_items"
+    assert caught.value.charged == 5
+
+
+def test_variable_default_values_not_used_when_variable_explicitly_passed():
+    """When a variable is explicitly provided, its runtime value is charged instead of the default value."""
+    document = (
+        'query WithDefaults($tags: [String!] = ["a", "b", "c", "d", "e"]) { echo(tags: $tags) }'
+    )
+    # Explicit 2 items passed should pass max_membership_items=3 even though default is 5:
+    _charge(
+        document,
+        variables={"tags": ["a", "b"]},
+        policy=ResourcePolicy(max_membership_items=3),
+    )
+    # Explicit 4 items passed should fail max_membership_items=3 with charged=4:
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            document,
+            variables={
+                "tags": [
+                    "a",
+                    "b",
+                    "c",
+                    "d",
+                ],
+            },
+            policy=ResourcePolicy(max_membership_items=3),
+        )
+    assert caught.value.bound == "max_membership_items"
+    assert caught.value.charged == 4
+
+
+def test_memoryview_multibyte_buffer_charged_by_nbytes():
+    """Multibyte memoryview payloads are bounded by true byte size (nbytes), not element count."""
+    import array
+
+    arr = array.array("i", range(10))  # 10 32-bit ints = 40 bytes
+    mv = memoryview(arr)
+    assert len(mv) == 10
+    assert mv.nbytes == 40
+
+    document = "query B($p: JSON!) { blob(payload: $p) }"
+    _charge(document, {"p": mv}, policy=ResourcePolicy(max_scalar_bytes=40))
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(document, {"p": mv}, policy=ResourcePolicy(max_scalar_bytes=39))
+    assert caught.value.bound == "max_scalar_bytes"
+    assert caught.value.charged == 40

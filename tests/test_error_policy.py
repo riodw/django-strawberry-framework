@@ -31,6 +31,7 @@ it matters. What is left here is the surface a request cannot express:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from types import SimpleNamespace
 
@@ -529,6 +530,17 @@ def test_an_absent_attribute_and_a_real_policy_are_both_read_correctly():
     assert schema_error_policy(SimpleNamespace(error_policy=policy)) is policy
 
 
+def test_a_raising_schema_error_policy_property_falls_back_to_the_default():
+    """A descriptor or property on schema that raises falls back to the masking default."""
+
+    class _RaisingSchema:
+        @property
+        def error_policy(self):
+            raise RuntimeError("Hostile error_policy read")
+
+    assert schema_error_policy(_RaisingSchema()) is DEFAULT_ERROR_POLICY
+
+
 # ---------------------------------------------------------------------------
 # Masking degrades CLOSED
 # ---------------------------------------------------------------------------
@@ -671,6 +683,75 @@ def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(caplog
     assert any(record.exc_info for record in caplog.records)
 
 
+def test_a_non_graphql_error_with_none_original_error_is_masked_as_unexpected():
+    """Any non-GraphQLError object in errors is classified as unexpected and masked."""
+
+    class _CustomError:
+        message = _SENSITIVE
+        original_error = None
+
+    error = _CustomError()
+    result = StrawberryExecutionResult(data={"data": 123}, errors=[error])
+    masked = mask_execution_result(result, DEFAULT_ERROR_POLICY)
+
+    assert masked.data == {"data": 123}
+    assert len(masked.errors) == 1
+    assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert _SENSITIVE not in str(masked.errors[0].message)
+
+
+def test_a_generator_or_iterator_error_list_is_masked_preserving_data():
+    """An iterator or generator on result.errors is consumed safely without crashing zip."""
+    original = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))
+    result = StrawberryExecutionResult(
+        data={"safe_field": 42},
+        errors=(err for err in [original]),
+    )
+    masked = mask_execution_result(result, DEFAULT_ERROR_POLICY)
+
+    assert masked.data == {"safe_field": 42}
+    assert len(masked.errors) == 1
+    assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+
+
+def test_the_extension_teardown_fails_closed_when_context_schema_raises(caplog):
+    """If extension teardown encounters a hostile schema or context, it degrades safely."""
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    extension = DjangoErrorPolicyExtension()
+
+    class _HostileContext:
+        @property
+        def schema(self):
+            raise RuntimeError("Hostile schema lookup")
+
+        @property
+        def result(self):
+            return StrawberryExecutionResult(
+                data={"leak": _SENSITIVE},
+                errors=[GraphQLError(_SENSITIVE, original_error=RuntimeError(_SENSITIVE))],
+            )
+
+        @result.setter
+        def result(self, val):
+            self._result = val
+
+    ctx = _HostileContext()
+    extension.execution_context = ctx
+
+    gen = extension.on_operation()
+    next(gen)
+    with contextlib.suppress(StopIteration):
+        next(gen)
+
+    assert hasattr(ctx, "_result")
+    assert ctx._result.data is None
+    assert ctx._result.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert any(
+        "The error policy encountered an unhandled exception during teardown" in r.message
+        for r in caplog.records
+    )
+
+
 # ---------------------------------------------------------------------------
 # The per-event seam's contract with the extensions that read originals
 # ---------------------------------------------------------------------------
@@ -710,3 +791,38 @@ def test_masking_leaves_the_original_result_holding_its_originals():
     assert isinstance(result.errors[0].original_error, ValueError)
     assert masked.data == {"leaky": None}
     assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+
+
+def test_error_policy_extension_on_operation_exploding_execution_context():
+    """Execution context with exploding result setter is safely ignored during exception handling."""
+    from django_strawberry_framework.extensions.error_policy import (
+        DjangoErrorPolicyExtension,
+    )
+
+    ext = DjangoErrorPolicyExtension()
+
+    call_count = 0
+
+    def _exploding_policy():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("first policy call explodes")
+        return DEFAULT_ERROR_POLICY
+
+    ext._policy = _exploding_policy
+
+    class ExplodingExecutionContext:
+        @property
+        def result(self):
+            return None
+
+        @result.setter
+        def result(self, val):
+            raise RuntimeError("cannot set result")
+
+    ext.execution_context = ExplodingExecutionContext()
+    gen = ext.on_operation()
+    next(gen)
+    with contextlib.suppress(StopIteration):
+        next(gen)

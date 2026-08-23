@@ -132,12 +132,20 @@ def test_subclass_without_meta_passes_through():
 
 
 def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class():
-    """The helper is defensive for classes outside the DjangoType hierarchy."""
+    """The helper is defensive for classes and objects outside the DjangoType hierarchy."""
 
     class PlainType:
         pass
 
+    class PlainTypeWithGetQueryset:
+        def get_queryset(self):
+            pass
+
     assert _detect_custom_get_queryset(PlainType) is False
+    assert _detect_custom_get_queryset(PlainTypeWithGetQueryset) is False
+    assert _detect_custom_get_queryset(None) is False
+    assert _detect_custom_get_queryset(123) is False
+    assert _detect_custom_get_queryset("not_a_type") is False
 
 
 def test_meta_required_model_raises_when_missing():
@@ -180,6 +188,35 @@ def test_meta_optimizer_hints_must_be_mapping_when_declared():
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
                 optimizer_hints = []
+
+
+def test_meta_optimizer_hints_rejects_non_string_keys():
+    with pytest.raises(
+        ConfigurationError,
+        match="Meta.optimizer_hints keys must be field name strings",
+    ):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ["items"]
+                optimizer_hints = {123: OptimizerHint.prefetch_related()}
+
+
+def test_meta_optimizer_hints_rejects_mixed_non_string_keys_safely():
+    with pytest.raises(
+        ConfigurationError,
+        match="Meta.optimizer_hints keys must be field name strings",
+    ):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ["items"]
+                optimizer_hints = {
+                    "unknown_field": OptimizerHint.prefetch_related(),
+                    123: OptimizerHint.prefetch_related(),
+                }
 
 
 class _HostileMetaValue:
@@ -2447,3 +2484,26 @@ def test_meta_cursor_field_finalization_validates_columns():
 
     with pytest.raises(ConfigurationError, match="must end in a unique column"):
         finalize_django_types()
+
+
+def test_has_custom_get_queryset_with_subclasscheck_without_mro():
+    from django_strawberry_framework.types.base import _detect_custom_get_queryset
+
+    class FakeMeta(type):
+        def __subclasscheck__(cls, subclass):
+            return True
+
+    class FakeType(metaclass=FakeMeta):
+        pass
+
+    assert not _detect_custom_get_queryset(FakeType)
+
+
+def test_validate_optimizer_hints_non_string_keys():
+    from django_strawberry_framework.types.base import _validate_optimizer_hints
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Meta.optimizer_hints keys must be field name strings",
+    ):
+        _validate_optimizer_hints({123: OptimizerHint()}, fields=(), model=Category)

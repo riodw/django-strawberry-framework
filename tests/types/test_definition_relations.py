@@ -597,3 +597,37 @@ def test_framework_id_resolver_guard_survives_hostile_descriptor():
             raise RuntimeError("descriptor should not escape")
 
     assert _is_framework_relay_id_resolver(HostileResolver()) is False
+
+
+def test_definition_equality_ignores_memoization_caches():
+    """Internal memoization caches do not participate in dataclass equality."""
+
+    class DummyType:
+        pass
+
+    d1 = _malformed_definition(origin=DummyType)
+    d2 = _malformed_definition(origin=DummyType)
+
+    assert d1 == d2
+
+    # Populate cache on d1
+    assert d1.has_custom_id_resolver_for("id") is False
+    assert d1._custom_id_resolver_cache == {"id": False}
+    assert d2._custom_id_resolver_cache == {}
+
+    # Dataclass equality ignores private cache fields
+    assert d1 == d2
+
+    # Cyclic caches also do not break equality
+    fake_field = Book._meta.get_field("shelf")
+    d1._related_target_cache["shelf"] = (d2, fake_field)
+    d2._related_target_cache["shelf"] = (d1, fake_field)
+    assert d1 == d2
+
+
+def test_custom_id_resolver_guards_reject_empty_pk_names():
+    """Empty primary-key names fail closed without polluting cache."""
+    definition = _malformed_definition(origin=Book)
+    assert definition.has_custom_id_resolver_for("") is False
+    assert origin_has_custom_id_resolver(Book, "") is False
+    assert "" not in definition._custom_id_resolver_cache

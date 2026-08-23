@@ -176,7 +176,8 @@ class DjangoMutationExecutionContext(ExecutionContext):
         if mutation_cls is None:
             return super().execute_field(parent_type, source, field_nodes, path)
 
-        alias = resolve_write_alias(mutation_cls._mutation_meta.model)
+        model = getattr(getattr(mutation_cls, "_mutation_meta", None), "model", None)
+        alias = resolve_write_alias(model)
         if in_async_context():
             return self._execute_mutation_field_async(
                 alias,
@@ -198,12 +199,28 @@ class DjangoMutationExecutionContext(ExecutionContext):
         the synthesized ``_resolve`` the ``DjangoMutationField`` factory stamped
         with its mutation class.
         """
-        if parent_type is not self.schema.mutation_type:
+        if (
+            parent_type is None
+            or self.schema.mutation_type is None
+            or parent_type is not self.schema.mutation_type
+        ):
             return None
-        field_def = parent_type.fields.get(field_nodes[0].name.value)
+        if not field_nodes:
+            return None
+        field_node = field_nodes[0]
+        node_name = getattr(field_node, "name", None)
+        field_name = getattr(node_name, "value", None)
+        if not field_name:
+            return None
+        parent_fields = getattr(parent_type, "fields", None)
+        if not isinstance(parent_fields, dict):
+            return None
+        field_def = parent_fields.get(field_name)
         if field_def is None:  # introspection (``__typename``) has no field entry here.
             return None
-        strawberry_field = (field_def.extensions or {}).get("strawberry-definition")
+        strawberry_field = (getattr(field_def, "extensions", None) or {}).get(
+            "strawberry-definition",
+        )
         base_resolver = getattr(strawberry_field, "base_resolver", None)
         wrapped = getattr(base_resolver, "wrapped_func", None)
         return getattr(wrapped, MUTATION_CLASS_MARKER, None)
@@ -219,8 +236,8 @@ class DjangoMutationExecutionContext(ExecutionContext):
         """
         collected = getattr(self, "collected_errors", None)
         if collected is not None:
-            return collected.errors
-        return self.errors
+            return getattr(collected, "errors", [])
+        return getattr(self, "errors", [])
 
     def _execute_mutation_field_sync(
         self,
@@ -355,7 +372,8 @@ class DjangoSchema(strawberry.Schema):
     ) -> None:
         self.resource_policy = resolve_resource_policy(resource_policy)
         self.error_policy = resolve_error_policy(error_policy)
-        kwargs.setdefault("execution_context_class", DjangoMutationExecutionContext)
+        if kwargs.get("execution_context_class") is None:
+            kwargs["execution_context_class"] = DjangoMutationExecutionContext
         extensions = _with_resource_policy_extension(kwargs.get("extensions"))
         self._auto_error_policy_extension = not any(
             _extension_entry_matches(extension, DjangoErrorPolicyExtension)
@@ -446,5 +464,8 @@ def _with_error_policy_extension(extensions: list[Any]) -> list[Any]:
 
 def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
     """Match a class or instance entry without invoking opaque factories."""
-    candidate = extension if isinstance(extension, type) else type(extension)
-    return issubclass(candidate, extension_type)
+    try:
+        candidate = extension if isinstance(extension, type) else type(extension)
+        return issubclass(candidate, extension_type)
+    except Exception:
+        return False

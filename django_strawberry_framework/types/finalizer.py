@@ -1174,15 +1174,15 @@ def _bind_set_owner_common(
     the order side has neither axis (``ORDER BY id`` uses the column, and ordering
     never scopes a related branch through the owner's ``get_queryset``).
     """
+    set_model = get_model(set_cls)
+    if (
+        set_model is not None
+        and definition.model is not None
+        and not issubclass(definition.model, set_model)
+    ):
+        raise ConfigurationError(format_model_mismatch(set_cls, definition))
     previous: DjangoTypeDefinition | None = getattr(set_cls, "_owner_definition", None)
     if previous is None:
-        set_model = get_model(set_cls)
-        if (
-            set_model is not None
-            and definition.model is not None
-            and not issubclass(definition.model, set_model)
-        ):
-            raise ConfigurationError(format_model_mismatch(set_cls, definition))
         set_cls._owner_definition = definition
         return
     if previous is definition:

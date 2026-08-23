@@ -553,7 +553,9 @@ def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     annotation-synthesis-time); centralizing the predicate keeps the
     Relay-shape contract single-sited.
     """
-    return any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
+    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (
+        isinstance(cls, type) and issubclass(cls, relay.Node)
+    )
 
 
 class DjangoType:
@@ -795,9 +797,11 @@ class DjangoType:
 
 def _detect_custom_get_queryset(cls: type) -> bool:
     """Return whether ``cls`` or an intermediate base overrides ``get_queryset``."""
+    if not (isinstance(cls, type) and issubclass(cls, DjangoType)):
+        return False
     for base in cls.__mro__:
         if base is DjangoType:
-            return False
+            break
         if "get_queryset" in base.__dict__:
             return True
     return False
@@ -947,6 +951,14 @@ def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
             f"{meta.model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
             f"instances, got {type(value).__name__}.",
         )
+    model = getattr(meta, "model", None)
+    prefix = f"{model.__name__}." if isinstance(model, type) else ""
+    for key in value:
+        if not isinstance(key, str):
+            raise ConfigurationError(
+                f"{prefix}Meta.optimizer_hints keys must be field name strings; "
+                f"got {_safe_arg_repr(key)}.",
+            )
     return dict(value)
 
 
@@ -1364,6 +1376,12 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
     """
     if not hints:
         return
+    for key in hints:
+        if not isinstance(key, str):
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
+                f"got {_safe_arg_repr(key)}.",
+            )
     valid_field_names = {f.name for f in model._meta.get_fields()}
     selected_relation_names = {f.name for f in fields if f.is_relation}
 

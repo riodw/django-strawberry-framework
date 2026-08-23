@@ -1549,3 +1549,454 @@ def test_corrupt_image_degrades_width_and_height_to_null(tmp_path):
     finally:
         with db_connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_async_relations_with_custom_visibility():
+    """Relations re-check custom visibility hooks asynchronously.
+
+    Stays in the package tier for the same structural reason the sync sibling
+    ``test_reverse_one_to_one_scopes_custom_target_by_planned_relation`` gives:
+    no fakeshop reverse-OneToOne target declares ``get_queryset``, so the
+    reverse-o2o-plus-custom-visibility shape cannot be assembled from the
+    shipped schema. ``MembershipCard.patron`` is the only library OneToOne and
+    ``MembershipCardType`` has no visibility hook; kanban's OneToOnes have none
+    either. Reaching this live would mean adding ``get_queryset`` to fakeshop's
+    shipped ``MembershipCardType``, which changes what every existing
+    ``patron { card { ... } }`` traversal returns -- a behavior change to the
+    example schema, not an additive one.
+
+    Its three no-visibility siblings DID move: they are now
+    ``examples/fakeshop/test_query/test_relations_async_api.py``.
+    """
+    from apps.library.models import MembershipCard, Patron
+    from asgiref.sync import sync_to_async
+
+    p1 = await sync_to_async(Patron.objects.create)(name="Hidden Patron")
+    await sync_to_async(MembershipCard.objects.create)(patron=p1, barcode="HIDDEN-99")
+    p2 = await sync_to_async(Patron.objects.create)(name="Visible Patron")
+    await sync_to_async(MembershipCard.objects.create)(patron=p2, barcode="OPEN-99")
+
+    class MembershipCardType(DjangoType):
+        class Meta:
+            model = MembershipCard
+            fields = ("id", "barcode")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(barcode__startswith="HIDDEN")
+
+    class PatronType(DjangoType):
+        class Meta:
+            model = Patron
+            fields = ("id", "name", "card")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        async def patrons(self) -> list[PatronType]:
+            patrons = []
+            async for p in Patron.objects.filter(pk__in=[p1.pk, p2.pk]).order_by("pk"):
+                patrons.append(p)
+            return patrons
+
+    schema = strawberry.Schema(query=Query)
+    result = await schema.execute("{ patrons { name card { barcode } } }")
+    assert result.errors is None
+    assert result.data == {
+        "patrons": [
+            {"name": "Hidden Patron", "card": None},
+            {"name": "Visible Patron", "card": {"barcode": "OPEN-99"}},
+        ],
+    }
+
+
+def test_fk_attname_is_deferred_and_stub_exceptions():
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import (
+        _FK_ELISION_UNSAFE,
+        _build_fk_id_stub,
+        _fk_attname_is_deferred,
+        _visible_related_object,
+    )
+
+    class BrokenDeferred:
+        def get_deferred_fields(self):
+            raise RuntimeError("hostile get_deferred_fields")
+
+    assert not _fk_attname_is_deferred(BrokenDeferred(), "category_id")
+
+    class BrokenDeferredIn:
+        def get_deferred_fields(self):
+            class HostileContainer:
+                def __contains__(self, item):
+                    raise RuntimeError("hostile in")
+
+            return HostileContainer()
+
+    assert not _fk_attname_is_deferred(BrokenDeferredIn(), "category_id")
+
+    # _visible_related_object(None, ...) -> None
+    assert _visible_related_object(None, Category, None) is None
+
+    # _build_fk_id_stub with unreadable attname / uninstantiable related_model
+    class BrokenRoot:
+        @property
+        def category_id(self):
+            raise AttributeError("broken attr")
+
+    fm = FieldMeta.from_django_field(Item._meta.get_field("category"))
+    assert _build_fk_id_stub(BrokenRoot(), fm) is None
+
+    class BrokenModel:
+        def __init__(self, pk=None):
+            raise RuntimeError("uninstantiable model")
+
+    fake_fm = SimpleNamespace(attname="target_id", related_model=BrokenModel)
+    assert _build_fk_id_stub(SimpleNamespace(target_id=1), fake_fm) is _FK_ELISION_UNSAFE
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_async_resolvers_optimizer_scoped_and_visibility():
+    import inspect
+
+    import django_strawberry_framework.types.resolvers as resolvers_mod
+    from django_strawberry_framework.optimizer._context import (
+        begin_scoped_relations,
+        begin_strictness,
+        end_scoped_relations,
+        end_strictness,
+        publish_scoped_relations,
+    )
+    from django_strawberry_framework.optimizer.plans import resolver_key
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class CustomCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(name__startswith="Visible")
+
+    class CustomItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(name__startswith="Visible")
+
+    from django_strawberry_framework.types.finalizer import finalize_django_types
+
+    finalize_django_types()
+    token = begin_scoped_relations()
+
+    try:
+
+        class FakeRevRel:
+            name = "profile"
+            is_relation = True
+            one_to_one = True
+            auto_created = True
+            related_model = Category
+
+            def get_accessor_name(self):
+                return "profile"
+
+        # Reverse one-to-one resolver (scoped and unscoped)
+        rev_field = FakeRevRel()
+        rev_resolver = _make_relation_resolver(rev_field, parent_type=Item)
+
+        key = resolver_key(Item, "profile", ("item", "profile"))
+        publish_scoped_relations({key})
+
+        cat = await Category.objects.acreate(name="Visible Cat")
+
+        class FakeRevRoot:
+            _state = SimpleNamespace(fields_cache={})
+
+            @property
+            def profile(self):
+                return cat
+
+        fake_info = SimpleNamespace(path=_path("item", "profile"), context={})
+        fake_root = FakeRevRoot()
+
+        res = rev_resolver(fake_root, fake_info)
+
+        if inspect.isawaitable(res):
+            res = await res
+        assert res == cat
+
+        unscoped_info = SimpleNamespace(path=_path("other", "profile"), context={})
+        res_unscoped = rev_resolver(fake_root, unscoped_info)
+        if inspect.isawaitable(res_unscoped):
+            res_unscoped = await res_unscoped
+        assert res_unscoped.pk == cat.pk
+
+        # Forward resolver (scoped and unscoped, without strictness)
+        fwd_field = Item._meta.get_field("category")
+        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=Item)
+        fwd_key = resolver_key(Item, "category", ("item", "category"))
+        publish_scoped_relations({fwd_key})
+        fwd_info = SimpleNamespace(path=_path("item", "category"), context={})
+
+        res_fwd = fwd_resolver(Item(name="Test Item 1", category_id=cat.pk), fwd_info)
+        if inspect.isawaitable(res_fwd):
+            res_fwd = await res_fwd
+        assert res_fwd.pk == cat.pk
+
+        fwd_unscoped_info = SimpleNamespace(path=_path("other", "category"), context={})
+        res_fwd_unscoped = fwd_resolver(
+            Item(name="Test Item 2", category_id=cat.pk),
+            fwd_unscoped_info,
+        )
+        if inspect.isawaitable(res_fwd_unscoped):
+            res_fwd_unscoped = await res_fwd_unscoped
+        assert res_fwd_unscoped.pk == cat.pk
+
+        # Forward resolver under active strictness (warn)
+        strict_token = begin_strictness("warn")
+        try:
+            # Scoped
+            res_strict_scoped = fwd_resolver(
+                Item(name="Test Item 3", category_id=cat.pk),
+                fwd_info,
+            )
+            if inspect.isawaitable(res_strict_scoped):
+                res_strict_scoped = await res_strict_scoped
+            assert res_strict_scoped.pk == cat.pk
+
+            # Unscoped
+            res_strict_unscoped = fwd_resolver(
+                Item(name="Test Item 4", category_id=cat.pk),
+                fwd_unscoped_info,
+            )
+            if inspect.isawaitable(res_strict_unscoped):
+                res_strict_unscoped = await res_strict_unscoped
+            assert res_strict_unscoped.pk == cat.pk
+
+            # Sync / loaded path under strictness
+            loaded_item = Item(name="Test Item Loaded", category_id=cat.pk)
+            loaded_item._state.fields_cache["category"] = cat
+            res_sync_scoped = fwd_resolver(loaded_item, fwd_info)
+            assert res_sync_scoped.pk == cat.pk
+        finally:
+            end_strictness(strict_token)
+
+        # Fallback when _visible_related_object returns non-awaitable (lines 510, 548, 601)
+        orig_vis = resolvers_mod._visible_related_object
+        try:
+            resolvers_mod._visible_related_object = lambda rel, vt, inf: rel
+
+            # Reverse one-to-one non-awaitable fallback (line 510)
+            res_rev_sync = rev_resolver(FakeRevRoot(), unscoped_info)
+            if inspect.isawaitable(res_rev_sync):
+                res_rev_sync = await res_rev_sync
+            assert res_rev_sync.pk == cat.pk
+
+            # Forward non-awaitable fallback without strictness (line 548)
+            res_fwd_sync = fwd_resolver(
+                Item(name="Test Item 5", category_id=cat.pk),
+                fwd_unscoped_info,
+            )
+            if inspect.isawaitable(res_fwd_sync):
+                res_fwd_sync = await res_fwd_sync
+            assert res_fwd_sync.pk == cat.pk
+
+            # Forward non-awaitable fallback with strictness (line 601)
+            strict_token = begin_strictness("warn")
+            try:
+                res_strict_sync = fwd_resolver(
+                    Item(name="Test Item 6", category_id=cat.pk),
+                    fwd_unscoped_info,
+                )
+                if inspect.isawaitable(res_strict_sync):
+                    res_strict_sync = await res_strict_sync
+                assert res_strict_sync.pk == cat.pk
+
+                # Null related in strict async forward resolver (line 602)
+                class FakeItemNull:
+                    _state = SimpleNamespace(fields_cache={})
+                    category = None
+
+                res_strict_null = fwd_resolver(FakeItemNull(), fwd_unscoped_info)
+                if inspect.isawaitable(res_strict_null):
+                    res_strict_null = await res_strict_null
+                assert res_strict_null is None
+
+            finally:
+                end_strictness(strict_token)
+        finally:
+            resolvers_mod._visible_related_object = orig_vis
+
+        # Many-side resolver with prefetched cache and visibility in async context
+        many_field = Category._meta.get_field("items")
+
+        many_resolver = _make_relation_resolver(many_field, parent_type=Category)
+        item_obj = await Item.objects.acreate(name="Visible Item", category=cat)
+        cat_with_cache = SimpleNamespace(
+            _prefetched_objects_cache={"items": [item_obj]},
+            items=Item.objects.filter(category=cat),
+        )
+        many_res_unscoped = many_resolver(cat_with_cache, unscoped_info)
+        if inspect.isawaitable(many_res_unscoped):
+            many_res_unscoped = await many_res_unscoped
+        assert len(many_res_unscoped) == 1
+
+        many_scoped_key = resolver_key(Category, "items", ("category", "items"))
+        publish_scoped_relations({many_scoped_key})
+        many_scoped_info = SimpleNamespace(path=_path("category", "items"), context={})
+        many_res_scoped = many_resolver(cat_with_cache, many_scoped_info)
+        assert len(list(many_res_scoped)) == 1
+    finally:
+        end_scoped_relations(token)
+        registry._finalized = False
+        registry.unregister(Category)
+        registry.unregister(Item)
+
+
+def test_sync_forward_and_many_resolver_visibility(db):
+    from django_strawberry_framework.optimizer._context import (
+        begin_scoped_relations,
+        end_scoped_relations,
+        publish_scoped_relations,
+    )
+    from django_strawberry_framework.optimizer.plans import resolver_key
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.finalizer import finalize_django_types
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class CustomCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(name__startswith="Visible")
+
+    class CustomItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(name__startswith="Visible")
+
+    finalize_django_types()
+    token = begin_scoped_relations()
+
+    try:
+        cat = Category.objects.create(name="Visible Cat")
+        item = Item.objects.create(name="Visible Item", category=cat)
+
+        fwd_field = Item._meta.get_field("category")
+        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=Item)
+
+        # Scoped (line 556)
+        fwd_key = resolver_key(Item, "category", ("item", "category"))
+        publish_scoped_relations({fwd_key})
+        fwd_scoped_info = SimpleNamespace(path=_path("item", "category"), context={})
+        res_scoped = fwd_resolver(item, fwd_scoped_info)
+        assert res_scoped.pk == cat.pk
+
+        # Unscoped (line 557)
+        fwd_unscoped_info = SimpleNamespace(path=_path("other", "category"), context={})
+        res_unscoped = fwd_resolver(item, fwd_unscoped_info)
+        assert res_unscoped.pk == cat.pk
+
+        # Many resolver sync unscoped with cache (line 462)
+        many_field = Category._meta.get_field("items")
+        many_resolver = _make_relation_resolver(many_field, parent_type=Category)
+        cat_with_cache = SimpleNamespace(
+            _prefetched_objects_cache={"items": [item]},
+            items=Item.objects.filter(category=cat),
+        )
+        many_unscoped_info = SimpleNamespace(path=_path("other", "items"), context={})
+        res_many_unscoped = many_resolver(cat_with_cache, many_unscoped_info)
+        assert len(res_many_unscoped) == 1
+
+        # Many resolver sync scoped with cache (line 467-469)
+        many_key = resolver_key(Category, "items", ("category", "items"))
+        publish_scoped_relations({many_key})
+        many_scoped_info = SimpleNamespace(path=_path("category", "items"), context={})
+        res_many_scoped = many_resolver(cat_with_cache, many_scoped_info)
+        assert len(list(res_many_scoped)) == 1
+    finally:
+        end_scoped_relations(token)
+        registry._finalized = False
+        registry.unregister(Category)
+        registry.unregister(Item)
+
+
+def test_resolver_helpers_edge_cases():
+    from django_strawberry_framework.types.resolvers import (
+        _attach_file_resolvers,
+        _attach_relation_resolvers,
+        _check_n1,
+    )
+
+    # Line 313: kind == "connection_to_attr"
+    info = SimpleNamespace(path=SimpleNamespace(key="items", prev=None), context={})
+    root_with_attr = SimpleNamespace(prefetched_page=["item1"])
+    # Not lazy when to_attr is present on root
+    _check_n1(
+        info,
+        root_with_attr,
+        "items",
+        Category,
+        kind="connection_to_attr",
+        to_attr="prefetched_page",
+        strictness="warn",
+    )
+    # Lazy when to_attr is None on root
+    root_without_attr = SimpleNamespace(prefetched_page=None)
+    _check_n1(
+        info,
+        root_without_attr,
+        "items",
+        Category,
+        kind="connection_to_attr",
+        to_attr="prefetched_page",
+        strictness="warn",
+    )
+    # Lazy when to_attr is not a str
+    _check_n1(
+        info,
+        root_with_attr,
+        "items",
+        Category,
+        kind="connection_to_attr",
+        to_attr=None,
+        strictness="warn",
+    )
+
+    # Lines 639 and 697: skip_field_names
+    class DummyTarget:
+        pass
+
+    fake_rel = SimpleNamespace(name="skipped_rel", is_relation=True)
+    _attach_relation_resolvers(
+        DummyTarget,
+        (fake_rel,),
+        skip_field_names=frozenset({"skipped_rel"}),
+    )
+    assert not hasattr(DummyTarget, "skipped_rel")
+
+    fake_file = SimpleNamespace(name="skipped_file", is_relation=False)
+    _attach_file_resolvers(
+        DummyTarget,
+        (fake_file,),
+        skip_field_names=frozenset({"skipped_file"}),
+    )
+    assert not hasattr(DummyTarget, "skipped_file")

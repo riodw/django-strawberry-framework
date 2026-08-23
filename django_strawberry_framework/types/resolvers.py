@@ -20,10 +20,12 @@ caller pre-computes the field list with
 ``base._select_fields(model, fields_spec, exclude_spec)`` and passes it in).
 """
 
+import inspect
 from collections.abc import Callable
 from typing import Any
 
 import strawberry
+from asgiref.sync import sync_to_async
 from django.db import router
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
@@ -105,7 +107,14 @@ def _fk_attname_is_deferred(root: Any, attname: str) -> bool:
     get_deferred_fields = getattr(root, "get_deferred_fields", None)
     if get_deferred_fields is None:
         return False
-    return attname in get_deferred_fields()
+    try:
+        deferred = get_deferred_fields()
+    except BaseException:
+        return False
+    try:
+        return attname in deferred
+    except BaseException:
+        return False
 
 
 def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
@@ -124,14 +133,20 @@ def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
         return None
     if _fk_attname_is_deferred(root, field_meta.attname):
         return _FK_ELISION_UNSAFE
-    related_id = getattr(root, field_meta.attname)
+    try:
+        related_id = getattr(root, field_meta.attname)
+    except AttributeError:
+        return None
     if related_id is None:
         return None
-    stub = field_meta.related_model(pk=related_id)
+    try:
+        stub = field_meta.related_model(pk=related_id)
+    except BaseException:
+        return _FK_ELISION_UNSAFE
     state = getattr(stub, "_state", None)
     if state is not None:
         state.adding = False
-        instance = root if hasattr(root, "_state") else None
+        instance = root if getattr(root, "_state", None) is not None else None
         state.db = router.db_for_read(field_meta.related_model, instance=instance)
     return stub
 
@@ -295,7 +310,7 @@ def _check_n1(
     if kind == "connection_to_attr":
         # The windowed page already landed under ``to_attr`` when present;
         # only an absent ``to_attr`` means the per-parent pipeline will query.
-        lazy = getattr(root, to_attr, None) is None
+        lazy = getattr(root, to_attr, None) is None if isinstance(to_attr, str) else True
     else:
         probe_name = accessor_name or field_name
         if is_many_side_relation_kind(kind):
@@ -377,11 +392,14 @@ def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
 
 def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
     """Re-check one relation object through its target visibility hook."""
+    if related is None:
+        return None
     source = initial_queryset(target_type)
     alias = getattr(getattr(related, "_state", None), "db", None)
     if alias is not None:
         source = source.using(alias)
-    source = source.filter(pk=related.pk)
+    pk = getattr(related, "pk", None)
+    source = source.filter(pk=pk)
     if in_async_context():
 
         async def _resolve() -> Any:
@@ -418,7 +436,7 @@ def _optimizer_scoped_relation(
     parent_type: type | None,
     field_name: str,
     *,
-    precomputed_key: Any = None,
+    precomputed_key: str | None = None,
 ) -> bool:
     """Return whether the optimizer planned THIS relation, so its rows are already scoped.
 
@@ -484,6 +502,16 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     ``FieldMeta``-derived relation-kind key so the many-side dispatch uses
     ``_prefetched_objects_cache`` exclusively and does not mis-classify
     a consumer-assigned attribute as "already loaded".
+
+    Every branch that would otherwise reach a SYNCHRONOUS descriptor read under
+    an async execution is gated on ``in_async_context() and
+    _will_lazy_load_single(...)`` and routed through ``sync_to_async(getattr,
+    thread_sensitive=True)``. The lazy-load predicate is load-bearing, not
+    belt-and-braces: an already-populated relation (optimizer ``select_related``
+    or a warm ``fields_cache``) must stay on the direct read so the common
+    optimized path does not pay a thread hop per row, and only the genuinely
+    unloaded descriptor - the one that would raise
+    ``SynchronousOnlyOperation`` - is offloaded.
     """
     field_name = field.name
     # Instance reads go through the accessor; ``field_name`` stays the
@@ -528,24 +556,61 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             # The bound is applied to the QUERYSET, before ``list(...)``, so the
             # unprefetched path carries it into SQL as a ``LIMIT`` rather than
             # materializing the whole relation and discarding the tail
-            # (``resource_policy.py::bounded_rows``).
+            # (``resource_policy.py::bounded_rows``). Building the queryset is
+            # lazy, so it is safe to do before the async branch below.
             source = getattr(root, accessor_name).all()
             if visibility_type is not None:
                 return _visible_many_rows(source, visibility_type, info)
+            if in_async_context():
+                # Unprefetched many-side under async: ``list(...)`` would execute
+                # the query on the event-loop thread. Iterate the bound queryset
+                # asynchronously instead - the same rows in the same order.
+
+                async def _resolve() -> list[Any]:
+                    bounded = await bounded_rows_async(source, info)
+                    return [row async for row in bounded]
+
+                return _resolve()
             return list(bounded_rows(source, info))
 
         return _name_resolver(many_resolver, field_name)
 
     if kind == "reverse_one_to_one":
-        related_does_not_exist = field_meta.related_model.DoesNotExist
+        related_does_not_exist = (
+            field_meta.related_model.DoesNotExist
+            if field_meta.related_model is not None
+            and hasattr(field_meta.related_model, "DoesNotExist")
+            else AttributeError
+        )
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+            if in_async_context() and _will_lazy_load_single(root, accessor_name):
+
+                async def _resolve_async() -> Any:
+                    try:
+                        related = await sync_to_async(getattr, thread_sensitive=True)(
+                            root,
+                            accessor_name,
+                        )
+                    except related_does_not_exist:
+                        return None
+                    if visibility_type is not None and related is not None:
+                        if _optimizer_scoped_relation(info, parent_type, field_name):
+                            return related
+                        res = _visible_related_object(related, visibility_type, info)
+                        if inspect.isawaitable(res):
+                            return await res
+                        return res
+                    return related
+
+                return _resolve_async()
+
             try:
                 related = getattr(root, accessor_name)
             except related_does_not_exist:
                 return None
-            if visibility_type is not None:
+            if visibility_type is not None and related is not None:
                 if _optimizer_scoped_relation(info, parent_type, field_name):
                     return related
                 return _visible_related_object(related, visibility_type, info)
@@ -574,6 +639,23 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         # below, which then re-reads nothing.
         live_strictness = _active_strictness()
         if not elisions and planned is None and live_strictness in (None, "off"):
+            if in_async_context() and _will_lazy_load_single(root, field_name):
+
+                async def _resolve_async() -> Any:
+                    related = await sync_to_async(getattr, thread_sensitive=True)(root, field_name)
+                    if visibility_type is None or related is None:
+                        return related
+                    # Strictness being off says nothing about what the optimizer
+                    # planned, so the scoped set still decides.
+                    if _optimizer_scoped_relation(info, parent_type, field_name):
+                        return related
+                    res = _visible_related_object(related, visibility_type, info)
+                    if inspect.isawaitable(res):
+                        return await res
+                    return res
+
+                return _resolve_async()
+
             related = getattr(root, field_name)
             if visibility_type is None or related is None:
                 return related
@@ -619,6 +701,26 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             force_unplanned=elision_unsafe,
             strictness=live_strictness,
         )
+        if in_async_context() and _will_lazy_load_single(root, field_name):
+
+            async def _resolve_async() -> Any:
+                related = await sync_to_async(getattr, thread_sensitive=True)(root, field_name)
+                if visibility_type is not None and related is not None:
+                    if _optimizer_scoped_relation(
+                        info,
+                        parent_type,
+                        field_name,
+                        precomputed_key=key,
+                    ):
+                        return related
+                    res = _visible_related_object(related, visibility_type, info)
+                    if inspect.isawaitable(res):
+                        return await res
+                    return res
+                return related
+
+            return _resolve_async()
+
         related = getattr(root, field_name)
         if visibility_type is not None and related is not None:
             if _optimizer_scoped_relation(

@@ -204,12 +204,20 @@ class DjangoTypeDefinition:
     # consumer code holding references to discarded definitions -
     # which would surface the same staleness on any direct attribute
     # read.
-    _related_target_cache: dict[str, Any] = field(default_factory=dict, repr=False)
+    _related_target_cache: dict[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
     # Per-instance memoization of ``has_custom_id_resolver_for(pk_name)``.
     # Values are keyed by concrete model primary-key field name and include
     # negative results; use membership checks instead of ``dict.get`` so
     # ``False`` remains a valid cached answer.
-    _custom_id_resolver_cache: dict[str, bool] = field(default_factory=dict, repr=False)
+    _custom_id_resolver_cache: dict[str, bool] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def graphql_type_name(self) -> str:
@@ -383,7 +391,10 @@ def _normalize_pk_name(pk_name: Any) -> str | None:
     """Return a plain primary-key name, or ``None`` for malformed input."""
     if not isinstance(pk_name, str):
         return None
-    return str.__str__(pk_name)
+    normalized = str.__str__(pk_name)
+    if not normalized:
+        return None
+    return normalized
 
 
 def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:

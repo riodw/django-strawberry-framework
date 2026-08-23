@@ -12,7 +12,7 @@ from __future__ import annotations
 import typing
 from dataclasses import dataclass
 from enum import Enum
-from typing import get_args, get_origin
+from typing import Any, get_args, get_origin
 
 import pytest
 import strawberry
@@ -587,6 +587,75 @@ def test_normalize_input_value_range_filter_drops_none_axes_partial_range():
         field_name="lifetime_fines_cents",
     )
     assert neither == {}
+
+
+def test_normalize_input_value_range_filter_drops_unset_axes_partial_range():
+    """Partial-range inputs drop ``UNSET``-valued axes identically to ``None``."""
+    f = RangeFilter(field_name="lifetime_fines_cents")
+
+    @dataclass
+    class _RangeInput:
+        start: Any = strawberry.UNSET
+        end: Any = strawberry.UNSET
+
+    # Dataclass inputs with UNSET
+    assert normalize_input_value(
+        f,
+        _RangeInput(start=5, end=strawberry.UNSET),
+        field_name="lifetime_fines_cents",
+    ) == {"lifetime_fines_cents_0": 5}
+
+    assert normalize_input_value(
+        f,
+        _RangeInput(start=strawberry.UNSET, end=10),
+        field_name="lifetime_fines_cents",
+    ) == {"lifetime_fines_cents_1": 10}
+
+    assert (
+        normalize_input_value(
+            f,
+            _RangeInput(start=strawberry.UNSET, end=strawberry.UNSET),
+            field_name="lifetime_fines_cents",
+        )
+        == {}
+    )
+
+    # Dict inputs with UNSET
+    assert normalize_input_value(
+        f,
+        {"start": 5, "end": strawberry.UNSET},
+        field_name="lifetime_fines_cents",
+    ) == {"lifetime_fines_cents_0": 5}
+
+    assert normalize_input_value(
+        f,
+        {"start": strawberry.UNSET, "end": 10},
+        field_name="lifetime_fines_cents",
+    ) == {"lifetime_fines_cents_1": 10}
+
+    assert (
+        normalize_input_value(
+            f,
+            {"start": strawberry.UNSET, "end": strawberry.UNSET},
+            field_name="lifetime_fines_cents",
+        )
+        == {}
+    )
+
+
+def test_normalize_input_value_range_filter_unwraps_enum_members():
+    """RangeFilter unwraps enum members on start and end axes."""
+    f = RangeFilter(field_name="status_range")
+
+    class StatusEnum(Enum):
+        ACTIVE = "active"
+        INACTIVE = "inactive"
+
+    assert normalize_input_value(
+        f,
+        {"start": StatusEnum.ACTIVE, "end": StatusEnum.INACTIVE},
+        field_name="status_range",
+    ) == {"status_range_0": "active", "status_range_1": "inactive"}
 
 
 def test_normalize_input_value_global_id_list():

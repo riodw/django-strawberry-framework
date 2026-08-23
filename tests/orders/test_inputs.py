@@ -805,22 +805,104 @@ def test_normalize_input_value_skips_attrs_with_no_field_spec_entry():
     """
     import dataclasses
 
+    from apps.library.models import Book
+
     from django_strawberry_framework.orders.inputs import normalize_input_value
 
-    class _NoSpecsOrder(OrderSet):
+    class _OrderWithSpecificFields(OrderSet):
         class Meta:
-            model = None
+            model = Book
             fields = ["title"]
 
     @dataclasses.dataclass
-    class _StubInput:
+    class _StubInputWithExtraAttr:
         title: Ordering | None = None
+        unmapped_extra_attr: Ordering | None = None
 
-    # ``_field_specs`` is empty for ``(_NoSpecsOrder, "title")`` because
-    # ``_build_input_fields`` was never called for it. The walker hits
-    # the ``if field.spec is None: continue`` guard and emits no tuples.
-    result = normalize_input_value(_NoSpecsOrder, _StubInput(title=Ordering.ASC))
+    result = normalize_input_value(
+        _OrderWithSpecificFields,
+        _StubInputWithExtraAttr(unmapped_extra_attr=Ordering.ASC),
+    )
     assert result == []
+
+
+def test_normalize_input_value_builds_field_specs_for_model_free_orderset():
+    """Model-free OrderSet direct callers must lazily build specs and normalize."""
+    from django_strawberry_framework.orders.inputs import (
+        clear_order_input_namespace,
+        normalize_input_value,
+    )
+
+    clear_order_input_namespace()
+
+    class ModelFreeOrder(OrderSet):
+        class Meta:
+            fields = ["title", "shelf__code"]
+
+    data = {"title": Ordering.ASC, "shelf_code": Ordering.DESC}
+    normalized = normalize_input_value(ModelFreeOrder, data)
+    assert ("title", Ordering.ASC) in normalized
+    assert ("shelf__code", Ordering.DESC) in normalized
+
+
+def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists():
+    """strawberry.UNSET values in dicts, lists, and nested structures are inactive."""
+    from apps.library.models import Book, Shelf
+    from strawberry import UNSET
+
+    from django_strawberry_framework.orders import RelatedOrder
+    from django_strawberry_framework.orders.inputs import (
+        clear_order_input_namespace,
+        normalize_input_value,
+    )
+
+    clear_order_input_namespace()
+
+    class ChildOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class ParentOrder(OrderSet):
+        shelf = RelatedOrder(ChildOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title", "subtitle"]
+
+    assert normalize_input_value(ParentOrder, UNSET) == []
+    assert normalize_input_value(ParentOrder, [UNSET]) == []
+    assert normalize_input_value(ParentOrder, [None, UNSET, None]) == []
+    assert normalize_input_value(ParentOrder, {"title": UNSET, "subtitle": Ordering.ASC}) == [
+        ("subtitle", Ordering.ASC),
+    ]
+    assert normalize_input_value(ParentOrder, {"shelf": {"code": UNSET}}) == []
+    assert normalize_input_value(ParentOrder, {"shelf": {"code": Ordering.ASC}}) == [
+        ("shelf__code", Ordering.ASC),
+    ]
+
+
+def test_normalize_input_value_rejects_invalid_direction_type():
+    """Invalid non-Ordering direction values raise ConfigurationError."""
+    from apps.library.models import Book
+
+    from django_strawberry_framework.orders.inputs import (
+        clear_order_input_namespace,
+        normalize_input_value,
+    )
+
+    clear_order_input_namespace()
+
+    class BookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="received invalid order direction 'ASC'"):
+        normalize_input_value(BookOrder, {"title": "ASC"})
+
+    with pytest.raises(ConfigurationError, match="received invalid order direction 123"):
+        normalize_input_value(BookOrder, {"title": 123})
 
 
 def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(

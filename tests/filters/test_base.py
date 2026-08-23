@@ -32,11 +32,13 @@ from django_strawberry_framework.filters import (
 )
 from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
+    IntegerInFilter,
     IntegerRangeFilter,
     _accepted_globalid_type_names,
     _decode_and_validate_global_id,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
+    resolve_globalid_target_definition,
 )
 from django_strawberry_framework.registry import registry
 from tests._relation_fixtures import (
@@ -1130,3 +1132,145 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch):
             object(),
             [relay.to_base64("owner.ownermodel", "1"), relay.to_base64("OwnerType", "2")],
         )
+
+
+# ---------------------------------------------------------------------------
+# Multi-hop GlobalID target definition resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_globalid_target_definition_multihop():
+    """`resolve_globalid_target_definition` walks multi-hop relation paths.
+
+    Scope note. The CONSUMER-VISIBLE half of this contract is pinned live at
+    ``examples/fakeshop/test_query/test_library_api.py::test_relay_global_id_filter_multihop_leaf_validates_against_the_terminal_model``,
+    which drives the shipped ``genresBooksId`` leaf over real HTTP and proves
+    the accept/reject polarity (terminal ``library.book`` accepted, head
+    ``library.genre`` rejected). That is the row the README's coverage rule
+    requires, because the behavior is reachable from a real query.
+
+    What stays here is what a live request cannot construct: the ``pk``/``id``
+    suffix equivalences, and the six unresolvable-path rows below (an
+    over-long path, unknown segments, an empty string, ``None``, and a
+    non-string field name). Every generated leaf resolves by construction and
+    a non-str field name cannot come off the wire, so those have no live form.
+    """
+    branch_def = _FakeTargetDefinition(effective_globalid_strategy="type")
+    branch_def.graphql_type_name = "BranchType"
+
+    class _FakeIntermediateDefinition:
+        model = _FakeTargetModel()
+        graphql_type_name = "ShelfType"
+        effective_globalid_strategy = "type"
+
+        def related_target_for(self, head):
+            if head == "branch":
+                return (branch_def, object())
+            return None
+
+    shelf_def = _FakeIntermediateDefinition()
+
+    class _FakeMultiHopOwnerDefinition:
+        model = _FakeModel()
+        graphql_type_name = "OwnerType"
+        effective_globalid_strategy = "type"
+
+        def related_target_for(self, head):
+            if head == "shelf":
+                return (shelf_def, object())
+            return None
+
+    owner = _FakeMultiHopOwnerDefinition()
+
+    # Single-hop own pk
+    assert resolve_globalid_target_definition(owner, "id") is owner
+    assert resolve_globalid_target_definition(owner, "pk") is owner
+
+    # Single-hop relation
+    assert resolve_globalid_target_definition(owner, "shelf") is shelf_def
+    assert resolve_globalid_target_definition(owner, "shelf__id") is shelf_def
+    assert resolve_globalid_target_definition(owner, "shelf__pk") is shelf_def
+
+    # Multi-hop relation
+    assert resolve_globalid_target_definition(owner, "shelf__branch") is branch_def
+    assert resolve_globalid_target_definition(owner, "shelf__branch__id") is branch_def
+    assert resolve_globalid_target_definition(owner, "shelf__branch__pk") is branch_def
+
+    # Unresolvable paths return None
+    assert resolve_globalid_target_definition(owner, "shelf__branch__id__extra") is None
+    assert resolve_globalid_target_definition(owner, "shelf__nonexistent") is None
+    assert resolve_globalid_target_definition(owner, "nonexistent") is None
+    assert resolve_globalid_target_definition(owner, "") is None
+    assert resolve_globalid_target_definition(owner, None) is None
+    assert resolve_globalid_target_definition(owner, 123) is None
+
+
+# ---------------------------------------------------------------------------
+# Range validation & Integer/Range filter edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    [
+        123,
+        45.6,
+        True,
+        False,
+        object(),
+        {"a": 1, "b": 2},
+        [1],
+        [1, 2, 3],
+        (),
+        (1,),
+        (1, 2, 3),
+        "ab",
+    ],
+)
+def test_validate_range_rejects_non_two_element_sequences(invalid_value):
+    """`validate_range` rejects non-sequences, wrong lengths, and mappings with ValidationError."""
+    with pytest.raises(ValidationError) as exc_info:
+        validate_range(invalid_value)
+    assert exc_info.value.code == "invalid"
+
+
+def test_integer_in_filter_unbound_and_missing_model():
+    """`IntegerInFilter.filter` safely filters when unbound or when model field is unresolvable."""
+    qs = models.Shelf.objects.all()
+
+    # Standalone / unbound filter instance (parent attribute is absent)
+    f = IntegerInFilter(field_name="id", lookup_expr="in")
+    assert getattr(f, "parent", None) is None
+    res = f.filter(qs, [1, 2])
+    assert "IN (1, 2)" in str(res.query)
+
+    # Empty value passes through without crashing
+    assert f.filter(qs, None) is qs
+    assert f.filter(qs, "") is qs
+
+
+def test_integer_range_filter_malformed_values_pass_through():
+    """`IntegerRangeFilter.filter` passes through malformed non-range values without crashing."""
+    qs = models.Shelf.objects.all()
+    f = IntegerRangeFilter(field_name="id")
+
+    assert f.filter(qs, None) is qs
+    assert f.filter(qs, "") is qs
+    assert f.filter(qs, [1]) is qs
+    assert f.filter(qs, [1, 2, 3]) is qs
+    assert f.filter(qs, 123) is qs
+    assert f.filter(qs, "invalid") is qs
+
+
+def test_filters_base_edge_cases():
+    """Edge cases for _coerce_int_in_members and resolve_globalid_target_definition."""
+    from django_strawberry_framework.filters.base import (
+        _coerce_int_in_members,
+        resolve_globalid_target_definition,
+    )
+
+    # Line 376: model_field is None
+    assert _coerce_int_in_members(None, [1, "foo", 3]) == [1, "foo", 3]
+
+    # Line 522: owner is None
+    assert resolve_globalid_target_definition(None, "shelf__branch__id") is None

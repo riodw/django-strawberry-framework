@@ -236,7 +236,9 @@ def _relation_uses_non_pk_to_field(model_field: Any) -> bool:
         getattr(model_field, "many_to_one", False) or getattr(model_field, "one_to_one", False)
     ):
         return False
-    return model_field.target_field is not model_field.related_model._meta.pk
+    related_model = getattr(model_field, "related_model", None)
+    target_pk = getattr(getattr(related_model, "_meta", None), "pk", None)
+    return getattr(model_field, "target_field", None) is not target_pk
 
 
 def _marked_pk_field_name(filter_instance: Filter) -> str | None:
@@ -252,7 +254,9 @@ def _marked_pk_field_name(filter_instance: Filter) -> str | None:
     per-method copy would let the empty-``node_id`` guard reach only one of them.
     """
     if getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False):
-        return f"{filter_instance.field_name}__pk"
+        field_name = getattr(filter_instance, "field_name", None)
+        if field_name:
+            return f"{field_name}__pk"
     return None
 
 
@@ -304,10 +308,10 @@ def validate_range(value: Any) -> None:
     """Reject range values whose length is not exactly two.
 
     Validator is only invoked by Django when the value is non-empty (the
-    standard form-field contract); a one-element or three-element list
-    raises `ValidationError(code="invalid")`.
+    standard form-field contract); a one-element, three-element list, or
+    non-sequence raises `ValidationError(code="invalid")`.
     """
-    if len(value) != 2:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
         raise ValidationError(
             "Invalid range specified: it needs to contain 2 values.",
             code="invalid",
@@ -352,7 +356,7 @@ class ListFilter(TypedFilter):
         return super().filter(qs, value)
 
 
-def _coerce_int_in_members(model_field: models.IntegerField, values: list) -> list:
+def _coerce_int_in_members(model_field: models.Field | None, values: list) -> list:
     """Drop ``__in`` members an integer column cannot store (range coercion).
 
     A scalar ``__in`` lookup (`BaseInFilter`) binds each member directly as a query
@@ -368,6 +372,8 @@ def _coerce_int_in_members(model_field: models.IntegerField, values: list) -> li
     and `relay.py::_coerce_pk_or_none` (the GlobalID id-attr coercion) - same
     coercion mechanics, a different field.
     """
+    if model_field is None:
+        return values
     kept: list = []
     for value in values:
         coerced = coerce_field_value_or_none(model_field, value)
@@ -402,13 +408,18 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
             # Explicit empty / None (``in: []``): keep django-filter's skip (no
             # membership values were supplied, so there is no constraint to honor).
             return super().filter(qs, value)
-        model_field = get_model_field(self.parent._meta.model, self.field_name)
-        kept = _coerce_int_in_members(model_field, value)
-        if not kept:
-            # A non-empty membership list whose every value is out of range matches
-            # no row; never the empty-value skip that would return all rows.
-            return _match_none_queryset(self, qs)
-        return super().filter(qs, kept)
+        parent = getattr(self, "parent", None)
+        meta = getattr(parent, "_meta", None)
+        model = getattr(meta, "model", None)
+        model_field = get_model_field(model, self.field_name) if model is not None else None
+        if model_field is not None:
+            kept = _coerce_int_in_members(model_field, value)
+            if not kept:
+                # A non-empty membership list whose every value is out of range matches
+                # no row; never the empty-value skip that would return all rows.
+                return _match_none_queryset(self, qs)
+            return super().filter(qs, kept)
+        return super().filter(qs, value)
 
 
 class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
@@ -438,7 +449,9 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
         """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``)."""
         if value in EMPTY_VALUES:
             # Explicit empty / None: keep django-filter's skip (no bounds supplied).
-            return super().filter(qs, value)
+            return qs
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return qs
         # ``BaseRangeField`` validates length == 2 before we run, and the generated
         # ``list[BigInt!]`` input carries non-null elements, so both bounds are present.
         start, end = value
@@ -477,7 +490,7 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
     owner = getattr(parent, "_owner_definition", None) if parent is not None else None
     if owner is None:
         return None
-    return resolve_globalid_target_definition(owner, filter_instance.field_name)
+    return resolve_globalid_target_definition(owner, getattr(filter_instance, "field_name", None))
 
 
 def resolve_globalid_target_definition(
@@ -493,20 +506,36 @@ def resolve_globalid_target_definition(
     ``filter.field_name`` that the runtime path resolves from a live filter
     instance - the own-PK-vs-relation decision stays single-sited here.
 
-    Returns the owner itself for the own-PK branch, the related target's
-    definition for a relation head, or ``None`` when the relation head does not
+    Returns the owner itself for the own-PK branch, the terminal related target's
+    definition for relation paths (including multi-hop relations like
+    ``"shelf__branch__id"``), or ``None`` when any segment along the path does not
     resolve to a registered target.
     """
-    field_name = field_name or ""
-    head, _sep, _tail = field_name.partition("__")
-    pk_name = getattr(owner.model._meta.pk, "name", None)
-    if head == pk_name or field_name == pk_name:
-        return owner
-    target = owner.related_target_for(head)
-    if target is None:
+    if not isinstance(field_name, str) or not field_name:
         return None
-    target_definition, _model_field = target
-    return target_definition
+
+    current_def: DjangoTypeDefinition | None = owner
+    segments = field_name.split("__")
+
+    for i, segment in enumerate(segments):
+        if current_def is None:
+            return None
+
+        current_model = getattr(current_def, "model", None)
+        pk_field = getattr(getattr(current_model, "_meta", None), "pk", None)
+        pk_name = getattr(pk_field, "name", None)
+
+        if pk_name is not None and segment in (pk_name, "pk"):
+            if i == len(segments) - 1:
+                return current_def
+            return None
+
+        target = current_def.related_target_for(segment)
+        if target is None:
+            return None
+        current_def, _model_field = target
+
+    return current_def
 
 
 def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> set[str] | None:

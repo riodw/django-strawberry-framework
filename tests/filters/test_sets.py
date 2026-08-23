@@ -4760,11 +4760,17 @@ def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
 
     assert list(WeirdCategoryFilter.get_filters()) == ["name__exact"]
     # ``base_path`` resolves to the bare ``name`` (from the field python attr),
-    # ``form_key`` is the bare ``name`` (exact), ``suffixed_key`` is
+    # ``form_key`` starts as bare ``name`` (exact), ``suffixed_key`` is
     # ``name__exact``; the bare probe misses, the suffixed probe resolves the
-    # declared filter and normalizes to the bare ``name`` form-data key.
+    # declared filter and normalizes to the ``name__exact`` form-data key so
+    # the FilterSet form cleans and filters the attribute properly.
     data = WeirdCategoryFilter._normalize_input({"name": _NameBag(exact="foo")})
-    assert data == {"name": "foo"}
+    assert data == {"name__exact": "foo"}
+
+    c1 = Category.objects.create(name="foo")
+    c2 = Category.objects.create(name="bar")
+    qs = WeirdCategoryFilter(data=data, queryset=Category.objects.all()).qs
+    assert list(qs) == [c1]
 
 
 @pytest.mark.django_db

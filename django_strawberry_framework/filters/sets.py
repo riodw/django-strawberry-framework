@@ -2261,6 +2261,8 @@ class FilterSet(
                     filter_instance = all_filters.get(form_key)
                     if filter_instance is None and form_key != suffixed_key:
                         filter_instance = all_filters.get(suffixed_key)
+                        if filter_instance is not None:
+                            form_key = suffixed_key
                     if filter_instance is None:
                         data[form_key] = lookup_value
                         continue

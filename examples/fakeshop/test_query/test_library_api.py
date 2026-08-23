@@ -1734,6 +1734,84 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
     assert [row["title"] for row in right_payload["data"]["allLibraryBooks"]] == ["Hyperion"]
 
 
+@pytest.mark.django_db
+def test_relay_global_id_filter_multihop_leaf_validates_against_the_terminal_model():
+    """A multi-hop GlobalID leaf validates against its TERMINAL model, not the first hop.
+
+    ``filters/base.py::resolve_globalid_target_definition`` walks every segment
+    of a relation path rather than resolving only the head. The public
+    ``genresBooksId`` leaf on ``BookFilterInputType`` is the flattened
+    ``genres__books__id`` expansion (``BookFilter.genres`` ->
+    ``GenreFilter.books`` -> pk), so its terminal target is ``library.book``
+    even though its FIRST hop is ``library.genre``. A head-only resolution
+    accepts a ``library.genre`` GlobalID here and rejects a ``library.book``
+    one -- the exact inverse of the correct contract -- so this row pins the
+    polarity on a shipped input field.
+
+    Contrast the sibling above: ``genres { id }`` is a single-hop relation
+    branch whose terminal genuinely IS ``library.genre``. The two together
+    prove the walk distinguishes depth rather than always reporting the head
+    or always reporting the leaf's own model.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    sci_fi = models.Genre.objects.create(name="SciFi")
+    hyperion = models.Book.objects.create(title="Hyperion", shelf=shelf)
+    endymion = models.Book.objects.create(title="Endymion", shelf=shelf)
+    hyperion.genres.add(sci_fi)
+    endymion.genres.add(sci_fi)
+    # A book under a different genre, to prove the predicate selects by shared
+    # genre rather than returning every row.
+    westerns = models.Genre.objects.create(name="Westerns")
+    lonesome = models.Book.objects.create(title="Lonesome Dove", shelf=shelf)
+    lonesome.genres.add(westerns)
+
+    book_id = str(
+        relay.GlobalID(type_name=models.Book._meta.label_lower, node_id=str(hyperion.pk)),
+    )
+    genre_id = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(sci_fi.pk)),
+    )
+
+    accepted = _post_graphql(
+        f"""
+        query {{
+          allLibraryBooks(filter: {{ genresBooksId: {{ exact: "{book_id}" }} }}) {{
+            title
+          }}
+        }}
+        """,
+    )
+    assert accepted.status_code == 200
+    accepted_payload = accepted.json()
+    assert "errors" not in accepted_payload, accepted_payload
+    # Every book sharing a genre with Hyperion, each reported once; the
+    # Westerns title is excluded.
+    assert sorted(row["title"] for row in accepted_payload["data"]["allLibraryBooks"]) == [
+        "Endymion",
+        "Hyperion",
+    ]
+
+    rejected = _post_graphql(
+        f"""
+        query {{
+          allLibraryBooks(filter: {{ genresBooksId: {{ exact: "{genre_id}" }} }}) {{
+            title
+          }}
+        }}
+        """,
+    )
+    assert rejected.status_code == 200
+    rejected_payload = rejected.json()
+    assert "errors" in rejected_payload, rejected_payload
+    message = rejected_payload["errors"][0]["message"]
+    assert "GlobalID type mismatch" in message
+    # ``library.book`` expected (the terminal), ``library.genre`` received (the
+    # head). Pre-walk these two were swapped.
+    assert models.Book._meta.label_lower in message
+    assert models.Genre._meta.label_lower in message
+
+
 # ---------------------------------------------------------------------------
 # Live HTTP order coverage (spec-028 test plan), plus the row-preserving
 # to-many aggregate cases from ``spec-030-connection_field-0_0_9`` P1-B.

@@ -937,6 +937,134 @@ def test_queryset_model_overrides_conflicting_orderset_meta_model():
     assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
 
 
+def test_resolve_order_expressions_rejects_non_ordering_direction():
+    """Passing a non-Ordering object to _resolve_order_expressions raises ConfigurationError."""
+
+    class CustomBookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="received invalid order direction 'ASC'"):
+        CustomBookOrder._resolve_order_expressions([("title", "ASC")], model=Book)
+
+    with pytest.raises(ConfigurationError, match="received invalid order direction 42"):
+        CustomBookOrder._resolve_order_expressions([("title", 42)], model=Book)
+
+
+@pytest.mark.django_db
+def test_orderset_apply_sync_handles_unset_in_nested_dict():
+    """apply_sync with UNSET fields normalizes cleanly and preserves queryset."""
+    from strawberry import UNSET
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BookOrder(OrderSet):
+        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    branch = Branch.objects.create(name="Main")
+    shelf = Shelf.objects.create(code="S1", branch=branch)
+    book = Book.objects.create(shelf=shelf, title="Book 1")
+    info = _make_info()
+    qs = Book.objects.all()
+    result = BookOrder.apply_sync({"shelf": {"code": UNSET}}, qs, info)
+    assert list(result.query.order_by) == list(qs.query.order_by)
+    assert list(result) == [book]
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
+    """Non-iterable or string Meta.fields (other than '__all__') raises ConfigurationError."""
+
+    class IntFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = 123
+
+    with pytest.raises(
+        ConfigurationError,
+        match="must be '__all__' or an iterable of field names",
+    ):
+        IntFieldsOrder.get_fields()
+
+    class StrFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = "title"
+
+    with pytest.raises(
+        ConfigurationError,
+        match="must be '__all__' or an iterable of field names",
+    ):
+        StrFieldsOrder.get_fields()
+
+    class ObjFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = object()
+
+    with pytest.raises(
+        ConfigurationError,
+        match="must be '__all__' or an iterable of field names",
+    ):
+        ObjFieldsOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_handles_non_class_meta_model():
+    """Non-class / invalid Meta.model does not crash with AttributeError and raises ConfigurationError."""
+
+    class BadModelOrder(OrderSet):
+        class Meta:
+            model = "NotAModel"
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="invalid order path 'title' for model str"):
+        BadModelOrder.get_fields()
+
+    class BadModelIntOrder(OrderSet):
+        class Meta:
+            model = 123
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="invalid order path 'title' for model int"):
+        BadModelIntOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_get_concrete_field_names_for_order_rejects_non_model():
+    """_get_concrete_field_names_for_order raises ConfigurationError on non-model objects."""
+    from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
+
+    with pytest.raises(ConfigurationError, match="Expected a Django Model class"):
+        _get_concrete_field_names_for_order("NotAModel")
+
+    with pytest.raises(ConfigurationError, match="Expected a Django Model class"):
+        _get_concrete_field_names_for_order(123)
+
+
+def test_resolve_order_expressions_handles_non_class_model_on_path_error():
+    """_resolve_order_expressions safely formats non-class model when path resolution fails."""
+
+    class CustomBookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    with pytest.raises(ConfigurationError, match="invalid order path 'bad_field' for model str"):
+        CustomBookOrder._resolve_order_expressions(
+            [("bad_field", Ordering.ASC)],
+            model="NotAModel",
+        )
+
+
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.
 assert F is not None
 assert Genre is not None

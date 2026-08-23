@@ -709,18 +709,19 @@ def _normalize_range_value(
         if not isinstance(raw_value, dict)
         else raw_value.get("end")
     )
-    # Drop ``None``-valued axes so partial-range inputs surface only the
-    # supplied positional key. Django's ``RangeWidget.value_from_datadict``
+    # Drop ``None``- and ``UNSET``-valued axes so partial-range inputs surface only
+    # the supplied positional key. Django's ``RangeWidget.value_from_datadict``
     # treats a missing key the same as a ``None``-valued one, but emitting
-    # ``{<name>_0: None}`` to the form-data dict surfaces "axis supplied,
-    # value is None" to any caller walking ``data.keys()`` -- the explicit
-    # ``is not None`` rigor mirrors ``normalize_input_value``'s ``raw_value
+    # ``{<name>_0: None}`` or ``{<name>_0: UNSET}`` to the form-data dict surfaces
+    # "axis supplied, value is inactive" to any caller walking ``data.keys()`` and
+    # leaks ``UNSET`` into form-field cleaning -- the explicit
+    # ``is_inactive_value`` rigor mirrors ``normalize_input_value``'s ``raw_value
     # is None or raw_value is UNSET`` entry guard.
     patch: dict[str, Any] = {}
-    if start is not None:
-        patch[f"{base}_0"] = start
-    if end is not None:
-        patch[f"{base}_1"] = end
+    if not is_inactive_value(start, unset_sentinel=UNSET):
+        patch[f"{base}_0"] = _unwrap_enum_member(start)
+    if not is_inactive_value(end, unset_sentinel=UNSET):
+        patch[f"{base}_1"] = _unwrap_enum_member(end)
     return patch
 
 

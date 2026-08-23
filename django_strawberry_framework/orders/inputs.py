@@ -29,6 +29,7 @@ import strawberry
 from django.db.models import F
 from django.db.models.expressions import OrderBy
 
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
 from ..utils.input_values import (
     RELATED,
@@ -176,9 +177,15 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     columns (their ``<field>_id`` column is on the model's own table)
     and excludes reverse FKs (no ``column`` attribute) and M2M managers.
     """
+    meta = getattr(model, "_meta", None)
+    if meta is None or not callable(getattr(meta, "get_fields", None)):
+        raise ConfigurationError(
+            f"Expected a Django Model class with '_meta.get_fields()'; "
+            f"got {_safe_type_name(model)} ({_safe_arg_repr(model)}).",
+        )
     return [
         f.name
-        for f in model._meta.get_fields()
+        for f in meta.get_fields()
         if getattr(f, "column", None) is not None and not getattr(f, "many_to_many", False)
     ]
 
@@ -311,6 +318,7 @@ def normalize_input_value(
     config = SetInputTraversal(
         field_specs=_field_specs,
         related_attr="related_orders",
+        unset_sentinel=strawberry.UNSET,
         handle_top_level_list=True,
     )
     result: list[tuple[str, Ordering | None]] = []
@@ -329,6 +337,13 @@ def normalize_input_value(
         else:
             # Leaf -- ``raw_value`` is an ``Ordering`` member (``None`` was
             # already skipped as inactive by the classifier).
+            if not isinstance(field.raw_value, Ordering):
+                owner_name = getattr(orderset_cls, "__qualname__", _safe_arg_repr(orderset_cls))
+                raise ConfigurationError(
+                    f"OrderSet {owner_name} received invalid order direction "
+                    f"{_safe_arg_repr(field.raw_value)} for field {field.python_attr!r}; "
+                    f"expected an Ordering enum member.",
+                )
             result.append((field.spec.django_source_path, field.raw_value))
     return result
 
@@ -337,20 +352,24 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: Any) -> None:
     """Populate provenance before direct normalization or permission checks."""
 
     def _has_active_fields(value: Any) -> bool:
-        if is_inactive_value(value):
+        if is_inactive_value(value, unset_sentinel=strawberry.UNSET):
             return False
         if isinstance(value, list):
             return any(_has_active_fields(element) for element in value)
         items = iter_input_items(value)
         if items is None:
             return False
-        return any(not is_inactive_value(raw_value) for _, raw_value in items)
+        return any(
+            not is_inactive_value(raw_value, unset_sentinel=strawberry.UNSET)
+            for _, raw_value in items
+        )
 
     if not _has_active_fields(input_value):
         return
-    meta = getattr(orderset_cls, "Meta", None)
-    if getattr(meta, "model", None) is not None and not any(
-        owner is orderset_cls for owner, _ in _field_specs
+    if (
+        isinstance(orderset_cls, type)
+        and callable(getattr(orderset_cls, "get_fields", None))
+        and not any(owner is orderset_cls for owner, _ in _field_specs)
     ):
         _build_input_fields(orderset_cls)
 

@@ -24,11 +24,13 @@ On top of that skeleton the module carries:
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
+from strawberry import UNSET
 
-from ..exceptions import ConfigurationError, PathResolutionError
+from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr, _safe_type_name
 from ..sets_mixins import (
     ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
@@ -162,12 +164,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
     # Family permission-facade config: shared with ``FilterSet`` through
     # ``ActiveInputPermissionMixin``. Order inputs are a top-level list with
-    # ``None`` (not ``UNSET``) for omitted fields, no operator-bag logic keys.
+    # ``UNSET`` / ``None`` for omitted fields, no operator-bag logic keys.
     _permission: ClassVar[ActiveInputPermissionAttrs] = ActiveInputPermissionAttrs(
         family_label="OrderSet",
         related_attr="related_orders",
         target_attr="orderset",
         field_specs=_field_specs,
+        unset_sentinel=UNSET,
         handle_top_level_list=True,
     )
 
@@ -254,12 +257,11 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             for name in _get_concrete_field_names_for_order(model):
                 fields[name] = None
             return fields
-        # Cookbook parity with
-        # ``django_graphene_filters/orderset.py::AdvancedOrderSet.get_fields``
-        # #"Works for both dict (iterates keys)" - one loop covers a dict (it
-        # iterates keys) and a list/tuple (it iterates values). Order's
-        # ``Meta.fields`` is list-only per spec-028 Decision 3 Layer 4, but
-        # the iteration pattern works either way.
+        if isinstance(meta_fields, str) or not isinstance(meta_fields, Iterable):
+            raise ConfigurationError(
+                f"OrderSet {cls.__qualname__}.Meta.fields must be '__all__' or an iterable "
+                f"of field names; got {_safe_type_name(meta_fields)} ({_safe_arg_repr(meta_fields)}).",
+            )
         model = getattr(meta, "model", None)
         for field_path in meta_fields:
             if model is not None:
@@ -268,7 +270,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
                 except PathResolutionError as exc:
                     raise ConfigurationError(
                         f"OrderSet {cls.__qualname__}.Meta.fields contains invalid "
-                        f"order path {field_path!r} for model {model.__name__}: {exc}",
+                        f"order path {field_path!r} for model {_safe_type_name(model)}: {exc}",
                     ) from exc
             fields[field_path] = None
         return fields
@@ -387,12 +389,18 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
+            if not isinstance(direction, Ordering):
+                raise ConfigurationError(
+                    f"OrderSet {cls.__qualname__} received invalid order direction "
+                    f"{_safe_arg_repr(direction)} for path {field_path!r}; "
+                    f"expected an Ordering enum member.",
+                )
             try:
                 classify_path(model, field_path)
             except PathResolutionError as exc:
                 raise ConfigurationError(
                     f"OrderSet {cls.__qualname__} received invalid order path "
-                    f"{field_path!r} for model {model.__name__}: {exc}",
+                    f"{field_path!r} for model {_safe_type_name(model)}: {exc}",
                 ) from exc
             if _path_traverses_to_many(model, field_path):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a

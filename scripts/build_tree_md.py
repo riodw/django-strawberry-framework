@@ -30,6 +30,31 @@ IGNORED_TREE_FILENAMES = frozenset(
 IGNORED_TREE_DIRNAMES = frozenset(
     {"__pycache__", "migrations"},
 )
+#: Rendered nodes that cannot carry a docstring-derived description.
+#:
+#: Every OTHER rendered file and directory must resolve to a non-empty summary or
+#: the render fails. A silent blank comment is how an undocumented module used to
+#: reach TREE.md unnoticed, so the exemptions are enumerated here rather than
+#: expressed as a bare ``return ""`` in the extractors:
+#:
+#: - ``py.typed`` is a zero-content PEP 561 marker file.
+#: - Django template directories are not Python packages (no ``__init__.py``) and
+#:   their ``.html`` leaves cannot hold a module docstring.
+#:
+#: ``examples/fakeshop/tests/`` and ``examples/fakeshop/test_query/`` are
+#: deliberately NOT packages either (AGENTS.md), but they are rendered as tree
+#: ROOTS and take their text from ``TEST_ROOT_DESCRIPTIONS``, so they never reach
+#: ``folder_description`` and need no exemption here.
+DESCRIPTIONLESS_FILENAMES = frozenset({"py.typed"})
+TEMPLATE_DIRNAME = "templates"
+#: A sentence terminator followed by whitespace, i.e. prose continuing into a
+#: SECOND sentence. Counting raw ``.`` characters cannot express this rule: a
+#: correct one-line summary routinely carries interior periods in module paths
+#: (``utils/write_transaction.py``), versions (``0.0.14``), phase names
+#: (``phase-2.5``) and attribute references (``Meta.cursor_field``). Those are
+#: never followed by whitespace, so this pattern accepts them and still rejects
+#: a genuine run-on summary.
+SENTENCE_BREAK_RE = re.compile(r"[.!?]\s")
 TREE_BRANCH = "\u251c\u2500\u2500 "
 TREE_LAST = "\u2514\u2500\u2500 "
 TREE_PIPE = "\u2502   "
@@ -175,14 +200,35 @@ def python_docstring_paragraphs(path: Path) -> list[str]:
     return paragraphs_from_text(python_docstring(path))
 
 
+def assert_single_sentence(path: Path, sentence: str) -> None:
+    """Raise unless ``sentence`` is exactly one period-terminated sentence.
+
+    The tree comment is one aligned line, so a summary that runs into a second
+    sentence either overflows the column or silently loses everything after the
+    first clause. Enforced on the extracted line rather than on the raw
+    docstring: later paragraphs are the file's detail prose and are free to be
+    as long as they need.
+    """
+    if not sentence.endswith("."):
+        raise TreeRenderError(
+            f"{path} first docstring line must end with '.'; got {sentence!r}.",
+        )
+    match = SENTENCE_BREAK_RE.search(sentence[:-1])
+    if match is not None:
+        raise TreeRenderError(
+            f"{path} first docstring line must be ONE sentence; found a second sentence "
+            f"starting at offset {match.start()} of {sentence!r}. Move the trailing prose "
+            "into the next paragraph.",
+        )
+
+
 def first_python_docstring_sentence(path: Path) -> str:
     """Return the first module-docstring line from a Python source file."""
     docstring = python_docstring(path)
     sentence = next((line.strip() for line in docstring.splitlines() if line.strip()), "")
     if not sentence:
         raise TreeRenderError(f"{path} has an empty module docstring.")
-    if not sentence.endswith("."):
-        raise TreeRenderError(f"{path} first docstring line must be a sentence.")
+    assert_single_sentence(path, sentence)
     return sentence
 
 
@@ -212,16 +258,38 @@ def markdown_paragraphs(path: Path) -> list[str]:
     return paragraphs
 
 
+def is_description_exempt(path: Path) -> bool:
+    """Return whether ``path`` is one of the documented description exemptions."""
+    if path.name in DESCRIPTIONLESS_FILENAMES:
+        return True
+    try:
+        parts = path.resolve().relative_to(REPO_ROOT).parts
+    except ValueError:
+        parts = path.parts
+    return TEMPLATE_DIRNAME in parts
+
+
 def first_non_python_sentence(path: Path) -> str:
-    """Return a useful first sentence for documented non-Python tree files."""
-    if path.name == "py.typed":
+    """Return the first sentence for a documented non-Python tree file.
+
+    Non-Python leaves have no module docstring, so markdown prose is the only
+    description source. Anything else rendered into the tree is undocumented by
+    construction and fails here rather than emitting a blank comment.
+    """
+    if is_description_exempt(path):
         return ""
     if path.suffix != ".md":
-        return ""
+        raise TreeRenderError(
+            f"{path} is rendered into the tree but cannot carry a description. Give it a "
+            f"module docstring, or add a documented exemption beside "
+            f"DESCRIPTIONLESS_FILENAMES.",
+        )
 
     for paragraph in markdown_paragraphs(path):
-        return first_sentence_from_text(paragraph, strip_markup=True)
-    return ""
+        sentence = first_sentence_from_text(paragraph, strip_markup=True)
+        assert_single_sentence(path, sentence)
+        return sentence
+    raise TreeRenderError(f"{path} has no prose paragraph to describe it.")
 
 
 def file_summary(path: Path) -> str:
@@ -285,10 +353,22 @@ def render_management_commands(app_dir: Path) -> list[str]:
 
 
 def folder_description(path: Path) -> str:
-    """Return the folder description stored in ``path / "__init__.py"``."""
+    """Return the folder description stored in ``path / "__init__.py"``.
+
+    A rendered directory with no ``__init__.py`` has nowhere to state what it is,
+    so it fails here instead of rendering an unlabelled row. Roots that are
+    deliberately not packages pass an explicit ``root_description`` and never
+    reach this function.
+    """
     init_path = path / "__init__.py"
     if not init_path.exists():
-        return ""
+        if is_description_exempt(path):
+            return ""
+        raise TreeRenderError(
+            f"{path} is rendered into the tree but has no __init__.py to describe it. Add "
+            f"one with a module docstring, pass an explicit root_description, or add a "
+            f"documented exemption beside DESCRIPTIONLESS_FILENAMES.",
+        )
     return first_python_docstring_sentence(init_path)
 
 

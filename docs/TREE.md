@@ -473,6 +473,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
+├── test_schema.py                # Permanent behavioral tests for django_strawberry_framework.schema.
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046).
@@ -650,6 +651,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 ├── test_products_visibility_api.py  # Live GraphQL proof that generated relations enforce target visibility themselves.
+├── test_relations_async_api.py   # Live GraphQL proof that generated relations lazy-load from an async context.
 ├── test_resource_policy_api.py   # Live ``/graphql/`` execution-resource-policy acceptance tests (spec-047).
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
@@ -697,6 +699,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
+├── test_schema.py                # Permanent behavioral tests for django_strawberry_framework.schema.
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046).
@@ -856,7 +859,7 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │           └── import_card_files.py  # manage.py import_card_files - replace kanban card package/path links.
     ├── library/    # Library app exercising relation graphs, keyset connections, and live model/form/serializer mutations.
     │   ├── apps.py               # Django app configuration for the library acceptance app.
-    │   ├── filters.py            # FilterSet declarations for the library acceptance app (spec-021).
+    │   ├── filters.py            # FilterSet declarations for the library acceptance app (spec-027).
     │   ├── filters_genre.py      # Cross-module fixture for the absolute-import-path ``RelatedFilter``.
     │   ├── forms.py              # Forms for the library app's live form-mutation surface.
     │   ├── models.py             # Managed models for library acceptance coverage.

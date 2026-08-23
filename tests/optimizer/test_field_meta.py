@@ -4,6 +4,10 @@ Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 ``DjangoType`` subclasses, and the walker's use of the cached map.
 """
 
+import copy
+import pickle
+from types import SimpleNamespace
+
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, MembershipCard, Patron, TaggedItem
@@ -12,9 +16,10 @@ from apps.products.models import Category, Item
 from django.db import models
 
 from django_strawberry_framework import DjangoType, finalize_django_types
-from django_strawberry_framework.exceptions import OptimizerError
-from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.optimizer.field_meta import FieldMeta, _target_pk_name
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils.relations import has_composite_pk
 
 
 class _MtiPlace(models.Model):
@@ -281,11 +286,196 @@ def test_from_django_field_rejects_hostile_required_attributes_safely():
             FieldMeta.from_django_field(field)  # type: ignore[arg-type]
 
 
+def test_target_pk_name_defensively_resolves_and_contains_errors():
+    """_target_pk_name returns model's pk name or None without raising unhandled errors."""
+    assert _target_pk_name(None) is None
+    assert _target_pk_name("string_model") is None
+    assert _target_pk_name(object()) is None
+    assert _target_pk_name(SimpleNamespace(_meta=None)) is None
+    assert _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=None))) is None
+    assert _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace()))) is None
+    assert (
+        _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace(name=123))))
+        is None
+    )
+
+    class HostileMeta:
+        @property
+        def _meta(self):
+            raise RuntimeError("hostile _meta access")
+
+    assert _target_pk_name(HostileMeta()) is None
+
+    class HostilePkMeta:
+        @property
+        def pk(self):
+            raise RuntimeError("hostile pk property")
+
+    assert _target_pk_name(SimpleNamespace(_meta=HostilePkMeta())) is None
+    assert _target_pk_name(Category) == "id"
+
+
+def test_from_django_field_rejects_non_string_field_name():
+    """Non-string field names are rejected with OptimizerError at stamp time."""
+    non_str_field = SimpleNamespace(name=123, is_relation=False)
+    with pytest.raises(OptimizerError, match="expected a string field name"):
+        FieldMeta.from_django_field(non_str_field)  # type: ignore[arg-type]
+
+
+def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
+    """Hostile or invalid relation metadata raises typed ConfigurationError."""
+
+    class HostileM2M:
+        name = "rel"
+        is_relation = True
+
+        @property
+        def many_to_many(self):
+            raise RuntimeError("m2m access error")
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Could not read relation metadata 'many_to_many'",
+    ):
+        FieldMeta.from_django_field(HostileM2M())  # type: ignore[arg-type]
+
+    class NonBoolM2M:
+        name = "rel"
+        is_relation = True
+        many_to_many = "yes"
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Relation metadata 'many_to_many' on .* must be a bool",
+    ):
+        FieldMeta.from_django_field(NonBoolM2M())  # type: ignore[arg-type]
+
+    class HostileAccessor:
+        name = "rel"
+        is_relation = True
+        one_to_many = True
+        auto_created = True
+
+        def get_accessor_name(self):
+            raise RuntimeError("accessor error")
+
+    with pytest.raises(ConfigurationError, match="Could not resolve relation accessor"):
+        FieldMeta.from_django_field(HostileAccessor())  # type: ignore[arg-type]
+
+    class NonCallableAccessor:
+        name = "rel"
+        is_relation = True
+        one_to_many = True
+        auto_created = True
+        get_accessor_name = "not_callable"
+
+    with pytest.raises(ConfigurationError, match="Relation accessor metadata .* must be callable"):
+        FieldMeta.from_django_field(NonCallableAccessor())  # type: ignore[arg-type]
+
+    class NonStrAccessor:
+        name = "rel"
+        is_relation = True
+        accessor_name = 12345
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Relation accessor metadata on .* must be a string",
+    ):
+        FieldMeta.from_django_field(NonStrAccessor())  # type: ignore[arg-type]
+
+
 def test_field_meta_is_frozen():
     """FieldMeta instances are immutable."""
     fm = FieldMeta(name="test")
-    with pytest.raises(AttributeError):
+    with pytest.raises((AttributeError, TypeError)):
         fm.name = "other"  # type: ignore[misc]
+
+
+def test_field_meta_slots_hashing_and_copy():
+    """FieldMeta is slotted, hashable, and supports copy/deepcopy/pickle."""
+    fm = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+        target_field_name="id",
+        target_pk_name="id",
+        fk_id_elision_eligible=True,
+    )
+    assert not hasattr(fm, "__dict__")
+    assert hasattr(fm, "__slots__")
+
+    # Hashable and equality
+    fm_same = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+        target_field_name="id",
+        target_pk_name="id",
+        fk_id_elision_eligible=True,
+    )
+    assert fm == fm_same
+    assert hash(fm) == hash(fm_same)
+    assert len({fm, fm_same}) == 1
+
+    # Copy and pickle
+    copied = copy.copy(fm)
+    deep_copied = copy.deepcopy(fm)
+    pickled = pickle.loads(pickle.dumps(fm))
+    assert copied == fm
+    assert deep_copied == fm
+    assert pickled == fm
+
+
+def test_fk_id_elision_edge_cases():
+    """FK elision correctly checks non-PK to_field and composite primary keys."""
+    # Standard FK: elision eligible
+    cat_field = Item._meta.get_field("category")
+    fm = FieldMeta.from_django_field(cat_field)
+    assert fm.fk_id_elision_eligible is True
+
+    # Non-PK to_field: not eligible
+    fake_to_field_fk = SimpleNamespace(
+        name="author_code",
+        is_relation=True,
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=False,
+        attname="author_code_id",
+        related_model=Category,
+        target_field=SimpleNamespace(name="code", attname="code"),
+    )
+    fm_to_field = FieldMeta.from_django_field(fake_to_field_fk)
+    assert fm_to_field.target_field_name == "code"
+    assert fm_to_field.target_pk_name == "id"
+    assert fm_to_field.fk_id_elision_eligible is False
+
+    # Composite PK model: not eligible
+    class DummyCompositeModel(models.Model):
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    DummyCompositeModel._meta.pk_fields = (
+        SimpleNamespace(name="tenant_id"),
+        SimpleNamespace(name="id"),
+    )
+    DummyCompositeModel._meta.pk = SimpleNamespace(name="id")
+    assert has_composite_pk(DummyCompositeModel) is True
+
+    fake_comp_fk = SimpleNamespace(
+        name="comp_rel",
+        is_relation=True,
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=False,
+        attname="comp_rel_id",
+        related_model=DummyCompositeModel,
+        target_field=SimpleNamespace(name="id", attname="id"),
+    )
+    fm_comp = FieldMeta.from_django_field(fake_comp_fk)
+    assert fm_comp.fk_id_elision_eligible is False
 
 
 def test_is_many_side_pins_every_relation_kind():
@@ -509,3 +699,33 @@ def test_mti_child_type_renders_parent_link_non_null():
     sdl = str(strawberry.Schema(query=Query))
 
     assert "MtiplacePtr: MtiPlaceType!" in sdl
+
+
+def test_from_django_field_non_string_attributes():
+    """FieldMeta.from_django_field safely coerces non-string attributes and rejects non-string field_name."""
+    # Non-string field_name raises OptimizerError
+    with pytest.raises(OptimizerError, match="expected a string field name"):
+        FieldMeta.from_django_field(SimpleNamespace(name=123, is_relation=False))
+    with pytest.raises(OptimizerError, match="expected a string field name"):
+        FieldMeta._from_field_shape(SimpleNamespace(), is_relation=True, field_name=123)
+
+    # Non-string target_field name/attname, field attname, reverse_connector_attname
+    fake_target = SimpleNamespace(name=123, attname=456)
+    fake_rel = SimpleNamespace(attname=789)
+    fake_field = SimpleNamespace(
+        name="test_field",
+        is_relation=True,
+        target_field=fake_target,
+        attname=999,
+        field=fake_rel,
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=False,
+        null=True,
+    )
+    fm = FieldMeta.from_django_field(fake_field)
+    assert fm.name == "test_field"
+    assert fm.target_field_name is None
+    assert fm.target_field_attname is None
+    assert fm.attname is None
+    assert fm.reverse_connector_attname is None

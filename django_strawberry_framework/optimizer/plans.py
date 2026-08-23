@@ -455,7 +455,7 @@ def _flatten_select_related(sr: Any) -> set[str]:
       dotted lookup paths via recursive walk, e.g.
       ``{"category": {"parent": {}}}`` -> ``{"category", "category__parent"}``.
     """
-    if sr is False or sr is True:
+    if sr is False or sr is True or not isinstance(sr, dict):
         return set()
     paths: set[str] = set()
 
@@ -618,11 +618,17 @@ def prune_unsupportable_select_related(plan: OptimizationPlan, queryset: Any) ->
     for path in unsupported:
         dropped_keys.update(plan.select_path_resolver_keys.get(path, ()))
     dropped_prefixes = tuple(f"{path}__" for path in unsupported)
+    new_select_path_keys = {
+        path: keys
+        for path, keys in plan.select_path_resolver_keys.items()
+        if path not in unsupported
+    }
     return replace(
         plan,
         select_related=[p for p in plan.select_related if p not in unsupported],
         planned_resolver_keys=[k for k in plan.planned_resolver_keys if k not in dropped_keys],
         only_fields=[f for f in plan.only_fields if not f.startswith(dropped_prefixes)],
+        select_path_resolver_keys=new_select_path_keys,
     ).finalize()
 
 
@@ -758,9 +764,9 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
     optional leading ``-`` for descending (Django's ``order_by`` contract -
     ``"--name"`` is not a valid order ref, so only the first dash is
     direction), or an ``OrderBy``-like expression wrapping an ``F`` with a
-    ``.name`` (direction from its ``descending`` flag). Anything else - a raw
-    expression with no resolvable name, a bare ``"-"`` - returns ``None`` and
-    the caller decides its fallback posture.
+    ``.name`` (direction from its ``descending`` flag), or a bare ``F``
+    expression. Anything else - a raw expression with no resolvable name, a bare
+    ``"-"`` - returns ``None`` and the caller decides its fallback posture.
 
     Shared by the nested planner's order-column projection
     (``nested_planner.py::_order_entry_field_name``), the unique-terminal check
@@ -773,8 +779,12 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
         name = entry[1:] if descending else entry
         return (name, descending) if name else None
     expression = getattr(entry, "expression", None)
-    name = getattr(expression, "name", None)
-    if name is None:
+    name = (
+        getattr(expression, "name", None)
+        if expression is not None
+        else getattr(entry, "name", None)
+    )
+    if not isinstance(name, str) or not name:
         return None
     return name, bool(getattr(entry, "descending", False))
 

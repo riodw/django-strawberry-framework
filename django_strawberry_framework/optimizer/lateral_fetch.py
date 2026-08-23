@@ -1076,13 +1076,15 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         prefetch_value_aliases: tuple[str, ...] = (
             f"_prefetch_related_val_{parent_link_field.attname}",
         )
-    else:
+    elif join.lateral_shape is LateralJoinShape.DIRECT_FK:
         # DIRECT_FK: the child table itself carries the parent id (reverse FK /
         # reverse one-to-one; the walker never plans forward-single relations).
         through_table = None
         parent_link_table = child_meta.db_table
         through_child_column = None
         prefetch_value_aliases = ()
+    else:
+        return None
     return LateralWindowSpec(
         model=child_queryset.model,
         db_table=child_meta.db_table,

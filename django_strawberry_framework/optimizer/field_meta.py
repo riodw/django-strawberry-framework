@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
+    _relation_attr,
+    _relation_bool,
+    _relation_name,
     has_composite_pk,
     instance_accessor,
     is_many_side_relation_kind,
@@ -190,6 +193,11 @@ class FieldMeta:
                 f"FieldMeta.from_django_field expected a Django field descriptor "
                 f"exposing 'name' and 'is_relation'; got {_safe_type_name(field)}.",
             ) from exc
+        if not isinstance(field_name, str):
+            raise OptimizerError(
+                f"FieldMeta.from_django_field expected a string field name; "
+                f"got {_safe_type_name(field_name)}.",
+            )
         return cls._from_field_shape(field, is_relation=is_relation, field_name=field_name)
 
     @classmethod
@@ -218,37 +226,66 @@ class FieldMeta:
         ``getattr``-defaulted relation-shape reads and the derived FK-id
         elision metadata live here so the two call sites cannot drift.
         """
-        # Read ``target_field`` once - it is consulted twice below to
-        # extract both ``name`` and ``attname``.
         if field_name is None:
-            field_name = field.name
-        target_field = getattr(field, "target_field", None)
-        related_model = getattr(field, "related_model", None)
+            field_name = _relation_attr(field, "name", None)
+        if not isinstance(field_name, str):
+            raise OptimizerError(
+                f"FieldMeta expected a string field name; got {_safe_type_name(field_name)}.",
+            )
+        target_field = _relation_attr(field, "target_field", None)
+        related_model = _relation_attr(field, "related_model", None)
         target_pk_name = _target_pk_name(related_model)
-        target_field_name = getattr(target_field, "name", None)
-        is_m2m = bool(getattr(field, "many_to_many", False))
-        is_o2m = bool(getattr(field, "one_to_many", False))
-        attname = getattr(field, "attname", None)
-        auto_created = bool(getattr(field, "auto_created", False))
+        target_field_name = (
+            _relation_attr(target_field, "name", None) if target_field is not None else None
+        )
+        if target_field_name is not None and not isinstance(target_field_name, str):
+            target_field_name = None
+        target_field_attname = (
+            _relation_attr(target_field, "attname", None) if target_field is not None else None
+        )
+        if target_field_attname is not None and not isinstance(target_field_attname, str):
+            target_field_attname = None
+        is_m2m = _relation_bool(field, "many_to_many", False)
+        is_o2m = _relation_bool(field, "one_to_many", False)
+        is_o2o = _relation_bool(field, "one_to_one", False)
+        attname = _relation_attr(field, "attname", None)
+        if attname is not None and not isinstance(attname, str):
+            attname = None
+        auto_created = _relation_bool(field, "auto_created", False)
+        concrete = _relation_bool(field, "concrete", False)
+        content_type_field_name = _relation_name(field, "content_type_field_name")
+        object_id_field_name = _relation_name(field, "object_id_field_name")
         kind = relation_kind(field)
+
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
         if is_m2m or is_o2m:
             nullable = False
         else:
-            nullable = kind == "reverse_one_to_one" or bool(
-                getattr(field, "null", False),
-            )
+            nullable = kind == "reverse_one_to_one" or _relation_bool(field, "null", False)
+
+        field_rel = _relation_attr(field, "field", None)
+        reverse_connector_attname = (
+            _relation_attr(field_rel, "attname", None) if field_rel is not None else None
+        )
+        if reverse_connector_attname is not None and not isinstance(
+            reverse_connector_attname,
+            str,
+        ):
+            reverse_connector_attname = None
+
+        accessor_name = instance_accessor(field)
+
         return cls(
             name=field_name,
             is_relation=is_relation,
             many_to_many=is_m2m,
             one_to_many=is_o2m,
-            one_to_one=bool(getattr(field, "one_to_one", False)),
+            one_to_one=is_o2o,
             nullable=nullable,
             related_model=related_model,
             attname=attname,
             target_field_name=target_field_name,
-            target_field_attname=getattr(target_field, "attname", None),
+            target_field_attname=target_field_attname,
             target_pk_name=target_pk_name,
             fk_id_elision_eligible=(
                 attname is not None
@@ -260,12 +297,12 @@ class FieldMeta:
                 and kind == "forward_single"
                 and not has_composite_pk(related_model)
             ),
-            reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
+            reverse_connector_attname=reverse_connector_attname,
             auto_created=auto_created,
-            accessor_name=instance_accessor(field),
-            concrete=bool(getattr(field, "concrete", False)),
-            content_type_field_name=getattr(field, "content_type_field_name", None),
-            object_id_field_name=getattr(field, "object_id_field_name", None),
+            accessor_name=accessor_name,
+            concrete=concrete,
+            content_type_field_name=content_type_field_name,
+            object_id_field_name=object_id_field_name,
         )
 
 
@@ -280,7 +317,14 @@ def _target_pk_name(model: type[models.Model] | None) -> str | None:
     """
     if model is None:
         return None
-    meta = getattr(model, "_meta", None)
-    if meta is None:
+    try:
+        meta = getattr(model, "_meta", None)
+        if meta is None:
+            return None
+        pk = getattr(meta, "pk", None)
+        if pk is None:
+            return None
+        pk_name = getattr(pk, "name", None)
+        return pk_name if isinstance(pk_name, str) else None
+    except BaseException:
         return None
-    return meta.pk.name

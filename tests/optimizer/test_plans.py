@@ -441,6 +441,12 @@ class TestFlattenSelectRelated:
             "category__parent",
         }
 
+    def test_none_or_non_dict_returns_empty_set(self):
+        assert _flatten_select_related(None) == set()
+        assert _flatten_select_related("invalid") == set()
+        assert _flatten_select_related(123) == set()
+        assert _flatten_select_related([1, 2]) == set()
+
 
 class TestConsumerOnlyFields:
     """``_consumer_only_fields`` defends Django's private ``deferred_loading`` contract.
@@ -1151,6 +1157,15 @@ class TestDeterministicOrderHoistParity:
         assert ends_in_unique_column((F("name").asc(),), Category) is True  # unique
         assert ends_in_unique_column((F("name").asc(),), Item) is False  # non-unique
 
+    def test_ends_in_unique_column_bare_f_expression(self):
+        """Bare ``F`` expression terminals read the wrapped column name directly."""
+        from django.db.models import F
+
+        assert ends_in_unique_column((F("name"),), Category) is True  # unique
+        assert ends_in_unique_column((F("name"),), Item) is False  # non-unique
+        assert ends_in_unique_column((F("id"),), Item) is True  # unique pk
+        assert deterministic_order((F("id"),), Item) == (F("id"),)
+
     def test_ends_in_unique_column_unnameable_terminal(self):
         """A transform terminal (no readable column name) is treated as non-unique."""
         from django.db.models.functions import Lower
@@ -1384,6 +1399,28 @@ class TestPruneUnsupportableSelectRelated:
         )
 
         assert prune_unsupportable_select_related(plan, Item.objects.all()) is plan
+
+    def test_prune_removes_unsupported_from_select_path_resolver_keys(self):
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(
+            select_related=["shelf", "shelf__branch"],
+            planned_resolver_keys=["shelf-key", "branch-key"],
+            select_path_resolver_keys={
+                "shelf": ("shelf-key",),
+                "shelf__branch": ("branch-key",),
+            },
+        ).finalize()
+        from django_strawberry_framework.optimizer.plans import (
+            prune_unsupportable_select_related,
+        )
+
+        pruned = prune_unsupportable_select_related(
+            plan,
+            Book.objects.only("title", "shelf__code"),
+        )
+        assert pruned.select_related == ("shelf",)
+        assert pruned.select_path_resolver_keys == {"shelf": ("shelf-key",)}
 
 
 def test_consumer_projection_and_traversal_defensive_shapes():

@@ -1336,3 +1336,121 @@ def test_spec_downgrades_for_custom_queryset_subclasses():
     assert isinstance(entry.queryset, _StatefulQuerySet)
     assert entry.queryset.marker == "visibility-scope"
     assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
+
+
+def test_spec_refuses_unsupported_lateral_join_shape():
+    """An unsupported join shape cannot build a LateralWindowSpec."""
+    import dataclasses
+
+    from django_strawberry_framework.optimizer.join_taxonomy import (
+        LateralJoinShape,
+        classify_relation_join,
+    )
+
+    req = _shelf_books_request()
+    unsupported_join = dataclasses.replace(
+        classify_relation_join(Book._meta.get_field("shelf")),
+        lateral_shape=LateralJoinShape.UNSUPPORTED,
+    )
+    req = dataclasses.replace(req, join=unsupported_join)
+    assert _build_lateral_spec(req) is None
+
+
+def test_keyset_seek_quals_match_single_and_multi_column():
+    """Test full keyset seek flow recognition for 1-column, 2-column, and 3-column plans."""
+    from django_strawberry_framework.keyset import (
+        KeysetCursor,
+        KeysetSeek,
+        cursor_columns_for,
+    )
+
+    # 1-column seek
+    seek1 = KeysetSeek(
+        columns=cursor_columns_for(Book, ("id",)),
+        cursor=KeysetCursor(values=(100,)),
+    )
+    req1 = _shelf_books_request(
+        child_queryset=Book.objects.only("id", "title", "shelf_id"),
+        keyset_seek=seek1,
+        order_by=("id",),
+        with_total_count=False,
+    )
+    spec1 = _build_lateral_spec(req1)
+    assert spec1 is not None
+    assert spec1.keyset_seek is seek1
+
+    plan1 = OptimizationPlan()
+    assert LateralPrefetchStrategy().plan(req1, plan1) is True
+    (entry1,) = plan1.prefetch_related
+    assert isinstance(entry1.queryset, LateralQuerySet)
+    prefetched1 = _filter_prefetch_queryset(
+        entry1.queryset,
+        "shelf_id",
+        [Shelf(id=1), Shelf(id=2)],
+    )
+    rec1 = _recognize_lateral_fetch(prefetched1, spec1)
+    assert rec1 is not None
+    assert rec1.parent_ids == [1, 2]
+
+    # 2-column seek (ASC + DESC)
+    seek2 = KeysetSeek(
+        columns=cursor_columns_for(Book, ("title", "-id")),
+        cursor=KeysetCursor(values=("Dune", 50)),
+    )
+    req2 = _shelf_books_request(
+        child_queryset=Book.objects.only("id", "title", "shelf_id"),
+        keyset_seek=seek2,
+        order_by=("title", "-id"),
+        with_total_count=False,
+    )
+    spec2 = _build_lateral_spec(req2)
+    assert spec2 is not None
+
+    plan2 = OptimizationPlan()
+    assert LateralPrefetchStrategy().plan(req2, plan2) is True
+    (entry2,) = plan2.prefetch_related
+    prefetched2 = _filter_prefetch_queryset(entry2.queryset, "shelf_id", [Shelf(id=3)])
+    rec2 = _recognize_lateral_fetch(prefetched2, spec2)
+    assert rec2 is not None
+    assert rec2.parent_ids == [3]
+
+    # 3-column seek
+    seek3 = KeysetSeek(
+        columns=cursor_columns_for(Book, ("circulation_status", "title", "id")),
+        cursor=KeysetCursor(values=("available", "Dune", 50)),
+    )
+    req3 = _shelf_books_request(
+        child_queryset=Book.objects.only("id", "title", "circulation_status", "shelf_id"),
+        keyset_seek=seek3,
+        order_by=("circulation_status", "title", "id"),
+        with_total_count=False,
+    )
+    spec3 = _build_lateral_spec(req3)
+    assert spec3 is not None
+
+    plan3 = OptimizationPlan()
+    assert LateralPrefetchStrategy().plan(req3, plan3) is True
+    (entry3,) = plan3.prefetch_related
+    prefetched3 = _filter_prefetch_queryset(entry3.queryset, "shelf_id", [Shelf(id=5)])
+    rec3 = _recognize_lateral_fetch(prefetched3, spec3)
+    assert rec3 is not None
+    assert rec3.parent_ids == [5]
+
+    # Mutated cursor value in spec fails recognition closed
+    different_seek = KeysetSeek(
+        columns=cursor_columns_for(Book, ("circulation_status", "title", "id")),
+        cursor=KeysetCursor(values=("available", "Different", 99)),
+    )
+    import dataclasses
+
+    spec_mutated = dataclasses.replace(spec3, keyset_seek=different_seek)
+    assert _recognize_lateral_fetch(prefetched3, spec_mutated) is None
+
+
+def test_build_window_spec_unsupported_shape_returns_none():
+    from django_strawberry_framework.optimizer.lateral_fetch import _build_lateral_spec
+
+    req = _shelf_books_request()
+    bad_join = dataclasses.replace(req.join, lateral_shape="UNSUPPORTED_SHAPE")
+    req_bad = dataclasses.replace(req, join=bad_join)
+    assert _build_lateral_spec(req_bad) is None

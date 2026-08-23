@@ -159,6 +159,32 @@ class TestStrategyFactory:
         with pytest.raises(ConfigurationError, match="nested_strategy"):
             OptimizerHint(prefetch_obj=Prefetch("items"), nested_strategy="windowed")
 
+    def test_strategy_rejects_hostile_type_name_safely(self) -> None:
+        """A hostile metaclass cannot replace the typed strategy rejection."""
+
+        class HostileType(type):
+            @property
+            def __name__(cls):
+                raise RuntimeError("type name should never run")
+
+        class NotStrategy(metaclass=HostileType):
+            pass
+
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="nested_connection_strategy"):
+            OptimizerHint.strategy(NotStrategy())  # type: ignore[arg-type]
+
+    def test_strategy_rejects_class_with_clean_name(self) -> None:
+        """Passing a strategy class instead of an instance names the class, not 'type'."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+        from django_strawberry_framework.optimizer.nested_fetch import (
+            WindowedPrefetchStrategy,
+        )
+
+        with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
+            OptimizerHint.strategy(WindowedPrefetchStrategy)  # type: ignore[arg-type]
+
     def test_public_annotations_resolve_at_runtime(self) -> None:
         """``typing.get_type_hints(OptimizerHint)`` resolves ``StrategySelection``.
 

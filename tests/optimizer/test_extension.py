@@ -3974,6 +3974,131 @@ def test_clear_optimizer_context_locked_querydict_is_noop():
     assert "dst_optimizer_plan" in locked  # untouched (read-only)
 
 
+def test_optimizer_context_all_exports():
+    """All public constants and functions in ``optimizer/_context.py`` are listed in ``__all__``."""
+    import django_strawberry_framework.optimizer._context as ctx_mod
+
+    expected = {
+        "DST_OPTIMIZER_FK_ID_ELISIONS",
+        "DST_OPTIMIZER_KEYS",
+        "DST_OPTIMIZER_LOOKUP_PATHS",
+        "DST_OPTIMIZER_PLAN",
+        "DST_OPTIMIZER_PLANNED",
+        "DST_OPTIMIZER_STRICTNESS",
+        "active_strictness",
+        "begin_scoped_relations",
+        "begin_strictness",
+        "clear_optimizer_context",
+        "end_scoped_relations",
+        "end_strictness",
+        "get_context_value",
+        "publish_scoped_relations",
+        "relation_is_optimizer_scoped",
+        "stash_on_context",
+    }
+    assert set(ctx_mod.__all__) == expected
+    for name in expected:
+        assert hasattr(ctx_mod, name)
+
+
+def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactive():
+    """``publish_scoped_relations`` handles None, empty collections, and generators safely."""
+    from django_strawberry_framework.optimizer._context import (
+        begin_scoped_relations,
+        end_scoped_relations,
+        publish_scoped_relations,
+        relation_is_optimizer_scoped,
+    )
+
+    # Inactive: safe no-op on falsy and non-iterables
+    publish_scoped_relations(None)
+    publish_scoped_relations(set())
+    publish_scoped_relations([])
+    publish_scoped_relations(())
+
+    # Active: safe no-op on falsy and proper consumption of iterables/generators
+    token = begin_scoped_relations()
+    try:
+        publish_scoped_relations(None)
+        publish_scoped_relations(set())
+        publish_scoped_relations([])
+        publish_scoped_relations(["rel_a@Type"])
+        publish_scoped_relations(x for x in ["rel_b@Type", "rel_c@Type"])
+        assert relation_is_optimizer_scoped("rel_a@Type")
+        assert relation_is_optimizer_scoped("rel_b@Type")
+        assert relation_is_optimizer_scoped("rel_c@Type")
+        assert not relation_is_optimizer_scoped("unplanned@Type")
+    finally:
+        end_scoped_relations(token)
+
+
+def test_relation_is_optimizer_scoped_unhashable_fail_closed():
+    """``relation_is_optimizer_scoped`` fails closed (returns False) for unhashable objects."""
+    from django_strawberry_framework.optimizer._context import (
+        begin_scoped_relations,
+        end_scoped_relations,
+        publish_scoped_relations,
+        relation_is_optimizer_scoped,
+    )
+
+    # Inactive: returns False for unhashable shapes
+    assert not relation_is_optimizer_scoped({})  # type: ignore[arg-type]
+    assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
+
+    # Active: still fail-closed (returns False rather than raising TypeError)
+    token = begin_scoped_relations()
+    try:
+        publish_scoped_relations({"valid@Type"})
+        assert relation_is_optimizer_scoped("valid@Type")
+        assert not relation_is_optimizer_scoped({})  # type: ignore[arg-type]
+        assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
+    finally:
+        end_scoped_relations(token)
+
+
+def test_strictness_and_scoped_relations_reentrant_isolation():
+    """Re-entrant nested executions isolate strictness and scoped relations and restore cleanly."""
+    from django_strawberry_framework.optimizer._context import (
+        active_strictness,
+        begin_scoped_relations,
+        begin_strictness,
+        end_scoped_relations,
+        end_strictness,
+        publish_scoped_relations,
+        relation_is_optimizer_scoped,
+    )
+
+    outer_s = begin_strictness("raise")
+    outer_r = begin_scoped_relations()
+    try:
+        publish_scoped_relations(["outer@Type"])
+        assert active_strictness() == "raise"
+        assert relation_is_optimizer_scoped("outer@Type")
+
+        # Nested execution with different strictness and separate relations
+        inner_s = begin_strictness("warn")
+        inner_r = begin_scoped_relations()
+        try:
+            publish_scoped_relations(["inner@Type"])
+            assert active_strictness() == "warn"
+            assert relation_is_optimizer_scoped("inner@Type")
+            assert not relation_is_optimizer_scoped("outer@Type")
+        finally:
+            end_strictness(inner_s)
+            end_scoped_relations(inner_r)
+
+        # Outer state restored
+        assert active_strictness() == "raise"
+        assert relation_is_optimizer_scoped("outer@Type")
+        assert not relation_is_optimizer_scoped("inner@Type")
+    finally:
+        end_strictness(outer_s)
+        end_scoped_relations(outer_r)
+
+    assert active_strictness() is None
+    assert not relation_is_optimizer_scoped("outer@Type")
+
+
 @pytest.mark.asyncio
 async def test_shared_singleton_keeps_execution_context_operation_local():
     """Concurrent operations clear their own reused context on a shared extension.

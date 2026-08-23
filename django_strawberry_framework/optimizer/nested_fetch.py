@@ -67,7 +67,7 @@ from typing import Any, ClassVar, Protocol
 from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_type_name
 from ..utils.connections import assert_window_fetch_mode_for
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
@@ -423,11 +423,11 @@ def resolve_strategy(value: Any) -> NestedConnectionStrategy:
                 f"{sorted(registry)} or 'auto' or a NestedConnectionStrategy instance.",
             )
         return strategy
-    if callable(getattr(value, "plan", None)):
+    if not isinstance(value, type) and callable(getattr(value, "plan", None)):
         return value
     raise ConfigurationError(
         f"nested_connection_strategy must be a strategy name, 'auto', or an object "
-        f"with a plan(request, plan) method; got {type(value).__name__}.",
+        f"with a plan(request, plan) method; got {_safe_type_name(value)}.",
     )
 
 

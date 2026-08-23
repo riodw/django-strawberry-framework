@@ -23,7 +23,11 @@ __all__ = (
     "DST_OPTIMIZER_PLANNED",
     "DST_OPTIMIZER_STRICTNESS",
     "active_strictness",
+    "begin_scoped_relations",
+    "begin_strictness",
     "clear_optimizer_context",
+    "end_scoped_relations",
+    "end_strictness",
     "get_context_value",
     "publish_scoped_relations",
     "relation_is_optimizer_scoped",
@@ -61,6 +65,8 @@ _scoped_relations: ContextVar[set[str] | None] = ContextVar(
 
 def publish_scoped_relations(keys: Any) -> None:
     """Record ``keys`` as optimizer-planned for this execution (idempotent union)."""
+    if not keys:
+        return
     scoped = _scoped_relations.get()
     if scoped is not None:
         scoped.update(keys)
@@ -69,7 +75,12 @@ def publish_scoped_relations(keys: Any) -> None:
 def relation_is_optimizer_scoped(key: str) -> bool:
     """Return whether ``key`` names a relation the optimizer planned this execution."""
     scoped = _scoped_relations.get()
-    return scoped is not None and key in scoped
+    if scoped is None:
+        return False
+    try:
+        return key in scoped
+    except TypeError:
+        return False
 
 
 #: The strictness in force for the CURRENT execution, or ``None`` when no

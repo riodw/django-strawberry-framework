@@ -114,6 +114,24 @@ def test_resolve_strategy_rejects_unknown_name_and_bad_type():
         resolve_strategy(42)
 
 
+def test_resolve_strategy_rejects_hostile_type_and_class_name():
+    """Hostile types fail safely with ConfigurationError and classes report their name."""
+
+    class HostileType(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError("type name should never run")
+
+    class NotStrategy(metaclass=HostileType):
+        pass
+
+    with pytest.raises(ConfigurationError, match="nested_connection_strategy"):
+        resolve_strategy(NotStrategy())
+
+    with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
+        resolve_strategy(WindowedPrefetchStrategy)
+
+
 def test_resolve_strategy_lateral_loads_the_lateral_backend():
     """``"lateral"`` lazily registers and returns the Postgres backend singleton."""
     from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY

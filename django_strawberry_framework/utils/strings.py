@@ -63,7 +63,9 @@ def _snake_case_cached(name: str) -> str:
     while i < len(name):
         c = name[i]
         if (
-            c == "_"
+            i > 0
+            and name[i - 1].isupper()
+            and c == "_"
             and i + 3 < len(name)
             and name[i + 1] == "_"
             and name[i + 2] == "x"

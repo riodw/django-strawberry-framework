@@ -21,9 +21,11 @@ function-locally (the repo's established cross-package seam, see
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.utils.functional import Promise
 
 from ..exceptions import _safe_type_name
 
@@ -85,7 +87,34 @@ def _str_list(value: Any) -> list[str]:
     (a DRF ``ErrorDetail`` list, a tuple) is materialized with each element
     stringified.
     """
-    if isinstance(value, str):
+    try:
+        is_str = isinstance(value, (str, Promise))
+    except BaseException:
+        is_str = False
+    if is_str:
+        return [_safe_text(value)]
+    try:
+        is_iter = isinstance(
+            value,
+            (
+                list,
+                tuple,
+                set,
+                frozenset,
+                Iterable,
+            ),
+        ) and not isinstance(
+            value,
+            (
+                bytes,
+                bytearray,
+                memoryview,
+                Promise,
+            ),
+        )
+    except BaseException:
+        is_iter = False
+    if not is_iter:
         return [_safe_text(value)]
     try:
         items = list(value)
@@ -119,10 +148,33 @@ def _unprintable(value: Any) -> str:
 def _validation_messages(error: Any) -> list[Any]:
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
-        return list(error.messages)
+        msgs = error.messages
+        if isinstance(
+            msgs,
+            (
+                str,
+                bytes,
+                bytearray,
+                memoryview,
+                Promise,
+            ),
+        ):
+            return [msgs]
+        return list(msgs)
     except BaseException:
         try:
-            return [error.message]
+            msg = error.message
+            if isinstance(
+                msg,
+                (
+                    list,
+                    tuple,
+                    set,
+                    frozenset,
+                ),
+            ):
+                return list(msg)
+            return [msg]
         except BaseException:
             return [error]
 
@@ -139,9 +191,26 @@ def _validation_code(leaf: Any) -> Any:
 def _validation_codes(error: Any) -> list[Any]:
     """Read all codes from one Django validation error leaf."""
     try:
-        leaves = tuple(error.error_list)
+        error_list = getattr(error, "error_list", None)
+        if error_list is not None:
+            leaves = (
+                (error_list,)
+                if isinstance(
+                    error_list,
+                    (
+                        str,
+                        bytes,
+                        bytearray,
+                        memoryview,
+                        Promise,
+                    ),
+                )
+                else tuple(error_list)
+            )
+        else:
+            leaves = (error,)
     except BaseException:
-        return []
+        leaves = (error,)
     return [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
 
 
@@ -221,10 +290,22 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                 field_name, field_errors = unpacked
                 normalized_name = _safe_text(field_name)
                 path = "" if normalized_name == NON_FIELD_ERRORS else normalized_name
-                try:
-                    field_error_items = tuple(field_errors)
-                except BaseException:
-                    field_error_items = (field_errors,)
+                if isinstance(
+                    field_errors,
+                    (
+                        str,
+                        bytes,
+                        bytearray,
+                        memoryview,
+                        Promise,
+                    ),
+                ):
+                    field_error_items: tuple[Any, ...] = (field_errors,)
+                else:
+                    try:
+                        field_error_items = tuple(field_errors)
+                    except BaseException:
+                        field_error_items = (field_errors,)
                 messages: list[Any] = []
                 for error in field_error_items:
                     messages.extend(_validation_messages(error))
@@ -240,14 +321,28 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
             if errors:
                 return errors
     try:
-        error_list = tuple(exc.error_list)
+        error_list = getattr(exc, "error_list", None)
+        if error_list is not None:
+            leaves = (
+                (error_list,)
+                if isinstance(
+                    error_list,
+                    (
+                        str,
+                        bytes,
+                        bytearray,
+                        memoryview,
+                        Promise,
+                    ),
+                )
+                else tuple(error_list)
+            )
+        else:
+            leaves = (exc,)
     except BaseException:
-        error_list = ()
-    codes = [code for leaf in error_list if (code := _validation_code(leaf)) is not None]
-    try:
-        messages = list(exc.messages)
-    except BaseException:
-        messages = [exc]
+        leaves = (exc,)
+    codes = [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
+    messages = _validation_messages(exc)
     return [field_error("", messages, codes=codes) if messages else _empty_validation_error()]
 
 

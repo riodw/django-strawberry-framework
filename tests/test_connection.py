@@ -50,6 +50,7 @@ from django_strawberry_framework.connection import (
     _connection_type_for,
     _ends_in_unique_column,
     _finalize_queryset,
+    _guard_first_and_last,
     _total_count_requested,
     clear_connection_type_cache,
 )
@@ -150,6 +151,17 @@ def test_first_and_last_guard_on_generated_subclass():
 
     with pytest.raises(GraphQLError, match="mutually exclusive"):
         connection_type.resolve_connection([], info=object(), first=1, last=1)
+
+
+def test_first_and_last_guard_with_unset():
+    """``_guard_first_and_last`` ignores ``strawberry.UNSET`` correctly."""
+    # Omitted args arriving as UNSET do not trigger the mutual exclusivity error
+    _guard_first_and_last(strawberry.UNSET, strawberry.UNSET)
+    _guard_first_and_last(5, strawberry.UNSET)
+    _guard_first_and_last(strawberry.UNSET, 5)
+
+    with pytest.raises(GraphQLError, match="mutually exclusive"):
+        _guard_first_and_last(5, 5)
 
 
 # =============================================================================

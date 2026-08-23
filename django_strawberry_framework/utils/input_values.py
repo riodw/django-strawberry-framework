@@ -217,16 +217,17 @@ def iter_active_fields(
     ``_apply_related_constraints`` own it). Leaf shape (operator bags, ranges,
     directions) is the consumer's business too; this walker only marks the kind.
     """
-    if is_inactive_value(input_value, unset_sentinel=config.unset_sentinel):
-        return
     try:
+        unset_sentinel = config.unset_sentinel
         handle_top_level_list = config.handle_top_level_list
     except BaseException as exc:
         raise _walk_error(input_value, "the traversal configuration could not be read") from exc
+    if is_inactive_value(input_value, unset_sentinel=unset_sentinel):
+        return
     if handle_top_level_list and isinstance(input_value, list):
         elements = list.__iter__(input_value)
         for element in elements:
-            if is_inactive_value(element, unset_sentinel=config.unset_sentinel):
+            if is_inactive_value(element, unset_sentinel=unset_sentinel):
                 continue
             if isinstance(element, list) or iter_input_items(element) is None:
                 raise ConfigurationError(
@@ -250,7 +251,7 @@ def iter_active_fields(
             f"{_safe_type_name(input_value)}: related-field declarations are not a mapping.",
         )
     for python_attr, raw_value in items:
-        if is_inactive_value(raw_value, unset_sentinel=config.unset_sentinel):
+        if is_inactive_value(raw_value, unset_sentinel=unset_sentinel):
             continue
         try:
             spec = config.field_specs.get((set_cls, python_attr))

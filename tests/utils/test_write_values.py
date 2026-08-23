@@ -16,6 +16,7 @@ from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
 )
 from django_strawberry_framework.utils.write_values import (
+    coerce_relation_pk_or_none,
     decode_field_handlers,
     decode_provided_fields,
     decode_scalar_leaf,
@@ -409,3 +410,95 @@ def test_form_and_serializer_decode_walks_share_field_handlers():
     assert mutation_resolvers.decode_provided_fields is decode_provided_fields
     assert mutation_resolvers.decoded_into is decoded_into
     assert mutation_resolvers.relation_into is relation_into
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_rejects_non_collection_types():
+    """Strings, bytes, bytearrays, memoryviews, and mappings are rejected as invalid relation values."""
+    category = Category.objects.create(name="NonCollTarget")
+    recourse = "Use a synchronous visibility hook."
+
+    for bad_container in [
+        "123",
+        "abc",
+        b"123",
+        bytearray(b"123"),
+        memoryview(b"123"),
+        {"category": category.pk},
+    ]:
+        pks, error = decode_visible_relation_ids(
+            bad_container,
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+        assert pks is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+
+def test_coerce_relation_pk_or_none_handles_non_models_and_hostile_objects():
+    """coerce_relation_pk_or_none returns None without crashing on non-models or hostile objects."""
+    assert coerce_relation_pk_or_none(object, 1) is None
+    assert coerce_relation_pk_or_none(None, 1) is None
+
+    class HostileInt:
+        def __int__(self):
+            raise RuntimeError("hostile int conversion")
+
+    assert coerce_relation_pk_or_none(Category, HostileInt()) is None
+    assert coerce_relation_pk_or_none(Category, object()) is None
+
+
+def test_decode_provided_fields_tolerates_unmapped_input_fields():
+    """Input fields present on the data object but not declared in specs are safely skipped."""
+
+    @strawberry.input
+    class ExtraFieldInput:
+        name: str = "Test"
+        extra: str = "Ignored"
+
+    dest: dict[str, object] = {}
+    specs = [_spec(attr="name", kind=SCALAR, target="name")]
+    handlers = {}
+    scalar_handler = scalar_into(dest)
+
+    error = decode_provided_fields(
+        specs,
+        ExtraFieldInput(),
+        handlers=handlers,
+        scalar_handler=scalar_handler,
+    )
+    assert error is None
+    assert dest == {"name": "Test"}
+
+
+def test_decode_provided_fields_handles_none_and_non_strawberry_data():
+    """decode_provided_fields safely treats None and non-strawberry data as empty without crashing."""
+    dest: dict[str, object] = {}
+    specs = [_spec(attr="name", kind=SCALAR, target="name")]
+    handlers = {}
+    scalar_handler = scalar_into(dest)
+
+    assert (
+        decode_provided_fields(
+            specs,
+            None,
+            handlers=handlers,
+            scalar_handler=scalar_handler,
+        )
+        is None
+    )
+    assert dest == {}
+
+    assert (
+        decode_provided_fields(
+            specs,
+            {"name": "dict_input"},
+            handlers=handlers,
+            scalar_handler=scalar_handler,
+        )
+        is None
+    )
+    assert dest == {}

@@ -27,27 +27,40 @@ def _safe_type_name(value: object) -> str:
     metaclass name before the ``"object"`` last resort, so the caller still gets
     the most specific label that can be rendered safely.
     """
-    sources = (value, type(value)) if isinstance(value, type) else (type(value),)
+    try:
+        is_type = isinstance(value, type)
+    except BaseException:
+        is_type = False
+    sources = (value, type(value)) if is_type else (type(value),)
     for source in sources:
         try:
             name = source.__name__
         except BaseException:
             continue
-        if not isinstance(name, str):
+        try:
+            is_str_name = isinstance(name, str)
+        except BaseException:
+            is_str_name = False
+        if not is_str_name:
             continue
-        # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
-        # that object would let its ``__str__`` / ``__format__`` run while a
-        # typed error message is being assembled, replacing the framework error
-        # with an arbitrary consumer exception.  The base ``str`` slot strips
-        # the subclass before the value reaches any f-string or join operation.
-        return str.__str__(name)
+        try:
+            if not name:
+                continue
+            # A metaclass can return a ``str`` subclass for ``__name__``.  Returning
+            # that object would let its ``__str__`` / ``__format__`` run while a
+            # typed error message is being assembled, replacing the framework error
+            # with an arbitrary consumer exception.  The base ``str`` slot strips
+            # the subclass before the value reaches any f-string or join operation.
+            return str.__str__(name)
+        except BaseException:
+            continue
     return "object"
 
 
 def _safe_arg_repr(value: object) -> str:
     """``repr(value)`` if it succeeds, else a placeholder naming the arg type."""
     try:
-        return repr(value)
+        return str.__str__(repr(value))
     except BaseException:
         return f"<unprintable {_safe_type_name(value)}>"
 
@@ -68,8 +81,11 @@ def _safe_class_name(value: object, *, qualified: bool = False) -> str:
         name = getattr(value, attribute)
     except BaseException:
         return _safe_type_name(value)
-    if isinstance(name, str):
-        return str.__str__(name)
+    try:
+        if isinstance(name, str) and name:
+            return str.__str__(name)
+    except BaseException:
+        pass
     return _safe_arg_repr(name)
 
 
@@ -80,11 +96,12 @@ def _safe_model_label(model: object) -> str:
         label = getattr(meta, "label", None)
     except BaseException:
         return _safe_type_name(model)
-    if isinstance(label, str):
-        try:
-            return str(label) or _safe_type_name(model)
-        except BaseException:
-            pass
+    try:
+        if isinstance(label, str):
+            label_str = str(label)
+            return str.__str__(label_str) or _safe_type_name(model)
+    except BaseException:
+        pass
     return _safe_type_name(model)
 
 
@@ -94,11 +111,12 @@ def _safe_terminal_label(terminal: object) -> str:
         name = getattr(terminal, "name", None)
     except BaseException:
         return _safe_type_name(terminal)
-    if isinstance(name, str):
-        try:
-            return str(name) or _safe_type_name(terminal)
-        except BaseException:
-            pass
+    try:
+        if isinstance(name, str):
+            name_str = str(name)
+            return str.__str__(name_str) or _safe_type_name(terminal)
+    except BaseException:
+        pass
     return _safe_type_name(terminal)
 
 
@@ -269,6 +287,10 @@ class PathResolutionError(ConfigurationError):
         self.field_path = field_path
         self.segment = segment
 
+    def __reduce__(self) -> tuple[object, ...]:
+        """Preserve constructor arguments and instance state across pickle roundtrips."""
+        return (self.__class__, (self.model, self.field_path, self.segment), self.__dict__)
+
 
 class LookupValidationError(ConfigurationError):
     """Raised when a django-filter lookup expression is invalid for a terminal.
@@ -306,6 +328,10 @@ class LookupValidationError(ConfigurationError):
         self.terminal = terminal
         self.lookup_expr = lookup_expr
         self.part = part
+
+    def __reduce__(self) -> tuple[object, ...]:
+        """Preserve constructor arguments and instance state across pickle roundtrips."""
+        return (self.__class__, (self.terminal, self.lookup_expr, self.part), self.__dict__)
 
 
 class OptimizerError(DjangoStrawberryFrameworkError):

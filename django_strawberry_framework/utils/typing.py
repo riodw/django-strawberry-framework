@@ -68,6 +68,15 @@ def schema_config_from_info(info: Any) -> Any | None:
     return config
 
 
+# A type- or callable-wrapper stack (``GraphQLNonNull`` / ``GraphQLList`` / a
+# Strawberry ``of_type`` object / nested ``partial`` or ``staticmethod`` wrappers)
+# nests only as deep as the declared shape - realistically a handful of layers.
+# This ceiling sits far above any real construct, so the only way to exceed it is a
+# cyclic or corrupt chain. Capping the peel gives the loops a fixed, statically-checkable
+# upper bound (NASA Power-of-Ten Rule 2) and turns a would-be hang into a loud failure.
+_MAX_TYPE_WRAPPER_DEPTH = 64
+
+
 def _callable_inspection_target(value: Any) -> Any:
     """Unwrap ``partial`` / ``staticmethod`` layers for the async predicates.
 
@@ -77,11 +86,20 @@ def _callable_inspection_target(value: Any) -> Any:
     can contain a partial, so peel both wrapper kinds until the callable target is
     reached. This handles both ``partial(staticmethod_obj)`` and
     ``staticmethod(partial(callable_instance))``.
+
+    The peel is bounded by ``_MAX_TYPE_WRAPPER_DEPTH`` rather than looping
+    unconditionally: a chain longer than that ceiling can only be cyclic or
+    corrupt, so it raises ``RuntimeError`` instead of spinning forever.
     """
     target = value
-    while isinstance(target, (functools.partial, staticmethod)):
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
+        if not isinstance(target, (functools.partial, staticmethod)):
+            return target
         target = target.func if isinstance(target, functools.partial) else target.__func__
-    return target
+    raise RuntimeError(
+        f"_callable_inspection_target: callable wrapper stack exceeded "
+        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the wrapper chain is likely cyclic or corrupt.",
+    )
 
 
 def is_async_callable(value: Any) -> bool:
@@ -131,15 +149,6 @@ def is_async_generator_callable(value: Any) -> bool:
     return inspect.isasyncgenfunction(target) or inspect.isasyncgenfunction(
         getattr(target, "__call__", None),  # noqa: B004
     )
-
-
-# A GraphQL type-wrapper stack (``GraphQLNonNull`` / ``GraphQLList`` / a
-# Strawberry ``of_type`` object) nests only as deep as the declared type -
-# realistically a handful of layers. This ceiling sits far above any real type,
-# so the only way to exceed it is a cyclic or corrupt ``of_type`` chain. Capping
-# the peel gives the loop a fixed, statically-checkable upper bound (NASA
-# Power-of-Ten Rule 2) and turns a would-be hang into a loud failure.
-_MAX_TYPE_WRAPPER_DEPTH = 64
 
 
 def unwrap_graphql_type(gql_type: Any) -> Any:

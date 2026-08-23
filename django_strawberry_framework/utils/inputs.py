@@ -33,7 +33,7 @@ cycle (same contract as ``utils/connections.py``).
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 
@@ -1157,7 +1157,10 @@ def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
     branch, spec lookup, short-circuit protocol) stays at each call site: this owns
     only the walk, not the routing.
     """
-    for field in data.__strawberry_definition__.fields:
+    definition = getattr(data, "__strawberry_definition__", None)
+    if definition is None:
+        return
+    for field in getattr(definition, "fields", ()):
         python_name = field.python_name
         value = getattr(data, python_name, strawberry.UNSET)
         if value is strawberry.UNSET:
@@ -1543,14 +1546,17 @@ def clear_generated_input_namespace(
     factory_cls = _safe_import(factory_module, factory_class_name)
     if factory_cls is not None:
         factory_cls.input_object_types.clear()
-        getattr(factory_cls, collision_registry_attr).clear()
+        collision_registry = getattr(factory_cls, collision_registry_attr, None)
+        if collision_registry is not None:
+            collision_registry.clear()
 
     set_root = _safe_import(set_module, set_class_name)
     if set_root is not None:
         # The per-family binding-state attrs (owner / expansion cache / reentry
         # guard) come from the set base's ``_lifecycle`` descriptor, so the names
         # are not re-spelled at the call site.
-        binding_attrs = set_root._lifecycle.binding_attrs
+        lifecycle = getattr(set_root, "_lifecycle", None)
+        binding_attrs = getattr(lifecycle, "binding_attrs", ())
         for subclass in iter_set_subclasses(set_root):
             # ``delattr`` on the subclass so an inherited default (the set
             # base's ``_owner_definition = None``) is restored rather than
@@ -1681,11 +1687,13 @@ class GeneratedInputArgumentsFactory:
             if target_name not in self.input_object_types:
                 self._build_class_type(set_cls)
 
-            for related in getattr(set_cls, self._related_attr, {}).values():
-                target = getattr(related, self._related_target_attr)
-                # ``Related*(None, ...)`` placeholder -- skip silently.
-                if target is not None and target not in seen:
-                    pending.append(target)
+            related_map = getattr(set_cls, self._related_attr, {}) or {}
+            if isinstance(related_map, Mapping):
+                for related in related_map.values():
+                    target = getattr(related, self._related_target_attr, None)
+                    # ``Related*(None, ...)`` placeholder -- skip silently.
+                    if target is not None and target not in seen:
+                        pending.append(target)
 
     def _build_class_type(self, set_cls: type) -> None:
         """Build the root input class for ``set_cls`` and stash it in the cache."""

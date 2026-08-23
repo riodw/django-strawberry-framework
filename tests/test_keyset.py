@@ -368,6 +368,24 @@ def test_decode_honors_secret_key_fallbacks_rotation():
         )
 
 
+@pytest.mark.django_db
+def test_decode_without_secret_key_fallbacks_attribute(monkeypatch):
+    """When SECRET_KEY_FALLBACKS attribute is absent on settings, decryption still works."""
+    from django.conf import settings as django_settings
+
+    periodical = Periodical.objects.create(name="P")
+    issue = Issue.objects.create(periodical=periodical, number=1, title="one")
+    cursor = _mint(issue)
+    monkeypatch.delattr(django_settings, "SECRET_KEY_FALLBACKS", raising=False)
+    decoded = decode_keyset_cursor(
+        cursor,
+        _issue_columns(),
+        fingerprint=_fingerprint(),
+        argument="after",
+    )
+    assert decoded.values[0] == 1
+
+
 def test_serialize_cursor_value_uses_field_codec():
     number_field = Issue._meta.get_field("number")
     assert serialize_cursor_value(number_field, 7) == "7"

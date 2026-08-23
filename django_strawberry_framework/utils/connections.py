@@ -31,10 +31,12 @@ re-exports the same helper for argument-comparison); this helper assumes its
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import strawberry
 from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import OptimizerError
@@ -79,7 +81,7 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
     """
 
 
-def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any]) -> tuple[Any, Any]:
+def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any] | None) -> tuple[Any, Any]:
     """Extract ``(filter_input, order_by_input)`` from a kwargs/arguments dict.
 
     The single reader of the sidecar kwarg keys so no caller re-spells
@@ -91,6 +93,8 @@ def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any]) -> tuple[Any, 
     No collision is possible - the resolver's kwargs never carry the camel
     key, and on the walker side either spelling IS the sidecar argument.
     """
+    if not kwargs:
+        return None, None
     order_by_input = kwargs.get(CONNECTION_ORDER_KWARG)
     if order_by_input is None:
         order_by_input = kwargs.get(CONNECTION_ORDER_KWARG_GRAPHQL)
@@ -99,10 +103,12 @@ def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any]) -> tuple[Any, 
 
 def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:
     """Return whether either already-extracted sidecar input is present."""
-    return filter_input is not None or order_by_input is not None
+    return (filter_input is not None and filter_input is not strawberry.UNSET) or (
+        order_by_input is not None and order_by_input is not strawberry.UNSET
+    )
 
 
-def has_connection_sidecar_kwargs(kwargs: dict[str, Any]) -> bool:
+def has_connection_sidecar_kwargs(kwargs: dict[str, Any] | None) -> bool:
     """Return whether a kwargs/arguments dict carries any sidecar input.
 
     The walker's fallback predicate (a sidecar-bearing nested connection is not
@@ -481,7 +487,7 @@ def assert_window_fetch_mode_for(window: Any) -> None:
 
 
 def split_window_rows(
-    rows: list[Any],
+    rows: list[Any] | Sequence[Any] | Iterable[Any],
     range_plan: WindowRangePlan,
     *,
     row_number: str,
@@ -519,27 +525,28 @@ def split_window_rows(
     future keyset-cursor backend (which makes ``rn`` page-relative) has to
     touch - everything else consumes ``(page_rows, probe_row_seen)`` unchanged.
     """
+    row_list = list(rows) if not isinstance(rows, list) else rows
     if range_plan.add_marker_rows and range_plan.next_page_probe:
         # Composed offset page: the marker (rn == 1) and the probe sentinel
         # (rn == fetch_upper_bound == upper_bound + 1) are both dropped; the page
         # proper is the rows strictly past the offset and within the page ceiling.
         page_rows = [
             row
-            for row in rows
+            for row in row_list
             if range_plan.offset < getattr(row, row_number) <= range_plan.upper_bound
         ]
         probe_row_seen = any(
-            getattr(row, row_number) == range_plan.fetch_upper_bound for row in rows
+            getattr(row, row_number) == range_plan.fetch_upper_bound for row in row_list
         )
         return page_rows, probe_row_seen
     if range_plan.add_marker_rows:
         if range_plan.limit == 0:
             return [], False
-        return [row for row in rows if getattr(row, row_number) > range_plan.offset], False
+        return [row for row in row_list if getattr(row, row_number) > range_plan.offset], False
     if range_plan.next_page_probe and range_plan.upper_bound is not None:
-        page_rows = [row for row in rows if getattr(row, row_number) <= range_plan.upper_bound]
-        return page_rows, len(page_rows) < len(rows)
-    return list(rows), False
+        page_rows = [row for row in row_list if getattr(row, row_number) <= range_plan.upper_bound]
+        return page_rows, len(page_rows) < len(row_list)
+    return list(row_list), False
 
 
 @dataclass(frozen=True)
@@ -618,12 +625,14 @@ def derive_connection_window_bounds(
         last=last,
         max_results=effective_max_results,
     )
-    reverse = isinstance(last, int) and not isinstance(first, int) and before is None
+    before_supplied = before is not None and before is not strawberry.UNSET
+    after_supplied = after is not None and after is not strawberry.UNSET
+    reverse = isinstance(last, int) and not isinstance(first, int) and not before_supplied
     if slice_meta.start < 0:
         raise TypeError("Argument 'after' contains a non-existing value.")
     if slice_meta.end < 0:
         raise TypeError("Argument 'before' contains a non-existing value.")
-    if reverse and after is not None:
+    if reverse and after_supplied:
         # Offset-bearing backward window: the reversed window's whole-partition
         # row numbering cannot honor the ``after`` offset (spec-033 Decision 5).
         raise UnwindowableConnection
@@ -674,11 +683,15 @@ def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
     of this terminal default) so the plan-time and resolve-time caps read the
     same attribute path (the cursor-parity invariant's keyset leg).
     """
-    if max_results is not None:
+    if max_results is not None and max_results is not strawberry.UNSET:
         cap = max_results
     else:
         configured = getattr(schema_config_from_info(info), "relay_max_results", None)
-        cap = configured if configured is not None else _RELAY_MAX_RESULTS_DEFAULT
+        cap = (
+            configured
+            if configured is not None and configured is not strawberry.UNSET
+            else _RELAY_MAX_RESULTS_DEFAULT
+        )
     # The request policy is a CEILING over whichever cap won above, never a
     # replacement for it: a connection can be narrower than the policy and can
     # never be wider (``resource_policy.py::effective_bound``). This is the seam
@@ -722,7 +735,8 @@ def derive_keyset_window_bounds(
       the bound), matching the offset path's flow where the guard raises
       before any window is consumed.
     """
-    if before is not None or (isinstance(last, int) and not isinstance(first, int)):
+    before_supplied = before is not None and before is not strawberry.UNSET
+    if before_supplied or (isinstance(last, int) and not isinstance(first, int)):
         raise UnwindowableConnection
     cap = resolve_relay_max_results(info, max_results)
     assert_relay_pagination_bound("first", first, cap=cap)

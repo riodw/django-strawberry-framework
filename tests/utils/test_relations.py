@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.kanban.models import Decision
-from apps.library.models import Book, Branch, Genre, Loan, Patron, TaggedItem
+from apps.library.models import Book, Branch, Genre, Loan, MembershipCard, Patron, TaggedItem
 from django.core.exceptions import FieldDoesNotExist
 
 from django_strawberry_framework.exceptions import (
@@ -27,6 +27,7 @@ from django_strawberry_framework.utils.relations import (
     classify_path,
     has_composite_pk,
     instance_accessor,
+    is_forward_concrete_relation,
     is_forward_many_to_many,
     path_traverses_to_many,
     validate_lookup_expr,
@@ -1053,3 +1054,105 @@ def test_instance_accessor_rejects_malformed_accessor_metadata():
         instance_accessor(SimpleNamespace(get_accessor_name=123, name="relation"))
     with pytest.raises(ConfigurationError, match="must be a string"):
         instance_accessor(SimpleNamespace(get_accessor_name=lambda: 123, name="relation"))
+
+
+def test_is_forward_concrete_relation():
+    """is_forward_concrete_relation correctly identifies forward concrete relations."""
+    # Forward ForeignKey
+    assert is_forward_concrete_relation(Book._meta.get_field("shelf")) is True
+    # Forward OneToOne
+    assert is_forward_concrete_relation(MembershipCard._meta.get_field("patron")) is True
+    # Reverse OneToOneRel -> False
+    assert is_forward_concrete_relation(Patron._meta.get_field("card")) is False
+    # Forward ManyToManyField -> False (kind is "many", not "forward_single")
+    assert is_forward_concrete_relation(Book._meta.get_field("genres")) is False
+    # Reverse ForeignObjectRel (reverse FK) -> False
+    assert is_forward_concrete_relation(Branch._meta.get_field("shelves")) is False
+    # GenericForeignKey -> False
+    assert is_forward_concrete_relation(TaggedItem._meta.get_field("content_object")) is False
+    # GenericRelation -> False
+    assert is_forward_concrete_relation(Branch._meta.get_field("tags")) is False
+    # Scalar field -> False
+    assert is_forward_concrete_relation(Book._meta.get_field("title")) is False
+    # Hostile / non-field -> False
+    assert is_forward_concrete_relation(None) is False
+    assert is_forward_concrete_relation(object()) is False
+    assert is_forward_concrete_relation(_HostileRelationMetadata()) is False
+
+
+def test_is_forward_concrete_relation_reads_cardinality_not_the_column_flag():
+    """A forward M2M is rejected on its KIND, never on a Django-version-specific ``column``.
+
+    Django moves both ``column`` and ``concrete`` for ``ManyToManyField`` inside
+    the supported range: the 5.2 support floor reports ``column="genres"`` /
+    ``concrete=True``, while 6.0+ reports ``column=None`` / ``concrete=False``.
+    A real ``Book.genres`` therefore only exercises whichever shape the matrix
+    cell installed, so the assertion above passes on 6.x for the wrong reason
+    and the 5.2 cell is the only thing that catches a ``column``-based test.
+    These doubles pin BOTH shapes on EVERY cell, so the predicate cannot regress
+    to a version-dependent signal without failing everywhere at once.
+    """
+    m2m_on_django_52 = SimpleNamespace(
+        is_relation=True,
+        many_to_many=True,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=True,
+        column="genres",
+        related_model=Genre,
+    )
+    m2m_on_django_60 = SimpleNamespace(
+        is_relation=True,
+        many_to_many=True,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=False,
+        column=None,
+        related_model=Genre,
+    )
+    forward_fk = SimpleNamespace(
+        is_relation=True,
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=False,
+        auto_created=False,
+        concrete=True,
+        column="shelf_id",
+        related_model=Branch,
+    )
+
+    assert is_forward_concrete_relation(m2m_on_django_52) is False
+    assert is_forward_concrete_relation(m2m_on_django_60) is False
+    assert is_forward_concrete_relation(forward_fk) is True
+
+
+def test_is_forward_concrete_relation_contains_every_metadata_read():
+    """Neither the taxonomy read nor the column read may dispatch a consumer's exception."""
+
+    class _HostileKind:
+        """Clears ``is_relation``, then explodes on every taxonomy flag behind it."""
+
+        is_relation = True
+
+        def __getattr__(self, name):
+            raise RuntimeError("hostile relation taxonomy")
+
+    class _HostileColumn:
+        """Classifies cleanly as ``forward_single``, then explodes on the column read."""
+
+        is_relation = True
+        many_to_many = False
+        one_to_many = False
+        one_to_one = False
+        auto_created = False
+        concrete = True
+        related_model = Branch
+
+        @property
+        def column(self):
+            raise RuntimeError("hostile column descriptor")
+
+    assert is_forward_concrete_relation(_HostileKind()) is False
+    assert is_forward_concrete_relation(_HostileColumn()) is False

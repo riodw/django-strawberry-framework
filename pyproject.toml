@@ -75,6 +75,15 @@ dev = [
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
+    # tomli is a test-only dependency, and NOT a dependency of the package
+    # ([project].dependencies is untouched): stdlib ``tomllib`` only arrives in
+    # 3.11, but the advertised floor -- and the Django 5.2.16 / Python 3.10 CI
+    # cell -- is 3.10, where ``import tomllib`` is a ModuleNotFoundError. The
+    # marker mirrors the one coverage and pytest already carry, so this adds no
+    # wheel on 3.11+; it only makes the floor's parser an explicit dependency of
+    # tests/base/test_init.py::test_version_parity_with_pyproject rather than
+    # something inherited by accident from another package's requirements.
+    "tomli>=2.0.1; python_version < '3.11'",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the

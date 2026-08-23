@@ -21,6 +21,7 @@ mutation resolver is not the utility module for the other write flavors):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -111,7 +112,8 @@ def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
     which makes it the same not-found ``relation_field_error`` as a genuinely
     missing pk, never a backend crash.
     """
-    return coerce_field_value_or_none(related_model._meta.pk, pk)
+    pk_field = getattr(getattr(related_model, "_meta", None), "pk", None)
+    return coerce_field_value_or_none(pk_field, pk)
 
 
 def type_check_relation_id(
@@ -259,6 +261,17 @@ def decode_visible_relation_ids(
     # container is an invalid relation value, not a resolver exception; keeping
     # the failure in the same field-keyed envelope also guarantees that a
     # partially-consumed iterator cannot lead to a visibility query.
+    if isinstance(
+        values,
+        (
+            str,
+            bytes,
+            bytearray,
+            memoryview,
+            Mapping,
+        ),
+    ):
+        return None, relation_field_error(graphql_name)
     try:
         provided_values = list(values)
     except BaseException:
@@ -452,7 +465,9 @@ def decode_provided_fields(
     """
     spec_by_attr = {spec.input_attr: spec for spec in specs}
     for python_name, value, _field in iter_provided_input_fields(data):
-        spec = spec_by_attr[python_name]
+        spec = spec_by_attr.get(python_name)
+        if spec is None:
+            continue
         error = handlers.get(spec.kind, scalar_handler)(spec, value)
         if error is not None:
             return error

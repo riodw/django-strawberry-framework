@@ -566,6 +566,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 pg = [
     { name = "psycopg", extra = ["binary"] },
@@ -594,6 +595,7 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "ruff", specifier = ">=0.15.0" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
 ]
 pg = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.2" }]
 

@@ -7,6 +7,7 @@ from django_strawberry_framework.utils.strings import (
     flatten_lookup_path,
     graphql_camel_name,
     pascal_case,
+    pascal_case_or_raise,
     snake_case,
 )
 
@@ -60,6 +61,19 @@ def test_snake_case_pins_acronym_digit_and_underscore_edges(camel, snake):
         "double__underscore",
         "a_a_a",
         "trailing_",
+        "__x_foo",
+        "___x_foo",
+        "__x_a",
+        "__x_1",
+        "__x_y_z",
+        "a_x",
+        "x_a",
+        "a__x",
+        "a__x_a",
+        "a__xa",
+        "a__b__c",
+        "a__b_c",
+        "a_b__c",
     ],
 )
 def test_graphql_camel_name_round_trips_normalized_snake_case(name):
@@ -116,6 +130,35 @@ def test_graphql_camel_name_escapes_adjacent_uppercase_segments():
     assert graphql_camel_name("a_a_a") == "aA__xA"
     assert snake_case(graphql_camel_name("a_a_a")) == "a_a_a"
     assert snake_case("aA__xA") != snake_case("aAA")
+
+
+def test_snake_case_distinguishes_x_token_from_adjacent_uppercase_escape():
+    """__x only functions as an adjacent-segment escape after an uppercase character."""
+    # After an uppercase segment, __x is the adjacent one-letter separator
+    assert snake_case("aA__xA") == "a_a_a"
+    assert snake_case("fooX__xBar") == "foo_x_bar"
+
+    # At start or after leading underscores, __x is literal and not an escape
+    assert snake_case("__xFoo") == "__x_foo"
+    assert snake_case("___xFoo") == "___x_foo"
+    assert snake_case("__xA") == "__x_a"
+
+
+def test_pascal_case_or_raise_raises_on_empty_and_delegates_on_valid():
+    """pascal_case_or_raise validates non-empty tokens and returns PascalCase."""
+    assert (
+        pascal_case_or_raise(
+            "category_name",
+            make_error=lambda n: ValueError(f"empty name: {n}"),
+        )
+        == "CategoryName"
+    )
+
+    with pytest.raises(ValueError, match="empty name: _"):
+        pascal_case_or_raise(
+            "_",
+            make_error=lambda n: ValueError(f"empty name: {n}"),
+        )
 
 
 @pytest.mark.parametrize(

@@ -625,3 +625,53 @@ def test_extend_only_projection_arms():
     names, defer_flag = deferred_loading_of(extended)
     assert defer_flag is False
     assert "number" in names and "title" in names
+
+
+@pytest.mark.django_db
+def test_resolve_keyset_connection_with_strawberry_unset(isolate_global_registry):
+    """Keyset connection resolver ignores `strawberry.UNSET` for pagination and cursor arguments."""
+    from django_strawberry_framework.connection import _resolve_keyset_connection
+
+    periodical = Periodical.objects.create(name="The Journal")
+    for i in range(5):
+        Issue.objects.create(periodical=periodical, number=i, title=f"Issue {i:02d}")
+
+    issue_type = make_django_type(
+        "KeysetUnsetIssueNode",
+        Issue,
+        ("id", "number", "title"),
+        meta_extra={"cursor_field": ("number", "id"), "primary": True},
+    )
+    finalize_django_types()
+    conn_cls = _connection_type_for(issue_type)
+    state = _keyset_connection_context(conn_cls)
+
+    info = SimpleNamespace(
+        selected_fields=[
+            SimpleNamespace(
+                name="issues",
+                selections=[
+                    SimpleNamespace(name="edges", selections=[]),
+                    SimpleNamespace(name="pageInfo", selections=[]),
+                ],
+            ),
+        ],
+        _raw_info=SimpleNamespace(field_nodes=[]),
+        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
+    )
+
+    conn = _resolve_keyset_connection(
+        conn_cls,
+        Issue.objects.all(),
+        info=info,
+        state=state,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=strawberry.UNSET,
+        last=strawberry.UNSET,
+        max_results=100,
+        want_count=False,
+    )
+    assert len(conn.edges) == 5
+    assert conn.page_info.has_next_page is False
+    assert conn.page_info.has_previous_page is False

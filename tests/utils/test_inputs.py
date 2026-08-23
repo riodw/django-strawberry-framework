@@ -952,3 +952,46 @@ def test_optional_input_field_widens_and_aliases_per_flags():
     )
     assert annotation is str
     assert kwargs == {}
+
+
+def test_iter_provided_input_fields_handles_none_and_non_inputs():
+    """iter_provided_input_fields yields nothing on None or non-Strawberry inputs."""
+    from django_strawberry_framework.utils.inputs import iter_provided_input_fields
+
+    assert list(iter_provided_input_fields(None)) == []
+    assert list(iter_provided_input_fields({})) == []
+    assert list(iter_provided_input_fields(42)) == []
+
+
+def test_generated_input_arguments_factory_tolerates_none_or_missing_related_attr():
+    """GeneratedInputArgumentsFactory does not crash when related_attr is None or missing."""
+    from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
+
+    class _ProbeFactory(GeneratedInputArgumentsFactory):
+        _factory_label = "ProbeFactory"
+        _family_label = "ProbeSet"
+        _rename_noun = "probe set"
+        _related_attr = "related_probes"
+        _related_target_attr = "target"
+        input_object_types = {}
+        _collision_registry = {}
+
+        def _build_input_triples(
+            self,
+            set_cls,
+            type_name,
+            owner_definition,
+        ):
+            return [("id", int | None, {"default": None})]
+
+    class _SetWithNoneRelated:
+        related_probes = None
+
+        @classmethod
+        def type_name_for(cls):
+            return "SetWithNoneRelatedInput"
+
+    factory = _ProbeFactory(_SetWithNoneRelated)
+    input_cls = factory.arguments
+    assert input_cls is not None
+    assert input_cls.__name__ == "SetWithNoneRelatedInput"

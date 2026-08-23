@@ -55,3 +55,66 @@ def test_permission_fallback_path_is_the_family_remap_hook():
 def test_apply_pipelines_remain_family_owned():
     assert _unbound(FilterSet, "apply_sync") is not _unbound(OrderSet, "apply_sync")
     assert _unbound(FilterSet, "apply_async") is not _unbound(OrderSet, "apply_async")
+
+
+def test_sets_mixins_all_exports_are_complete():
+    import django_strawberry_framework.sets_mixins as sm
+
+    assert "should_cache_expansion" in sm.__all__
+    for symbol in sm.__all__:
+        assert hasattr(sm, symbol), f"Symbol {symbol!r} in __all__ but not in sets_mixins"
+
+
+def test_should_cache_expansion_gates_on_dict_and_unresolved_strings():
+    import types
+
+    from django_strawberry_framework.sets_mixins import should_cache_expansion
+
+    class _MockTarget:
+        pass
+
+    class _BaseSet:
+        related_items = {}
+
+    # Inherited related_items (not in __dict__) fails gate
+    class _InheritedSet(_BaseSet):
+        pass
+
+    assert (
+        should_cache_expansion(
+            _InheritedSet,
+            related_attr="related_items",
+            target_slot="_target",
+        )
+        is False
+    )
+
+    # Own related_items with unresolved string target fails gate
+    class _UnresolvedSet:
+        related_items = {
+            "rel": types.SimpleNamespace(_target="some.unresolved.String"),
+        }
+
+    assert (
+        should_cache_expansion(
+            _UnresolvedSet,
+            related_attr="related_items",
+            target_slot="_target",
+        )
+        is False
+    )
+
+    # Own related_items with resolved class target passes gate
+    class _ResolvedSet:
+        related_items = {
+            "rel": types.SimpleNamespace(_target=_MockTarget),
+        }
+
+    assert (
+        should_cache_expansion(
+            _ResolvedSet,
+            related_attr="related_items",
+            target_slot="_target",
+        )
+        is True
+    )

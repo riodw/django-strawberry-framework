@@ -619,6 +619,34 @@ def test_fire_flat_relation_path_gates_works_for_the_order_family():
     assert calls == ["ItemOrder.category", "CategoryOrder.name"]
 
 
+def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_field_name_is_none():
+    """When field_name is None or omitted, the declared attribute name is used.
+
+    In RelatedOrder(AuthorOrder) or RelatedFilter(AuthorFilter), field_name is None
+    on the class declaration. A flat relation traversal (``author__name``) must fall
+    back to the declared attribute key (``author``) rather than skipping the branch.
+    """
+    calls: list[str] = []
+
+    class AuthorOrder:
+        check_name_permission = _record_gate(calls, "AuthorOrder.name")
+
+    class BookOrder:
+        # field_name is None (the default for RelatedOrder(Target))
+        related_orders = {"author": _Rel(None, AuthorOrder, target_attr="orderset")}
+        check_author_permission = _record_gate(calls, "BookOrder.author")
+
+    _fire_flat_relation_path_gates(
+        BookOrder,
+        "author__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_orders",
+        target_attr="orderset",
+    )
+    assert calls == ["BookOrder.author", "AuthorOrder.name"]
+
+
 def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolved():
     """A hop whose related object's target set resolves to ``None`` stops the walk.
 
@@ -1008,3 +1036,113 @@ def test_resolve_auth_aliases_skips_uninstalled_models():
     from django_strawberry_framework.utils.permissions import _safe_get_model
 
     assert _safe_get_model("nonexistent_app", "Nope") is None
+    assert _safe_get_model(None, None) is None
+
+
+def test_channels_request_in_object_context_is_adapted_to_channels_request_adapter():
+    """Channels request stored at context.request resolves to a ChannelsRequestAdapter."""
+    from django_strawberry_framework.utils.permissions import (
+        ChannelsRequestAdapter,
+        request_from_info,
+    )
+
+    class _FakeConsumer:
+        def __init__(self, scope):
+            self.scope = scope
+
+    class _FakeChannelsRequest:
+        def __init__(self, scope):
+            self.consumer = _FakeConsumer(scope)
+            self.method = "POST"
+
+    scope = {"user": "ada", "session": {"key": "456"}}
+    raw_req = _FakeChannelsRequest(scope)
+    ctx = type("Context", (), {"request": raw_req})()
+    info = type("Info", (), {"context": ctx})()
+
+    resolved = request_from_info(info, family_label="FilterSet")
+    assert isinstance(resolved, ChannelsRequestAdapter)
+    assert resolved.user == "ada"
+    assert resolved.session == {"key": "456"}
+    assert resolved.scope is scope
+    assert resolved.method == "POST"
+
+
+def test_bare_channels_consumer_in_object_context_is_adapted():
+    """A bare Channels WebSocket consumer context resolves to a ChannelsRequestAdapter."""
+    from django_strawberry_framework.utils.permissions import (
+        ChannelsRequestAdapter,
+        request_from_info,
+    )
+
+    class _FakeWSConsumer:
+        def __init__(self, scope):
+            self.scope = scope
+            self.channel_name = "specific..inmemory!ws"
+
+    scope = {"user": "grace", "session": None}
+    consumer = _FakeWSConsumer(scope)
+    info = type("Info", (), {"context": consumer})()
+
+    resolved = request_from_info(info, family_label="OrderSet")
+    assert isinstance(resolved, ChannelsRequestAdapter)
+    assert resolved.user == "grace"
+    assert resolved.session is None
+    assert resolved.scope is scope
+    assert resolved.channel_name == "specific..inmemory!ws"
+
+
+def test_run_active_input_permission_checks_safely_handles_missing_target_attr():
+    """If a related object lacks target_attr, child recursion is safely skipped without AttributeError."""
+    from django_strawberry_framework.utils.permissions import run_active_input_permission_checks
+
+    class _DuckRelatedObj:
+        # Does not define 'filterset' or 'target_attr'
+        pass
+
+    class _SampleFilter:
+        @classmethod
+        def _active_permission_targets(cls, input_value):
+            return [], [("duck", _DuckRelatedObj(), {"sub": 1})]
+
+        @staticmethod
+        def _invoke_permission_method(
+            bare,
+            field_name,
+            request,
+            *,
+            fired=None,
+        ):
+            if fired is not None:
+                fired.add(f"check_{field_name}_permission")
+
+    fired = {}
+    run_active_input_permission_checks(
+        _SampleFilter,
+        {"duck": {"sub": 1}},
+        object(),
+        fired=fired,
+        bare=object(),
+        target_attr="filterset",
+        related_attr="related_filters",
+    )
+    assert fired.get(_SampleFilter) == {"check_duck_permission"}
+
+
+def test_channels_request_adapter_idempotent_wrapping():
+    """Wrapping an existing ChannelsRequestAdapter returns the adapter directly."""
+    from django_strawberry_framework.utils.permissions import (
+        ChannelsRequestAdapter,
+        _channels_request_adapter,
+        _request_from_context,
+    )
+
+    scope = {"user": "ada", "type": "websocket"}
+    adapter = ChannelsRequestAdapter(HttpRequest(), scope)
+
+    assert _channels_request_adapter(adapter) is adapter
+    assert _channels_request_adapter({"request": adapter}) is adapter
+    assert _channels_request_adapter(type("Ctx", (), {"request": adapter})()) is adapter
+    assert _request_from_context(adapter) is adapter
+    assert _request_from_context({"request": adapter}) is adapter
+    assert _request_from_context(type("Ctx", (), {"request": adapter})()) is adapter

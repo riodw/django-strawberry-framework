@@ -547,6 +547,59 @@ def is_forward_many_to_many(field: object) -> bool:
     return many_to_many and (concrete or not auto_created)
 
 
+def is_forward_concrete_relation(field: object) -> bool:
+    """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
+
+    Cardinality is decided by ``relation_kind`` - this module's single site of
+    the relation taxonomy - so the predicate is exactly "the kind is
+    ``"forward_single"``, and it is backed by a real local column". Cardinality
+    deliberately does NOT come from ``column`` / ``concrete``: Django moves BOTH
+    flags for ``ManyToManyField`` inside the supported range. On the 5.2 support
+    floor a forward M2M reports ``column="genres"`` and ``concrete=True``
+    (``Field.set_attributes_from_name`` fills the attname in even though no such
+    column exists on the source table - the pairing lives in the through table);
+    6.0+ reports ``column=None`` and ``concrete=False``. A ``column``-only test
+    therefore called a forward M2M a forward concrete relation on 5.2 and not on
+    6.x - one predicate answering two ways across one supported matrix. The four
+    flags ``relation_kind`` reads (``many_to_many`` / ``one_to_many`` /
+    ``one_to_one`` / ``auto_created``) are stable across that range, so routing
+    the cardinality question through it makes the answer version-independent.
+
+    This helper is single-sited precisely so the predicate cannot drift across
+    the write surfaces, and the M2M guard belongs HERE rather than at the
+    callers. Both of today's callers - ``forms/inputs.py::_model_column_for``
+    and ``mutations/inputs.py::_relation_field_index`` - screen M2M into their
+    own forward-M2M arm before reaching this, which is why the promotion of
+    this predicate out of ``forms/inputs.py`` carried the narrower ``column``
+    test in unnoticed; the gate is here so the NEXT caller inherits the whole
+    contract instead of having to re-derive that half of it.
+
+    The ``column`` / ``related_model`` reads stay load-bearing AFTER the kind
+    gate, because a forward ``GenericForeignKey`` also classifies
+    ``"forward_single"``: it carries ``ct_field`` / ``fk_field``, not the
+    ``content_type_field_name`` / ``object_id_field_name`` slots that mark a
+    ``GenericRelation``, so the ``"generic"`` arm never claims it. It is virtual
+    all the same (``column=None``, ``related_model=None``), and excluding it
+    keeps a scalar or extra form field that merely shares a name with a virtual
+    or reverse relation from being misclassified by the FK index or by ModelForm
+    backing-column resolution.
+
+    Every read is contained, so a descriptor with hostile metadata fails closed
+    to ``False`` instead of dispatching its own exception into the caller.
+    """
+    try:
+        if not _relation_bool(field, "is_relation"):
+            return False
+        if relation_kind(field) != "forward_single":
+            return False
+        return (
+            getattr(field, "column", None) is not None
+            and getattr(field, "related_model", None) is not None
+        )
+    except BaseException:
+        return False
+
+
 def instance_accessor(field: object) -> str:
     """Return the attribute name relation rows are reached through on an instance.
 

@@ -9,6 +9,7 @@ import pytest
 from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
     _MAX_TYPE_WRAPPER_DEPTH,
+    _callable_inspection_target,
     is_async_callable,
     is_async_generator_callable,
     schema_config_from_info,
@@ -391,3 +392,57 @@ def test_unwrap_return_type_preserves_none_inner_type():
     from types import SimpleNamespace
 
     assert unwrap_return_type(SimpleNamespace(of_type=None)) is None
+
+
+def test_callable_inspection_target_accepts_exact_wrapper_depth():
+    """The configured depth is inclusive for partial/staticmethod chains."""
+
+    def inner():
+        return 42
+
+    wrapped = inner
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+        wrapped = functools.partial(wrapped)
+
+    assert _callable_inspection_target(wrapped) is inner
+
+
+def test_callable_inspection_target_raises_on_cyclic_partial_stack():
+    """A cyclic partial wrapper stack raises RuntimeError instead of hanging."""
+
+    class CyclicPartial(functools.partial):
+        @property
+        def func(self):
+            return self
+
+    p = CyclicPartial(lambda: 0)
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        _callable_inspection_target(p)
+
+
+def test_callable_inspection_target_raises_on_cyclic_staticmethod_stack():
+    """A cyclic staticmethod wrapper stack raises RuntimeError instead of hanging."""
+
+    class CyclicStaticMethod(staticmethod):
+        @property
+        def __func__(self):
+            return self
+
+    sm = CyclicStaticMethod(lambda: 0)
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        _callable_inspection_target(sm)
+
+
+def test_is_async_callable_raises_on_cyclic_wrapper_stack():
+    """Async predicates fail loud via RuntimeError when given cyclic callables."""
+
+    class CyclicPartial(functools.partial):
+        @property
+        def func(self):
+            return self
+
+    p = CyclicPartial(lambda: 0)
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        is_async_callable(p)
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        is_async_generator_callable(p)

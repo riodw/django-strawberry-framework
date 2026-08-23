@@ -115,3 +115,146 @@ def test_file_upload_exports_resolve_to_their_source_definitions():
     assert Upload is ScalarsUpload
     assert DjangoFileType is converters.DjangoFileType
     assert DjangoImageType is converters.DjangoImageType
+
+
+def test_version_parity_with_pyproject():
+    """Verify package __version__ stays byte-synchronized with pyproject.toml.
+
+    ``tomllib`` entered the stdlib in 3.11, but the advertised floor - and the
+    ``Django 5.2.16 / Python 3.10`` push/PR matrix cell - is 3.10, where a bare
+    ``import tomllib`` raises ``ModuleNotFoundError`` and takes this gate down
+    with it. The dev group declares the ``tomli`` backport behind the matching
+    marker, so the parity assertion runs on EVERY cell instead of only the ones
+    whose interpreter ships the stdlib module. Same guard shape as
+    ``scripts/bug_hunt.py`` and ``scripts/check_trailing_commas.py``, which read
+    this file on the same floor.
+    """
+    from pathlib import Path
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10 floor.
+        import tomli as tomllib
+
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    assert pyproject_path.exists(), f"pyproject.toml not found at {pyproject_path}"
+
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+
+    assert __version__ == data["project"]["version"]
+
+
+def test_dynamic_drf_soft_exports_via_getattr():
+    """Verify DRF soft exports resolve dynamically through package __getattr__."""
+    from django_strawberry_framework import (
+        NestedSerializerConfig,
+        SerializerFieldConversion,
+        SerializerHookContext,
+        SerializerMutation,
+        UploadMetadata,
+        describe_serializer_input,
+        register_serializer_field_converter,
+    )
+
+    assert SerializerMutation is not None
+    assert callable(register_serializer_field_converter)
+    assert SerializerFieldConversion is not None
+    assert callable(describe_serializer_input)
+    assert NestedSerializerConfig is not None
+    assert SerializerHookContext is not None
+    assert UploadMetadata is not None
+
+
+def test_dynamic_getattr_non_memoization():
+    """Verify package __getattr__ does not pollute module __dict__."""
+    _ = django_strawberry_framework.SerializerMutation
+    assert "SerializerMutation" not in django_strawberry_framework.__dict__
+
+
+def test_dynamic_getattr_unknown_attribute_error():
+    """Verify unknown attribute access on package root raises AttributeError."""
+    import pytest
+
+    with pytest.raises(AttributeError, match="has no attribute 'unregistered_symbol_xyz'"):
+        _ = django_strawberry_framework.unregistered_symbol_xyz
+
+
+def test_star_import_preserves_namespace_hygiene():
+    """Verify `from django_strawberry_framework import *` only imports __all__."""
+    ns: dict = {}
+    exec("from django_strawberry_framework import *", ns)
+
+    assert "SerializerMutation" not in ns
+    assert "_DRF_SOFT_EXPORTS" not in ns
+    assert "__getattr__" not in ns
+
+    for sym in django_strawberry_framework.__all__:
+        assert sym in ns
+
+
+def test_reexported_types_resolve_to_canonical_subpackage_definitions():
+    """Verify all re-exported symbols on root resolve by identity to their defining modules."""
+    from django_strawberry_framework import (
+        DjangoErrorPolicyExtension,
+        DjangoFormMutation,
+        DjangoModelFormMutation,
+        DjangoModelPermission,
+        DjangoMutation,
+        DjangoMutationField,
+        DjangoOptimizerExtension,
+        DjangoResourcePolicyExtension,
+        DjangoType,
+        FieldError,
+        SyncMisuseError,
+        finalize_django_types,
+    )
+    from django_strawberry_framework.extensions import (
+        DjangoErrorPolicyExtension as ExtErrorPolicy,
+    )
+    from django_strawberry_framework.extensions import (
+        DjangoResourcePolicyExtension as ExtResourcePolicy,
+    )
+    from django_strawberry_framework.forms import (
+        DjangoFormMutation as FormsDjangoFormMutation,
+    )
+    from django_strawberry_framework.forms import (
+        DjangoModelFormMutation as FormsDjangoModelFormMutation,
+    )
+    from django_strawberry_framework.mutations import (
+        DjangoModelPermission as MutationsDjangoModelPermission,
+    )
+    from django_strawberry_framework.mutations import (
+        DjangoMutation as MutationsDjangoMutation,
+    )
+    from django_strawberry_framework.mutations import (
+        DjangoMutationField as MutationsDjangoMutationField,
+    )
+    from django_strawberry_framework.mutations import (
+        FieldError as MutationsFieldError,
+    )
+    from django_strawberry_framework.optimizer import (
+        DjangoOptimizerExtension as OptDjangoOptimizerExtension,
+    )
+    from django_strawberry_framework.types import (
+        DjangoType as TypesDjangoType,
+    )
+    from django_strawberry_framework.types import (
+        SyncMisuseError as TypesSyncMisuseError,
+    )
+    from django_strawberry_framework.types import (
+        finalize_django_types as types_finalize_django_types,
+    )
+
+    assert DjangoType is TypesDjangoType
+    assert SyncMisuseError is TypesSyncMisuseError
+    assert finalize_django_types is types_finalize_django_types
+    assert DjangoOptimizerExtension is OptDjangoOptimizerExtension
+    assert DjangoFormMutation is FormsDjangoFormMutation
+    assert DjangoModelFormMutation is FormsDjangoModelFormMutation
+    assert DjangoModelPermission is MutationsDjangoModelPermission
+    assert DjangoMutation is MutationsDjangoMutation
+    assert DjangoMutationField is MutationsDjangoMutationField
+    assert FieldError is MutationsFieldError
+    assert DjangoErrorPolicyExtension is ExtErrorPolicy
+    assert DjangoResourcePolicyExtension is ExtResourcePolicy

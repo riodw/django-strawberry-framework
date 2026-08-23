@@ -80,7 +80,6 @@ from decimal import Decimal
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Prefetch, sql
 from django.db.models.expressions import RawSQL
@@ -287,10 +286,12 @@ def coerce_field_value_or_none(field: models.Field, value: Any) -> Any:
     column) and stays at each call site; only the coercion mechanics are
     single-sourced here.
     """
+    if not isinstance(field, models.Field):
+        return None
     try:
         coerced = field.to_python(value)
         field.run_validators(coerced)
-    except (TypeError, ValueError, ValidationError):
+    except Exception:
         return None
     return coerced
 

@@ -165,45 +165,63 @@ def _channels_scope(request: Any) -> Mapping[str, Any] | None:
 
 
 def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
-    """Resolve a mapping context to the Channels adapter; ``None`` for every other shape.
-
-    The recognized value carries a mapping scope through ``consumer.scope``
-    (HTTP) or directly through ``scope`` (WebSocket). Keeping this recognition
-    here preserves the single request-decoder boundary from spec-041 D-P2.
-    """
-    if not isinstance(context, Mapping):
-        return None
-    try:
-        request = Mapping.get(context, "request")
-    except BaseException:
-        return None
-    if request is None:
-        return None
-    scope = _channels_scope(request)
-    if scope is None:
-        return None
-    return ChannelsRequestAdapter(request, scope)
+    """Wrap ``context`` or its ``request`` in a ``ChannelsRequestAdapter`` when an ASGI scope is present."""
+    if isinstance(context, ChannelsRequestAdapter):
+        return context
+    scope = _channels_scope(context)
+    if scope is not None:
+        return ChannelsRequestAdapter(context, scope)
+    if isinstance(context, Mapping):
+        try:
+            request = Mapping.get(context, "request")
+        except BaseException:
+            request = None
+        if isinstance(request, ChannelsRequestAdapter):
+            return request
+        if request is not None:
+            scope = _channels_scope(request)
+            if scope is not None:
+                return ChannelsRequestAdapter(request, scope)
+    else:
+        try:
+            request = getattr(context, "request", None)
+        except BaseException:
+            request = None
+        if isinstance(request, ChannelsRequestAdapter):
+            return request
+        if request is not None:
+            scope = _channels_scope(request)
+            if scope is not None:
+                return ChannelsRequestAdapter(request, scope)
+    return None
 
 
 def _request_from_context(context: Any) -> Any | None:
     """Resolve every supported Django or Channels request context shape."""
+    if isinstance(context, ChannelsRequestAdapter):
+        return context
     if isinstance(context, Mapping):
         try:
             request = Mapping.get(context, "request")
         except BaseException:
             return None
-        if isinstance(request, HttpRequest):
+        if isinstance(request, (HttpRequest, ChannelsRequestAdapter)):
             return request
         return _channels_request_adapter(context)
     try:
         request = getattr(context, "request", None)
     except BaseException:
         request = None
+    if isinstance(request, (HttpRequest, ChannelsRequestAdapter)):
+        return request
+    adapter = _channels_request_adapter(context)
+    if adapter is not None:
+        return adapter
     if request is not None:
         return request
     if isinstance(context, HttpRequest):
         return context
-    return _channels_request_adapter(context)
+    return None
 
 
 def request_from_info(info: Any, *, family_label: str) -> Any:
@@ -252,7 +270,12 @@ def _safe_get_model(app_label: str, model_name: str) -> type | None:
 
     try:
         return apps.get_model(app_label, model_name)
-    except LookupError:
+    except (
+        LookupError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
         return None
 
 
@@ -600,6 +623,8 @@ def _fire_flat_relation_path_gates(
                     f"{_safe_type_name(current_cls)} declares an unreadable related "
                     f"permission branch under {related_attr!r}.",
                 ) from exc
+            if field_name is None:
+                field_name = declared_attr
             if not isinstance(field_name, str):
                 continue
             field_hops = field_name.split(LOOKUP_SEP)
@@ -620,7 +645,7 @@ def _fire_flat_relation_path_gates(
         # so it matches the ``check_<branch>_permission`` the nested form fires.
         _fire_gate_on_class(current_cls, declared_attr, request, fired=fired)
         child_set = getattr(related_obj, target_attr, None)
-        if child_set is None:
+        if not isinstance(child_set, type):
             return
         current_cls = child_set
         index += consumed
@@ -720,7 +745,7 @@ def run_active_input_permission_checks(
         )
 
     for field_name, related_obj, child_input in related_branches:
-        child_set = getattr(related_obj, target_attr)
+        child_set = getattr(related_obj, target_attr, None)
         if child_set is not None and hasattr(child_set, "_run_permission_checks"):
             # Child set is (usually) a different class; it keys its own per-class
             # set inside the shared ``fired`` map and allocates its own bare.

@@ -614,4 +614,5 @@ __all__ = (
     "SetLifecycleAttrs",
     "collect_related_declarations",
     "expanded_once",
+    "should_cache_expansion",
 )

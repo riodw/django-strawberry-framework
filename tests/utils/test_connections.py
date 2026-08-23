@@ -9,6 +9,7 @@ identically.
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from strawberry.relay.types import to_base64
 from strawberry.relay.utils import SliceMetadata
 
@@ -811,3 +812,162 @@ def test_fetch_mode_maps_to_the_count_probe_constant_false_triple(
         assert plan.probe_shape is True
     if want_constant_false:
         assert plan.constant_false_shape is True
+
+
+def test_has_connection_sidecar_input_ignores_strawberry_unset():
+    """`has_connection_sidecar_input` returns False when inputs are `strawberry.UNSET`."""
+    assert has_connection_sidecar_input(filter_input=None, order_by_input=None) is False
+    assert (
+        has_connection_sidecar_input(filter_input=strawberry.UNSET, order_by_input=None) is False
+    )
+    assert (
+        has_connection_sidecar_input(filter_input=None, order_by_input=strawberry.UNSET) is False
+    )
+    assert (
+        has_connection_sidecar_input(
+            filter_input=strawberry.UNSET,
+            order_by_input=strawberry.UNSET,
+        )
+        is False
+    )
+    assert has_connection_sidecar_input(filter_input={"name": "test"}, order_by_input=None) is True
+    assert (
+        has_connection_sidecar_input(filter_input=None, order_by_input=[{"name": "asc"}]) is True
+    )
+
+
+def test_derive_connection_window_bounds_handles_strawberry_unset():
+    """`derive_connection_window_bounds` correctly ignores `strawberry.UNSET` inputs."""
+    bounds = derive_connection_window_bounds(
+        None,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=strawberry.UNSET,
+        last=strawberry.UNSET,
+        max_results=_MAX,
+    )
+    assert bounds == ConnectionWindowBounds(offset=0, limit=_MAX, reverse=False)
+
+    bounds_first = derive_connection_window_bounds(
+        None,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=5,
+        last=strawberry.UNSET,
+        max_results=_MAX,
+    )
+    assert bounds_first == ConnectionWindowBounds(offset=0, limit=5, reverse=False)
+
+    bounds_last = derive_connection_window_bounds(
+        None,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=strawberry.UNSET,
+        last=5,
+        max_results=_MAX,
+    )
+    assert bounds_last == ConnectionWindowBounds(offset=0, limit=5, reverse=True)
+
+
+def test_derive_keyset_window_bounds_handles_strawberry_unset():
+    """`derive_keyset_window_bounds` correctly ignores `strawberry.UNSET` inputs."""
+    from django_strawberry_framework.utils.connections import derive_keyset_window_bounds
+
+    bounds = derive_keyset_window_bounds(
+        None,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=strawberry.UNSET,
+        last=strawberry.UNSET,
+        max_results=_MAX,
+    )
+    assert bounds == ConnectionWindowBounds(offset=0, limit=_MAX, reverse=False)
+
+    bounds_first = derive_keyset_window_bounds(
+        None,
+        before=strawberry.UNSET,
+        after=strawberry.UNSET,
+        first=7,
+        last=strawberry.UNSET,
+        max_results=_MAX,
+    )
+    assert bounds_first == ConnectionWindowBounds(offset=0, limit=7, reverse=False)
+
+
+def test_split_window_rows_handles_iterators_and_generators():
+    """`split_window_rows` accepts one-shot generators and iterators without losing probe flags."""
+    from django_strawberry_framework.utils.connections import (
+        split_window_rows,
+        window_range_plan,
+    )
+
+    class _Row:
+        def __init__(self, rn: int) -> None:
+            self.rn = rn
+
+    # Composed offset probe: marker (rn 1), page (rn 3, 4), sentinel (rn 5)
+    plan = window_range_plan(offset=2, limit=2, reverse=False, next_page_probe=True)
+    rows_gen = (
+        _Row(i)
+        for i in (
+            1,
+            3,
+            4,
+            5,
+        )
+    )
+    page, probe = split_window_rows(rows_gen, plan, row_number="rn")
+    assert [r.rn for r in page] == [3, 4]
+    assert probe is True
+
+    # Plain first page probe: page (rn 1, 2), sentinel (rn 3)
+    plain_plan = window_range_plan(offset=0, limit=2, reverse=False, next_page_probe=True)
+    plain_gen = (_Row(i) for i in (1, 2, 3))
+    page_plain, probe_plain = split_window_rows(plain_gen, plain_plan, row_number="rn")
+    assert [r.rn for r in page_plain] == [1, 2]
+    assert probe_plain is True
+
+
+def test_connection_sidecar_kwargs_handles_none_and_empty():
+    """Sidecar helper functions safely accept None and empty dicts."""
+    from django_strawberry_framework.utils.connections import (
+        connection_sidecar_inputs_from_kwargs,
+        has_connection_sidecar_kwargs,
+    )
+
+    assert connection_sidecar_inputs_from_kwargs(None) == (None, None)
+    assert has_connection_sidecar_kwargs(None) is False
+    assert connection_sidecar_inputs_from_kwargs({}) == (None, None)
+    assert has_connection_sidecar_kwargs({}) is False
+
+
+def test_resolve_relay_max_results_handles_unset():
+    """`resolve_relay_max_results` treats `strawberry.UNSET` as unspecified."""
+    from django_strawberry_framework.utils.connections import (
+        derive_connection_window_bounds,
+        derive_keyset_window_bounds,
+        resolve_relay_max_results,
+    )
+
+    cap = resolve_relay_max_results(None, strawberry.UNSET)
+    assert cap == 100
+
+    bounds = derive_connection_window_bounds(
+        None,
+        before=None,
+        after=None,
+        first=5,
+        last=None,
+        max_results=strawberry.UNSET,
+    )
+    assert bounds == ConnectionWindowBounds(offset=0, limit=5, reverse=False)
+
+    keyset_bounds = derive_keyset_window_bounds(
+        None,
+        before=None,
+        after=None,
+        first=5,
+        last=None,
+        max_results=strawberry.UNSET,
+    )
+    assert keyset_bounds == ConnectionWindowBounds(offset=0, limit=5, reverse=False)

@@ -416,7 +416,11 @@ def _resolve_from_window(
     # (``window_range_plan`` drops a probe request off a non-probe shape).
     # Probe and counted-keyset cannot both fire: ``count_absent`` means the
     # annotation is missing, ``keyset_counted`` means it is present.
-    keyset_seek_supplied = keyset_state is not None and keyset_after is not None
+    keyset_seek_supplied = (
+        keyset_state is not None
+        and keyset_after is not None
+        and keyset_after is not strawberry.UNSET
+    )
     range_plan = window_range_plan(
         offset=offset,
         limit=limit,
@@ -689,7 +693,9 @@ def _consume_window(
                 reverse=bounds.reverse,
                 want_count=want_count,
                 keyset_state=keyset_state,
-                keyset_after=after if keyset_state is not None else None,
+                keyset_after=(
+                    after if keyset_state is not None and after is not strawberry.UNSET else None
+                ),
                 **kwargs,
             )
         if built is not None:
@@ -985,10 +991,12 @@ def _resolve_keyset_connection(
     _guard_source_not_pre_sliced(nodes)
     columns, fingerprint, queryset = _keyset_order_state(state, nodes)
     count_source = queryset
-    if after is not None:
+    after_supplied = after is not None and after is not strawberry.UNSET
+    before_supplied = before is not None and before is not strawberry.UNSET
+    if after_supplied:
         cursor = decode_keyset_cursor(after, columns, fingerprint=fingerprint, argument="after")
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor).q())
-    if before is not None:
+    if before_supplied:
         cursor = decode_keyset_cursor(before, columns, fingerprint=fingerprint, argument="before")
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor, flip=True).q())
     cap = resolve_relay_max_results(info, max_results)
@@ -1000,7 +1008,7 @@ def _resolve_keyset_connection(
     for argument, value in (("first", first), ("last", last)):
         assert_relay_pagination_bound(argument, value, cap=cap)
     last_zero_quirk = (
-        isinstance(last, int) and last == 0 and not isinstance(first, int) and before is None
+        isinstance(last, int) and last == 0 and not isinstance(first, int) and not before_supplied
     )
     backward = isinstance(last, int) and not isinstance(first, int) and not last_zero_quirk
     # Strawberry's ``edges[-0:]`` quirk means ``last: 0`` serves the rows it
@@ -1069,8 +1077,8 @@ def _resolve_keyset_connection(
             rows=rows,
             overfetched=len(rows) == fetch_limit,
             backward=backward,
-            after_supplied=after is not None,
-            before_supplied=before is not None,
+            after_supplied=after_supplied,
+            before_supplied=before_supplied,
             last_zero_quirk=last_zero_quirk,
         )
 
@@ -1100,7 +1108,9 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
     ``ConfigurationError``. Single-sited so the literal lives once and both the
     base and the generated ``<TypeName>Connection`` reuse it.
     """
-    if first is not None and last is not None:
+    first_supplied = first is not None and first is not strawberry.UNSET
+    last_supplied = last is not None and last is not strawberry.UNSET
+    if first_supplied and last_supplied:
         raise GraphQLError(
             "Connection arguments `first` and `last` are mutually exclusive; supply only one.",
         )
@@ -1637,9 +1647,11 @@ def _pipeline_sync(
     if not is_queryset:
         return source
     qs = apply_type_visibility_sync(target_type, source, info)
-    if filter_input is not None and definition.filterset_class is not None:
+    filter_supplied = filter_input is not None and filter_input is not strawberry.UNSET
+    order_by_supplied = order_by_input is not None and order_by_input is not strawberry.UNSET
+    if filter_supplied and definition.filterset_class is not None:
         qs = definition.filterset_class.apply_sync(filter_input, qs, info)
-    if order_by_input is not None and definition.orderset_class is not None:
+    if order_by_supplied and definition.orderset_class is not None:
         qs = definition.orderset_class.apply_sync(order_by_input, qs, info)
     return _finalize_queryset(target_type, qs, info)
 
@@ -1672,9 +1684,11 @@ async def _pipeline_async(
     if not is_queryset:
         return source
     qs = await apply_type_visibility_async(target_type, source, info)
-    if filter_input is not None and definition.filterset_class is not None:
+    filter_supplied = filter_input is not None and filter_input is not strawberry.UNSET
+    order_by_supplied = order_by_input is not None and order_by_input is not strawberry.UNSET
+    if filter_supplied and definition.filterset_class is not None:
         qs = await definition.filterset_class.apply_async(filter_input, qs, info)
-    if order_by_input is not None and definition.orderset_class is not None:
+    if order_by_supplied and definition.orderset_class is not None:
         qs = await definition.orderset_class.apply_async(order_by_input, qs, info)
     return _finalize_queryset(target_type, qs, info)
 

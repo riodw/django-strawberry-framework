@@ -321,6 +321,13 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
 
         unset_sentinel = None
 
+    class _UnreadableSentinelConfig:
+        @property
+        def unset_sentinel(self):
+            raise RuntimeError("hostile unset_sentinel")
+
+        handle_top_level_list = False
+
     class _HostileSetMeta(type):
         def __getattribute__(cls, name):
             if name == "related_orders":
@@ -332,6 +339,8 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
 
     with pytest.raises(ConfigurationError, match="configuration could not be read"):
         list(iter_active_fields(object, {"name": "x"}, _UnreadableConfig()))
+    with pytest.raises(ConfigurationError, match="configuration could not be read"):
+        list(iter_active_fields(object, {"name": "x"}, _UnreadableSentinelConfig()))
 
     config = SetInputTraversal(field_specs={}, related_attr="related_orders")
     with pytest.raises(ConfigurationError, match="related-field declarations could not be read"):

@@ -287,3 +287,17 @@ def test_secondary_model_label_emitter_decodes_to_primary():
     # ... and decode routes the model-label payload to the model's PRIMARY
     # via registry.get(model) - the documented asymmetry.
     assert decode_global_id(minted) == (primary, "3")
+
+
+def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():
+    """An input whose __getattr__ raises is handled cleanly and raises ConfigurationError."""
+
+    class _HostileGetattrMeta(type):
+        def __getattr__(cls, name):
+            raise RuntimeError("attribute access exploded")
+
+    class _HostileClass(metaclass=_HostileGetattrMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
+        global_id_for(_HostileClass, 1)

@@ -418,7 +418,7 @@ def _decrypt_cursor_payload(value: str, argument: str) -> Any:
     except (UnicodeEncodeError, binascii.Error, ValueError):
         raise _invalid_cursor_error(argument) from None
     _aessiv, invalid_tag = _cursor_crypto_types()
-    secrets = (settings.SECRET_KEY, *settings.SECRET_KEY_FALLBACKS)
+    secrets = (settings.SECRET_KEY, *getattr(settings, "SECRET_KEY_FALLBACKS", ()))
     for secret_key in secrets:
         try:
             serialized = _cursor_aessiv(secret_key).decrypt(

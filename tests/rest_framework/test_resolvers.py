@@ -30,7 +30,9 @@ duplicated here** - those are owned by the live suite.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import strawberry
@@ -4648,3 +4650,296 @@ def test_attestation_rejects_a_cleared_fk_that_was_not_cleared():
             m2m_before={},
             relation_pks={"category": None},  # captured null intent
         )
+
+
+def test_decode_nested_multi_non_iterable_returns_field_error():
+    """Passing a non-iterable to _decode_nested for NESTED_MULTI returns a field-keyed error."""
+    spec = SimpleNamespace(
+        kind=serializer_resolvers.NESTED_MULTI,
+        nested_specs=[],
+    )
+    result, error = serializer_resolvers._decode_nested(
+        spec,
+        12345,
+        info=None,
+        path_prefix="shelves",
+    )
+    assert result is None
+    assert error is not None
+    assert error.field == "shelves"
+    assert error.codes == ["invalid"]
+
+
+def test_upload_metadata_tolerates_raising_name_and_content_type():
+    """A file object whose ``name`` or ``content_type`` properties raise yields ``None``."""
+    from django.core.files import File
+
+    class BrokenFile(File):
+        def __init__(self):
+            pass
+
+        @property
+        def name(self):
+            raise RuntimeError("corrupted name descriptor")
+
+        @property
+        def size(self):
+            raise OSError("fstat failed on closed file")
+
+        @property
+        def content_type(self):
+            raise ValueError("invalid content-type header")
+
+    metadata = serializer_resolvers._upload_metadata(BrokenFile())
+    assert isinstance(metadata, UploadMetadata)
+    assert metadata.name is None
+    assert metadata.size is None
+    assert metadata.content_type is None
+
+
+@pytest.mark.parametrize(
+    "bad_context",
+    [
+        123,
+        "not-a-mapping",
+        [("key", "val")],
+        True,
+    ],
+)
+def test_merged_serializer_kwargs_rejects_non_mapping_context(bad_context: Any):
+    """`get_serializer_kwargs` returning a non-mapping `context` raises `ConfigurationError`."""
+    mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
+    req = HttpRequest()
+    req.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=req))
+    hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
+
+    class BadContextMutation(mutation_cls):
+        def get_serializer_kwargs(
+            self,
+            info,
+            *,
+            data,
+            hook_context,
+        ):
+            return {"context": bad_context}
+
+    with pytest.raises(ConfigurationError, match="returned a `context` that is not a mapping"):
+        serializer_resolvers._merged_serializer_kwargs(
+            BadContextMutation,
+            info,
+            final_data={},
+            instance=None,
+            alias="default",
+            hook_context=hook_ctx,
+        )
+
+
+def test_merged_serializer_kwargs_rejects_unmaterializable_context_mapping():
+    """`get_serializer_kwargs` returning an unmaterializable `context` raises `ConfigurationError`."""
+    mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
+    req = HttpRequest()
+    req.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=req))
+    hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
+
+    class ExplodingMapping(Mapping):
+        def __getitem__(self, key):
+            raise RuntimeError("boom on read")
+
+        def __iter__(self):
+            raise RuntimeError("boom on iter")
+
+        def __len__(self):
+            return 1
+
+    class ExplodingContextMutation(mutation_cls):
+        def get_serializer_kwargs(
+            self,
+            info,
+            *,
+            data,
+            hook_context,
+        ):
+            return {"context": ExplodingMapping()}
+
+    with pytest.raises(
+        ConfigurationError,
+        match="could not be materialized for the serializer pipeline",
+    ):
+        serializer_resolvers._merged_serializer_kwargs(
+            ExplodingContextMutation,
+            info,
+            final_data={},
+            instance=None,
+            alias="default",
+            hook_context=hook_ctx,
+        )
+
+
+def test_merged_serializer_kwargs_preserves_custom_context_keys():
+    """`get_serializer_kwargs` custom `context` keys are preserved alongside request and write_alias."""
+    mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
+
+    class CustomContextMutation(mutation_cls):
+        def get_serializer_kwargs(
+            self,
+            info,
+            *,
+            data,
+            hook_context,
+        ):
+            return {
+                "context": {"format": "json", "view": "custom_view", "custom_flag": True},
+            }
+
+    req = HttpRequest()
+    req.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=req))
+    hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
+
+    kwargs = serializer_resolvers._merged_serializer_kwargs(
+        CustomContextMutation,
+        info,
+        final_data={"name": "test"},
+        instance=None,
+        alias="default",
+        hook_context=hook_ctx,
+    )
+    assert kwargs["context"]["request"] is req
+    assert kwargs["context"]["write_alias"] == "default"
+    assert kwargs["context"]["format"] == "json"
+    assert kwargs["context"]["view"] == "custom_view"
+    assert kwargs["context"]["custom_flag"] is True
+
+
+def test_serializer_errors_to_field_errors_never_returns_empty_envelope():
+    """Empty serializer error dicts or lists of empty dicts fall back to a non-empty envelope."""
+    empty_dict_errors = serializer_resolvers.serializer_errors_to_field_errors({}, {})
+    assert len(empty_dict_errors) == 1
+    assert empty_dict_errors[0].field == NON_FIELD_ERROR_KEY
+    assert empty_dict_errors[0].messages == ["Validation failed without error details."]
+    assert empty_dict_errors[0].codes == ["invalid"]
+
+    list_empty_dicts = serializer_resolvers.serializer_errors_to_field_errors([{}, {}], {})
+    assert len(list_empty_dicts) == 1
+    assert list_empty_dicts[0].field == NON_FIELD_ERROR_KEY
+    assert list_empty_dicts[0].messages == ["Validation failed without error details."]
+    assert list_empty_dicts[0].codes == ["invalid"]
+
+    field_empty_list = serializer_resolvers.serializer_errors_to_field_errors({"name": []}, {})
+    assert len(field_empty_list) == 1
+    assert field_empty_list[0].field == "name"
+    assert field_empty_list[0].messages == ["Validation failed without error details."]
+    assert field_empty_list[0].codes == ["invalid"]
+
+
+def test_serializer_errors_to_field_errors_formats_scalar_integers_and_booleans():
+    """Non-string scalar values in serializer errors are converted to strings."""
+    errors = {"count": 100, "flag": False, "score": 9.5}
+    flat = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
+    by_field = {err.field: err.messages for err in flat}
+    assert by_field["count"] == ["100"]
+    assert by_field["flag"] == ["False"]
+    assert by_field["score"] == ["9.5"]
+
+
+def test_decode_input_object_handles_none_and_invalid_dataclass():
+    """_decode_input_object safely handles None and non-dataclass values."""
+    data_none, err_none = serializer_resolvers._decode_input_object([], None, info=None)
+    assert data_none == {}
+    assert err_none is None
+
+    data_bad, err_bad = serializer_resolvers._decode_input_object([], "invalid_object", info=None)
+    assert data_bad == {}
+    assert err_bad is not None
+    assert err_bad.field == NON_FIELD_ERROR_KEY
+    assert err_bad.messages == ["Invalid input object."]
+
+
+@pytest.mark.django_db
+def test_decode_nested_multi_tolerates_none_item_in_list():
+    """_decode_nested correctly passes None list items to DRF validation instead of raising AttributeError."""
+    from apps.library import models as library_models
+    from strawberry import relay
+
+    from django_strawberry_framework import (
+        DjangoMutationField,
+        DjangoSchema,
+        DjangoType,
+        NestedSerializerConfig,
+        SerializerMutation,
+        finalize_django_types,
+    )
+    from django_strawberry_framework.registry import registry
+
+    registry.clear()
+    try:
+
+        class ShelfItemChildSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = library_models.Shelf
+                fields = ("code", "topic")
+
+        class LibraryBookSerializer(serializers.ModelSerializer):
+            shelves = ShelfItemChildSerializer(many=True, required=False)
+
+            class Meta:
+                model = library_models.Book
+                fields = ("title", "shelves")
+
+            def create(self, validated_data):
+                return library_models.Book.objects.create(**validated_data)
+
+        class ShelfT(DjangoType, relay.Node):
+            class Meta:
+                model = library_models.Shelf
+                fields = ("id", "code", "topic")
+                primary = True
+
+        class BookT(DjangoType, relay.Node):
+            class Meta:
+                model = library_models.Book
+                fields = ("id", "title")
+                primary = True
+
+        class CreateBook(SerializerMutation):
+            class Meta:
+                serializer_class = LibraryBookSerializer
+                operation = "create"
+                nested_fields = {"shelves": NestedSerializerConfig()}
+                permission_classes = ()
+
+        @strawberry.type
+        class Query:
+            ping: int = 1
+
+        @strawberry.type
+        class Mutation:
+            create_book = DjangoMutationField(CreateBook)
+
+        finalize_django_types()
+        DjangoSchema(query=Query, mutation=Mutation)
+
+        req = HttpRequest()
+        req.user = SimpleNamespace(username="u", is_authenticated=True)
+        info = SimpleNamespace(context=SimpleNamespace(request=req))
+
+        input_data = CreateBook._input_class(
+            title="Book with None shelf",
+            shelves=[None],
+        )
+
+        with managed_write_transaction("default"):
+            result = serializer_resolvers.resolve_serializer_sync(
+                CreateBook,
+                info,
+                data=input_data,
+                id=strawberry.UNSET,
+            )
+
+        assert result.errors is not None
+        assert len(result.errors) > 0
+        assert any("shelves" in err.field for err in result.errors)
+    finally:
+        registry.clear()

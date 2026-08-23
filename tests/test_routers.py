@@ -5677,3 +5677,19 @@ async def test_router_delegates_legacy_invalid_json_continuation():
     await communicator.send_json_to({"type": "connection_init"})
     output = await communicator.receive_json_from(timeout=10)
     assert output["type"] == "connection_ack"
+
+
+@pytest.mark.django_db
+async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unauthenticated():
+    """A custom or duck-typed actor object lacking is_authenticated is treated as unauthenticated."""
+
+    class CustomActor:
+        pass
+
+    class MockConsumer:
+        def __init__(self, user):
+            self.scope = {"user": user}
+            self.revalidation_window = 0.0
+
+    consumer = MockConsumer(CustomActor())
+    assert await consumers_module._actor_is_current(consumer) is True

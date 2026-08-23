@@ -1113,3 +1113,83 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
     assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.value for member in annotation} == {"a", "b"}
     assert spec.source == "name"  # still writes through to the model column
+
+
+def test_non_relation_field_over_relation_column_fails_loud():
+    """A non-relation field (e.g. CharField) explicitly mapped over a relation column raises ConfigurationError."""
+    _register_products_types()
+
+    class BadRelSer(serializers.ModelSerializer):
+        category = serializers.CharField()
+
+        class Meta:
+            model = product_models.Item
+            fields = ("category",)
+
+    field = BadRelSer().fields["category"]
+    with pytest.raises(ConfigurationError, match="only PrimaryKeyRelatedField is supported"):
+        resolve_serializer_field(field, product_models.Item, "BadRelInput")
+
+
+def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
+    """A consumer-declared field whose scalar disagrees with a choices column fails loud."""
+    _register_products_types()
+
+    # Dynamic model with choices
+    class ChoiceItem(models.Model):
+        status = models.CharField(max_length=20, choices=[("open", "Open"), ("closed", "Closed")])
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class ChoiceItemSer(serializers.ModelSerializer):
+        status = serializers.IntegerField()
+
+        class Meta:
+            model = ChoiceItem
+            fields = ("status",)
+
+    field = ChoiceItemSer().fields["status"]
+    with pytest.raises(ConfigurationError, match="disagrees with the backing model column"):
+        resolve_serializer_field(field, ChoiceItem, "ChoiceItemInput")
+
+
+def test_list_field_with_no_child_raises_configuration_error():
+    """ListField with default child=None raises ConfigurationError requesting a typed child."""
+    field = serializers.ListField()
+    field.bind("tags", None)
+    with pytest.raises(ConfigurationError, match="ListField with no explicit child field"):
+        convert_serializer_field(field)
+
+
+def test_unsupported_serializer_field_without_field_name_raises_cleanly():
+    """An unmapped serializer field without field_name raises ConfigurationError without AttributeError."""
+
+    class CustomUnsupported(serializers.Field):
+        pass
+
+    field = CustomUnsupported()
+    with pytest.raises(
+        ConfigurationError,
+        match="Unsupported serializer field type 'CustomUnsupported'",
+    ):
+        convert_serializer_field(field)
+
+
+def test_unsupported_serializer_field_with_hostile_field_name_repr():
+    """An unmapped serializer field with a hostile field_name repr raises ConfigurationError with <unavailable>."""
+
+    class HostileRepr:
+        def __repr__(self):
+            raise RuntimeError("hostile repr")
+
+    class HostileField(serializers.Field):
+        pass
+
+    field = HostileField()
+    field.field_name = HostileRepr()
+    with pytest.raises(
+        ConfigurationError,
+        match="on serializer field <unavailable>",
+    ):
+        convert_serializer_field(field)

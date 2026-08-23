@@ -97,10 +97,11 @@ reconstruction.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from django import forms
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.forms.models import model_to_dict
 
 from ..mutations.resolvers import (
@@ -114,6 +115,7 @@ from ..utils.write_values import (
     decode_field_handlers,
     decode_provided_fields,
     decode_visible_relation,
+    relation_field_error,
 )
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -134,8 +136,31 @@ def _to_form_key_value(obj: Any, form_field: Any) -> Any:
     """
     to_field_name = getattr(form_field, "to_field_name", None)
     if to_field_name:
-        return obj.serializable_value(to_field_name)
-    return obj.pk
+        try:
+            if hasattr(obj, "serializable_value"):
+                return obj.serializable_value(to_field_name)
+        except (AttributeError, FieldDoesNotExist):
+            pass
+    return getattr(obj, "pk", obj)
+
+
+def _is_empty_form_value(candidate: Any, form_field: Any) -> bool:
+    """Return whether ``candidate`` matches the form field's empty values safely."""
+    empty_values = getattr(
+        form_field,
+        "empty_values",
+        (
+            None,
+            "",
+            [],
+            (),
+            {},
+        ),
+    )
+    try:
+        return candidate in empty_values
+    except TypeError:
+        return False
 
 
 def _decode_form_relation_single(
@@ -179,7 +204,7 @@ def _decode_form_relation_single(
         related_model=related_model,
         info=info,
         async_recourse=_FORM_ASYNC_RECOURSE,
-        skip=lambda candidate: candidate in form_field.empty_values,
+        skip=lambda candidate: _is_empty_form_value(candidate, form_field),
         project=lambda obj: _to_form_key_value(obj, form_field),
     )
 
@@ -214,10 +239,25 @@ def _decode_form_relation_multi(
     honors the form's own required-ness rather than imposing the model path's
     stricter "null is never a valid replace-set" stance (spec-038 Decision 8 step 1).
     """
-    if values in form_field.empty_values:
+    if _is_empty_form_value(values, form_field):
         return [], None
+    if isinstance(
+        values,
+        (
+            str,
+            bytes,
+            bytearray,
+            memoryview,
+            Mapping,
+        ),
+    ):
+        return None, relation_field_error(graphql_name)
+    try:
+        provided_values = list(values)
+    except BaseException:
+        return None, relation_field_error(graphql_name)
     keys: list[Any] = []
-    for value in values:
+    for value in provided_values:
         key, error = _decode_form_relation_single(
             value,
             graphql_name=graphql_name,
@@ -269,7 +309,7 @@ def _decode_form_data(
         single=_decode_form_relation_single,
         multi=_decode_form_relation_multi,
         file_dest=provided_files,
-        extra=lambda spec: {"form_field": form_fields[spec.target_name]},
+        extra=lambda spec: {"form_field": form_fields.get(spec.target_name)},
     )
     error = decode_provided_fields(
         mutation_cls._input_field_specs,
@@ -345,6 +385,9 @@ def _reconstruct_partial_data(
     model = mutation_cls._mutation_meta.model
     form_fields = dict(mutation_cls.get_form_fields())
     m2m_field_names = {field.name for field in model._meta.many_to_many}
+    fk_field_names = {
+        field.name for field in model._meta.concrete_fields if getattr(field, "is_relation", False)
+    }
 
     m2m_data: dict[str, Any] = {}
     relation_data: dict[str, Any] = {}
@@ -353,16 +396,25 @@ def _reconstruct_partial_data(
         if name in provided_data or isinstance(form_field, forms.FileField):
             continue
         if isinstance(form_field, forms.ModelMultipleChoiceField) and name in m2m_field_names:
-            m2m_data[name] = [
-                _to_form_key_value(obj, form_field) for obj in getattr(instance, name).all()
-            ]
+            try:
+                related_objs = getattr(instance, name).all()
+                m2m_data[name] = [_to_form_key_value(obj, form_field) for obj in related_objs]
+            except (AttributeError, ObjectDoesNotExist):
+                pass
         elif (
             isinstance(form_field, forms.ModelChoiceField)
             and not isinstance(form_field, forms.ModelMultipleChoiceField)
             and form_field.to_field_name
-            and (related := getattr(instance, name, None)) is not None
+            and name in fk_field_names
         ):
-            relation_data[name] = _to_form_key_value(related, form_field)
+            try:
+                related = getattr(instance, name, None)
+            except (AttributeError, ObjectDoesNotExist):
+                related = None
+            if related is not None:
+                relation_data[name] = _to_form_key_value(related, form_field)
+            else:
+                scalar_names.append(name)
         else:
             scalar_names.append(name)
 

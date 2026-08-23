@@ -1013,3 +1013,66 @@ def test_plain_form_default_perform_mutate_calls_form_save():
 
     Submit().perform_mutate(SavingForm(data={"message": "x"}), info=None)
     assert called["saved"] is True
+
+
+@pytest.mark.parametrize(
+    "invalid_meta",
+    [
+        123,
+        "string",
+        [1, 2, 3],
+        (1, 2),
+        lambda: None,
+    ],
+)
+def test_plain_form_mutation_rejects_non_class_meta(invalid_meta):
+    """A non-class Meta on DjangoFormMutation raises ConfigurationError."""
+    with pytest.raises(ConfigurationError, match=r"BadMeta\.Meta must be a class; got "):
+
+        class BadMeta(DjangoFormMutation):
+            Meta = invalid_meta
+
+
+@pytest.mark.parametrize(
+    "invalid_meta",
+    [
+        123,
+        "string",
+        [1, 2, 3],
+        (1, 2),
+        lambda: None,
+    ],
+)
+def test_modelform_mutation_rejects_non_class_meta(invalid_meta):
+    """A non-class Meta on DjangoModelFormMutation raises ConfigurationError."""
+    with pytest.raises(ConfigurationError, match=r"BadModelMeta\.Meta must be a class; got "):
+
+        class BadModelMeta(DjangoModelFormMutation):
+            Meta = invalid_meta
+
+
+@pytest.mark.parametrize(
+    "invalid_op",
+    [
+        [],
+        {},
+        {"a": 1},
+        set(),
+        123,
+        True,
+        None,
+    ],
+)
+def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_op):
+    """An unhashable or non-string operation on DjangoModelFormMutation raises ConfigurationError."""
+    form_cls = _item_model_form()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Meta\.operation must be one of \['create', 'update'\]; got ",
+    ):
+
+        class BadOp(DjangoModelFormMutation):
+            class Meta:
+                form_class = form_cls
+                operation = invalid_op

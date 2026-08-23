@@ -52,6 +52,7 @@ from django_strawberry_framework.forms.inputs import (
     FORM,
     INPUTS_MODULE_PATH,
     PARTIAL,
+    _model_column_for,
     build_form_input_class,
     build_form_inputs,
     clear_form_input_namespace,
@@ -911,6 +912,80 @@ def test_extra_field_shadowing_reverse_relation_stays_scalar():
     assert not _is_optional(fields["items"])
 
 
+def test_extra_field_shadowing_generic_foreign_key_stays_scalar():
+    """An extra ModelForm field reusing a GenericForeignKey name stays on the scalar path.
+
+    ``TaggedItem.content_object`` is a ``GenericForeignKey`` with no concrete DB column.
+    ``_model_column_for`` must return ``None`` so an extra form field with the same name
+    routes through ``convert_form_field`` rather than crashing on missing ``related_model``.
+    """
+    from apps.library.models import TaggedItem
+
+    class TaggedItemForm(forms.ModelForm):
+        content_object = forms.CharField()
+
+        class Meta:
+            model = TaggedItem
+            fields = ("tag",)
+
+    assert _model_column_for(TaggedItemForm, "content_object") is None
+
+    cre, specs = build_form_input_class(TaggedItemForm, operation_kind=CREATE)
+    co_spec = next(s for s in specs if s.target_name == "content_object")
+    assert co_spec.input_attr == "content_object"
+    assert co_spec.graphql_name == "contentObject"
+    assert co_spec.kind == SCALAR
+    assert co_spec.related_model is None
+    fields = _field_map(cre)
+    assert "content_object" in fields
+    assert not _is_optional(fields["content_object"])
+
+
+def test_extra_field_shadowing_generic_relation_stays_scalar():
+    """An extra ModelForm field reusing a GenericRelation name stays on the scalar path.
+
+    ``Branch.tags`` is a ``GenericRelation`` with no concrete DB column.
+    ``_model_column_for`` must return ``None`` so an extra form field with the same name
+    routes through ``convert_form_field`` as a scalar rather than misclassifying as a single relation.
+    """
+    from apps.library.models import Branch
+
+    class BranchForm(forms.ModelForm):
+        tags = forms.CharField()
+
+        class Meta:
+            model = Branch
+            fields = ("name",)
+
+    assert _model_column_for(BranchForm, "tags") is None
+
+    cre, specs = build_form_input_class(BranchForm, operation_kind=CREATE)
+    tags_spec = next(s for s in specs if s.target_name == "tags")
+    assert tags_spec.input_attr == "tags"
+    assert tags_spec.graphql_name == "tags"
+    assert tags_spec.kind == SCALAR
+    assert tags_spec.related_model is None
+    fields = _field_map(cre)
+    assert "tags" in fields
+    assert "tags_id" not in fields
+
+
+def test_guard_partial_required_column_less_fields_catches_dropped_gfk_extra():
+    """guard_partial_required_column_less_fields catches dropped required GFK-shadowing extra fields."""
+    from apps.library.models import TaggedItem
+
+    class TaggedItemForm(forms.ModelForm):
+        content_object = forms.CharField(required=True)
+
+        class Meta:
+            model = TaggedItem
+            fields = ("tag",)
+
+    effective = resolve_effective_form_fields(TaggedItemForm, exclude=("content_object",))
+    with pytest.raises(ConfigurationError, match="content_object"):
+        guard_partial_required_column_less_fields(TaggedItemForm, effective)
+
+
 def test_digit_boundary_form_fields_survive_distinct_in_sdl():
     """``field_2`` / ``field2`` both appear on the generated form input (shared pin path).
 
@@ -966,3 +1041,33 @@ def test_model_choice_field_with_none_queryset_is_fail_loud():
     assert "LateQuerysetForm" in message
     assert "'target'" in message
     assert "queryset is None" in message
+
+
+def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
+    from types import SimpleNamespace
+
+    from django.core.exceptions import FieldDoesNotExist
+
+    from django_strawberry_framework.forms.inputs import _model_column_for
+
+    class FakeReverseM2M:
+        is_relation = True
+        many_to_many = True
+        auto_created = True
+
+    class FakeNonConcreteField:
+        is_relation = False
+        column = None
+
+    def _get_field(name):
+        if name == "reverse_m2m":
+            return FakeReverseM2M()
+        if name == "non_concrete":
+            return FakeNonConcreteField()
+        raise FieldDoesNotExist
+
+    fake_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_get_field))
+    fake_form = SimpleNamespace(_meta=SimpleNamespace(model=fake_model))
+
+    assert _model_column_for(fake_form, "reverse_m2m") is None
+    assert _model_column_for(fake_form, "non_concrete") is None

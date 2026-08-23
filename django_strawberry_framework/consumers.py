@@ -860,7 +860,7 @@ async def _actor_is_current(consumer: Any) -> bool:
     # Strawberry type stack behind it) into a transport-layer coroutine. If a
     # THIRD site ever needs this predicate, promote it to
     # ``utils/permissions.py`` beside ``ChannelsRequestAdapter`` instead.
-    if actor is None or not actor.is_authenticated:
+    if actor is None or not getattr(actor, "is_authenticated", False):
         return not connection_was_authenticated(scope)
     note_authenticated_actor(scope)
 
@@ -897,7 +897,7 @@ async def _actor_is_current(consumer: Any) -> bool:
         )
         refreshed = None
 
-    if refreshed is None or not refreshed.is_authenticated:
+    if refreshed is None or not getattr(refreshed, "is_authenticated", False):
         # The stale actor stays on the scope. Downgrading it to ``AnonymousUser``
         # would let anything still holding this scope read an anonymous session
         # instead of a revoked one (spec-046 Decision 11); the connection is

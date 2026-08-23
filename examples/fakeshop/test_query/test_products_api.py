@@ -110,7 +110,7 @@ _CREATE_ITEM = (
 )
 _UPDATE_ITEM = (
     "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
-    "node { name } errors { field messages } } }"
+    "node { name } errors { field messages codes } } }"
 )
 _DELETE_ITEM = (
     "mutation($id: ID!) { deleteItem(id: $id) { "
@@ -832,10 +832,42 @@ def test_update_item_explicit_null_category_id_is_field_error():
     assert "errors" not in payload, payload
     result = payload["data"]["updateItem"]
     assert result["node"] is None
-    assert len(result["errors"]) == 1
-    assert result["errors"][0]["field"] == "categoryId"
+    assert result["errors"] == [
+        {"field": "categoryId", "messages": ["This field cannot be null."], "codes": ["null"]},
+    ]
     item.refresh_from_db()
     assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_explicit_null_scalar_name_is_field_error():
+    """Explicit ``name: null`` on a non-nullable scalar field returns a field-keyed null error.
+
+    Live ``/graphql`` acceptance for ``_explicit_null_error``. ``ItemPartialInput.name``
+    is optional in the GraphQL schema, so sending ``name: null`` reaches the resolver where
+    it is rejected with a ``null`` FieldError before attempting a DB write.
+    """
+    create_users(1)
+    seed_data(1)
+    item = models.Item.objects.first()
+    orig_name = item.name
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": None}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert result["errors"] == [
+        {"field": "name", "messages": ["This field cannot be null."], "codes": ["null"]},
+    ]
+    item.refresh_from_db()
+    assert item.name == orig_name
 
 
 @pytest.mark.django_db(transaction=True)

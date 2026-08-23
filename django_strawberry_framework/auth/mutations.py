@@ -397,7 +397,7 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     between the two fields.
     """
     user = getattr(request, "user", None)
-    if user is not None and user.is_authenticated:
+    if user is not None and getattr(user, "is_authenticated", False):
         return user
     return None
 
@@ -968,7 +968,7 @@ def _register_decode_step(
     if isinstance(decoded, list):
         return decoded
     user, m2m_assignments, exclude, excluded_values = decoded
-    return user, m2m_assignments, exclude, excluded_values["password"]
+    return user, m2m_assignments, exclude, excluded_values.get("password")
 
 
 def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
@@ -991,6 +991,10 @@ def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
     from ..utils.write_values import unencodable_text_error
 
     user, m2m_assignments, exclude, raw_password = decoded
+    if raw_password is None:
+        return [resolvers.field_error("password", "This field cannot be null.", codes="null")]
+    if not isinstance(raw_password, str):
+        return [resolvers.field_error("password", "Invalid password.", codes="invalid")]
     # ``password`` rides the D6 exclusion seam, so it bypasses the shared decode's
     # scalar storability preflight (``decode_scalar_leaf``) that every other input
     # scalar - including this register's own ``username`` - runs through. A

@@ -67,6 +67,7 @@ from ..utils.inputs import (
     optional_input_field,
     resolve_effective_fields,
 )
+from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
 from .converter import (
     FILE,
@@ -314,16 +315,18 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
     A ``ModelForm`` exposes its model via ``_meta.model``; a field with a backing
     forward column / M2M resolves through ``model._meta.get_field(name)``. A plain
     ``Form`` (no ``_meta.model``), or a ``ModelForm`` extra field that declares no
-    model column (a ``confirm``, a captcha), yields ``None`` - the caller routes
-    it through the model-less ``convert_form_field`` table instead. The two key
-    spaces stay separate: only a resolved ``models.Field`` ever reaches the
-    read-side converters (spec-038 Decision 7).
+    model column (a ``confirm``, a captcha, or a field reusing the name of a
+    reverse relation, GenericForeignKey, or GenericRelation), yields ``None`` - the
+    caller routes it through the model-less ``convert_form_field`` table instead.
+    The two key spaces stay separate: only a resolved concrete ``models.Field``
+    ever reaches the read-side converters (spec-038 Decision 7).
 
     ``get_field`` also resolves reverse relations (``ForeignObjectRel`` - e.g.
-    ``Category.items``). Those are NOT ModelForm column-backed fields: an extra
-    form field that reuses the reverse accessor name (``items = forms.CharField()``)
-    must stay on the model-less path. Treating the reverse rel as a column would
-    mis-emit a relation id input (``itemsId``) for a scalar extra.
+    ``Category.items``), ``GenericForeignKey``, and ``GenericRelation``. Those
+    are NOT ModelForm column-backed fields: an extra form field that reuses those
+    names (e.g. ``items = forms.CharField()``) must stay on the model-less path.
+    Treating them as columns would mis-emit a relation id input (``itemsId``) or
+    crash on missing related models.
     """
     meta = getattr(form_class, "_meta", None)
     model = getattr(meta, "model", None)
@@ -334,6 +337,14 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
     except FieldDoesNotExist:
         return None
     if isinstance(column, models.ForeignObjectRel):
+        return None
+    if getattr(column, "is_relation", False):
+        if getattr(column, "many_to_many", False):
+            if not is_forward_many_to_many(column):
+                return None
+        elif not is_forward_concrete_relation(column):
+            return None
+    elif getattr(column, "column", None) is None:
         return None
     return column
 

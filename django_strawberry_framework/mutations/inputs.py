@@ -63,7 +63,7 @@ from ..utils.inputs import (
     optional_input_field,
     pascalize_token,
 )
-from ..utils.relations import is_forward_many_to_many
+from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
@@ -258,7 +258,7 @@ def editable_input_fields(
         if getattr(field, "many_to_many", False):
             # Forward M2M only: a forward ``ManyToManyField`` is concrete and
             # writable; an auto-created reverse M2M accessor is not.
-            if is_forward_many_to_many(field):
+            if is_forward_many_to_many(field) and getattr(field, "editable", False):
                 selected.append(field)
             continue
         # Concrete column-backed fields only (``hasattr(f, "column")`` is the
@@ -477,24 +477,9 @@ def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
         if getattr(field, "many_to_many", False):
             if is_forward_many_to_many(field):
                 m2m_by_name[field.name] = field
-        elif _is_forward_concrete_relation(field):
+        elif is_forward_concrete_relation(field):
             fk_by_attr[f"{field.name}_id"] = field
     return fk_by_attr, m2m_by_name
-
-
-def _is_forward_concrete_relation(field: Any) -> bool:
-    """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
-
-    A concrete forward relation has both a non-``None`` ``column`` (a real DB
-    column - a ``GenericForeignKey`` reports ``column=None``) and a non-``None``
-    ``related_model`` (the type the relation id is checked against - a
-    ``GenericForeignKey`` reports ``related_model=None``). This excludes virtual
-    relations from the FK index so a scalar field that merely *ends in* ``_id`` is
-    never reverse-mapped to a non-existent relation field.
-    """
-    if not getattr(field, "is_relation", False):
-        return False
-    return getattr(field, "column", None) is not None and field.related_model is not None
 
 
 def mutation_input_field_specs(

@@ -24,6 +24,7 @@ import itertools
 import json
 import logging
 import threading
+from types import SimpleNamespace
 
 import pytest
 import strawberry
@@ -48,6 +49,7 @@ from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.db import models as djmodels
 from django.test import RequestFactory, override_settings
+from django.utils.functional import SimpleLazyObject
 from strawberry import relay
 
 from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
@@ -415,6 +417,22 @@ def test_logout_without_auth_middleware_is_anonymous_and_flushes_the_session():
     assert result.errors is None, result.errors
     assert result.data["logout"] == {"ok": False, "errors": []}
     assert "logout_residue" not in request.session
+
+    # SimpleLazyObject returning None
+    lazy_req = RequestFactory().post("/graphql/")
+    SessionMiddleware(lambda _request: None).process_request(lazy_req)
+    lazy_req.user = SimpleLazyObject(lambda: None)
+    lazy_res = schema.execute_sync(_LOGOUT_Q, context_value=lazy_req)
+    assert lazy_res.errors is None, lazy_res.errors
+    assert lazy_res.data["logout"] == {"ok": False, "errors": []}
+
+    # Custom actor object without is_authenticated
+    custom_req = RequestFactory().post("/graphql/")
+    SessionMiddleware(lambda _request: None).process_request(custom_req)
+    custom_req.user = object()
+    custom_res = schema.execute_sync(_LOGOUT_Q, context_value=custom_req)
+    assert custom_res.errors is None, custom_res.errors
+    assert custom_res.data["logout"] == {"ok": False, "errors": []}
 
 
 def test_login_only_bind_emits_no_orphan_logout_payload():
@@ -1022,6 +1040,140 @@ def test_register_input_name_is_pinned_and_payload_derives_from_the_rider_name()
     # The deterministic shape-derived name never leaks into the schema.
     assert "UserEmailPasswordUsernameInput" not in sdl
     assert mutation_inputs.RegisterPayload.__name__ == "RegisterPayload"
+
+
+def test_register_with_explicit_none_password_returns_null_field_error():
+    """An explicit null password on register is rejected with field-keyed null error."""
+    from django_strawberry_framework.auth.mutations import _register_decode_step
+    from django_strawberry_framework.mutations.inputs import InputFieldSpec
+
+    specs = [
+        InputFieldSpec(
+            graphql_name="username",
+            input_attr="username",
+            target_name="username",
+            kind="scalar",
+        ),
+        InputFieldSpec(
+            graphql_name="password",
+            input_attr="password",
+            target_name="password",
+            kind="excluded",
+        ),
+    ]
+    model_fields = {
+        "username": User._meta.get_field("username"),
+        "password": User._meta.get_field("password"),
+    }
+    fake_mutation = SimpleNamespace(
+        _mutation_meta=SimpleNamespace(model=User),
+        _input_field_specs=specs,
+        _model_fields_by_attr=model_fields,
+    )
+
+    @strawberry.input
+    class _RegisterInput:
+        username: str
+        password: str | None = None
+
+    data = _RegisterInput(username="testuser", password=None)
+    errors = _register_decode_step(fake_mutation, data, info=None, instance=None)
+    assert isinstance(errors, list)
+    assert len(errors) == 1
+    assert errors[0].field == "password"
+    assert errors[0].codes == ["null"]
+
+
+def test_register_write_step_none_password_defense_in_depth():
+    """_register_write_step safely rejects None password without crashing validate_password."""
+    from django_strawberry_framework.auth.mutations import _register_write_step
+
+    user = User(username="testuser")
+    decoded = (
+        user,
+        [],
+        set(),
+        None,
+    )
+    errors = _register_write_step(None, decoded)
+    assert len(errors) == 1
+    assert errors[0].field == "password"
+    assert errors[0].codes == ["null"]
+
+
+def test_register_decode_step_with_unset_password_returns_none_password():
+    """_register_decode_step safely returns None when password is omitted/UNSET instead of raising KeyError."""
+    from django_strawberry_framework.auth.mutations import _register_decode_step
+    from django_strawberry_framework.mutations.inputs import InputFieldSpec
+
+    specs = [
+        InputFieldSpec(
+            graphql_name="username",
+            input_attr="username",
+            target_name="username",
+            kind="scalar",
+        ),
+        InputFieldSpec(
+            graphql_name="password",
+            input_attr="password",
+            target_name="password",
+            kind="excluded",
+        ),
+    ]
+    model_fields = {
+        "username": User._meta.get_field("username"),
+        "password": User._meta.get_field("password"),
+    }
+    fake_mutation = SimpleNamespace(
+        _mutation_meta=SimpleNamespace(model=User),
+        _input_field_specs=specs,
+        _model_fields_by_attr=model_fields,
+    )
+
+    @strawberry.input
+    class _RegisterInput:
+        username: str
+        password: str = strawberry.UNSET
+
+    data = _RegisterInput(username="testuser", password=strawberry.UNSET)
+    user, _m2m, _exclude, raw_password = _register_decode_step(
+        fake_mutation,
+        data,
+        info=None,
+        instance=None,
+    )
+    assert user.username == "testuser"
+    assert raw_password is None
+
+
+@pytest.mark.parametrize(
+    "bad_password",
+    [
+        123,
+        45.6,
+        True,
+        False,
+        ["secret"],
+        {"pass": "word"},
+        object(),
+    ],
+)
+def test_register_write_step_non_str_password_defense_in_depth(bad_password):
+    """_register_write_step safely rejects non-string password with an invalid field error."""
+    from django_strawberry_framework.auth.mutations import _register_write_step
+
+    user = User(username="testuser")
+    decoded = (
+        user,
+        [],
+        set(),
+        bad_password,
+    )
+    errors = _register_write_step(None, decoded)
+    assert len(errors) == 1
+    assert errors[0].field == "password"
+    assert errors[0].codes == ["invalid"]
+    assert "Invalid password" in errors[0].messages[0]
 
 
 # ===========================================================================

@@ -198,6 +198,40 @@ def test_editable_fields_rejects_unknown_exclude_name():
         editable_input_fields(product_models.Item, exclude=("nope",))
 
 
+def test_editable_fields_excludes_non_editable_many_to_many():
+    """A ManyToManyField declared with ``editable=False`` is excluded from editable_input_fields."""
+
+    class Tag(models.Model):
+        name = models.CharField(max_length=50)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class Article(models.Model):
+        title = models.CharField(max_length=100)
+        editable_tags = models.ManyToManyField(Tag, related_name="editable_articles")
+        non_editable_tags = models.ManyToManyField(
+            Tag,
+            related_name="non_editable_articles",
+            editable=False,
+        )
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    fields = editable_input_fields(Article)
+    field_names = [f.name for f in fields]
+    assert "title" in field_names
+    assert "editable_tags" in field_names
+    assert "non_editable_tags" not in field_names
+
+    with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
+        editable_input_fields(Article, fields=("title", "non_editable_tags"))
+
+    with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
+        editable_input_fields(Article, exclude=("non_editable_tags",))
+
+
 # ---------------------------------------------------------------------------
 # input_field_required - the create-required rule
 # ---------------------------------------------------------------------------

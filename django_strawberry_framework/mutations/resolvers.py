@@ -274,6 +274,18 @@ def run_write_pipeline_sync(
                     data,
                     instance=instance,
                 )
+                if instance is not None and authorized_pk is not None:
+                    reject_substituted_row(
+                        model,
+                        instance.pk,
+                        authorized_pk,
+                        message=(
+                            f"{mutation_cls.__name__}: the located instance's pk changed from "
+                            f"{_safe_arg_repr(authorized_pk)} to {_safe_arg_repr(instance.pk)} during "
+                            "authorization; an update must "
+                            "write the row that was authorized, never a substituted one."
+                        ),
+                    )
 
             decoded = decode_step(instance)
             if isinstance(decoded, list):
@@ -406,11 +418,19 @@ def _decode_relations(
     m2m_pks: dict[str, Any] = {}
     excluded_values: dict[str, Any] = {}
     scalar_handler = decoded_into(scalar_and_fk_attrs, _model_scalar_decode)
+
+    def _model_excluded_decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+        graphql_name = spec.graphql_name
+        null_error = _explicit_null_error(model_fields[spec.input_attr], graphql_name, value)
+        if null_error is not None:
+            return None, null_error
+        return value, None
+
     handlers = {
         RELATION_SINGLE: relation_handler(scalar_and_fk_attrs),
         RELATION_MULTI: relation_handler(m2m_pks),
         FILE: scalar_handler,
-        EXCLUDED: decoded_into(excluded_values, lambda _spec, value: (value, None)),
+        EXCLUDED: decoded_into(excluded_values, _model_excluded_decode),
     }
     error = decode_provided_fields(
         specs,
@@ -880,6 +900,16 @@ def _model_write_step(
     update row, ``None`` for create) selects the save mode: a create saves the
     ``decoded`` target normally, an update saves it with ``force_update=True``
     (the 0.0.14 disappearing-row concurrency contract via ``forced_save_or_field_errors``).
+
+    ``decoded`` is the THREE-tuple contract exactly. ``_model_decode_step``
+    returns a four-tuple when the mutation's specs carry the spec-040 D6
+    ``EXCLUDED`` kind, but an excluded value is by definition one this generic
+    tail cannot write - only a flavor that knows what the value MEANS can. The
+    register flavor hashes its ``password`` and calls this with a re-packed
+    three-tuple (``auth/mutations.py::_register_write_step``). Unpacking
+    strictly is therefore the guard: a bind that introduces an ``EXCLUDED``
+    spec without pairing it to a flavor write step raises here instead of
+    silently discarding the excluded value.
     """
     target, m2m_assignments, exclude = decoded
 
@@ -902,7 +932,10 @@ def _model_write_step(
             write_error = forced_save_or_field_errors(target)
         if write_error is not None:
             return write_error
-        _assign_m2m(target, m2m_assignments)
+        try:
+            _assign_m2m(target, m2m_assignments)
+        except IntegrityError:
+            return integrity_error_field_errors()
     return target
 
 
@@ -1050,6 +1083,8 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
                 codes="protected",
             ),
         ]
+    except IntegrityError:
+        return integrity_error_field_errors()
     if per_model.get(instance._meta.label, 0) == 0:
         return [conflict_error()]
     return None

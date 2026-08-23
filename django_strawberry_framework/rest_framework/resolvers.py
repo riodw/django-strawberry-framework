@@ -314,6 +314,14 @@ def _decode_input_object(
     (FILE lands in ``data``, the deliberate DRF contrast with Django ``files=``).
     Nested recursion stays serializer-only via ``extra_handlers``.
     """
+    if data is None:
+        return {}, None
+    if not hasattr(data, "__strawberry_definition__"):
+        return {}, field_error(
+            path_prefix or NON_FIELD_ERROR_KEY,
+            "Invalid input object.",
+            codes="invalid",
+        )
     provided_data: dict[str, Any] = {}
 
     def _field_path(spec: Any) -> str:
@@ -363,13 +371,21 @@ def _decode_nested(
     if value is None:
         return None, None
     if spec.kind == NESTED_MULTI:
-        decoded_items: list[dict[str, Any]] = []
-        for index, item in enumerate(value):
+        try:
+            items = list(value)
+        except Exception:
+            return None, field_error(path_prefix, "Expected a list of items.", codes="invalid")
+        decoded_items: list[dict[str, Any] | None] = []
+        for index, item in enumerate(items):
+            item_path = join_error_path(path_prefix, str(index))
+            if item is None:
+                decoded_items.append(None)
+                continue
             item_data, error = _decode_input_object(
                 spec.nested_specs,
                 item,
                 info,
-                path_prefix=join_error_path(path_prefix, str(index)),
+                path_prefix=item_path,
             )
             if error is not None:
                 return None, error
@@ -468,6 +484,14 @@ def serializer_errors_to_field_errors(
         if not descended:
             active.discard(id(node))
             frames.pop()
+    if not flattened and not prefix:
+        return [
+            field_error(
+                prefix,
+                "Validation failed without error details.",
+                codes="invalid",
+            ),
+        ]
     return flattened
 
 
@@ -514,10 +538,26 @@ def _error_leaf(errors: Any, prefix: str) -> FieldError:
     path directly - preserving each DRF ``ErrorDetail.code`` alongside the message
     and the structured path (derived inside ``field_error`` from the dotted key).
     """
+    leaf_codes = _error_detail_codes(errors)
+    if (
+        errors
+        in (
+            None,
+            "",
+            [],
+            {},
+        )
+        and not leaf_codes
+    ):
+        return field_error(
+            prefix,
+            "Validation failed without error details.",
+            codes="invalid",
+        )
     return field_error(
         prefix,
         errors,
-        codes=_error_detail_codes(errors),
+        codes=leaf_codes,
     )
 
 
@@ -582,13 +622,21 @@ def _upload_metadata(item: Any) -> UploadMetadata:
     ``data`` for the serializer's own validation.
     """
     try:
+        name = getattr(item, "name", None)
+    except Exception:
+        name = None
+    try:
         size = item.size
     except Exception:
         size = None
+    try:
+        content_type = getattr(item, "content_type", None)
+    except Exception:
+        content_type = None
     return UploadMetadata(
-        name=getattr(item, "name", None),
+        name=name,
         size=size,
-        content_type=getattr(item, "content_type", None),
+        content_type=content_type,
     )
 
 
@@ -908,7 +956,22 @@ def _merged_serializer_kwargs(
         kwargs["partial"] = True
 
     request = request_from_info(info, family_label="SerializerMutation")
-    context = dict(kwargs.get("context") or {})
+    raw_context = kwargs.get("context")
+    if raw_context is not None:
+        if not isinstance(raw_context, Mapping):
+            raise ConfigurationError(
+                f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
+                f"`context` that is not a mapping; got {_safe_type_name(raw_context)}.",
+            )
+        try:
+            context = dict(raw_context)
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
+                "`context` mapping that could not be materialized for the serializer pipeline.",
+            ) from exc
+    else:
+        context = {}
     override_request = context.get("request")
     if override_request is not None and override_request is not request:
         raise ConfigurationError(
@@ -1829,7 +1892,12 @@ def _attest_saved_relations(
             model_field = model._meta.get_field(source)
         except FieldDoesNotExist:
             continue  # A serializer-only relation: nothing on the row to attest.
-        if not getattr(model_field, "is_relation", False) or model_field.many_to_many:
+        if (
+            not getattr(model_field, "is_relation", False)
+            or model_field.many_to_many
+            or not getattr(model_field, "concrete", False)
+            or not hasattr(model_field, "attname")
+        ):
             continue
         fk_checks.append((spec.target_name, model_field, relation_pks[spec.target_name]))
 

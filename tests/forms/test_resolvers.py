@@ -2301,3 +2301,206 @@ async def test_plain_form_resolve_async_seam():
     )
     assert res.errors is None, res.errors
     assert res.data["submit"]["ok"] is True
+
+
+def test_decode_form_relation_multi_non_iterable_returns_field_error():
+    """Passing a non-iterable to _decode_form_relation_multi returns a field-keyed error."""
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
+    keys, error = form_resolvers._decode_form_relation_multi(
+        12345,
+        graphql_name="genres",
+        related_model=library_models.Genre,
+        form_field=field,
+        info=None,
+    )
+    assert keys is None
+    assert error is not None
+    assert error.field == "genres"
+    assert error.codes == ["invalid"]
+
+
+@pytest.mark.django_db
+def test_partial_update_reconstruct_with_extra_model_choice_field():
+    """A ModelForm with an extra ModelChoiceField does not crash reconstruction on non-model attrs."""
+    cat = product_models.Category.objects.create(name=_uniq("cat"))
+    item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
+    item.extra_choice = "not a model object"
+
+    class CustomItemForm(forms.ModelForm):
+        extra_choice = forms.ModelChoiceField(
+            queryset=product_models.Category.objects.all(),
+            to_field_name="name",
+            required=False,
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "extra_choice")
+
+    class CustomItemMutation(DjangoModelFormMutation):
+        class Meta:
+            form_class = CustomItemForm
+            operation = "update"
+
+    data = form_resolvers._reconstruct_partial_data(CustomItemMutation, item, {"name": "updated"})
+    assert "extra_choice" not in data
+    assert data["name"] == "updated"
+    assert data["category"] == cat.pk
+
+
+@pytest.mark.django_db
+def test_partial_update_reconstruct_with_reverse_relation_field():
+    """A ModelForm with a field name matching a reverse relation does not crash reconstruction."""
+    cat = product_models.Category.objects.create(name=_uniq("cat"))
+    item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
+
+    class CustomItemForm(forms.ModelForm):
+        entries = forms.ModelChoiceField(
+            queryset=product_models.Entry.objects.all(),
+            to_field_name="value",
+            required=False,
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "entries")
+
+    class CustomItemMutation(DjangoModelFormMutation):
+        class Meta:
+            form_class = CustomItemForm
+            operation = "update"
+
+    data = form_resolvers._reconstruct_partial_data(CustomItemMutation, item, {"name": "updated"})
+    assert "entries" not in data
+    assert data["name"] == "updated"
+    assert data["category"] == cat.pk
+
+
+@pytest.mark.django_db
+def test_partial_update_reconstruct_with_dangling_fk_target():
+    """A ModelForm with a dangling FK does not crash reconstruction with DoesNotExist."""
+    cat = product_models.Category.objects.create(name=_uniq("cat"))
+    item = product_models.Item.objects.create(name=_uniq("item"), category=cat)
+    item.category_id = 999999
+    if hasattr(item, "_state"):
+        item._state.fields_cache.pop("category", None)
+
+    class ItemForm(forms.ModelForm):
+        category = forms.ModelChoiceField(
+            queryset=product_models.Category.objects.all(),
+            to_field_name="name",
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class ItemMutation(DjangoModelFormMutation):
+        class Meta:
+            form_class = ItemForm
+            operation = "update"
+
+    data = form_resolvers._reconstruct_partial_data(ItemMutation, item, {"name": "updated"})
+    assert data["name"] == "updated"
+    assert data.get("category") in (None, 999999)
+
+
+def test_to_form_key_value_handles_serializable_value_exceptions():
+    from django.core.exceptions import FieldDoesNotExist
+
+    from django_strawberry_framework.forms.resolvers import _to_form_key_value
+
+    class FakeField:
+        to_field_name = "invalid_attr"
+
+    class FakeObj:
+        pk = 42
+
+        def serializable_value(self, name):
+            raise FieldDoesNotExist("missing")
+
+    assert _to_form_key_value(FakeObj(), FakeField()) == 42
+
+
+def test_is_empty_form_value_handles_unhashable_and_typeerror():
+    from django_strawberry_framework.forms.resolvers import _is_empty_form_value
+
+    class FakeField:
+        empty_values = {None, ""}
+
+    class UnhashableValue:
+        def __hash__(self):
+            raise TypeError("unhashable")
+
+        def __eq__(self, other):
+            raise TypeError("cannot compare")
+
+    assert not _is_empty_form_value(UnhashableValue(), FakeField())
+
+
+def test_decode_form_relation_multi_rejects_non_collection_sequences():
+    from django_strawberry_framework.forms.resolvers import _decode_form_relation_multi
+
+    for bad in (
+        "123",
+        b"bytes",
+        bytearray(b"bytes"),
+        memoryview(b"view"),
+        {"key": "val"},
+    ):
+        val, err = _decode_form_relation_multi(
+            bad,
+            graphql_name="genres",
+            related_model=None,
+            form_field=forms.ModelMultipleChoiceField(queryset=None),
+            info=None,
+        )
+        assert val is None
+        assert err is not None
+        assert err.field == "genres"
+
+
+def test_reconstruct_partial_data_m2m_does_not_exist():
+    from django.core.exceptions import ObjectDoesNotExist
+
+    from django_strawberry_framework.forms.resolvers import _reconstruct_partial_data
+
+    class FakeModelOpts:
+        many_to_many = [SimpleNamespace(name="tags")]
+        fields = []
+        concrete_fields = []
+        private_fields = []
+        concrete_model = None
+
+    class FakeInstance:
+        pk = 1
+        _meta = FakeModelOpts
+        _state = type("State", (), {"adding": False})()
+
+        @property
+        def tags(self):
+            raise ObjectDoesNotExist("dangling")
+
+    class FakeForm(forms.ModelForm):
+        tags = forms.ModelMultipleChoiceField(queryset=product_models.Item.objects.all())
+
+        class Meta:
+            model = product_models.Item
+            fields = ("tags",)
+
+    class FakeMutation:
+        _mutation_meta = SimpleNamespace(
+            model=SimpleNamespace(_meta=FakeModelOpts),
+            form_class=FakeForm,
+        )
+
+        class Meta:
+            form_class = FakeForm
+            operation = "update"
+
+        @classmethod
+        def get_form_fields(cls):
+            return FakeForm.base_fields.items()
+
+    data = _reconstruct_partial_data(FakeMutation, FakeInstance(), {})
+    assert "tags" not in data

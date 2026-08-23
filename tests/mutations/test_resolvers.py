@@ -2926,3 +2926,63 @@ def test_integrity_error_field_errors_is_the_shared_constraint_envelope():
     assert error.field == NON_FIELD_ERROR_KEY
     assert error.messages == ["A database constraint was violated."]
     assert error.codes == ["constraint"]
+
+
+@pytest.mark.django_db
+def test_assign_m2m_integrity_error_contained_in_envelope():
+    """IntegrityError during M2M assignment is returned as the constraint FieldError envelope."""
+    from unittest.mock import patch
+
+    from django.db import IntegrityError
+
+    from django_strawberry_framework.utils.write_transaction import (
+        managed_write_transaction,
+        open_write_pipeline,
+    )
+
+    class CategoryType(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name", "description")
+
+    class CreateCategoryMutation(DjangoMutation):
+        class Meta:
+            model = product_models.Category
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    finalize_django_types()
+    cat = product_models.Category(name=_category_name())
+
+    with patch(
+        "django_strawberry_framework.mutations.resolvers._assign_m2m",
+        side_effect=IntegrityError("constraint failed"),
+    ):
+        decoded = (cat, [("fake_m2m", [1, 2])], [])
+        with managed_write_transaction("default"), open_write_pipeline(CreateCategoryMutation):
+            errors = resolvers._model_write_step(None, decoded)
+        assert isinstance(errors, list)
+        assert len(errors) == 1
+        assert errors[0].field == NON_FIELD_ERROR_KEY
+        assert errors[0].codes == ["constraint"]
+
+
+@pytest.mark.django_db
+def test_delete_integrity_error_contained_in_envelope():
+    """IntegrityError during instance.delete() is returned as the constraint FieldError envelope."""
+    from unittest.mock import patch
+
+    from django.db import IntegrityError
+
+    cat = product_models.Category.objects.create(name=_category_name())
+
+    with patch.object(
+        product_models.Category,
+        "delete",
+        side_effect=IntegrityError("FK constraint on delete"),
+    ):
+        errors = resolvers._delete_or_field_errors(cat)
+        assert isinstance(errors, list)
+        assert len(errors) == 1
+        assert errors[0].field == NON_FIELD_ERROR_KEY
+        assert errors[0].codes == ["constraint"]

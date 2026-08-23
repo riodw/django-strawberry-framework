@@ -332,23 +332,21 @@ def _reject_unsupported_relation_field(field: serializers.Field) -> None:
     decode for those kinds. ``read_only`` relations are dropped before this is
     reached, so only a WRITABLE non-PK relation raises.
     """
+    field_name = getattr(field, "field_name", None)
     if isinstance(field, serializers.ManyRelatedField):
         child = field.child_relation
         if not isinstance(child, serializers.PrimaryKeyRelatedField):
             raise ConfigurationError(
-                f"Serializer field {field.field_name!r} is a ManyRelatedField wrapping a "
+                f"Serializer field {field_name!r} is a ManyRelatedField wrapping a "
                 f"{type(child).__name__}; only PrimaryKeyRelatedField(many=True) is supported "
                 "(the relation input decodes to a primary key). A slug / URL / custom related "
                 "field has no pk-based input shape - drop it via Meta.fields / Meta.exclude, or "
                 "model the relation with PrimaryKeyRelatedField(many=True).",
             )
         return
-    if isinstance(field, serializers.RelatedField) and not isinstance(
-        field,
-        serializers.PrimaryKeyRelatedField,
-    ):
+    if not isinstance(field, serializers.PrimaryKeyRelatedField):
         raise ConfigurationError(
-            f"Serializer relation field {field.field_name!r} is a {type(field).__name__}; only "
+            f"Serializer relation field {field_name!r} is a {type(field).__name__}; only "
             "PrimaryKeyRelatedField is supported (the relation input decodes to a primary key). "
             "A slug / URL / custom related field has no pk-based input shape - drop it via "
             "Meta.fields / Meta.exclude, or use a PrimaryKeyRelatedField.",
@@ -364,18 +362,25 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
     child is supported - a list of relation ids is expressed as
     ``PrimaryKeyRelatedField(many=True)``, not ``ListField(child=relation)``).
     """
-    child = field.child
+    field_name = getattr(field, "field_name", None)
+    child = getattr(field, "child", None)
+    if child is None or type(child).__name__ == "_UnvalidatedField":
+        raise ConfigurationError(
+            f"Serializer field {field_name!r} is a ListField with no explicit child field; "
+            "a GraphQL list input requires a typed scalar child "
+            "(e.g. ListField(child=serializers.CharField())).",
+        )
     _reject_nested_serializer(child)
     if isinstance(child, (serializers.RelatedField, serializers.ManyRelatedField)):
         raise ConfigurationError(
-            f"Serializer field {field.field_name!r} is a ListField whose child is a "
+            f"Serializer field {field_name!r} is a ListField whose child is a "
             f"{type(child).__name__} (a relation); only a scalar child is supported. "
             "Express a list of relation ids with PrimaryKeyRelatedField(many=True).",
         )
     child_conversion = convert_serializer_field(child)
     if child_conversion.kind != SCALAR or child_conversion.annotation is None:
         raise ConfigurationError(
-            f"Serializer field {field.field_name!r} is a ListField whose child "
+            f"Serializer field {field_name!r} is a ListField whose child "
             f"{type(child).__name__} does not resolve to a scalar annotation; only a "
             "scalar child is supported.",
         )
@@ -523,9 +528,13 @@ def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationErro
     ``ConfigurationError``). The no-catch-all contract - raise, never silently
     coerce to ``String`` - lives in this wording.
     """
+    try:
+        field_name = repr(getattr(field, "field_name", None))
+    except BaseException:
+        field_name = "<unavailable>"
     return ConfigurationError(
         f"Unsupported serializer field type {_safe_type_name(field)!r} on serializer "
-        f"field {field.field_name!r}. convert_serializer_field has no mapping for it "
+        f"field {field_name}. convert_serializer_field has no mapping for it "
         "and no supported ancestor; register a supported base class, or drop it via "
         "Meta.fields / Meta.exclude.",
     )
@@ -819,7 +828,7 @@ def _model_backed_scalar_annotation(
     if _is_consumer_declared(field) and _is_enumerable_serializer_choice(field):
         return _serializer_choice_annotation(field, type_name)
     model_annotation = convert_scalar(column, type_name, force_nullable=False)
-    if not _is_consumer_declared(field) or column.choices:
+    if not _is_consumer_declared(field):
         return model_annotation
     serializer_conversion = convert_serializer_field(field)
     if serializer_conversion.kind != SCALAR or serializer_conversion.annotation is None:

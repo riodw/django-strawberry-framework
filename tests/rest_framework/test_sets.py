@@ -1787,3 +1787,149 @@ def test_nested_input_rematerialized_after_recover_in_place(monkeypatch):
     assert registry.is_finalized() is True
     assert "ItemInlineInput" in serializer_materialized_names
     assert serializer_materialized_names["ItemInlineInput"] is not first_nested
+
+
+def test_deeper_nested_fields_unknown_field_raises_configuration_error():
+    """A deeper NestedSerializerConfig declaring a nonexistent field fails loud with ConfigurationError."""
+    category_cls = _nested_category_serializer()
+
+    with pytest.raises(ConfigurationError, match="declares nested_fields for 'nonexistent'"):
+
+        class _BadDeepMutation(SerializerMutation):
+            class Meta:
+                serializer_class = category_cls
+                operation = "create"
+                nested_fields = {
+                    "items": NestedSerializerConfig(
+                        nested_fields={"nonexistent": NestedSerializerConfig()},
+                    ),
+                }
+
+
+def test_deeper_nested_fields_non_nested_field_raises_configuration_error():
+    """A deeper NestedSerializerConfig declaring a scalar field fails loud with ConfigurationError."""
+    category_cls = _nested_category_serializer()
+
+    with pytest.raises(ConfigurationError, match="it is a CharField, not a nested serializer"):
+
+        class _BadDeepScalarMutation(SerializerMutation):
+            class Meta:
+                serializer_class = category_cls
+                operation = "create"
+                nested_fields = {
+                    "items": NestedSerializerConfig(
+                        nested_fields={"name": NestedSerializerConfig()},
+                    ),
+                }
+
+
+def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
+    """A self-referential nested serializer configuration fails loud with ConfigurationError."""
+
+    class RecursiveCategorySerializer(serializers.ModelSerializer):
+        parent = serializers.SerializerMethodField()
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "parent")
+
+        def get_fields(self):
+            fields = super().get_fields()
+            fields["parent"] = RecursiveCategorySerializer()
+            return fields
+
+        def create(self, validated_data):
+            return product_models.Category.objects.create(**validated_data)
+
+    with pytest.raises(ConfigurationError, match="re-enters RecursiveCategorySerializer"):
+
+        class _CyclicMutation(SerializerMutation):
+            class Meta:
+                serializer_class = RecursiveCategorySerializer
+                operation = "create"
+                nested_fields = {"parent": NestedSerializerConfig()}
+
+
+def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation():
+    """A mutual cycle in nested serializers fails loud with ConfigurationError."""
+
+    class MutCategorySerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "item")
+
+        def create(self, validated_data):
+            return product_models.Category.objects.create(**validated_data)
+
+    class MutItemSerializer(serializers.ModelSerializer):
+        category = MutCategorySerializer()
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+        def create(self, validated_data):
+            return product_models.Item.objects.create(**validated_data)
+
+    MutCategorySerializer._declared_fields["item"] = MutItemSerializer()
+
+    cycle_cat = {}
+    config_item = NestedSerializerConfig(nested_fields=cycle_cat)
+    config_cat = NestedSerializerConfig(nested_fields={"item": config_item})
+    cycle_cat["category"] = config_cat
+
+    with pytest.raises(ConfigurationError, match="re-enters MutItemSerializer"):
+
+        class _MutualCyclicMutation(SerializerMutation):
+            class Meta:
+                serializer_class = MutItemSerializer
+                operation = "create"
+                nested_fields = {"category": config_cat}
+
+
+def test_validate_nested_fields_child_serializer_errors():
+    class BrokenConfigChild(serializers.Serializer):
+        @property
+        def fields(self):
+            raise ConfigurationError("Explicit config error in child fields")
+
+    class BrokenExcChild(serializers.Serializer):
+        @property
+        def fields(self):
+            raise RuntimeError("Unexpected runtime error in child fields")
+
+    class Parent1(serializers.ModelSerializer):
+        child = BrokenConfigChild()
+
+        class Meta:
+            model = product_models.Category
+            fields = ("child",)
+
+        def create(self, validated_data):
+            pass
+
+    class Parent2(serializers.ModelSerializer):
+        child = BrokenExcChild()
+
+        class Meta:
+            model = product_models.Category
+            fields = ("child",)
+
+        def create(self, validated_data):
+            pass
+
+    with pytest.raises(ConfigurationError, match="Explicit config error in child fields"):
+
+        class _Mut1(SerializerMutation):
+            class Meta:
+                serializer_class = Parent1
+                operation = "create"
+                nested_fields = {"child": NestedSerializerConfig()}
+
+    with pytest.raises(ConfigurationError, match="Could not read .fields from nested serializer"):
+
+        class _Mut2(SerializerMutation):
+            class Meta:
+                serializer_class = Parent2
+                operation = "create"
+                nested_fields = {"child": NestedSerializerConfig()}

@@ -1253,6 +1253,10 @@ def test_is_read_only_sql_uses_a_comment_stripped_allow_list():
     from django_strawberry_framework.utils.write_transaction import is_read_only_sql
 
     assert is_read_only_sql("SELECT 1")
+    assert is_read_only_sql("(SELECT 1)")
+    assert is_read_only_sql("((SELECT 1))")
+    assert is_read_only_sql("SELECT(1)")
+    assert is_read_only_sql("SELECT* FROM t")
     assert is_read_only_sql("  /* lead */ -- note\n select name from t")
     assert is_read_only_sql('SAVEPOINT "s1"')
     assert is_read_only_sql('RELEASE SAVEPOINT "s1"')
@@ -1260,7 +1264,9 @@ def test_is_read_only_sql_uses_a_comment_stripped_allow_list():
     # Writes, DDL, EXPLAIN (PostgreSQL EXPLAIN ANALYZE executes), and CTE openers
     # (a data-modifying CTE writes through a read-shaped opener) are all rejected.
     assert not is_read_only_sql("INSERT INTO t VALUES (1)")
+    assert not is_read_only_sql("(INSERT INTO t VALUES (1))")
     assert not is_read_only_sql("/* comment */ UPDATE t SET x = 1")
+    assert not is_read_only_sql("(UPDATE t SET x = 1)")
     assert not is_read_only_sql("EXPLAIN ANALYZE UPDATE t SET x = 1")
     assert not is_read_only_sql("WITH d AS (DELETE FROM t RETURNING 1) SELECT * FROM d")
     # Degenerate shapes fail CLOSED: comment-only / unterminated-comment / empty.

@@ -1852,3 +1852,200 @@ def test_model_and_form_validate_ride_shared_meta_helpers():
         "model_backed_permission_and_lock"
         not in SerializerMutation._validate_meta.__code__.co_names
     )
+
+
+@pytest.mark.parametrize(
+    "invalid_meta",
+    [
+        123,
+        "string",
+        [1, 2, 3],
+        (1, 2),
+        lambda: None,
+    ],
+)
+def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta):
+    """reject_unknown_meta_keys raises ConfigurationError if meta is not a class."""
+    from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
+
+    with pytest.raises(ConfigurationError, match=r"TestMutation\.Meta must be a class; got "):
+        reject_unknown_meta_keys("TestMutation", invalid_meta, frozenset())
+
+
+@pytest.mark.parametrize(
+    "invalid_op",
+    [
+        [],
+        {},
+        {"a": 1},
+        set(),
+        123,
+        True,
+        None,
+    ],
+)
+def test_require_non_delete_operation_rejects_unhashable_and_non_string_operation(invalid_op):
+    """require_non_delete_operation raises ConfigurationError for unhashable or non-string operations."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import require_non_delete_operation
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Meta\.operation must be one of \['create', 'update'\]; got ",
+    ):
+        require_non_delete_operation(
+            "DjangoModelFormMutation",
+            "BadOpMutation",
+            SimpleNamespace(operation=invalid_op),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_op",
+    [
+        [],
+        {},
+        {"a": 1},
+        set(),
+        123,
+        True,
+        None,
+    ],
+)
+def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operation(invalid_op):
+    """DjangoMutation._validate_meta raises ConfigurationError for unhashable or non-string operations."""
+    _declare_products_primaries()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of \['create', 'delete', 'update'\]; got ",
+    ):
+
+        class BadOpMutation(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = invalid_op
+
+
+class _HostileRepr:
+    def __repr__(self):
+        raise RuntimeError("HostileRepr exploded")
+
+    def __str__(self):
+        raise RuntimeError("HostileRepr str exploded")
+
+
+class _HostilePermMeta(type):
+    @property
+    def has_permission(cls):
+        raise RuntimeError("HostilePermMeta.has_permission exploded")
+
+
+def test_require_model_class_hostile_repr_safe_containment():
+    """require_model_class with hostile repr raises ConfigurationError cleanly."""
+    from django_strawberry_framework.mutations.sets import require_model_class
+
+    hostile = _HostileRepr()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation Probe resolved model must be a Django model class; got <unprintable _HostileRepr>\.",
+    ):
+        require_model_class("Probe", hostile, base_label="DjangoMutation")
+
+
+def test_validate_select_for_update_hostile_repr_safe_containment():
+    """validate_select_for_update with hostile repr raises ConfigurationError cleanly."""
+    from django_strawberry_framework.mutations.sets import validate_select_for_update
+
+    hostile = _HostileRepr()
+
+    class BadMeta:
+        select_for_update = hostile
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation Probe\.Meta\.select_for_update must be a bool; got <unprintable _HostileRepr>\.",
+    ):
+        validate_select_for_update("DjangoMutation", "Probe", BadMeta)
+
+
+def test_validate_input_class_hostile_repr_safe_containment():
+    """_validate_input_class with hostile repr raises ConfigurationError cleanly."""
+    from django_strawberry_framework.mutations.sets import _validate_input_class
+
+    hostile = _HostileRepr()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation Probe\.Meta\.input_class must be a @strawberry\.input-decorated type; got <unprintable _HostileRepr>\.",
+    ):
+        _validate_input_class(
+            "Probe",
+            hostile,
+            attr_name="input_class",
+            model=product_models.Item,
+            fields=None,
+            exclude=None,
+        )
+
+
+def test_validate_permission_classes_hostile_metaclass_safe_containment():
+    """_validate_permission_classes with hostile metaclass descriptor raises ConfigurationError cleanly."""
+    from django_strawberry_framework.mutations.sets import _validate_permission_classes
+
+    class HostilePerm(metaclass=_HostilePermMeta):
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"permission_classes entry .* is not a permission class exposing has_permission",
+    ):
+        _validate_permission_classes("Probe", [HostilePerm])
+
+
+@pytest.mark.filterwarnings("ignore:non-string key in the __dict__")
+def test_reject_unknown_meta_keys_non_string_dict_keys():
+    """reject_unknown_meta_keys handles non-string keys in vars(meta) cleanly."""
+    from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
+
+    meta = type("NonStrKeyMeta", (), {123: "foo"})
+    with pytest.raises(ConfigurationError, match=r"TestMutation\.Meta has unknown keys: \[123\]"):
+        reject_unknown_meta_keys("TestMutation", meta, frozenset({"model", "operation"}))
+
+
+def test_django_mutation_validate_meta_hostile_values_containment():
+    """DjangoMutation definition with hostile repr values raises typed ConfigurationError."""
+    _declare_products_primaries()
+    hostile = _HostileRepr()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation BadModelMutation resolved model must be a Django model class",
+    ):
+
+        class BadModelMutation(DjangoMutation):
+            class Meta:
+                model = hostile
+                operation = "create"
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation BadLockMutation\.Meta\.select_for_update must be a bool",
+    ):
+
+        class BadLockMutation(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                select_for_update = hostile
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation BadInputMutation\.Meta\.input_class must be a @strawberry\.input-decorated type",
+    ):
+
+        class BadInputMutation(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                input_class = hostile

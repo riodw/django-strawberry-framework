@@ -52,7 +52,7 @@ from django.db import models
 from strawberry import relay
 from strawberry.types.base import StrawberryList
 
-from ..exceptions import ConfigurationError, _safe_arg_repr
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name
 from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
 from ..utils.inputs import (
@@ -166,7 +166,7 @@ def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
     model-less plain form does NOT call this (it rejects ANY ``operation`` key).
     """
     operation = getattr(meta, "operation", None)
-    if operation not in NON_DELETE_WRITE_OPERATIONS:
+    if not isinstance(operation, str) or operation not in NON_DELETE_WRITE_OPERATIONS:
         raise non_delete_operation_error(base_label, name, operation)
     return operation
 
@@ -182,8 +182,13 @@ def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> 
     raises ``ConfigurationError`` naming the offending key(s). Mirrors
     ``types/base.py::_validate_meta``'s own-keys-only posture.
     """
-    declared = {key for key in vars(meta) if not key.startswith("_")}
-    unknown = sorted(declared - allowed)
+    if not isinstance(meta, type):
+        raise ConfigurationError(f"{name}.Meta must be a class; got {_safe_arg_repr(meta)}.")
+    declared = {key for key in vars(meta) if not (isinstance(key, str) and key.startswith("_"))}
+    unknown = sorted(
+        declared - allowed,
+        key=lambda k: (not isinstance(k, str), str(k)),
+    )
     if unknown:
         raise ConfigurationError(f"{name}.Meta has unknown keys: {unknown}.")
 
@@ -388,7 +393,7 @@ def require_model_class(name: str, model: Any, *, base_label: str) -> Any:
     if isinstance(model, type) and issubclass(model, models.Model):
         return model
     raise ConfigurationError(
-        f"{base_label} {name} resolved model must be a Django model class; got {model!r}.",
+        f"{base_label} {name} resolved model must be a Django model class; got {_safe_arg_repr(model)}.",
     )
 
 
@@ -427,7 +432,7 @@ def resolve_backed_model_or_raise(
     if model is None:
         backing = getattr(meta, key)
         raise ConfigurationError(
-            f"{base_label} {cls.__name__}.Meta.{key} {backing.__name__} resolves no model; "
+            f"{base_label} {_safe_class_name(cls)}.Meta.{key} {_safe_class_name(backing)} resolves no model; "
             f"a {noun} must set Meta.model so the mutation has a model + a DjangoType to return.",
         )
     return model
@@ -568,7 +573,7 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
     def register(declaration_cls: type) -> None:
         if registry.is_finalized():
             raise ConfigurationError(
-                f"Cannot declare {label} {declaration_cls.__name__} after finalization; "
+                f"Cannot declare {label} {_safe_class_name(declaration_cls)} after finalization; "
                 "mutation declarations are import-time only (call registry.clear() first).",
             )
         if declaration_cls not in store:
@@ -687,7 +692,7 @@ def _validate_input_class(
     if definition is None or not getattr(definition, "is_input", False):
         raise ConfigurationError(
             f"DjangoMutation {mutation_name}.Meta.{attr_name} must be a "
-            f"@strawberry.input-decorated type; got {input_class!r}.",
+            f"@strawberry.input-decorated type; got {_safe_arg_repr(input_class)}.",
         )
 
     expected = _expected_input_attr_names(model, fields=fields, exclude=exclude)
@@ -877,7 +882,11 @@ def _validate_permission_classes(
             f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         ) from exc
     for entry in classes:
-        if not isinstance(entry, type) or not callable(getattr(entry, "has_permission", None)):
+        try:
+            has_perm = getattr(entry, "has_permission", None)
+        except BaseException:
+            has_perm = None
+        if not isinstance(entry, type) or not callable(has_perm):
             raise ConfigurationError(
                 f"DjangoMutation {mutation_name}.Meta.permission_classes entry "
                 f"{_safe_arg_repr(entry)} is not a permission class exposing has_permission; "
@@ -906,7 +915,7 @@ def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bo
     if not isinstance(select_for_update, bool):
         raise ConfigurationError(
             f"{flavor} {mutation_name}.Meta.select_for_update must be a bool; got "
-            f"{select_for_update!r}.",
+            f"{_safe_arg_repr(select_for_update)}.",
         )
     return select_for_update
 
@@ -1054,10 +1063,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         model = require_model_class(name, model, base_label="DjangoMutation")
 
         operation = getattr(meta, "operation", None)
-        if operation not in _VALID_OPERATIONS:
+        if not isinstance(operation, str) or operation not in _VALID_OPERATIONS:
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta.operation must be one of "
-                f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
+                f"{sorted(_VALID_OPERATIONS)}; got {_safe_arg_repr(operation)}.",
             )
 
         # The model-flavor field-sequence pair routes through the shared
@@ -1094,7 +1103,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             if not selected:
                 raise ConfigurationError(
                     f"DjangoMutation {name}.Meta.fields / Meta.exclude narrowed the "
-                    f"editable column set to empty (or {model.__name__} declares no "
+                    f"editable column set to empty (or {_safe_class_name(model)} declares no "
                     f"editable columns). A {operation} mutation input must define at "
                     "least one field.",
                 )
@@ -1281,14 +1290,14 @@ def _resolve_primary_type(mutation_cls: type, model: type[models.Model]) -> type
         return primary
     if registry.types_for(model):
         raise ConfigurationError(
-            f"DjangoMutation {mutation_cls.__name__} targets {model.__name__}, which has "
+            f"DjangoMutation {_safe_class_name(mutation_cls)} targets {_safe_class_name(model)}, which has "
             "multiple registered DjangoTypes and no declared primary; set Meta.primary on "
             "one of them so the mutation return type is unambiguous.",
         )
     raise ConfigurationError(
-        f"DjangoMutation {mutation_cls.__name__} targets {model.__name__}, which has no "
+        f"DjangoMutation {_safe_class_name(mutation_cls)} targets {_safe_class_name(model)}, which has no "
         "registered DjangoType; the mutation has no type to return. Declare a "
-        f"DjangoType for {model.__name__}.",
+        f"DjangoType for {_safe_class_name(model)}.",
     )
 
 
@@ -1503,7 +1512,7 @@ def _validate_relation_override_types(
             raise ConfigurationError(
                 f"DjangoMutation {mutation_name}.Meta.{attr_name} overrides relation field "
                 f"{python_attr!r} with an id type/shape that diverges from the generated input. "
-                f"{field.related_model.__name__} has a primary Relay-Node type, so the {kind} "
+                f"{_safe_class_name(field.related_model)} has a primary Relay-Node type, so the {kind} "
                 f"relation input is {expected} - type- and visibility-checked at decode (spec-036 "
                 "Decision 10). A divergent core type or container shape would be passed "
                 "through unchecked (bypassing the relation visibility contract) or crash the "

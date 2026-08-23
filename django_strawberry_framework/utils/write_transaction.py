@@ -419,7 +419,7 @@ def _sql_statement_token(sql: Any) -> str:
     index = 0
     length = len(text)
     while index < length:
-        if text[index].isspace():
+        if text[index].isspace() or text[index] == "(":
             index += 1
         elif text.startswith("--", index):
             newline = text.find("\n", index)
@@ -433,8 +433,10 @@ def _sql_statement_token(sql: Any) -> str:
             index = end + 2
         else:
             break
-    rest = text[index:]
-    return rest.split(None, 1)[0].upper() if rest else ""
+    start = index
+    while index < length and (text[index].isalnum() or text[index] == "_"):
+        index += 1
+    return text[start:index].upper()
 
 
 def is_read_only_sql(sql: Any) -> bool:

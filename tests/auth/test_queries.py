@@ -242,6 +242,20 @@ def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
     assert bare_res.errors is None, bare_res.errors
     assert bare_res.data["me"] is None
 
+    # A SimpleLazyObject returning None (lazy unauthenticated user resolving to None).
+    lazy_none = RequestFactory().post("/graphql/")
+    lazy_none.user = SimpleLazyObject(lambda: None)
+    lazy_none_res = schema.execute_sync(_ME_Q, context_value=lazy_none)
+    assert lazy_none_res.errors is None, lazy_none_res.errors
+    assert lazy_none_res.data["me"] is None
+
+    # A custom actor object without is_authenticated attribute.
+    custom_actor = RequestFactory().post("/graphql/")
+    custom_actor.user = object()
+    custom_res = schema.execute_sync(_ME_Q, context_value=custom_actor)
+    assert custom_res.errors is None, custom_res.errors
+    assert custom_res.data["me"] is None
+
 
 @pytest.mark.django_db
 def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string():

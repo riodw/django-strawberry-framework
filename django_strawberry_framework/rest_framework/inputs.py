@@ -59,7 +59,7 @@ from typing import Any
 from rest_framework import serializers
 from rest_framework.fields import empty
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.inputs import CREATE, PARTIAL
 from ..registry import register_subsystem_clear
 from ..utils.inputs import (
@@ -237,6 +237,11 @@ def normalize_nested_serializer_configs(
     """
     if nested_configs is None:
         return None
+    if not isinstance(nested_configs, Mapping):
+        raise ConfigurationError(
+            f"nested_configs must be a mapping of {{field_name: NestedSerializerConfig}}; "
+            f"got {_safe_arg_repr(nested_configs)}.",
+        )
     mapping_id = id(nested_configs)
     if mapping_id in _mapping_path:
         return nested_configs
@@ -754,6 +759,11 @@ def resolve_injected_field_specs(
     provisional_name = f"{serializer_class.__name__}Input"
     specs: list[InputFieldSpec] = []
     for name in injected_fields:
+        if name not in field_map:
+            raise ConfigurationError(
+                f"SerializerMutation {serializer_class.__name__}.Meta.injected_fields names "
+                f"{name!r}, which is not in the serializer's schema-time field map.",
+            )
         _python_attr, _annotation, spec = resolve_serializer_field(
             field_map[name],
             model,
@@ -1298,7 +1308,7 @@ def _walk_serializer_fields(
     return field_specs, annotation_reprs, descriptions, required_state, triples
 
 
-def _guard_nested_recursion(
+def guard_nested_recursion(
     nested_class: type,
     nested_path: tuple[type, ...],
     field_name: str,
@@ -1401,7 +1411,7 @@ def _resolve_nested_field(
     """
     child_serializer, many = nested_serializer_child(field)
     nested_class = type(child_serializer)
-    _guard_nested_recursion(nested_class, nested_path, field_name)
+    guard_nested_recursion(nested_class, nested_path, field_name)
     # The source axis. A dotted / star source has no single write-back
     # attribute for the nested write; reject via the shared one-segment policy (the same
     # detection ``backing_model_field`` uses for model-column resolve).
@@ -1411,7 +1421,17 @@ def _resolve_nested_field(
         must_map_to="a nested write must map to a single attribute",
     )
     source = field.source if (field.source and field.source != field_name) else None
-    nested_field_map = dict(child_serializer.fields)
+    try:
+        nested_field_map = dict(child_serializer.fields)
+    except ConfigurationError:
+        raise
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Could not read .fields from nested serializer {nested_class.__name__!r} "
+            f"under no-arg construction: {type(exc).__name__}: {exc}. A nested serializer opted in "
+            "via Meta.nested_fields must expose a stable, request-independent no-arg .fields "
+            "(override get_serializer_for_schema() on the mutation to return a stable field map).",
+        ) from exc
     nested_cls, nested_shape = build_serializer_input_class(
         nested_class,
         operation_kind=operation_kind,
@@ -1437,7 +1457,7 @@ def _resolve_nested_field(
     return field_name, annotation, spec
 
 
-def _validate_nested_config_keys(
+def validate_nested_config_keys(
     serializer_class: type[serializers.BaseSerializer],
     effective: dict[str, serializers.Field],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
@@ -1452,7 +1472,17 @@ def _validate_nested_config_keys(
     """
     if not nested_configs:
         return
-    for name in nested_configs:
+    if not isinstance(nested_configs, Mapping):
+        raise ConfigurationError(
+            f"SerializerMutation {serializer_class.__name__}.Meta.nested_fields must be a mapping "
+            f"of {{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_configs)}.",
+        )
+    for name, config in nested_configs.items():
+        if not isinstance(config, NestedSerializerConfig):
+            raise ConfigurationError(
+                f"SerializerMutation {serializer_class.__name__}.Meta.nested_fields[{name!r}] must be a "
+                f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
+            )
         field = effective.get(name)
         if field is None:
             raise ConfigurationError(
@@ -1574,7 +1604,7 @@ def build_serializer_input_class(
     )
     # fail loud NOW (at every nesting level) if a ``nested_fields`` key does not name
     # an effective nested serializer field - a typo / excluded / non-nested key is a config error.
-    _validate_nested_config_keys(serializer_class, effective, nested_configs)
+    validate_nested_config_keys(serializer_class, effective, nested_configs)
     optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
     is_partial = operation_kind == PARTIAL
     if is_partial:
@@ -1714,6 +1744,11 @@ def build_serializer_inputs(
         label="exclude",
         flavor="SerializerMutation",
     )
+    normalized_optional = normalize_field_name_sequence(
+        optional_fields,
+        label="optional_fields",
+        flavor="SerializerMutation",
+    )
     normalized_nested_configs = normalize_nested_serializer_configs(nested_configs)
     effective = resolve_effective_serializer_fields(
         serializer_class,
@@ -1722,14 +1757,18 @@ def build_serializer_inputs(
         field_map=field_map,
     )
     if guard_required:
-        guard_create_required_serializer_fields(serializer_class, effective, field_map=field_map)
+        guard_create_required_serializer_fields(
+            serializer_class,
+            tuple(effective),
+            field_map=field_map,
+        )
 
     create_cls, create_shape = build_serializer_input_class(
         serializer_class,
         operation_kind=CREATE,
         fields=normalized_fields,
         exclude=normalized_exclude,
-        optional_fields=optional_fields,
+        optional_fields=normalized_optional,
         field_map=field_map,
         nested_configs=normalized_nested_configs,
     )
@@ -1738,7 +1777,7 @@ def build_serializer_inputs(
         operation_kind=PARTIAL,
         fields=normalized_fields,
         exclude=normalized_exclude,
-        optional_fields=optional_fields,
+        optional_fields=normalized_optional,
         field_map=field_map,
         nested_configs=normalized_nested_configs,
     )

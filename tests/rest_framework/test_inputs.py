@@ -1645,3 +1645,101 @@ def test_fingerprint_propagates_nested_configuration_error_unwrapped():
             dict(Parent().fields),
             nested_configs={"child": NestedSerializerConfig()},
         )
+
+
+def test_nested_serializer_fields_access_exception_raises_configuration_error():
+    """A nested serializer whose get_fields() raises raw KeyError raises ConfigurationError."""
+
+    class CtxChild(serializers.Serializer):
+        def get_fields(self):
+            user = self.context["user"]
+            return {"a": serializers.CharField(default=user)}
+
+    class Parent(serializers.Serializer):
+        child = CtxChild()
+
+    with pytest.raises(ConfigurationError, match="Could not read .fields from nested serializer"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"child": NestedSerializerConfig()},
+        )
+
+
+def test_normalize_nested_serializer_configs_rejects_non_mapping():
+    """normalize_nested_serializer_configs raises ConfigurationError on non-mapping values."""
+    with pytest.raises(ConfigurationError, match="nested_configs must be a mapping"):
+        normalize_nested_serializer_configs(["invalid"])  # type: ignore[arg-type]
+
+
+def test_build_serializer_input_class_rejects_non_nested_config_items():
+    """build_serializer_input_class raises ConfigurationError when a nested_config item is invalid."""
+
+    class Child(serializers.Serializer):
+        x = serializers.CharField()
+
+    class Parent(serializers.Serializer):
+        child = Child()
+
+    with pytest.raises(ConfigurationError, match="must be a NestedSerializerConfig"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"child": "not_a_config"},  # type: ignore[dict-item]
+        )
+
+
+def test_resolve_injected_field_specs_unknown_field_raises_configuration_error():
+    """resolve_injected_field_specs raises ConfigurationError when an injected field is missing."""
+    from django_strawberry_framework.rest_framework.inputs import resolve_injected_field_specs
+
+    class S(serializers.Serializer):
+        a = serializers.CharField()
+
+    field_map = dict(S().fields)
+    with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
+        resolve_injected_field_specs(S, field_map, ["non_existent"])
+
+
+def test_build_serializer_inputs_preserves_optional_fields_one_shot_iterator():
+    """One-shot iterator in optional_fields is normalized for both create and partial shapes."""
+
+    class SampleSer(serializers.Serializer):
+        code = serializers.CharField(required=True)
+        name = serializers.CharField(required=True)
+
+    gen = (f for f in ("code",))
+    _create_cls, c_shape, _partial_cls, p_shape = build_serializer_inputs(
+        SampleSer,
+        optional_fields=gen,
+    )
+    assert c_shape.optional_fields == frozenset({"code"})
+    assert p_shape.optional_fields == frozenset()
+
+
+def test_validate_nested_config_keys_not_a_mapping():
+    """A non-mapping ``Meta.nested_fields`` is a ConfigurationError, not a silent skip."""
+    from django_strawberry_framework.rest_framework.inputs import validate_nested_config_keys
+
+    class S(serializers.Serializer):
+        pass
+
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        validate_nested_config_keys(S, {}, ["not_a_mapping"])  # type: ignore[arg-type]
+
+
+def test_build_nested_serializer_spec_child_fields_configuration_error():
+    class BrokenChild(serializers.Serializer):
+        @property
+        def fields(self):
+            raise ConfigurationError("Explicit config error in child fields")
+
+    class Parent(serializers.Serializer):
+        child = BrokenChild()
+
+    with pytest.raises(ConfigurationError, match="Explicit config error in child fields"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"child": NestedSerializerConfig()},
+        )

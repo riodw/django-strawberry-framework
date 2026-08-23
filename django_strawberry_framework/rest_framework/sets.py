@@ -91,6 +91,7 @@ from .inputs import (
     build_serializer_input_class,
     dedupe_serializer_input_shape,
     guard_create_required_serializer_fields,
+    guard_nested_recursion,
     materialize_serializer_input_class,
     normalize_nested_serializer_configs,
     raise_writable_source_ownership_errors,
@@ -99,6 +100,7 @@ from .inputs import (
     resolve_optional_fields,
     runtime_validated_data_fields,
     serializer_schema_fingerprint,
+    validate_nested_config_keys,
     writable_serializer_fields,
 )
 from .inputs import (
@@ -356,10 +358,12 @@ def _assert_schema_source_ownership(
     name: str,
     field_map: Mapping[str, serializers.Field],
     *,
+    serializer_class: type[serializers.BaseSerializer],
     supplied_fields: set[str],
     apply_defaults: bool,
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     path: str = "",
+    nested_path: tuple[type, ...] = (),
 ) -> None:
     """Reject star / colliding writable sources at schema time (root + nested).
 
@@ -377,11 +381,30 @@ def _assert_schema_source_ownership(
     runtime_sources = {field_name: field.source for field_name, field in runtime_fields.items()}
     location = f"nested serializer path {path!r}" if path else None
     raise_writable_source_ownership_errors(name, runtime_sources, location=location)
-    for field_name, config in (nested_fields or {}).items():
+    if not nested_fields:
+        return
+    validate_nested_config_keys(
+        serializer_class,
+        {k: v for k, v in field_map.items() if k in supplied_fields},
+        nested_fields,
+    )
+    for field_name, config in nested_fields.items():
         child_serializer, _many = nested_serializer_child(field_map[field_name])
-        child_fields = dict(child_serializer.fields)
+        child_class = type(child_serializer)
+        guard_nested_recursion(child_class, nested_path, field_name)
+        try:
+            child_fields = dict(child_serializer.fields)
+        except ConfigurationError:
+            raise
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Could not read .fields from nested serializer {child_class.__name__!r} "
+                f"under no-arg construction: {type(exc).__name__}: {exc}. A nested serializer opted in "
+                "via Meta.nested_fields must expose a stable, request-independent no-arg .fields "
+                "(override get_serializer_for_schema() on the mutation to return a stable field map).",
+            ) from exc
         effective = resolve_effective_serializer_fields(
-            type(child_serializer),
+            child_class,
             fields=config.fields,
             exclude=config.exclude,
             field_map=child_fields,
@@ -390,10 +413,12 @@ def _assert_schema_source_ownership(
         _assert_schema_source_ownership(
             name,
             child_fields,
+            serializer_class=child_class,
             supplied_fields=set(effective),
             apply_defaults=apply_defaults,
             nested_fields=config.nested_fields,
             path=child_path,
+            nested_path=(*nested_path, child_class),
         )
 
 
@@ -644,9 +669,11 @@ class SerializerMutation(DjangoMutation):
         _assert_schema_source_ownership(
             name,
             field_map,
+            serializer_class=serializer_class,
             supplied_fields=set(effective) | set(injected_fields or ()),
             apply_defaults=operation == CREATE,
             nested_fields=nested_fields,
+            nested_path=(serializer_class,),
         )
 
         permission_classes = _validate_mutation_permission_classes(

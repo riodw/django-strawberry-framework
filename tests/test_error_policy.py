@@ -184,6 +184,11 @@ def test_a_non_mapping_policy_setting_is_rejected(settings):
         resolve_error_policy(None)
 
 
+def test_a_non_mapping_policy_argument_is_rejected():
+    with pytest.raises(ConfigurationError, match="must be an ErrorPolicy or a mapping"):
+        resolve_error_policy("invalid")  # type: ignore[arg-type]
+
+
 def test_an_unknown_option_name_is_rejected_with_the_valid_vocabulary():
     """Naming the valid options in the message is what makes a typo self-correcting."""
     with pytest.raises(ConfigurationError, match=r"Unknown error-policy option\(s\): mesage"):

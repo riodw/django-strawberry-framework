@@ -372,9 +372,13 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
     Django-backed live sync rebuilds from the absent key as empty settings.
     """
     from django_strawberry_framework.conf import (
+        error_policy_setting,
         hide_flat_filters_setting,
         max_request_body_bytes_setting,
         nested_connection_strategy_setting,
+        relay_globalid_strategy_setting,
+        resource_policy_setting,
+        single_parent_fast_path_setting,
         testing_endpoint_setting,
     )
 
@@ -382,16 +386,24 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
         "FILTER_KEY": "x",
         "APPLY_UPSTREAM_PATCHES": False,
         "NESTED_CONNECTION_STRATEGY": "eager",
+        "SINGLE_PARENT_FAST_PATH": False,
         "TESTING_ENDPOINT": "/custom/",
         "HIDE_FLAT_FILTERS": True,
+        "RELAY_GLOBALID_STRATEGY": "type",
         "MAX_REQUEST_BODY_BYTES": 4096,
+        "RESOURCE_POLICY": {"max_query_depth": 5},
+        "ERROR_POLICY": {"enabled": False},
     }
     assert conf.settings.FILTER_KEY == "x"
     assert upstream_patches_enabled("django") is False
     assert nested_connection_strategy_setting() == "eager"
+    assert single_parent_fast_path_setting() is False
     assert testing_endpoint_setting() == "/custom/"
     assert hide_flat_filters_setting() is True
+    assert relay_globalid_strategy_setting() == "type"
     assert max_request_body_bytes_setting() == 4096
+    assert resource_policy_setting() == {"max_query_depth": 5}
+    assert error_policy_setting() == {"enabled": False}
 
     del settings.DJANGO_STRAWBERRY_FRAMEWORK
 
@@ -400,9 +412,56 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
         _ = conf.settings.FILTER_KEY
     assert upstream_patches_enabled("django") is True
     assert nested_connection_strategy_setting() == "windowed"
+    assert single_parent_fast_path_setting() is True
     assert testing_endpoint_setting() == "/graphql/"
     assert hide_flat_filters_setting() is False
+    assert relay_globalid_strategy_setting() is None
     assert max_request_body_bytes_setting() == 1_048_576
+    assert resource_policy_setting() is None
+    assert error_policy_setting() is None
+
+
+def test_setting_reader_helpers_default_and_override_values(settings):
+    """Direct unit test for each thin reader helper in conf.py."""
+    from django_strawberry_framework.conf import (
+        error_policy_setting,
+        hide_flat_filters_setting,
+        max_request_body_bytes_setting,
+        nested_connection_strategy_setting,
+        relay_globalid_strategy_setting,
+        resource_policy_setting,
+        single_parent_fast_path_setting,
+        testing_endpoint_setting,
+    )
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+    assert nested_connection_strategy_setting() == "windowed"
+    assert single_parent_fast_path_setting() is True
+    assert testing_endpoint_setting() == "/graphql/"
+    assert hide_flat_filters_setting() is False
+    assert relay_globalid_strategy_setting() is None
+    assert max_request_body_bytes_setting() == 1_048_576
+    assert resource_policy_setting() is None
+    assert error_policy_setting() is None
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "NESTED_CONNECTION_STRATEGY": "in_memory",
+        "SINGLE_PARENT_FAST_PATH": False,
+        "TESTING_ENDPOINT": "/api/graphql/",
+        "HIDE_FLAT_FILTERS": True,
+        "RELAY_GLOBALID_STRATEGY": "type+model",
+        "MAX_REQUEST_BODY_BYTES": 8192,
+        "RESOURCE_POLICY": {"max_page_size": 20},
+        "ERROR_POLICY": {"enabled": True},
+    }
+    assert nested_connection_strategy_setting() == "in_memory"
+    assert single_parent_fast_path_setting() is False
+    assert testing_endpoint_setting() == "/api/graphql/"
+    assert hide_flat_filters_setting() is True
+    assert relay_globalid_strategy_setting() == "type+model"
+    assert max_request_body_bytes_setting() == 8192
+    assert resource_policy_setting() == {"max_page_size": 20}
+    assert error_policy_setting() == {"enabled": True}
 
 
 def test_django_backed_resync_fails_loud_after_silent_bad_replacement(settings):

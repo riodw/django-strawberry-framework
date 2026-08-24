@@ -186,6 +186,11 @@ def test_a_non_mapping_policy_setting_is_rejected(settings):
         resolve_resource_policy(None)
 
 
+def test_a_non_mapping_policy_argument_is_rejected():
+    with pytest.raises(ConfigurationError, match="must be a ResourcePolicy or a mapping"):
+        resolve_resource_policy(12)  # type: ignore[arg-type]
+
+
 def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary():
     """Naming the valid bounds in the message is what makes a typo self-correcting."""
     with pytest.raises(ConfigurationError, match="Unknown resource-policy bound\\(s\\): max_deth"):

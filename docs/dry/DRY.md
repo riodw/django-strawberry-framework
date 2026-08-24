@@ -28,6 +28,14 @@ Everything recorded in an artifact must help one of those activities.
 - Work on one planned target at a time, but read as widely as needed to understand it.
 - Similar-looking code is not automatically duplication. Consolidate only when sites encode the
   same responsibility, should obey the same contract, and should change together.
+- Textual difference is never proof of independence. The costly duplication in a mature codebase
+  shares no tokens: one rule spelled two ways, a sync and an async twin, a contract restated in a
+  test or a doc. Clone detection and repeated-literal counts find only the cheap cases, so a clean
+  audit report is an orientation result and never a verdict.
+- Consolidation deletes tests as well as code. When sites merge, the removed sites' tests go with
+  them, and 100% coverage of the new owner does not prove every former behavior still runs. Carry
+  each distinct behavior forward as a case on the owner, and never let a mode flag add a branch no
+  real path reaches.
 - Do not optimize for fewer lines. A helper that obscures ownership, couples independent domains,
   or needs mode flags to reconcile different rules makes the system less DRY.
 - Prefer the root owner of an invariant over a convenience helper at its call sites.
@@ -85,6 +93,28 @@ same policy: repeated validation, parallel caches, mirrored sync/async paths, co
 construction, repeated error translation, multiple lifecycle registries, or tests rebuilding the
 same domain fixture.
 
+#### Mandatory duplication probing matrix
+
+Five axes on which duplication hides from textual search. They are the floor of a review, not its
+shape: a target yielding only matrix hits has not been searched. Discharge every axis on every
+target, either with a search or with one line naming why the target has no such surface - many
+items, `__init__.py` files among them, legitimately carry no round-trip pair or async twin.
+
+1. **Cross-flavor policy mirroring:** the same rule implemented once per public surface - types,
+   filters, orders, mutations, forms, `rest_framework` - each in its own local vocabulary. Read the
+   sibling flavors of the target's concern before concluding that it is unique.
+2. **Sync and async twins:** paired implementations separated only by the await boundary. They
+   drift silently because no single test executes both. Compare them by behavior, not by shape.
+3. **Derived rather than repeated knowledge:** one fact reconstructed by different means - a name
+   rebuilt by concatenation, a field set re-derived from `_meta`, a default recomputed from
+   settings. Deriving a duplicated fact still duplicates it.
+4. **Inverse and round-trip pairs:** encode and decode, pack and unpack, build and parse, input and
+   output shaping. Both halves encode one grammar and must change together, yet they are routinely
+   separated by module.
+5. **Contracts restated in another medium:** the same promise held in production code, in a test's
+   expectations, in prose under `docs/`, and in a generated artifact. Count every medium a change
+   would force to move.
+
 Follow an edge until its contract is understood and further expansion would not change the DRY
 judgment. The target remains the review unit; connected files are evidence and may become part of a
 root-cause fix.
@@ -106,6 +136,17 @@ tool, not a source of findings. Static similarity must still be reconciled with 
 ownership. The optional `check` mode can verify that a completed artifact names every target
 definition, but cannot judge the quality of its reasoning.
 
+#### The single-edit-site test
+
+The decisive question is not whether two sites look alike; it is how many of them one change must
+touch. Name a specific plausible change to the rule the target owns - a new field kind, another
+error code, a different default, one more relation hop - then count the sites that must move
+together for the system to stay correct.
+
+A count above one is duplication even when the sites share no token. A count of one is independence
+even when they read identically. Record the change you posited and the sites it forced; that count
+is the evidence, and structural similarity is not.
+
 ### 3. Design the consolidation
 
 For a real opportunity, identify the narrowest owner that can state the shared rule once. Consider
@@ -122,14 +163,17 @@ Be creative, but concrete. Every finding must state:
 
 - **Repeated responsibility:** the rule or knowledge represented more than once;
 - **Sites:** all confirmed implementations and important consumers;
-- **Evidence:** why the sites have the same contract and change axis;
+- **Evidence:** why the sites have the same contract and change axis, including the posited change
+  and every site it forces;
 - **Owner:** where the single source of truth belongs;
 - **Consolidation:** the proposed shape and migration of each site;
 - **Proof:** the permanent tests or experiments that demonstrate equivalence and prevent drift;
 - **Risks / non-goals:** behavior that must remain distinct or compatible.
 
 If no consolidation is warranted, say so and preserve the strongest rejected candidates with the
-evidence that kept them separate. A well-proved zero-edit review is a successful result.
+evidence that kept them separate. A zero-edit review is a successful result only when it is proved:
+every axis searched or ruled inapplicable, and at least one posited change whose single-edit-site
+count came back as one. An unproved `None` is indistinguishable from an unfinished review.
 
 ## Integration passes
 
@@ -159,7 +203,8 @@ What the target owns and the connected behavior examined.
 
 ## Verification
 
-Searches, scratch experiments, tests, and rejected candidates that shaped the judgment.
+Searches, scratch experiments, tests, and rejected candidates that shaped the judgment, with each
+probing axis searched or ruled inapplicable, and the single-edit-site counts they produced.
 
 ## Opportunities
 
@@ -187,7 +232,12 @@ Each plan item uses fresh workers so the author of a change never approves it:
    consolidation at its true owner and adds permanent tests. It sets `fix-implemented` for both
    edited and proved zero-edit results.
 2. Worker 2 independently re-traces the connected behavior, challenges equivalence and boundaries,
-   and sets `verified` or `revision-needed`.
+   and sets `verified` or `revision-needed`. Every result, `None` or a consolidation, must show the
+   matrix discharged: each axis searched, or ruled inapplicable for that target. Judge a claimed
+   inapplicability on its reason against the target's real surface, not on the missing search; a
+   found consolidation never excuses an unsearched axis. Worker 2 also confirms the recorded
+   single-edit-site counts hold, and returns `revision-needed` with concrete named candidates when
+   the search was shallow or merely textual.
 3. Every revision returns to Worker 1. Worker 2 marks the plan item complete only after
    verification.
 

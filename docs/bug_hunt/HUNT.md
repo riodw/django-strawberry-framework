@@ -35,8 +35,12 @@ external blocker requires maintainer input.
   tests are leads, not findings.
 - Coverage is never proof of correctness. 100% line coverage means existing lines executed under at
   least one happy or expected path; it does not prove the absence of missing branches, unhandled
-  type shapes, missing defensive guards, or escaping 500-level exceptions. Search for the defensive
+  type shapes, missing defensive guards, or escaping runtime exceptions. Search for the defensive
   branches and validations that should exist but are missing.
+- A new guard needs a test that reaches it. `fail_under = 100` admits no unreached branch, and
+  `AGENTS.md` allows `pragma: no cover` only where the runner cannot reach the line. A guard that
+  no real path reaches is usually the wrong guard or sits at the wrong layer; never widen the
+  pragma to land one.
 - Prefer the root-cause fix at the layer that owns the violated contract. Do not patch only the
   observed caller when the system invariant is wrong.
 - Every production fix receives a permanent behavioral test at the strongest reachable tier
@@ -154,37 +158,31 @@ Challenge assumptions around invalid input, partial failure, request and cache i
 permissions, optional dependencies, schema lifecycle, type selection, error translation, and
 ordering. These are prompts for invention, not a checklist to reproduce.
 
-### Mandatory Adversarial Probing Matrix
+### Mandatory adversarial probing matrix
 
-Worker 1 must systematically probe every target, decoder, parser, and resolver across five
-hostile axes:
+Five axes on which defects outlive a passing suite. They are the floor of a hunt, not its shape: a
+target yielding only matrix hits has not been searched. Discharge every axis on every target,
+either with a probe or with one line naming why the target has no such surface.
 
-1. **Shape and Container Mismatches:** Pass scalars (`int`, `str`, `None`) into multi-item or
-   collection decoders expecting iterables (`list(values)`), and pass collections/objects into
-   scalar decoders.
-2. **Explicit Null vs. Unset:** For every field kind (scalar, FK, M2M, file, excluded,
-   credentials), test both `UNSET` (omitted) and explicit `None`/`null` (especially on required or
-   non-nullable model fields).
-3. **Lexical, Syntax, and Delimiter Boundaries:** For SQL tokenizers, query parsers, and string
-   scanners, test non-whitespace boundaries, leading/trailing parentheses `((...))`, brackets,
-   compound statements, and punctuation delimiters.
-4. **Hostile and Non-Standard Callables/Iterators:** Pass one-shot generators, iterators that
-   raise midway, or objects with hostile magic methods (`__iter__`, `__len__`, `__str__`).
-5. **Omitted vs. Empty Settings:** Test optional settings when the attribute is completely absent
-   on `django.conf.settings` (e.g. `monkeypatch.delattr(settings, ...)`), not merely set to
-   `None` or `[]`.
+1. **Shape and container mismatches:** scalars where an iterable is consumed, collections where a
+   scalar is expected, at every boundary that unpacks, iterates, or measures its input.
+2. **Absent versus explicitly null:** for each field kind the target handles, contrast an omitted
+   value (`UNSET`) with an explicit `None`, especially where the contract forbids null.
+3. **Lexical and delimiter boundaries:** wherever text is scanned, split, or classified, probe
+   nesting, redundant and unbalanced delimiters, compound forms, and non-whitespace separators.
+4. **Hostile callables and iterators:** one-shot generators, iterators that raise midway, and
+   objects with adversarial `__iter__`, `__len__`, `__eq__`, or `__str__`.
+5. **Absent versus empty configuration:** delete the settings attribute with
+   `monkeypatch.delattr(settings, ...)` rather than setting it to `None` or `[]`.
 
-### Exception Containment Invariant
+### Exception containment invariant
 
-In public resolvers, input decoders, and transaction guards, no client-supplied input (even
-hostile or malformed input) should escape as an unhandled Python runtime exception (`TypeError`,
-`ValueError`, `AttributeError`, `IndexError`, `KeyError`) causing a 500 or top-level GraphQL crash.
-
-When input is invalid:
-- User input errors must be caught and mapped into field-keyed `FieldError` envelopes
-  (`errors { field messages codes }`).
-- Phase and transaction guards must fail closed safely without crashing or leaking unhandled stack
-  traces.
+No client-supplied input, however hostile, may leave a public resolver, input decoder, or
+transaction guard as an unhandled `TypeError`, `ValueError`, `AttributeError`, `IndexError`, or
+`KeyError`. Invalid input becomes a field-keyed `FieldError` envelope
+(`errors { field messages codes }`); phase and transaction guards fail closed. Reaching a top-level
+GraphQL error or a transport failure that way is a defect in the target, not in the probe that
+found it.
 
 Try to disprove every candidate. Read the existing test bodies and exercise uncertain framework or
 state behavior with a small scratch probe. A confirmed bug must have:
@@ -220,6 +218,7 @@ Worker 1 reports:
 
 - target and result: `No bugs`, `Fixed <severity>`, or `Blocked`;
 - system paths and behavior examined;
+- the probing matrix: each axis probed, or ruled inapplicable with its reason;
 - confirmed defects and evidence, or the strongest evidence supporting a no-bug conclusion;
 - files changed and why;
 - permanent and scratch tests, commands, and outcomes;
@@ -228,13 +227,13 @@ Worker 1 reports:
 
 ## Worker 0: verify and advance
 
-Worker 0 reviews every Worker 1 report for completeness and scope. A `No bugs` conclusion requires
-proof of adversarial exploration: Worker 0 must verify that Worker 1's scratch probes explicitly
-challenged the target against the Mandatory Adversarial Probing Matrix (shape mismatches, explicit
-null on required/excluded fields, parser delimiters, and missing settings). If these probes are
-absent or purely happy-path, Worker 0 records `Status: revision-needed` with concrete adversarial
-challenges. When the adversarial trace is thorough, Worker 0 reruns or inspects the strongest
-scratch probes, removes all item-owned scratch and disposable state, records `Status: no-bugs` and a
+Worker 0 reviews every Worker 1 report for completeness and scope. Every conclusion, `No bugs` or
+`Fixed`, must show the probing matrix discharged: each axis probed, or ruled inapplicable for that
+target. Judge a claimed inapplicability on its reason against the target's real surface, not on the
+missing probe; a found bug never excuses an unsearched axis. Where the trace is shallow, purely
+happy-path, or silent on an axis, Worker 0 records `Status: revision-needed` with concrete
+adversarial challenges. For a thorough `No bugs`, Worker 0 reruns or inspects the strongest scratch
+probes, removes all item-owned scratch and disposable state, records `Status: no-bugs` and a
 concise `Result:` line, then checks the item.
 
 After any fix, Worker 0 independently verifies it before advancing:

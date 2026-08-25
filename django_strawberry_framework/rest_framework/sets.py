@@ -65,6 +65,7 @@ from rest_framework import serializers
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.inputs import CREATE
 from ..mutations.sets import (
+    MODEL_BACKED_WRITE_META_KEYS,
     NON_DELETE_OPERATION_INPUT_KIND,
     DjangoMutation,
     _ValidatedMutationMeta,
@@ -108,23 +109,14 @@ from .inputs import (
 )
 from .serializer_converter import is_nested_serializer_field, nested_serializer_child
 
-# The serializer ``Meta``'s allowed-key set (spec-039 Decision 6). Disjoint from
-# ``036``'s ``_ALLOWED_MUTATION_META_KEYS`` and ``038``'s form sets: a serializer
-# ``Meta`` ADDS ``serializer_class`` / ``optional_fields``, KEEPS ``operation`` /
-# ``fields`` / ``exclude`` / ``permission_classes`` (the ``036`` write-auth seam
-# inherited unchanged - Decision 11), and DROPS ``model`` / ``input_class`` /
-# ``partial_input_class``.
-_ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
+# The serializer ``Meta``'s allowed-key set (spec-039 Decision 6), composed from
+# the shared ``MODEL_BACKED_WRITE_META_KEYS`` plus serializer-specific keys.
+_ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | frozenset(
     {
         "serializer_class",
         "optional_fields",
         "injected_fields",
-        "select_for_update",
         "nested_fields",
-        "operation",
-        "fields",
-        "exclude",
-        "permission_classes",
     },
 )
 

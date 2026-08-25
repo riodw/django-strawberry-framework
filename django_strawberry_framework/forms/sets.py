@@ -50,6 +50,8 @@ from ..exceptions import ConfigurationError
 from ..mutations.inputs import PARTIAL
 from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
 from ..mutations.sets import (
+    COMMON_WRITE_META_KEYS,
+    MODEL_BACKED_WRITE_META_KEYS,
     NON_DELETE_OPERATION_INPUT_KIND,
     DjangoMutation,
     _hook_overridden,
@@ -90,27 +92,19 @@ from .inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
 
-# The form ``Meta``'s allowed-key sets (spec-038 Decision 6). Disjoint
-# from ``036``'s ``_ALLOWED_MUTATION_META_KEYS``: a form ``Meta`` adds
-# ``form_class`` and drops ``model`` / ``input_class`` / ``partial_input_class``.
-# The ``ModelForm`` flavor keeps ``operation`` (create / update); the plain
-# flavor drops it (a model-less mutation has no model operation - Decision 10).
-_ALLOWED_MODELFORM_META_KEYS: frozenset[str] = frozenset(
+# The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from
+# the shared mutation foundation key sets plus the local ``form_class`` key.
+# The ``ModelForm`` flavor uses ``MODEL_BACKED_WRITE_META_KEYS`` (keeping
+# ``operation`` and ``select_for_update``); the plain flavor uses
+# ``COMMON_WRITE_META_KEYS`` (a model-less mutation has no model operation - Decision 10).
+_ALLOWED_MODELFORM_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | frozenset(
     {
         "form_class",
-        "operation",
-        "fields",
-        "exclude",
-        "permission_classes",
-        "select_for_update",
     },
 )
-_ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = frozenset(
+_ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = COMMON_WRITE_META_KEYS | frozenset(
     {
         "form_class",
-        "fields",
-        "exclude",
-        "permission_classes",
     },
 )
 

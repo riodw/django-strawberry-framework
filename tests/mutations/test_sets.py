@@ -1284,6 +1284,58 @@ def test_deferred_and_allowed_meta_keys_unchanged():
         assert mutation_key not in DEFERRED_META_KEYS
 
 
+def test_write_flavor_meta_vocabulary_composition():
+    """All write flavors compose their allowed Meta keys from the mutation foundation vocabulary."""
+    from django_strawberry_framework.forms.sets import (
+        _ALLOWED_MODELFORM_META_KEYS,
+        _ALLOWED_PLAIN_FORM_META_KEYS,
+    )
+    from django_strawberry_framework.mutations.sets import (
+        _ALLOWED_MUTATION_META_KEYS,
+        COMMON_WRITE_META_KEYS,
+        MODEL_BACKED_WRITE_META_KEYS,
+    )
+    from django_strawberry_framework.rest_framework.sets import _ALLOWED_SERIALIZER_META_KEYS
+
+    assert frozenset({"fields", "exclude", "permission_classes"}) == COMMON_WRITE_META_KEYS
+    assert (
+        COMMON_WRITE_META_KEYS | frozenset({"operation", "select_for_update"})
+    ) == MODEL_BACKED_WRITE_META_KEYS
+    assert (
+        MODEL_BACKED_WRITE_META_KEYS
+        | frozenset(
+            {"model", "input_class", "partial_input_class"},
+        )
+    ) == _ALLOWED_MUTATION_META_KEYS
+    assert (
+        MODEL_BACKED_WRITE_META_KEYS
+        | frozenset(
+            {
+                "form_class",
+            },
+        )
+    ) == _ALLOWED_MODELFORM_META_KEYS
+    assert (
+        COMMON_WRITE_META_KEYS
+        | frozenset(
+            {
+                "form_class",
+            },
+        )
+    ) == _ALLOWED_PLAIN_FORM_META_KEYS
+    assert (
+        MODEL_BACKED_WRITE_META_KEYS
+        | frozenset(
+            {
+                "serializer_class",
+                "optional_fields",
+                "injected_fields",
+                "nested_fields",
+            },
+        )
+    ) == _ALLOWED_SERIALIZER_META_KEYS
+
+
 # ---------------------------------------------------------------------------
 # Public export
 # ---------------------------------------------------------------------------

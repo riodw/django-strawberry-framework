@@ -64,7 +64,6 @@ from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
     INPUTS_MODULE_PATH,
-    PARTIAL,
     build_mutation_input,
     build_payload_type,
     editable_input_fields,
@@ -74,86 +73,33 @@ from .inputs import (
     payload_object_slot,
     relation_input_annotation,
 )
+from .operations import (
+    _OPERATION_INPUT_OVERRIDE_ATTR,
+    _VALID_OPERATIONS,
+    NON_DELETE_OPERATION_INPUT_KIND,
+    NON_DELETE_WRITE_OPERATIONS,
+    non_delete_operation_error,
+)
 from .permissions import DjangoModelPermission, run_permission_classes
+
+#: Common Meta keys accepted by every write-flavor Mutation.Meta (fields, exclude, permission_classes).
+COMMON_WRITE_META_KEYS: frozenset[str] = frozenset(
+    {"fields", "exclude", "permission_classes"},
+)
+
+#: Common Meta keys accepted by every model-backed write-flavor Mutation.Meta
+#: (DjangoMutation, ModelForm, Serializer).
+MODEL_BACKED_WRITE_META_KEYS: frozenset[str] = COMMON_WRITE_META_KEYS | frozenset(
+    {"operation", "select_for_update"},
+)
 
 # The mutation ``Meta``'s own allowed-key set (spec-036 Decision 12). Disjoint
 # from ``types/base.py::ALLOWED_META_KEYS``: a mutation
-# ``Meta`` is the mutation class's own namespace, so this set is defined here and
-# the ``DjangoType`` sets stay byte-unchanged.
-_ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
-    {
-        "model",
-        "operation",
-        "input_class",
-        "partial_input_class",
-        "fields",
-        "exclude",
-        "permission_classes",
-        "select_for_update",
-    },
+# ``Meta`` is the mutation class's own namespace, composed from the shared
+# ``MODEL_BACKED_WRITE_META_KEYS`` plus model-flavor specific keys.
+_ALLOWED_MUTATION_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | frozenset(
+    {"model", "input_class", "partial_input_class"},
 )
-
-# ``operation`` -> input-generator kind. ``create`` builds the required-aware
-# ``<Model>Input`` (``CREATE``); ``update`` builds the all-optional
-# ``<Model>PartialInput`` (``PARTIAL``); ``delete`` is ``id:``-only and needs no
-# input (spec-036 Decision 14). The bind reads this to know which input(s) to
-# materialize per operation. Single-sourced across all three write flavors
-# (spec-039): the model reads it via ``.get(...)`` (``delete`` -> ``None``), the
-# form + serializer flavors via ``[...]`` (both reject ``delete``, so every key is
-# present). Replaces the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` +
-# ``_modelform_operation_kind`` copies. Also the root of the create/update
-# vocabulary below - ``NON_DELETE_WRITE_OPERATIONS`` / ``_VALID_OPERATIONS`` derive
-# from its keys so the Meta allow-lists cannot spell a non-delete verb the
-# generator-kind map does not know.
-NON_DELETE_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
-
-# The consumer override each non-delete operation honors. This is deliberately
-# separate from ``NON_DELETE_OPERATION_INPUT_KIND`` (forms and serializers reuse
-# the generator-kind map but do not support consumer input overrides), and is the
-# single source for both model-flavor validation and bind-time selection.
-_OPERATION_INPUT_OVERRIDE_ATTR: dict[str, str] = {
-    "create": "input_class",
-    "update": "partial_input_class",
-}
-
-# The create/update-only write operations the form + serializer flavors share.
-# Derived from ``NON_DELETE_OPERATION_INPUT_KIND``'s keys (the
-# ops that materialize an input) so the Meta allow-list and the generator-kind
-# map cannot drift. A ``DjangoModelFormMutation`` and a ``SerializerMutation``
-# both reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
-# delete - spec-039 Decision 10). The ``036`` model flavor keeps the broader
-# ``_VALID_OPERATIONS`` (it DOES accept ``delete``).
-NON_DELETE_WRITE_OPERATIONS: frozenset[str] = frozenset(NON_DELETE_OPERATION_INPUT_KIND)
-
-# The three valid model-flavor ``Meta.operation`` values (spec-036 Decision 5).
-# Non-delete verbs come from ``NON_DELETE_WRITE_OPERATIONS``; ``delete`` is the
-# model-only id-only op. Single source for THIS module's membership check only
-# (``_validate_meta #"if operation not in _VALID_OPERATIONS"``): the resolver
-# dispatches on the verb literals directly (``== "create"`` / ``"update"`` in
-# ``mutations/resolvers.py``) rather than testing this set, so it does not
-# import the constant. Not a package-wide OPERATIONS table - permissions /
-# resolvers / fields keep their own change axes (see ``fields.py`` /
-# ``permissions.py``).
-_VALID_OPERATIONS: frozenset[str] = NON_DELETE_WRITE_OPERATIONS | frozenset({"delete"})
-
-
-def non_delete_operation_error(base_label: str, name: str, got: Any) -> ConfigurationError:
-    """Build the shared "operation must be create/update" reject.
-
-    Single-sites the create/update-only operation reject message both the form and
-    serializer ``_validate_meta`` raise for a bad / ``"delete"`` ``Meta.operation``:
-    the SET (``NON_DELETE_WRITE_OPERATIONS``) is single-sourced AND the message
-    string is too, so the two flavors cannot drift on the wording. ``base_label``
-    names the offending base (``"DjangoModelFormMutation"`` /
-    ``"SerializerMutation"``); ``got`` is the rejected value. Names the no-delete
-    reason so a consumer who copied a ``036`` ``Meta.operation = "delete"`` gets a
-    clear redirect rather than a bare allowed-values list.
-    """
-    return ConfigurationError(
-        f"{base_label} {name}.Meta.operation must be one of "
-        f"{sorted(NON_DELETE_WRITE_OPERATIONS)}; got {_safe_arg_repr(got)}. (This flavor has no "
-        "delete pipeline - declare a 036 DjangoMutation with operation='delete' instead.)",
-    )
 
 
 def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:

@@ -488,3 +488,36 @@ def test_safe_type_name_edge_cases(monkeypatch):
 
     monkeypatch.setattr(exc_mod, "str", _MockStr, raising=False)
     assert _safe_type_name(int) == "object"
+
+
+def test_safe_arg_repr_falls_back_for_hostile_values_and_type_metadata():
+    """A diagnostic message can never be blocked or corrupted by the value it names.
+
+    Both fallback rungs return the same sentinel: a ``__repr__`` that raises drops
+    to the type name, and a ``__name__`` that is unavailable OR is not a string
+    drops further to the literal ``"object"``.
+    """
+
+    class _HostileNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                raise RuntimeError("name unavailable")
+            return super().__getattribute__(name)
+
+    class _HostileValue(metaclass=_HostileNameMeta):
+        def __repr__(self) -> str:
+            raise RuntimeError("repr unavailable")
+
+    assert _safe_arg_repr(_HostileValue()) == "<unprintable object>"
+
+    class _NonStringNameMeta(type):
+        def __getattribute__(cls, name: str):
+            if name == "__name__":
+                return 42
+            return super().__getattribute__(name)
+
+    class _NonStringName(metaclass=_NonStringNameMeta):
+        def __repr__(self) -> str:
+            raise RuntimeError("repr unavailable")
+
+    assert _safe_arg_repr(_NonStringName()) == "<unprintable object>"

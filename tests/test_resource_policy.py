@@ -39,11 +39,15 @@ from typing import Any
 import pytest
 import strawberry
 from graphql import GraphQLError, parse
+from graphql.language.token_kind import TokenKind
 from strawberry.types import Info
 
 from django_strawberry_framework import DjangoSchema, Upload
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.resource_policy import (
+    _CLOSE_TOKEN_KINDS,
+    _OPEN_TOKEN_KINDS,
+    _STRUCTURAL_DELIMITER_PAIRS,
     DjangoResourcePolicyExtension,
     charge_document,
     scan_document_text,
@@ -542,6 +546,53 @@ def test_a_document_that_is_both_oversized_and_malformed_is_rejected_on_size():
     with pytest.raises(ResourceLimitExceeded) as caught:
         scan_document_text(policy, "{ a b c d e 'garbage' }")
     assert caught.value.bound == "max_document_tokens"
+
+
+def test_structural_delimiter_pairs_derivation():
+    """_OPEN_TOKEN_KINDS and _CLOSE_TOKEN_KINDS derive from _STRUCTURAL_DELIMITER_PAIRS."""
+    assert _STRUCTURAL_DELIMITER_PAIRS == (
+        (TokenKind.BRACE_L, TokenKind.BRACE_R),
+        (TokenKind.PAREN_L, TokenKind.PAREN_R),
+        (TokenKind.BRACKET_L, TokenKind.BRACKET_R),
+    )
+    assert (
+        frozenset(open_kind for open_kind, _ in _STRUCTURAL_DELIMITER_PAIRS) == _OPEN_TOKEN_KINDS
+    )
+    assert (
+        frozenset(close_kind for _, close_kind in _STRUCTURAL_DELIMITER_PAIRS)
+        == _CLOSE_TOKEN_KINDS
+    )
+    assert not (_OPEN_TOKEN_KINDS & _CLOSE_TOKEN_KINDS)
+
+
+@pytest.mark.parametrize(
+    ("doc", "limit", "should_exceed"),
+    [
+        ("{ a { b { c } } }", 2, True),
+        ("{ a { b { c } } }", 3, False),
+        ("{ foo(arg: { bar: 1 }) }", 2, True),
+        ("{ foo(arg: { bar: 1 }) }", 3, False),
+        ("{ foo(filter: [1, 2]) }", 2, True),
+        ("{ foo(filter: [1, 2]) }", 3, False),
+    ],
+    ids=[
+        "nested_braces_exceeds",
+        "nested_braces_passes",
+        "nested_parens_and_braces_exceeds",
+        "nested_parens_and_braces_passes",
+        "nested_brackets_exceeds",
+        "nested_brackets_passes",
+    ],
+)
+def test_pre_parse_scan_depth_across_delimiter_families(doc, limit, should_exceed):
+    """The pre-parse scan tracks depth across braces, parens, and brackets."""
+    policy = ResourcePolicy(max_depth=limit)
+    if should_exceed:
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            scan_document_text(policy, doc)
+        assert caught.value.bound == "max_depth"
+    else:
+        scan_document_text(policy, doc)
 
 
 # ---------------------------------------------------------------------------

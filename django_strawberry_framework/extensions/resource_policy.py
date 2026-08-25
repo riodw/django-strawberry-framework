@@ -85,13 +85,24 @@ from ..utils.context import clear_context_key, get_context_value, stash_on_conte
 __all__ = ("DjangoResourcePolicyExtension",)
 
 
-#: Token kinds that open and close a structural nesting level. Counting all
-#: three bracket families - not just selection-set braces - is deliberate: the
-#: scan runs before the parse, where the only thing distinguishing an argument
-#: list from a selection set is the bracket itself, and the parser recurses on
-#: every one of them.
-_OPEN_TOKEN_KINDS = frozenset({TokenKind.BRACE_L, TokenKind.PAREN_L, TokenKind.BRACKET_L})
-_CLOSE_TOKEN_KINDS = frozenset({TokenKind.BRACE_R, TokenKind.PAREN_R, TokenKind.BRACKET_R})
+#: Structural delimiter families (opening token, closing token) that define
+#: nesting levels. Counting all three bracket families - not just selection-set
+#: braces - is deliberate: the scan runs before the parse, where the only thing
+#: distinguishing an argument list from a selection set is the bracket itself,
+#: and the parser recurses on every one of them.
+_STRUCTURAL_DELIMITER_PAIRS: tuple[tuple[TokenKind, TokenKind], ...] = (
+    (TokenKind.BRACE_L, TokenKind.BRACE_R),
+    (TokenKind.PAREN_L, TokenKind.PAREN_R),
+    (TokenKind.BRACKET_L, TokenKind.BRACKET_R),
+)
+
+#: Opening and closing delimiter sets derived from ``_STRUCTURAL_DELIMITER_PAIRS``.
+_OPEN_TOKEN_KINDS: frozenset[TokenKind] = frozenset(
+    open_kind for open_kind, _ in _STRUCTURAL_DELIMITER_PAIRS
+)
+_CLOSE_TOKEN_KINDS: frozenset[TokenKind] = frozenset(
+    close_kind for _, close_kind in _STRUCTURAL_DELIMITER_PAIRS
+)
 
 #: The GraphQL scalar names the value budget classifies by name rather than by
 #: Python shape. ``ID`` is every Relay ``GlobalID`` on the wire; ``Upload`` is

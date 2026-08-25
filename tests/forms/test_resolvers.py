@@ -117,10 +117,11 @@ def _schema(mutation_type: type) -> strawberry.Schema:
     pretending an in-process probe is a debug deployment; the masking contract is
     pinned in ``tests/test_error_policy.py`` and the live tier.
     """
+    optimizer = DjangoOptimizerExtension()
     return DjangoSchema(
         query=_Query,
         mutation=mutation_type,
-        extensions=[DjangoOptimizerExtension],
+        extensions=[lambda: optimizer],
         error_policy={"enabled": False},
     )
 

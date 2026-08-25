@@ -226,8 +226,9 @@ The `_sync_extensions` / `_async_extensions` split does not exist at the package
 `Schema.get_extensions`, whose body instantiates any entry that is not already a `SchemaExtension`
 and which both `execute()` and `execute_sync()` call **per request**, in both modes. And the
 instance form the spike recommended is deprecated upstream — passing it makes `Schema.__init__`
-emit a `DeprecationWarning`. [`spec-029`][spec-029] `P1.1 — stale extension-lifecycle model` names
-spec-004's model as stale by name, and its Decision 3 is the successor: the supported construction
+emit a `DeprecationWarning`. [`spec-029`'s rationale companion][spec-029-rationale] carries the
+`P1.1 — stale extension-lifecycle model` finding that names spec-004's model as stale, and
+[`spec-029`][spec-029]'s Decision 3 is the successor: the supported construction
 is a **module-level singleton wrapped in a factory**, `_optimizer = DjangoOptimizerExtension()`
 with `extensions=[lambda: _optimizer]`, which is the upstream-recommended callable form yet hands
 back one shared instance per request. That is the form [`docs/README.md`][docs-readme] and
@@ -1292,6 +1293,7 @@ the spike is still ahead of implementation.
 [spec-018]: ../spec-018-meta_primary-0_0_6.md
 [spec-023]: ../spec-023-multi_db-0_0_7.md
 [spec-029]: ../spec-029-consumer_dx_cleanup-0_0_9.md
+[spec-029-rationale]: spec-029-consumer_dx_cleanup-0_0_9-rationale.md
 [spec-032]: ../spec-032-full_relay-0_0_9.md
 [spec-033]: ../spec-033-connection_optimizer-0_0_9.md
 [spec-035]: ../spec-035-optimizer_hardening-0_0_10.md

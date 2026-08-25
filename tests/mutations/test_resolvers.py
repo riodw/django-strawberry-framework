@@ -101,10 +101,11 @@ class _Query:
 
 def _schema(mutation_type: type) -> strawberry.Schema:
     """Build a finalized schema with the optimizer extension installed."""
+    optimizer = DjangoOptimizerExtension()
     return DjangoSchema(
         query=_Query,
         mutation=mutation_type,
-        extensions=[DjangoOptimizerExtension],
+        extensions=[lambda: optimizer],
     )
 
 
@@ -964,10 +965,11 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
         create_item = DjangoMutationField(CreateItem)
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
     schema = DjangoSchema(
         query=Query,
         mutation=Mutation,
-        extensions=[DjangoOptimizerExtension],
+        extensions=[lambda: optimizer],
     )
 
     user_name = _category_name()

@@ -156,8 +156,9 @@ def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed(db):
             return list(Category.objects.filter(pk=category.pk).prefetch_related("items"))
 
     query = "{ categories { items { name isPrivate } } }"
+    optimizer = DjangoOptimizerExtension()
     optimized = _post_visibility_query(
-        strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension]),
+        strawberry.Schema(query=Query, extensions=[lambda: optimizer]),
         query,
     )
     unoptimized = _post_visibility_query(strawberry.Schema(query=Query), query)
@@ -188,8 +189,9 @@ def test_forward_fk_target_visibility_holds_with_the_optimizer_installed(db):
             return list(Item.objects.filter(pk=item.pk))
 
     query = "{ items { name category { name } } }"
+    optimizer = DjangoOptimizerExtension()
     optimized = _post_visibility_query(
-        strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension]),
+        strawberry.Schema(query=Query, extensions=[lambda: optimizer]),
         query,
     )
     unoptimized = _post_visibility_query(strawberry.Schema(query=Query), query)

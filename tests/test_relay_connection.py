@@ -1027,7 +1027,10 @@ def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="
             {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
         ),
     )
-    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    extensions = []
+    if optimizer:
+        optimizer_ext = DjangoOptimizerExtension(strictness=strictness)
+        extensions = [lambda: optimizer_ext]
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
@@ -1068,10 +1071,11 @@ def _genres_filterable_book_schema(*, strictness="raise"):
             {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
         ),
     )
+    optimizer = DjangoOptimizerExtension(strictness=strictness)
     return strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),
-        extensions=[lambda: DjangoOptimizerExtension(strictness=strictness)],
+        extensions=[lambda: optimizer],
     )
 
 
@@ -1106,7 +1110,10 @@ def _genres_distinct_book_schema(*, optimizer=True, strictness="off"):
             {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
         ),
     )
-    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    extensions = []
+    if optimizer:
+        optimizer_ext = DjangoOptimizerExtension(strictness=strictness)
+        extensions = [lambda: optimizer_ext]
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
@@ -1494,7 +1501,10 @@ def _genres_expression_ordered_schema(*, optimizer=True, auto_camel_case=True):
             {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
         ),
     )
-    extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+    extensions = []
+    if optimizer:
+        optimizer_ext = DjangoOptimizerExtension()
+        extensions = [lambda: optimizer_ext]
     return strawberry.Schema(
         query=query_cls,
         config=strawberry_config(auto_camel_case=auto_camel_case),
@@ -1693,7 +1703,10 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
                     },
                 ),
             )
-            extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+            extensions = []
+            if optimizer:
+                optimizer_ext = DjangoOptimizerExtension()
+                extensions = [lambda: optimizer_ext]
             return strawberry.Schema(
                 query=query_cls,
                 config=strawberry_config(),
@@ -1824,10 +1837,11 @@ def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_q
                 },
             ),
         )
+        optimizer = DjangoOptimizerExtension()
         schema = strawberry.Schema(
             query=query_cls,
             config=strawberry_config(),
-            extensions=[lambda: DjangoOptimizerExtension()],
+            extensions=[lambda: optimizer],
         )
         for ai in range(3):
             author = WindowAuthor.objects.create(name=f"a{ai}")
@@ -2164,10 +2178,11 @@ def test_fast_path_ignores_window_when_sidecar_kwargs_present():
             {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
         ),
     )
+    optimizer = DjangoOptimizerExtension()
     schema = strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),
-        extensions=[lambda: DjangoOptimizerExtension()],
+        extensions=[lambda: optimizer],
     )
     _seed_library_books(["apple", "banana", "avocado"])
     result = schema.execute_sync(
@@ -2268,10 +2283,11 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
             {"__annotations__": {"objs": conn_type}, "objs": DjangoConnectionField(genre_type)},
         ),
     )
+    optimizer = DjangoOptimizerExtension()
     schema = strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),
-        extensions=[lambda: DjangoOptimizerExtension()],
+        extensions=[lambda: optimizer],
     )
     # Only the NESTED totalCount is selected; the outer one is not. The outer
     # predicate must stay False (its direct children are edges + the nested
@@ -2501,10 +2517,11 @@ def test_nested_fallback_does_not_clobber_fk_id_elisions():
             {"__annotations__": {"objs": list[book_type]}, "objs": DjangoListField(book_type)},
         ),
     )
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     # ``shelf { id }`` is FK-id elided (planned); ``genresConnection(filter:)`` is
     # a sidecar fallback. The elided FK must NOT spuriously flag after the nested
@@ -2795,10 +2812,11 @@ def _shelves_with_consumer_books_schema(*, strictness="raise", books_hint=None):
             {"__annotations__": {"objs": list[shelf_type]}, "objs": DjangoListField(shelf_type)},
         ),
     )
+    optimizer = DjangoOptimizerExtension(strictness=strictness)
     return strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),
-        extensions=[lambda: DjangoOptimizerExtension(strictness=strictness)],
+        extensions=[lambda: optimizer],
     )
 
 

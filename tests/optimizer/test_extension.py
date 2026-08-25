@@ -5381,9 +5381,10 @@ def test_b8_pruned_select_related_stays_strictness_visible():
             return Item.objects.order_by("id")
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     # Strictness sentinels stash on the context: execution needs a real
     # context object (the standing strictness-test convention).
@@ -5443,9 +5444,10 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
             return Category.objects.all()
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     consumer_wins = schema.execute_sync(
         "{ objs { name items { name entries { value } } } }",
@@ -5497,9 +5499,10 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
             )
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     result = schema.execute_sync(
         "{ objs { name items { name category { id } } } }",
@@ -5545,9 +5548,10 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
             return Item.objects.order_by("id").only("name")
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     query = "{ projectedItems { name category { name } } }"
 
@@ -5595,17 +5599,19 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
     finalize_django_types()
     query = "{ categories { name items { name } } }"
 
+    raising_optimizer = DjangoOptimizerExtension(strictness="raise")
     raising = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: raising_optimizer],
     )
     flagged = raising.execute_sync(query, context_value=SimpleNamespace())
     assert flagged.errors is not None
     assert any("Unplanned N+1: items" in str(error) for error in flagged.errors)
 
+    silent_optimizer = DjangoOptimizerExtension(strictness="off")
     silent = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="off")],
+        extensions=[lambda: silent_optimizer],
     )
     served = silent.execute_sync(query, context_value=SimpleNamespace())
     assert served.errors is None, served.errors
@@ -5643,9 +5649,10 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
             return [obj async for obj in Category.objects.order_by("id")]
 
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: optimizer],
     )
     result = await schema.execute(
         "{ categories { name items { name } } }",

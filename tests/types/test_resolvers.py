@@ -164,9 +164,10 @@ def test_reverse_one_to_one_scopes_custom_target_by_planned_relation():
     assert unplanned.errors is None, unplanned.errors
     assert unplanned.data == {"patrons": [{"card": None}, {"card": {"barcode": "OPEN-1"}}]}
 
+    optimizer = DjangoOptimizerExtension()
     planned = strawberry.Schema(
         query=Query,
-        extensions=[DjangoOptimizerExtension],
+        extensions=[lambda: optimizer],
     ).execute_sync(query, context_value=SimpleNamespace())
     assert planned.errors is None, planned.errors
     assert planned.data == unplanned.data

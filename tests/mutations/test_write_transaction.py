@@ -174,10 +174,11 @@ def _mutation_schema(*mutations, schema_cls=DjangoSchema, extra_fields=None):
     body["__annotations__"] = {}
     Mutation = strawberry.type(type("Mutation", (), body))
     finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
     return schema_cls(
         query=_Query,
         mutation=Mutation,
-        extensions=[DjangoOptimizerExtension],
+        extensions=[lambda: optimizer],
         **policy_kwargs,
     )
 

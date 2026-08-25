@@ -1294,7 +1294,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     # both-sets collision is a shape-level contradiction visible from the raw
     # ``Meta`` alone (no model/field access needed), so it raises here rather
     # than in the target-validator. Target existence / scope checks
-    # (unknown / excluded / consumer-authored / relation / Relay-pk) need the
+    # (unknown / excluded / consumer-authored / Relay-pk / relation) need the
     # selected fields and run later in ``_validate_nullability_override_targets``.
     nullable_overrides = frozenset(
         _normalize_sequence_spec(getattr(meta, "nullable_overrides", None), "nullable_overrides")
@@ -1423,16 +1423,17 @@ def _selected_meta_targets(
 ) -> tuple[dict[str, Any], list[str]]:
     """Run the shared unknown/excluded Meta-target guards; return ``(selected_by_name, sorted)``.
 
-    The first half shared by ``_validate_nullability_override_targets`` and
-    ``_validate_relation_shape_targets`` (spec-029 / spec-032 Decision 7-8):
-    reject names unknown to the model (via the shared
+    The unknown/excluded half shared by every ``Meta`` key that targets a set
+    of field names on the type (spec-029 Decision 8 / spec-032 Decision 7 /
+    spec-048 Decision 2): reject names unknown to the model (via the shared
     ``_format_unknown_fields_error`` keyed on ``attr`` so the consumer-visible
     shape matches the ``Meta.fields`` / ``Meta.exclude`` typo guards), then
     reject names not in the selected set (via the caller's family-specific
     ``excluded_error``, which receives the sorted excluded names). Returns the
     ``{name: field}`` selected map and the sorted target names; the
     domain-specific per-name checks (consumer-authored, non-relation, Relay-pk,
-    many-side) stay in the caller, which iterates the returned names.
+    file/image column, many-side) stay in the caller, which iterates the
+    returned names.
 
     Keeping the unknown-vs-excluded distinction here means a future ``Meta.*``
     target feature inherits both guards without re-deriving the model-wide vs
@@ -1482,11 +1483,13 @@ def _validate_nullability_override_targets(
     shape matches the ``Meta.fields`` / ``Meta.exclude`` / ``Meta.optimizer_hints``
     typo guards.
 
-    Check order: unknown -> excluded -> (consumer-authored / relation / Relay-pk).
-    The last three operate on selected, known fields, so they run only after the
-    first two have confirmed the name exists and is selected. Every failure
-    raises ``ConfigurationError`` at type-creation time naming the offending
-    field.
+    Check order: unknown -> excluded -> consumer-authored -> Relay-pk ->
+    relation. The last three operate on selected, known fields, so they run
+    only after the first two have confirmed the name exists and is selected.
+    Relay-pk precedes relation so a name that is both - a relation pk such as
+    ``OneToOneField(primary_key=True)`` on a Relay-shaped type - is reported
+    with the Relay reason rather than the relation one. Every failure raises
+    ``ConfigurationError`` at type-creation time naming the offending field.
 
     Args:
         model: The Django model the type wraps; ``model._meta.get_fields()``
@@ -1506,7 +1509,7 @@ def _validate_nullability_override_targets(
 
     Raises:
         ConfigurationError: any target is unknown / excluded / consumer-authored
-            / a relation field / the Relay-suppressed pk.
+            / the Relay-suppressed pk / a relation field.
     """
     targets = nullable_overrides | required_overrides
     if not targets:

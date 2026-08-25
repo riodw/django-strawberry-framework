@@ -52,9 +52,11 @@ def build_strategy_schema(query_cls: type, strategy: Any) -> Any:
     """One ``strawberry.Schema`` over ``query_cls`` running ``strategy``.
 
     ``strategy`` is a ``nested_connection_strategy`` selection (``"windowed"``,
-    ``"lateral"``, an instance) mounted on a fresh per-execution
-    ``DjangoOptimizerExtension``; ``None`` builds the OPTIMIZER-OFF schema
-    (the per-parent fallback pipeline the benchmark uses as its floor).
+    ``"lateral"``, an instance) mounted on ONE ``DjangoOptimizerExtension`` per
+    built schema, wrapped in a factory so Strawberry's per-request
+    ``get_extensions`` hands back that same instance every execution (the
+    instance-bound plan cache survives); ``None`` builds the OPTIMIZER-OFF
+    schema (the per-parent fallback pipeline the benchmark uses as its floor).
     """
     import strawberry
 
@@ -62,7 +64,8 @@ def build_strategy_schema(query_cls: type, strategy: Any) -> Any:
 
     extensions = []
     if strategy is not None:
-        extensions = [lambda: DjangoOptimizerExtension(nested_connection_strategy=strategy)]
+        optimizer = DjangoOptimizerExtension(nested_connection_strategy=strategy)
+        extensions = [lambda: optimizer]
     return strawberry.Schema(
         query=query_cls,
         config=strawberry_config(),

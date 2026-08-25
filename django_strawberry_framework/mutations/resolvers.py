@@ -121,6 +121,7 @@ from ..utils.write_values import (
     relation_into,
 )
 from .inputs import EXCLUDED, FieldError, payload_object_slot
+from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -198,7 +199,7 @@ def run_write_pipeline_sync(
     payload_cls = payload_cls_for(mutation_cls)
     slot = None if primary_type is None else payload_object_slot(primary_type)
     model = None if primary_type is None else model_for(primary_type)
-    needs_locate = primary_type is not None and meta.operation in {"update", "delete"}
+    needs_locate = primary_type is not None and operation_takes_id(meta.operation)
 
     # The managed-transaction gate + the pinned write alias (mutation atomicity, shipped 0.0.14): the
     # completion-spanning ``DjangoSchema`` transaction must already be open on the

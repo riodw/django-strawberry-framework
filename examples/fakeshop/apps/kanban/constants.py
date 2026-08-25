@@ -44,6 +44,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/mutations/__init__.py",
     "django_strawberry_framework/mutations/fields.py",
     "django_strawberry_framework/mutations/inputs.py",
+    "django_strawberry_framework/mutations/operations.py",
     "django_strawberry_framework/mutations/permissions.py",
     "django_strawberry_framework/mutations/resolvers.py",
     "django_strawberry_framework/mutations/sets.py",

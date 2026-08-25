@@ -31,17 +31,7 @@ from typing import Any
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
-
-# The one mapping spec-036 Decision 15 names: a mutation ``operation`` to the
-# Django model-permission action verb. Single-sited so the resolver reuses
-# it if it needs the action verb (e.g. for an error message). Django's own
-# ``Permission`` codename scheme is ``<action>_<model_name>`` (the DRF
-# ``DjangoModelPermissions`` ``perms_map`` shape).
-_OPERATION_PERMISSION_ACTION: dict[str, str] = {
-    "create": "add",
-    "update": "change",
-    "delete": "delete",
-}
+from .operations import _OPERATION_PERMISSION_ACTION
 
 # The recourse appended to a ``SyncMisuseError`` raised when a permission hook
 # (``check_permission`` / a ``permission_classes`` entry's ``has_permission``)

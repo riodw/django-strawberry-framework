@@ -60,6 +60,7 @@ from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from .inputs import INPUTS_MODULE_PATH
+from .operations import operation_takes_data, operation_takes_id
 
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
 # pointing at the bound mutation class. ``schema.py::DjangoMutationExecutionContext``
@@ -243,9 +244,9 @@ def _synthesized_mutation_signature(
     operation = meta.operation
 
     arguments: list[tuple[str, Any]] = []
-    if operation in ("update", "delete"):
+    if operation_takes_id(operation):
         arguments.append(("id", strawberry.ID))
-    if operation != "delete":
+    if operation_takes_data(operation):
         data_ann = _lazy_ref(mutation_cls.input_type_name(meta), mutation_cls.input_module_path)
         arguments.append(("data", data_ann))
 

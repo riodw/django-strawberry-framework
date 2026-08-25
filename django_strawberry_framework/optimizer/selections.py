@@ -46,7 +46,7 @@ schema-config dig ``connection_field_names`` needs.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from types import SimpleNamespace
 from typing import Any
 
@@ -507,33 +507,21 @@ class ConnectionFieldNames:
     different mechanism than the other.
     """
 
-    edges: str
-    node: str
-    page_info: str
-    total_count: str
-    has_next_page: str
+    edges: str = "edges"
+    node: str = "node"
+    page_info: str = "pageInfo"
+    total_count: str = "totalCount"
+    has_next_page: str = "hasNextPage"
 
 
 #: The default-``NameConverter`` vocabulary (``auto_camel_case=True``). It is the
 #: fallback for every direct / test caller that has no ``info`` in hand, so those
 #: call sites keep their historical behavior without threading a schema through.
-DEFAULT_CONNECTION_FIELD_NAMES = ConnectionFieldNames(
-    edges="edges",
-    node="node",
-    page_info="pageInfo",
-    total_count="totalCount",
-    has_next_page="hasNextPage",
-)
+DEFAULT_CONNECTION_FIELD_NAMES = ConnectionFieldNames()
 
-#: The PYTHON attribute names of the five fields above, in ``ConnectionFieldNames``
-#: field order - the input the schema's name converter transforms.
-_CONNECTION_FIELD_PYTHON_NAMES = (
-    "edges",
-    "node",
-    "page_info",
-    "total_count",
-    "has_next_page",
-)
+#: The PYTHON attribute names of the five fields above, derived directly in
+#: ``ConnectionFieldNames`` field order - the input the schema's name converter transforms.
+_CONNECTION_FIELD_PYTHON_NAMES = tuple(f.name for f in fields(ConnectionFieldNames))
 
 
 def connection_field_names(info: Any) -> ConnectionFieldNames:
@@ -568,7 +556,7 @@ def connection_field_names(info: Any) -> ConnectionFieldNames:
     if not callable(apply_naming_config):
         return DEFAULT_CONNECTION_FIELD_NAMES
     return ConnectionFieldNames(
-        *(apply_naming_config(python_name) for python_name in _CONNECTION_FIELD_PYTHON_NAMES),
+        *(apply_naming_config(f.name) for f in fields(ConnectionFieldNames)),
     )
 
 

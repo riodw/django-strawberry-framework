@@ -720,45 +720,29 @@ def _extend_only_projection(child_queryset: Any, attnames: tuple[str, ...]) -> A
     return child_queryset.only(*names, *missing)
 
 
-def _relation_connection_to_attr(relation_field_name: str) -> str:
+def relation_connection_to_attr(relation_field_name: str, response_key: str | None = None) -> str:
     """Return the package-reserved ``to_attr`` for a relation connection window.
 
-    ``_dst_<field>_connection``, keyed on the relation FIELD NAME (not the
-    accessor). The single source for this literal across the walker (plan
-    site), the finalizer (resolver precompute), and the connection
-    resolver probe, so the ``_dst_`` namespace string is never
-    duplicated as a scattered f-string (Decision 4 / Decision 5).
+    Single authoritative owner of the ``_dst_<field>..._connection`` attribute
+    grammar. When ``response_key`` is ``None``, returns the default
+    ``_dst_<field>_connection``. When ``response_key`` is provided (for divergent
+    aliases), escapes underscores to ``$`` and returns
+    ``_dst_<field>$<key>_connection``.
     """
-    return f"_dst_{relation_field_name}_connection"
+    if response_key is None:
+        return f"_dst_{relation_field_name}_connection"
+    escaped_key = response_key.replace("_", "$")
+    return f"_dst_{relation_field_name}${escaped_key}_connection"
+
+
+def _relation_connection_to_attr(relation_field_name: str) -> str:
+    """Compatibility delegate to ``relation_connection_to_attr``."""
+    return relation_connection_to_attr(relation_field_name)
 
 
 def _relation_connection_to_attr_for_key(relation_field_name: str, response_key: str) -> str:
-    """Return the per-RESPONSE-KEY ``to_attr`` for a divergent-alias window.
-
-    ``_dst_<field>$<key>_connection`` - the namespaced twin of
-    ``_relation_connection_to_attr`` used when aliases of one relation carry
-    DIVERGENT argument payloads and each response key gets its own windowed
-    prefetch (one ``Prefetch`` per key on the same lookup; Django's
-    ``prefetch_to`` is ``to_attr``-aware, so they coexist).
-
-    The ``$`` delimiter (graph-node's ``g$parent_id`` move) is load-bearing
-    twice over. Collision-safety: ``$`` is illegal in BOTH vocabularies
-    (Django field names must be Python identifiers; GraphQL response keys
-    match ``[_A-Za-z][_0-9A-Za-z]*``), so the first ``$`` unambiguously ends
-    the field name - no ``(field, key)`` pair can alias another or the shared
-    attr - and graphql-core's field-merging validation forbids one response
-    key carrying two different argument payloads. Django-safety: a ``to_attr``
-    must not contain ``__`` anywhere (``prefetch_to`` is split on
-    ``LOOKUP_SEP`` to traverse prefetch levels; an embedded ``__`` silently
-    breaks the descent), and a response key MAY contain ``__``/trailing
-    ``_``, so every ``_`` in the key is escaped to ``$`` - injective, since
-    ``$`` cannot occur in a raw key. ``setattr``/``getattr`` accept the
-    non-identifier attr just fine (the ``_dst_`` namespace is
-    package-reserved either way). The single source for the per-key namespace
-    string shared with the resolve-side probe
-    (``connection.py::_build_relation_connection_resolver``).
-    """
-    return f"_dst_{relation_field_name}${response_key.replace('_', '$')}_connection"
+    """Compatibility delegate to ``relation_connection_to_attr``."""
+    return relation_connection_to_attr(relation_field_name, response_key)
 
 
 def _connection_node_selections(
@@ -1421,11 +1405,7 @@ def plan_connection_relation(
             with_total_count=with_total_count,
             next_page_probe=next_page_probe,
             keyset_seek=window_seek,
-            to_attr=(
-                _relation_connection_to_attr(relation_field_name)
-                if resp_key is None
-                else _relation_connection_to_attr_for_key(relation_field_name, resp_key)
-            ),
+            to_attr=relation_connection_to_attr(relation_field_name, resp_key),
             lookup=f"{prefix}{instance_accessor(django_field)}",
         )
         strategy_plan = OptimizationPlan()

@@ -21,15 +21,19 @@ from graphql.language.ast import FragmentDefinitionNode, FragmentSpreadNode
 from django_strawberry_framework.optimizer.selections import (
     DEFAULT_CONNECTION_FIELD_NAMES,
     ast_child_selections,
+    ast_to_converted_selections,
     connection_count_required,
     connection_field_names,
+    connection_has_next_page_selected,
     connection_node_children,
+    connection_total_count_selected,
     direct_child_selected,
     directive_variable_names,
     included_field_selections,
     is_fragment,
     named_children,
     node_children_with_runtime_prefix,
+    prime_selected_fields,
     resolve_unvisited_fragment,
     response_key,
     response_keys,
@@ -555,3 +559,120 @@ def test_connection_predicates_consume_the_resolved_names():
         names=snake,
     )
     assert [child.name for child in node_children] == ["title"]
+
+
+def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
+    """``ast_to_converted_selections`` converts field nodes, named/anonymous fragments, and spreads."""
+    from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField
+
+    doc = parse(
+        "query Q($incl: Boolean!) { "
+        "  item(id: 1) @include(if: $incl) { name } "
+        "  ... on Book { title } "
+        "  ... { isbn } "
+        "  ...Frag "
+        "} "
+        "fragment Frag on Author { penName }",
+    )
+    operation, fragment_def = doc.definitions
+    field_nodes = list(operation.selection_set.selections)
+    info = SimpleNamespace(
+        fragments={"Frag": fragment_def},
+        variable_values={"incl": True},
+        schema=None,
+    )
+
+    converted = ast_to_converted_selections(info, field_nodes)
+    assert len(converted) == 4
+
+    # 1. SelectedField with arguments, directives, and children
+    field_sel = converted[0]
+    assert isinstance(field_sel, SelectedField)
+    assert field_sel.name == "item"
+    assert field_sel.arguments == {"id": "1"}
+    assert field_sel.directives == {"include": {"if": True}}
+    assert len(field_sel.selections) == 1
+    assert field_sel.selections[0].name == "name"
+
+    # 2. Named InlineFragment
+    inline_named = converted[1]
+    assert isinstance(inline_named, InlineFragment)
+    assert inline_named.type_condition == "Book"
+    assert len(inline_named.selections) == 1
+    assert inline_named.selections[0].name == "title"
+
+    # 3. Anonymous InlineFragment (type_condition is None, never crashes)
+    inline_anon = converted[2]
+    assert isinstance(inline_anon, InlineFragment)
+    assert inline_anon.type_condition is None
+    assert len(inline_anon.selections) == 1
+    assert inline_anon.selections[0].name == "isbn"
+
+    # 4. FragmentSpread (spreads to definition in info.fragments)
+    spread = converted[3]
+    assert isinstance(spread, FragmentSpread)
+    assert spread.name == "Frag"
+    assert spread.type_condition == "Author"
+    assert len(spread.selections) == 1
+    assert spread.selections[0].name == "penName"
+
+
+def test_prime_selected_fields_lifecycle():
+    """``prime_selected_fields`` populates ``info.__dict__['selected_fields']`` idempotently."""
+    from strawberry.types.nodes import SelectedField
+
+    # 1. No _raw_info -> no-op
+    bare_info = SimpleNamespace()
+    prime_selected_fields(bare_info)
+    assert "selected_fields" not in bare_info.__dict__
+
+    # 2. _raw_info has no field_nodes -> no-op
+    empty_raw = SimpleNamespace(_raw_info=SimpleNamespace(field_nodes=None))
+    prime_selected_fields(empty_raw)
+    assert "selected_fields" not in empty_raw.__dict__
+
+    # 3. Existing selected_fields in __dict__ is never overwritten
+    pre_existing = ["sentinel"]
+    existing_info = SimpleNamespace(
+        _raw_info=SimpleNamespace(
+            field_nodes=[parse("{ x }").definitions[0].selection_set.selections[0]],
+            fragments={},
+            variable_values={},
+        ),
+        selected_fields=pre_existing,
+    )
+    assert existing_info.__dict__["selected_fields"] is pre_existing
+    prime_selected_fields(existing_info)
+    assert existing_info.__dict__["selected_fields"] is pre_existing
+
+    # 4. Valid unpopulated info -> primed with converted selections
+    doc = parse("{ item { name } }")
+    field_node = doc.definitions[0].selection_set.selections[0]
+    raw_info = SimpleNamespace(field_nodes=[field_node], fragments={}, variable_values={})
+    info_to_prime = SimpleNamespace(_raw_info=raw_info)
+    prime_selected_fields(info_to_prime)
+    assert "selected_fields" in info_to_prime.__dict__
+    assert len(info_to_prime.selected_fields) == 1
+    assert isinstance(info_to_prime.selected_fields[0], SelectedField)
+    assert info_to_prime.selected_fields[0].name == "item"
+
+
+def test_connection_total_count_and_has_next_page_selected_direct():
+    """``connection_total_count_selected`` and ``connection_has_next_page_selected`` isolate their paths."""
+    total_only = _field("conn", selections=[_field("totalCount")])
+    assert connection_total_count_selected(total_only) is True
+    assert connection_has_next_page_selected(total_only) is False
+
+    next_only = _field(
+        "conn",
+        selections=[_field("pageInfo", selections=[_field("hasNextPage")])],
+    )
+    assert connection_total_count_selected(next_only) is False
+    assert connection_has_next_page_selected(next_only) is True
+
+    prev_only = _field(
+        "conn",
+        selections=[_field("pageInfo", selections=[_field("hasPreviousPage")])],
+    )
+    assert connection_total_count_selected(prev_only) is False
+    assert connection_has_next_page_selected(prev_only) is False

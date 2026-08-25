@@ -116,9 +116,9 @@ Slice 4's planning pass surfaced a conflict it correctly refused to fix: **once 
 
 That file belongs to Slice 3, and Slice 4 may not write it. **The integration pass owns the correction** (Worker 1 owns both spec files there), and it is the right owner regardless of which slice closes first — Slice 3's own final verification may run before Slice 4's fix lands, in which case the parenthetical is still true when Slice 3 closes and only becomes false afterwards. That ordering is exactly why this is recorded here rather than left to whichever pass happens to notice.
 
-**CORRECTION (Worker 0, after Slice 3's final verification): the population is ONE sentence, not two passages, and it is false NOW.** Slice 3's final verification enumerated it on three disjoint vocabularies: both clauses live in the **same trailing parenthetical at companion `:245`**, and nothing else in either file asserts it — no passage asserts the `_selected_meta_targets` defect at all, because companion `:244` already names the third caller. Worker 0's "at least two passages" framing below was itself the parallel-site error in miniature: two passes each described the same sentence from a different angle and each read the other's description as a second site. **Slice 4's bytes are already on disk**, so `:245` is false *now* rather than "once Slice 4 lands"; the integration pass still owns the fix, gated only on Slice 4's acceptance. The enumerate-don't-sweep instruction below stands — it is what produced this correction.
+**CORRECTION (Worker 0, after Slice 3's final verification): the population is ONE sentence, not two passages, and it is false NOW.** Slice 3's final verification enumerated it on three disjoint vocabularies: both clauses live in the **same trailing parenthetical at companion #"Claim this Decision may no longer make: that the rejection order is"**, and nothing else in either file asserts it — no passage asserts the `_selected_meta_targets` defect at all, because the companion's #"the unknown/excluded half became shared, which retired this Decision's structural-template framing" entry already names the third caller. Worker 0's "at least two passages" framing below was itself the parallel-site error in miniature: two passes each described the same sentence from a different angle and each read the other's description as a second site. **Slice 4's bytes are already on disk**, so that claim is false *now* rather than "once Slice 4 lands"; the integration pass still owns the fix, gated only on Slice 4's acceptance. The enumerate-don't-sweep instruction below stands — it is what produced this correction.
 
-**The original two-site framing, kept because it is the evidence for the correction above:** companion `:245` says `_validate_nullability_override_targets`'s docstring "still lists the three per-name rules in the rev1 order" and routes it to the deferred catalog — the exact docstring Slice 4 is repairing. So Slice 4 falsifies **two** companion passages, not one.
+**The original two-site framing, kept because it is the evidence for the correction above:** the companion's #"Claim this Decision may no longer make: that the rejection order is" entry says `_validate_nullability_override_targets`'s docstring "still lists the three per-name rules in the rev1 order" and routes it to the deferred catalog — the exact docstring Slice 4 is repairing. So Slice 4 falsifies **two** companion passages, not one.
 
 That is the parallel-site skip again, and it is the fifth instance in this cycle. **The integration pass must therefore enumerate the population rather than fix the two sites named here** — every companion or spec passage asserting that a docstring defect is unfixed, out of fence, or deferred. Two independent passes each found one site and neither found the other's; a third pass keyed on either of their vocabularies would find only what it already knew.
 
@@ -250,7 +250,7 @@ Every one of these is the spec asserting something that was true at authoring an
 ### D. Outside the fence — route to the deferred catalog, do not fix
 
 - `KANBAN.md`'s `DONE-029` card body still names the **rejected** migration targets (`extensions=[DjangoOptimizerExtension]` class / `lambda: DjangoOptimizerExtension()` factory) as Slice 1's goal, and still names the non-existent `examples/fakeshop/tests/test_commands.py` as Slice 2's test home. Both were resolved *against* the card by Decisions 3 and 4. DB-backed (`KANBAN.md` is rendered from `examples/fakeshop/db.sqlite3`); out of fence.
-- `KANBAN.md:366` already carries an open, unrelated item against `docs/GLOSSARY.md`'s `## Schema introspection management command` entry (it owes three selector rejections, not two), filed by the `spec-022` residual cycle. Note it in the catalog so this cycle is not read as having missed it; do not duplicate the filing.
+- `KANBAN.md` #"states no selector-rejection contract at all" already carries an open, unrelated item against `docs/GLOSSARY.md`'s `## Schema introspection management command` entry (it owes three selector rejections, not two), filed by the `spec-022` residual cycle. Note it in the catalog so this cycle is not read as having missed it; do not duplicate the filing.
 
 ## Checklist
 
@@ -260,3 +260,123 @@ Every one of these is the spec asserting something that was true at authoring an
 - [x] Slice 4: Docstring-rot repair in `types/base.py` — two confirmed false docstring claims about live behavior -> `docs/builder/bld-slice-4-029-docstring_rot_repair.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-integration-029.md`
 - [x] Final test-run gate -> `docs/builder/bld-final-029.md`
+
+---
+
+## Final gate record (folded in from `bld-final-029.md` before its deletion)
+
+The five per-slice / integration artifacts were deleted at close on the maintainer's instruction,
+and `bld-final-029.md` after them; **this plan is the only surviving artifact of the cycle.** Each
+reached `Status: final-accepted` first. Every `Slice N` / `integration pass` / `final gate`
+attribution elsewhere in this file names a source that no longer exists on disk — the claims they
+supported are restated here rather than left as pointers. All five, and the final gate, are
+recoverable from commit `39f0100d`.
+
+Gate commands, in `BUILD.md` order, all PASS at the final gate: `pytest --no-cov`
+(**6525 passed, 42 skipped**); `manage.py check`; `makemigrations --check --dry-run`;
+`ruff format --check .` (429 files); `ruff check .`; `git diff --check` over a live 1,791-line diff;
+`check_spec_glossary.py` (44 terms); `check_citations.py` (789 citations, 712 in 426 `.py` files,
+77 in `KANBAN.md`); `check_trailing_commas.py --check`. No `--cov*` flag was used and no coverage
+figure was read. Floor verification (Django 5.2.16 / Python 3.10 / strawberry-graphql 0.316.0) was
+confirmed as a backstop rather than re-run. Every gate was fired on a known-bad input first.
+
+Post-gate, at the maintainer's direction, the one in-fence catalog item below was fixed and the whole
+cycle committed as `39f0100d` (20 files, +10,104 / -291).
+
+## Deferred-work homing (Worker 0, post-gate, maintainer-requested)
+
+The next spec author's reading list, carried over verbatim in substance from the final gate's
+`### Deferred work catalog`. Destinations are proposals; the board edits are not made.
+
+### Closed — do NOT read these as deferred
+
+- `django_strawberry_framework/types/base.py::_selected_meta_targets` named 2 of its 3 callers. **Closed by Slice 4** by
+  *deleting* the enumeration rather than extending it: the docstring now states the seam's contract
+  ("every `Meta` key that targets a set of field names on the type"), which cannot rot when a fourth
+  key lands.
+- `django_strawberry_framework/types/base.py::_validate_nullability_override_targets`'s stated check order contradicted its own
+  loop. **Closed by Slice 4**; now reads `unknown -> excluded -> consumer-authored -> Relay-pk ->
+  relation`, with a clause saying *why* Relay-pk precedes relation, and `Raises:` in the same order.
+- `django_strawberry_framework/types/base.py::_validate_meta`'s third enumeration (a `#` comment, not a docstring — the
+  distinction is what the executable-byte-identity proof rests on). **Closed by the integration
+  pass**; reads the shipped order at `django_strawberry_framework/types/base.py::_validate_meta` #"(unknown / excluded / consumer-authored / Relay-pk / relation) need the".
+- The thirteenth site, in the spec's `## Implementation plan` Slice-3 cell (#"consumer-authored / Relay-pk / relation reject"). No
+  module-scoped sweep could see it: both of Slice 4's enumerations were correctly scoped to
+  `django_strawberry_framework/`, and this site is one surface over. **Closed by the integration
+  pass.**
+- **the spec's `ConfigurationError` gloss #"every Slice 3 validation failure" enumerated 4 of the 5 per-name rejection rules**,
+  omitting the Relay-suppressed pk under an "every Slice 3 validation failure" quantifier. Found at
+  the final gate, graded by no earlier pass, pre-existing at HEAD byte-identical. **Closed post-gate**
+  on maintainer instruction, together with three parallel sites the closing sweep exposed: the DoD
+  package-coverage enumeration (#"the validation + collision cases:", which also omitted the shape guard) and the Slice 3 test
+  roster, which named 8 of the 11 shipped `tests/types/test_base.py` rows
+  (`test_override_flips_choice_field_enum_nullability`, `test_override_relay_suppressed_pk_raises`,
+  `test_override_non_sequence_raises` were absent). The roster now matches the tree 11-for-11.
+  **Standing lesson, one more time: a site that OMITS a term cannot match an ordering grep** — every
+  instrument that missed the gloss keyed on the ordering vocabulary `relation / Relay-pk`.
+
+### Open — outside the fence, proposed destinations
+
+| # | Item | Proposed home |
+|---|---|---|
+| 1 | `docs/SPECS/appx/spec-029-…-terms.csv` carries the retired *scalar-only* scope claim on **three** rows: **44** twice ("forcing a **scalar** field nullable", "**scalar-only**") plus the narrow "via the `convert_scalar` `force_nullable` tri-state" apply mechanism; **45** once; **14** once in different words ("Decision 10 scopes overrides to scalars"). Row 14 survived four passes' sweeps because every one keyed on the string `scalar-only` or on the two `Meta.` rows. The spec's corresponding bullet #"scopes Slice 3's overrides to non-relation model fields" is already corrected. | `TODO-ALPHA-052` (DB-backed terms; ORM edit + re-import) |
+| 2 | `CHANGELOG.md` #"decouple a scalar field's GraphQL nullability" carries the same retired claim ("decouple a **scalar field's** GraphQL nullability", "**scalar-only**"). Corrects Slice 3's recorded conclusion that the CSV was "the only stale surface left anywhere". | `TODO-ALPHA-052` (`AGENTS.md` rule 21 closes `CHANGELOG.md` to a build cycle; 052 owns the promotion) |
+| 3 | `docs/SPECS/spec-034-permissions-0_0_10.md` #"is scalar-only (spec-029 Decision 10)" says "`Meta.nullable_overrides` is scalar-only (spec-029 Decision 10)" — a cross-spec citation into a Decision this cycle renamed (`Scalar-only scope` -> `Non-relation scope`). Its **conclusion still holds**; only the cited reason is retired. | `TODO-ALPHA-052` (repo-wide citation sweep) |
+| 4 | Three standing docs enumerate the per-name rejection rules in the pre-repair order — `CHANGELOG.md` #"decouple a scalar field's GraphQL nullability", `docs/GLOSSARY.md` #"the inverse-direction companion to", `docs/README.md` #"(new in `0.0.9`) — two tuple-set `Meta` keys". **None is false** (each enumerates a rejected-target *set*, not an order), so this is a coherence grade. `docs/GLOSSARY.md` is DB-generated: ORM edit plus regenerate, never a hand-edit. | `TODO-ALPHA-052` — take the trio whole so it lands uniformly |
+| 5 | `KANBAN.md`'s `DONE-029` card body is stale two ways: #"Strawberry `extensions=[instance]` factory-callable migration" names the **rejected** migration targets (bare class / constructing lambda) as Slice 1's goal, both resolved *against* the card by Decision 3; #"Tests via `examples/fakeshop/tests/test_commands.py::call_command" (Slice 2 scope) and #"Tests via `examples/fakeshop/tests/test_commands.py` using `call_command`" (DoD 2) name that non-existent module, where the shipped tests are `examples/fakeshop/tests/test_inspect_django_type.py` and `tests/management/test_inspect_django_type.py`. | `TODO-ALPHA-052`, joining its board-DB rot bullet and its open question (c): true-as-history vs navigable |
+| 6 | `CHANGELOG.md` carries `0.0.7`-era consumer snippets showing the deprecated instance form at #"Consumers compose package-defined scalars into their schema via", #"- schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])" and #"+ schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])". The `0.0.9` bullet correctly *describes* the `0.0.9` migration and is fine as history. | `TODO-ALPHA-052` (rule 21) |
+| 7 | `tests/test_ci_governance.py`'s first docstring line still reads "Governance tests for the CI workflow definitions" now that the module carries a first-party-source pin. The `.py` is in fence but the fix **forces** a `docs/TREE.md` regenerate (`docs/TREE.md` #"Governance tests for the CI workflow definitions." matches **twice**, once under each render root, and both sites need the same edit) and CI runs `build_tree_md.py --check`. Slice 2's **Amendment 1**. | `TODO-ALPHA-051` (live-code docstring; TREE regenerates at that card's doc-wrap) |
+| 8 | `docs/builder/DONE/build-004-optimizer_beyond-0_0_3.md` #"Sole carrier of `djangooptimizerextension`" carries a `path #"substring"` citation that no longer resolves — `spec-029 #"P1.1 — stale extension-lifecycle model"`. Slice 1's move relocated that string into the companion; the `spec-004` *companion*'s prose citation was repaired in-cycle, this archived artifact deliberately was not. The same file's sibling assessment ("spec-029 (6 hits) | P1 / P1.1 / Decision 3 / Risks") is drifted for the same reason. No gate sees either. | `TODO-ALPHA-052` |
+
+**Two recorded non-misses — do not re-open as omissions, and do not duplicate the filing:**
+
+- `KANBAN.md` #"states no selector-rejection contract at all" already carries an open item against `docs/GLOSSARY.md`'s
+  `## Schema introspection management command` entry (it owes **three** selector rejections, not
+  two), filed by the `spec-022` residual cycle. Kept as its own line because a catalog reader will
+  look for it by description rather than by board reference.
+- `docs/bug_hunt/temp-tests/resolvers_async_parity/` holds four forbidden-form entries (two bare-class entries in
+  `test_connection_and_mutation_async.py`, two constructing lambdas in `test_async_probes.py`). Gitignored scratch, **outside the pin's corpus by design** —
+  a pin walking the filesystem indiscriminately would pass in CI and fail on a developer machine.
+
+`docs/TREE.md`'s two-line staleness at HEAD is the concurrent session's untracked
+`tests/mutations/test_operations.py`, **not this cycle's**. `build_tree_md.py` must only ever be run
+with `--check` here.
+
+### Open — test coverage and instrument integrity
+
+| # | Item | Proposed home |
+|---|---|---|
+| 9 | **The Relay-pk-before-relation precedence is a shipped contract pinned by no test.** Decision 8 rule 4 states it, the repaired docstring states it, the code holds it, and no fixture pairs a relation pk with a Relay-shaped type and an override — so **no row fails if the precedence is lost**. *Owed row:* a test naming such a pk in `nullable_overrides` and asserting the **Relay** message rather than the relation one. Both fixture halves already exist: the pattern at `tests/optimizer/test_walker.py::test_plan_relay_id_projects_attname_when_pk_is_relation` (`OneToOneField(..., primary_key=True)`) and the assertion neighbourhood at `tests/types/test_base.py::test_override_relay_suppressed_pk_raises`. **Explicitly not harness-impossible.** Pre-existing at HEAD, so no `revision-needed` rule applies. `fail_under = 100` structurally cannot see it: both guards' statements are covered; what is unpinned is *which wins when both are true*. | `TODO-BETA-068` (root-`tests/` pins for jointly-pinned or unpinned boundaries — its existing shape) |
+| 10 | **ACCEPTED RESIDUAL, maintainer-facing** — `tests/test_ci_governance.py` #"CORPUS_REGIONS = (" is unpinned: narrowing it fails **0** rows, and a same-arity substitution fails 0 rows with the row count unchanged. Accepted as terminal on a structural, mechanically checkable criterion: the constant has exactly **one** reader (`tests/test_ci_governance.py::test_the_oracle_requirement_reaches_every_corpus_region`'s `parametrize` decorator, a row-generating position), that reader is row-generating, and no surviving assertion reads it as data — so narrowing *deletes rows* rather than leaving a live boundary enforcing less. **The maintainer may overturn this**; the fix would inline the tuple into the decorator, which moves the narrowing target rather than removing it. | `TODO-BETA-068`, or let the acceptance stand |
+| 11 | `django_strawberry_framework/types/base.py::_format_unknown_fields_error` enumerates its callers (`Meta.fields`, `Meta.exclude`, `Meta.optimizer_hints`, `nullable_overrides`, `required_overrides`, `filesystem_path_fields`, `relation_shapes`). Currently **complete and correct**, but carries the same rot risk Slice 4's Decision 1 removed from `_selected_meta_targets`. Left alone deliberately, not overlooked. | `TODO-ALPHA-051` WP-B |
+| 12 | `django_strawberry_framework/types/base.py::_validate_optimizer_hints` duplicates the unknown/excluded shape. **Judged and declined with the reason recorded**: the shapes are not near-copies, the common piece is already extracted as `_format_unknown_fields_error`, consolidating would widen the seam for one non-conforming caller, and the difference is the measurement that makes Slice 4's L2 ruling non-arbitrary. A future DRY candidate, not this cycle's residue. | `TODO-ALPHA-051` WP-C |
+
+### Open — process and tooling blind spots (maintainer proposals, not cards)
+
+- **No gate validates a `path::Symbol` citation inside a `.md` file.** `check_citations.py` covers
+  `SOURCE_TREES` plus `KANBAN.md` and nothing else; `docs/` is out of scope by design. The spec's
+  ~25 and the companion's ~6 such citations are checked by a reviewer or by nobody, and a symbol
+  rename breaks them silently exactly as the `#"substring"` class does. The integration pass depended
+  on this blind spot three times. Extends `TODO-ALPHA-052`'s existing checker bullet, beside its
+  source-symbol-citation and substring-uniqueness siblings.
+- **The `## Current state` observation-vs-prediction rule is unrouted.** A vintage-framed section's
+  licence covers dated **observations** of the pre-build repo, not **predictions the build
+  falsified**. Homed in the companion's `### Documentation-coherence passes`, but the rule is not
+  spec-029-specific. `BUILD.md` and `worker-1.md` are corpus-ratchet-bound, so this is a **maintainer
+  proposal that must name the bytes it retires**, not a worker edit.
+- **The underscore-stripping slugger trap killed three instruments in this cycle**, each author
+  reaching for the same reflex character class independently. `_` is a `\w` character GitHub's
+  slugger keeps. It does not transmit by being written down — it transmits by a positive control on
+  an **underscore-bearing** anchor. Worth one line wherever anchor-checking is described.
+- **The zsh no-word-splitting trap killed a fourth, three times in one cycle**: an unquoted `$FILES`
+  in a `--numstat`; four anchors shell-quoted into one argument; a `for` loop whose `set -- $row` did
+  not split. In every case a non-run read like a result. **Pass path lists and anchors as explicit
+  separate arguments, never through a variable.** Same family: `${PIPESTATUS[0]}` is a bash spelling
+  and reads empty in zsh. (The post-gate closing pass hit both again — an unquoted file list handed
+  ten paths to `ruff` as one argument, and a `$?` after a pipe read `grep`'s status.)
+- **`tests/test_ci_governance.py`'s corpus census fires on any untracked-but-not-ignored `.py`
+  outside the corpus.** That is the gate doing its job, but in a repo worked by concurrent sessions
+  one session's stray root-level `.py` can red another's suite. Recorded so the behavior is a decided
+  answer rather than a surprise.
+- **This plan's section C under-describes the cycle.** It lists nine divergences; Slice 3 discharged
+  eleven, its final verification added a twelfth site, and the integration pass a thirteenth.

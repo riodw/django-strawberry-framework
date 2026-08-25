@@ -3446,6 +3446,43 @@ def test_run_permission_checks_recurses_into_logical_branches():
     assert fired == ["name"]
 
 
+def test_run_permission_checks_rejects_malformed_logical_branch_before_hooks():
+    """Malformed logical input is rejected before check_*_permission gates fire."""
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    # Sequence operator given a dict container
+    with pytest.raises(ConfigurationError, match="takes a list of filter inputs"):
+        CategoryFilter._run_permission_checks(
+            {"or_": {"name": "foo"}},
+            request=HttpRequest(),
+        )
+    assert fired == []
+
+    # Sequence operator containing scalar elements
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        CategoryFilter._run_permission_checks(
+            {"and_": ["bad_scalar"]},
+            request=HttpRequest(),
+        )
+    assert fired == []
+
+    # Single-element operator given a sequence container
+    with pytest.raises(ConfigurationError, match="takes a single filter input"):
+        CategoryFilter._run_permission_checks(
+            {"not_": [{"name": "foo"}]},
+            request=HttpRequest(),
+        )
+    assert fired == []
+
+
 def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
     """A child filterset gate fires once even when entered from sibling ``or`` arms.
 
@@ -5238,6 +5275,66 @@ def test_collect_nested_visibility_querysets_async_skips_none_child_branch():
     assert result == {}
 
 
+def test_collect_nested_visibility_querysets_async_rejects_malformed_logical_branch_before_hooks():
+    """Malformed logical input on the async path is rejected before related visibility queries run."""
+    import asyncio
+
+    visibility_called: list[str] = []
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            visibility_called.append("shelf")
+            return queryset
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # Sequence operator given a dict container
+    with pytest.raises(ConfigurationError, match="takes a list of filter inputs"):
+        asyncio.run(
+            BranchFilter._collect_nested_visibility_querysets_async(
+                {"or": {"shelves": {"code": {"exact": "A"}}}},
+                _make_info(),
+            ),
+        )
+    assert visibility_called == []
+
+    # Sequence operator containing scalar elements
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        asyncio.run(
+            BranchFilter._collect_nested_visibility_querysets_async(
+                {"and": ["bad_scalar"]},
+                _make_info(),
+            ),
+        )
+    assert visibility_called == []
+
+    # Single-element operator given a list container
+    with pytest.raises(ConfigurationError, match="takes a single filter input"):
+        asyncio.run(
+            BranchFilter._collect_nested_visibility_querysets_async(
+                {"not": [{"shelves": {"code": {"exact": "A"}}}]},
+                _make_info(),
+            ),
+        )
+    assert visibility_called == []
+    assert ShelfType is not None
+
+
 @pytest.mark.django_db
 def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
     """``_q_for_branch`` with a present-but-missing stash uses the sync-derive fallback.
@@ -5582,6 +5679,51 @@ def test_validate_logic_branch_shape_accepts_inactive_list_element():
     # No raise: ``None`` list arms are skipped downstream, not shape errors.
     CategoryFilter._validate_logic_branch_shape("or", [None, {"name": {"exact": "x"}}])
     CategoryFilter._validate_logic_branch_shape("and", [{"name": {"exact": "x"}}, None])
+
+
+def test_iter_logic_branches_walks_active_branches_and_filters_inactive():
+    """``_iter_logic_branches`` yields (operator, children) across formats and drops inactive."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    # None / UNSET input -> empty
+    assert list(CategoryFilter._iter_logic_branches(None)) == []
+    assert list(CategoryFilter._iter_logic_branches(strawberry.UNSET)) == []
+
+    # Wire keys with inactive elements filtered out
+    branches = list(
+        CategoryFilter._iter_logic_branches(
+            {
+                "and": [{"name": {"exact": "a"}}, None],
+                "or": [None],
+                "not": {"name": {"exact": "b"}},
+            },
+        ),
+    )
+    assert len(branches) == 2
+    op_and, children_and = branches[0]
+    assert op_and.wire_name == "and"
+    assert children_and == [{"name": {"exact": "a"}}]
+    op_not, children_not = branches[1]
+    assert op_not.wire_name == "not"
+    assert children_not == [{"name": {"exact": "b"}}]
+
+    # Python attr keys
+    branches_py = list(
+        CategoryFilter._iter_logic_branches(
+            {"and_": [{"name": {"exact": "a"}}], "or_": None, "not_": None},
+        ),
+    )
+    assert len(branches_py) == 1
+    assert branches_py[0][0].wire_name == "and"
+    assert branches_py[0][1] == [{"name": {"exact": "a"}}]
+
+    # Validation failure unconditionally
+    with pytest.raises(ConfigurationError, match="takes a list of filter inputs"):
+        list(CategoryFilter._iter_logic_branches({"or": {"name": {"exact": "x"}}}))
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ from django_filters.utils import get_model_field, resolve_field, try_dbfield
 from graphql import GraphQLError
 from strawberry import UNSET
 
-from ..exceptions import ConfigurationError, PathResolutionError
+from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr
 from ..optimizer.predicates import attach_exists, correlated_inner_root
 from ..registry import registry
 from ..sets_mixins import (
@@ -63,6 +63,7 @@ from ..sets_mixins import (
 )
 from ..types.relay import implements_relay_node
 from ..utils.input_values import (
+    DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LOGIC,
     RELATED,
     SetInputTraversal,
@@ -97,16 +98,18 @@ from .base import (
     _relation_uses_non_pk_to_field,
 )
 from .inputs import (
-    _LOGIC_KEYS,
+    LOGIC_OPERATORS,
+    LOGIC_OPERATORS_BY_PYTHON_ATTR,
+    LOGIC_OPERATORS_BY_WIRE,
     LOOKUP_NAME_MAP,
+    LogicOperatorDescriptor,
     _field_specs,
-    _safe_repr,
     normalize_input_value,
 )
 
 # Python-attr tokens of the logical operator keys (``and_`` / ``or_`` / ``not_``),
 # excluded from the active-permission field walk (they recurse separately).
-_LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(python_attr for python_attr, _wire in _LOGIC_KEYS)
+_LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_OPERATORS)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
@@ -130,11 +133,6 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
     python_attr: django_lookup
     for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
 }
-
-# ``python_attr -> django-filter wire key`` for the logical operators, built once
-# at import: ``_LOGIC_KEYS`` is a frozen module constant, so ``_normalize_input``
-# re-derived an identical dict every call before this hoist.
-_LOGIC_WIRE_BY_PYTHON_ATTR: dict[str, str] = dict(_LOGIC_KEYS)
 
 # The filter-normalize traversal config is request-independent (it references the
 # same module-level ``_field_specs`` map by reference, which ``inputs.py`` mutates
@@ -1224,7 +1222,7 @@ class FilterSet(
     # covers every realistic consumer-driven graph; beyond it a typed
     # `ConfigurationError` surfaces the misuse at the source instead of a
     # Python `RecursionError`.
-    _MAX_LOGIC_DEPTH: ClassVar[int] = 8
+    _MAX_LOGIC_DEPTH: ClassVar[int] = DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
 
     # Depth hand-off channel for the tree-form logic recursion. Set on a
     # sibling instance by `_q_for_branch` so `filter_queryset` can read
@@ -2087,13 +2085,53 @@ class FilterSet(
         return iter_input_items(input_value)
 
     @classmethod
+    def _iter_logic_branches(
+        cls,
+        input_value: Any,
+    ) -> Iterator[tuple[LogicOperatorDescriptor, list[Any]]]:
+        """Iterate active logical branches and their child filter-input elements.
+
+        Single authoritative iterator for all runtime logical-tree traversals
+        (async visibility derive, permission recursion, and query Q composition).
+        For each operator in ``LOGIC_OPERATORS``:
+        - Extracts the branch value across Python attribute and wire key names.
+        - Validates container and element shapes fail-closed.
+        - Filters inactive (``None`` / ``UNSET``) elements.
+        - Yields ``(operator, active_children)`` for non-empty branches.
+        """
+        if is_inactive_value(input_value, unset_sentinel=UNSET):
+            return
+        for op in LOGIC_OPERATORS:
+            branch_value = cls._extract_branch_value(input_value, op.python_attr)
+            if branch_value is None:
+                branch_value = cls._extract_branch_value(input_value, op.wire_name)
+            if branch_value is None or is_inactive_value(branch_value, unset_sentinel=UNSET):
+                continue
+            cls._validate_logic_branch_shape(op.wire_name, branch_value)
+            if op.is_sequence:
+                children = [
+                    child
+                    for child in branch_value
+                    if not is_inactive_value(child, unset_sentinel=UNSET)
+                ]
+            else:
+                children = (
+                    [branch_value]
+                    if not is_inactive_value(branch_value, unset_sentinel=UNSET)
+                    else []
+                )
+            if children:
+                yield op, children
+
+    @classmethod
     def _validate_logic_branch_shape(cls, wire_key: str, value: Any) -> None:
         """Reject a malformed logical container before it silently no-ops.
 
-        ``and`` / ``or`` carry a LIST of filter inputs; ``not`` carries a
-        SINGLE filter input. GraphQL input coercion guarantees these shapes,
-        but the public ``apply_sync`` / ``apply_async`` raw-dict API accepts
-        anything a consumer hands it. Two malformations are rejected:
+        Sequence operators (``and`` / ``or``) carry a LIST of filter inputs;
+        single-element operators (``not``) carry a SINGLE filter input. GraphQL
+        input coercion guarantees these shapes, but the public ``apply_sync`` /
+        ``apply_async`` raw-dict API accepts anything a consumer hands it. Two
+        malformations are rejected:
 
         * **Wrong CONTAINER.** A mapping supplied where a list is expected --
           ``{"or": {"name": {"exact": "x"}}}`` -- would otherwise be iterated
@@ -2120,13 +2158,14 @@ class FilterSet(
         """
         if is_inactive_value(value, unset_sentinel=UNSET):
             return
+        op = LOGIC_OPERATORS_BY_WIRE.get(wire_key)
         is_sequence = isinstance(value, (list, tuple))
-        if wire_key == "not":
+        if op is not None and not op.is_sequence:
             if is_sequence:
                 raise ConfigurationError(
-                    f"FilterSet {cls.__qualname__}: logical branch 'not' takes a "
+                    f"FilterSet {cls.__qualname__}: logical branch {wire_key!r} takes a "
                     f"single filter input, got a {type(value).__name__}. Wrap the "
-                    "clause as 'not: {{...}}', not a list.",
+                    f"clause as '{wire_key}: {{...}}', not a list.",
                 )
             cls._validate_logic_element_shape(wire_key, value)
             return
@@ -2156,7 +2195,7 @@ class FilterSet(
         if iter_input_items(element) is None:
             raise ConfigurationError(
                 f"FilterSet {cls.__qualname__}: logical branch {wire_key!r} takes "
-                f"filter inputs, got a {type(element).__name__} ({_safe_repr(element)}). Each "
+                f"filter inputs, got a {type(element).__name__} ({_safe_arg_repr(element)}). Each "
                 "clause must be a mapping or filter-input object, not a scalar.",
             )
 
@@ -2207,7 +2246,7 @@ class FilterSet(
         data: dict[str, Any] = {}
         for field in iter_active_fields(cls, input_value, _NORMALIZE_TRAVERSAL):
             if field.kind == LOGIC:
-                wire_key = _LOGIC_WIRE_BY_PYTHON_ATTR[field.python_attr]
+                wire_key = LOGIC_OPERATORS_BY_PYTHON_ATTR[field.python_attr].wire_name
                 cls._validate_logic_branch_shape(wire_key, field.raw_value)
                 data[wire_key] = field.raw_value
                 continue
@@ -2593,28 +2632,12 @@ class FilterSet(
             return result
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()
-        # Walk each logical sub-branch (``and_`` / ``or_`` / ``not_`` on the
-        # Strawberry side; the dict-side input may already carry the
-        # normalized ``and`` / ``or`` / ``not`` keys when a consumer hands a
-        # raw dict). Each child_input gets its OWN visibility derive plus a
-        # recursive walk so deeply-nested branches all carry pre-derived
-        # maps before the sync ``_q_for_branch`` ever runs.
-        for _python_attr, _wire_key in _LOGIC_KEYS:
-            branch_value = cls._extract_branch_value(input_value, _python_attr)
-            if branch_value is None:
-                branch_value = cls._extract_branch_value(input_value, _wire_key)
-            if branch_value is None:
-                continue
-            children = (
-                [branch_value]
-                if _wire_key == "not"
-                else list(branch_value)
-                if branch_value
-                else []
-            )
+        # Walk each logical sub-branch via ``_iter_logic_branches``. Each
+        # child_input gets its OWN visibility derive plus a recursive walk so
+        # deeply-nested branches all carry pre-derived maps before the sync
+        # ``_q_for_branch`` ever runs.
+        for _op, children in cls._iter_logic_branches(input_value):
             for child_input in children:
-                if is_inactive_value(child_input, unset_sentinel=UNSET):
-                    continue
                 result[id(child_input)] = await cls._derive_related_visibility_querysets_async(
                     child_input,
                     info,
@@ -2678,40 +2701,20 @@ class FilterSet(
         _bare: Any,
         _depth: int,
     ) -> None:
-        """Recurse into ``and`` / ``or`` / ``not`` so nested clauses stay gated.
+        """Recurse into logical operator branches so nested clauses stay gated.
 
         Filter-only: the order family has no operator bag. Same ``cls`` reuses
-        ``_bare`` and the shared ``_fired`` map. ``_normalize_input`` is read
-        here only to pick the django-filter wire keys.
+        ``_bare`` and the shared ``_fired`` map.
         """
-        normalized = cls._normalize_input(input_value)
-        and_branches = normalized.get("and") or []
-        for child_input in and_branches:
-            cls._run_permission_checks(
-                child_input,
-                request,
-                _fired=_fired,
-                _bare=_bare,
-                _depth=_depth + 1,
-            )
-        or_branches = normalized.get("or") or []
-        for child_input in or_branches:
-            cls._run_permission_checks(
-                child_input,
-                request,
-                _fired=_fired,
-                _bare=_bare,
-                _depth=_depth + 1,
-            )
-        not_branch = normalized.get("not")
-        if not_branch is not None:
-            cls._run_permission_checks(
-                not_branch,
-                request,
-                _fired=_fired,
-                _bare=_bare,
-                _depth=_depth + 1,
-            )
+        for _op, children in cls._iter_logic_branches(input_value):
+            for child_input in children:
+                cls._run_permission_checks(
+                    child_input,
+                    request,
+                    _fired=_fired,
+                    _bare=_bare,
+                    _depth=_depth + 1,
+                )
 
     def check_permissions(self, request: Any, requested_fields: set[str] | None = None) -> None:
         """Backward-compatible thin delegate to `_run_permission_checks`.
@@ -2983,7 +2986,7 @@ class FilterSet(
         _depth: int = 0,
         _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None,
     ) -> models.Q:
-        """Build the ``Q`` expression for the ``and`` / ``or`` / ``not`` branches.
+        """Build the ``Q`` expression for logical operator branches.
 
         Recursion terminates naturally when ``tree_data`` carries no
         logical keys -- an empty ``Q()`` is the identity element for
@@ -2994,8 +2997,8 @@ class FilterSet(
         visibility maps produced by ``_collect_nested_visibility_querysets_async``
         (None on the sync path).
 
-        Inactive children (``None`` / ``strawberry.UNSET``) inside ``and`` /
-        ``or`` lists -- and an inactive ``not`` value -- are skipped, matching
+        Inactive children (``None`` / ``strawberry.UNSET``) inside sequence
+        lists -- and an inactive single-element value -- are skipped, matching
         ``_collect_nested_visibility_querysets_async``. Without that skip an
         inactive ``or`` arm materializes as ``pk__in=<full qs>`` (match-all)
         and silently widens past every real sibling arm.
@@ -3006,42 +3009,9 @@ class FilterSet(
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()
 
-        # Fail loud on a malformed logical container BEFORE query construction
-        # (report Defect 4). ``apply_sync`` / ``apply_async`` normalize through
-        # ``_normalize_input`` (which validates), but a queryset built by
-        # directly constructing ``cls(data={"or": {...}})`` skips that path; a
-        # mapping where a list is expected would otherwise be iterated as its
-        # KEYS and silently collapse the branch to an identity query.
-        for _wire_key in ("and", "or", "not"):
-            if _wire_key in tree_data:
-                cls._validate_logic_branch_shape(_wire_key, tree_data[_wire_key])
-
-        and_branches = tree_data.get("and") or []
-        for child_input in and_branches:
-            # Mirror ``_collect_nested_visibility_querysets_async``: ``None`` /
-            # ``UNSET`` list elements are inactive, not match-all clauses. An
-            # inactive arm under ``or`` would otherwise OR with the full
-            # parent queryset and silently widen past every real sibling arm.
-            if is_inactive_value(child_input, unset_sentinel=UNSET):
-                continue
-            q &= cls._q_for_branch(
-                queryset,
-                child_input,
-                request=request,
-                info=info,
-                _depth=_depth + 1,
-                _nested_qs_by_branch_id=_nested_qs_by_branch_id,
-            )
-
-        or_branches = [
-            child_input
-            for child_input in (tree_data.get("or") or [])
-            if not is_inactive_value(child_input, unset_sentinel=UNSET)
-        ]
-        if or_branches:
-            or_q = models.Q()
-            for child_input in or_branches:
-                or_q |= cls._q_for_branch(
+        for op, children in cls._iter_logic_branches(tree_data):
+            branch_qs = [
+                cls._q_for_branch(
                     queryset,
                     child_input,
                     request=request,
@@ -3049,21 +3019,9 @@ class FilterSet(
                     _depth=_depth + 1,
                     _nested_qs_by_branch_id=_nested_qs_by_branch_id,
                 )
-            q &= or_q
-
-        not_branch = tree_data.get("not")
-        if not_branch is not None and not is_inactive_value(
-            not_branch,
-            unset_sentinel=UNSET,
-        ):
-            q &= ~cls._q_for_branch(
-                queryset,
-                not_branch,
-                request=request,
-                info=info,
-                _depth=_depth + 1,
-                _nested_qs_by_branch_id=_nested_qs_by_branch_id,
-            )
+                for child_input in children
+            ]
+            q &= op.compose(branch_qs)
 
         return q
 

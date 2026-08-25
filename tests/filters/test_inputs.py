@@ -37,8 +37,13 @@ from django_strawberry_framework.filters import (
 )
 from django_strawberry_framework.filters.inputs import (
     _FILTER_INPUT_KIND_TYPES,
-    _LOGIC_KEYS,
     INPUTS_MODULE_PATH,
+    LOGIC_OP_AND,
+    LOGIC_OP_NOT,
+    LOGIC_OP_OR,
+    LOGIC_OPERATORS,
+    LOGIC_OPERATORS_BY_PYTHON_ATTR,
+    LOGIC_OPERATORS_BY_WIRE,
     LOOKUP_NAME_MAP,
     _build_input_fields,
     _build_logic_fields,
@@ -49,7 +54,6 @@ from django_strawberry_framework.filters.inputs import (
     _iter_filterset_subclasses,
     _model_field_for_filter,
     _pascal_case,
-    _safe_repr,
     _scalar_from_form_field,
     _scalar_from_model_field,
     _unexpected_filter_dispatch,
@@ -165,17 +169,58 @@ def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
     assert by_attr["not_"] == {"name": "not", "default": None}
 
 
-def test_build_logic_fields_tracks_logic_keys():
-    """Emission order and ``(python_attr, wire_name)`` pairs must match ``_LOGIC_KEYS``.
+def test_build_logic_fields_tracks_logic_operators():
+    """Emission order and ``(python_attr, wire_name)`` pairs must match ``LOGIC_OPERATORS``.
 
     ``FilterSet._normalize_input`` maps the same constant onto django-filter
     wire keys; re-spelling the pairs in ``_build_logic_fields`` would let the
     input surface and the runtime normalizer diverge.
     """
     triples = _build_logic_fields("X")
-    assert [(python_attr, kwargs["name"]) for python_attr, _, kwargs in triples] == list(
-        _LOGIC_KEYS,
-    )
+    assert [(python_attr, kwargs["name"]) for python_attr, _, kwargs in triples] == [
+        (op.python_attr, op.wire_name) for op in LOGIC_OPERATORS
+    ]
+
+
+def test_logic_operator_descriptors_and_mappings():
+    """Descriptors encapsulate python attr, wire name, sequence cardinality, and Q compose."""
+    from types import MappingProxyType
+
+    assert LOGIC_OPERATORS == (LOGIC_OP_AND, LOGIC_OP_OR, LOGIC_OP_NOT)
+    assert LOGIC_OPERATORS_BY_WIRE == {"and": LOGIC_OP_AND, "or": LOGIC_OP_OR, "not": LOGIC_OP_NOT}
+    assert LOGIC_OPERATORS_BY_PYTHON_ATTR == {
+        "and_": LOGIC_OP_AND,
+        "or_": LOGIC_OP_OR,
+        "not_": LOGIC_OP_NOT,
+    }
+    assert isinstance(LOGIC_OPERATORS_BY_WIRE, MappingProxyType)
+    assert isinstance(LOGIC_OPERATORS_BY_PYTHON_ATTR, MappingProxyType)
+    with pytest.raises(TypeError):
+        LOGIC_OPERATORS_BY_WIRE["custom"] = LOGIC_OP_AND  # type: ignore[index]
+    with pytest.raises(TypeError):
+        LOGIC_OPERATORS_BY_PYTHON_ATTR["custom_"] = LOGIC_OP_AND  # type: ignore[index]
+    assert LOGIC_OP_AND.is_sequence is True
+    assert LOGIC_OP_OR.is_sequence is True
+    assert LOGIC_OP_NOT.is_sequence is False
+
+
+def test_logic_operator_composition_semantics():
+    """Each operator compose function builds the expected Django Q structure."""
+    q1 = models.Q(name="a")
+    q2 = models.Q(name="b")
+
+    # and_ compose
+    assert LOGIC_OP_AND.compose([]) == models.Q()
+    assert LOGIC_OP_AND.compose([q1]) == models.Q(name="a")
+    assert LOGIC_OP_AND.compose([q1, q2]) == (models.Q(name="a") & models.Q(name="b"))
+
+    # or_ compose
+    assert LOGIC_OP_OR.compose([]) == models.Q()
+    assert LOGIC_OP_OR.compose([q1, q2]) == (models.Q(name="a") | models.Q(name="b"))
+
+    # not_ compose
+    assert LOGIC_OP_NOT.compose([]) == models.Q()
+    assert LOGIC_OP_NOT.compose([q1]) == ~models.Q(name="a")
 
 
 # ---------------------------------------------------------------------------
@@ -801,44 +846,6 @@ def test_filter_input_type_rejects_non_filterset():
 
     with pytest.raises(TypeError):
         filter_input_type(None)
-
-
-# ---------------------------------------------------------------------------
-# _safe_repr - diagnostic rendering of a hostile value
-# ---------------------------------------------------------------------------
-
-
-def test_filter_diagnostic_repr_falls_back_for_hostile_values_and_type_metadata():
-    """A diagnostic message can never be blocked or corrupted by the value it names.
-
-    Both fallback rungs return the same sentinel: a ``__repr__`` that raises drops
-    to the type name, and a ``__name__`` that is unavailable OR is not a string
-    drops further to the literal ``"object"``.
-    """
-
-    class _HostileNameMeta(type):
-        def __getattribute__(cls, name: str):
-            if name == "__name__":
-                raise RuntimeError("name unavailable")
-            return super().__getattribute__(name)
-
-    class _HostileValue(metaclass=_HostileNameMeta):
-        def __repr__(self) -> str:
-            raise RuntimeError("repr unavailable")
-
-    assert _safe_repr(_HostileValue()) == "<unprintable object>"
-
-    class _NonStringNameMeta(type):
-        def __getattribute__(cls, name: str):
-            if name == "__name__":
-                return 42
-            return super().__getattribute__(name)
-
-    class _NonStringName(metaclass=_NonStringNameMeta):
-        def __repr__(self) -> str:
-            raise RuntimeError("repr unavailable")
-
-    assert _safe_repr(_NonStringName()) == "<unprintable object>"
 
 
 # ---------------------------------------------------------------------------

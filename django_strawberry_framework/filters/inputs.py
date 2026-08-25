@@ -22,10 +22,13 @@ import decimal
 import enum
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
+from django.db import models
 from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
 from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
@@ -33,7 +36,7 @@ from django_filters.utils import get_model_field
 from strawberry import UNSET, relay
 
 from ..conf import hide_flat_filters_setting
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..registry import register_subsystem_clear
 from ..utils.converters import MRO_CONTINUE, convert_with_mro
 from ..utils.input_values import is_inactive_value
@@ -125,15 +128,75 @@ LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-# Logical-operator keys per the cookbook's tree-form contract. Single
-# source of truth for the ``and_`` / ``or_`` / ``not_`` Python-attr <->
-# ``and`` / ``or`` / ``not`` GraphQL-name pairing. ``sets.py`` imports
-# this tuple for ``FilterSet._normalize_input`` (mapping the Python attrs
-# onto the form-data keys ``django-filter`` recognizes); ``_build_logic_fields``
-# iterates the same pairs to emit the self-referential input fields whose
-# GraphQL surface names land through ``optional_field_kwargs`` because
-# ``and`` / ``or`` / ``not`` cannot be dataclass field names.
-_LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("not_", "not"))
+def _compose_and(branch_qs: list[models.Q]) -> models.Q:
+    """Compose branch Q objects with logical AND."""
+    q = models.Q()
+    for branch_q in branch_qs:
+        q &= branch_q
+    return q
+
+
+def _compose_or(branch_qs: list[models.Q]) -> models.Q:
+    """Compose branch Q objects with logical OR."""
+    if not branch_qs:
+        return models.Q()
+    q = models.Q()
+    for branch_q in branch_qs:
+        q |= branch_q
+    return q
+
+
+def _compose_not(branch_qs: list[models.Q]) -> models.Q:
+    """Compose branch Q objects with logical NOT."""
+    if not branch_qs:
+        return models.Q()
+    return ~branch_qs[0]
+
+
+@dataclass(frozen=True, slots=True)
+class LogicOperatorDescriptor:
+    """Authoritative descriptor for a filter logical operator.
+
+    Encapsulates the Python attribute name, wire name, cardinality (sequence vs
+    single-element), and Django Q composition semantics in a single immutable record.
+    """
+
+    python_attr: str
+    wire_name: str
+    is_sequence: bool
+    compose: Callable[[list[models.Q]], models.Q]
+
+
+LOGIC_OP_AND = LogicOperatorDescriptor(
+    python_attr="and_",
+    wire_name="and",
+    is_sequence=True,
+    compose=_compose_and,
+)
+
+LOGIC_OP_OR = LogicOperatorDescriptor(
+    python_attr="or_",
+    wire_name="or",
+    is_sequence=True,
+    compose=_compose_or,
+)
+
+LOGIC_OP_NOT = LogicOperatorDescriptor(
+    python_attr="not_",
+    wire_name="not",
+    is_sequence=False,
+    compose=_compose_not,
+)
+
+LOGIC_OPERATORS: tuple[LogicOperatorDescriptor, ...] = (LOGIC_OP_AND, LOGIC_OP_OR, LOGIC_OP_NOT)
+
+LOGIC_OPERATORS_BY_WIRE: Mapping[str, LogicOperatorDescriptor] = MappingProxyType(
+    {op.wire_name: op for op in LOGIC_OPERATORS},
+)
+
+LOGIC_OPERATORS_BY_PYTHON_ATTR: Mapping[str, LogicOperatorDescriptor] = MappingProxyType(
+    {op.python_attr: op for op in LOGIC_OPERATORS},
+)
 
 
 # Provenance table populated by ``_build_input_fields`` and consulted at
@@ -176,20 +239,6 @@ _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
 # ---------------------------------------------------------------------------
 
 
-def _safe_repr(value: Any) -> str:
-    """Render a diagnostic value without allowing a hostile ``__repr__`` to escape."""
-    try:
-        return repr(value)
-    except BaseException:
-        try:
-            type_name = type(value).__name__
-        except BaseException:
-            type_name = "object"
-        if not isinstance(type_name, str):
-            type_name = "object"
-        return f"<unprintable {type_name}>"
-
-
 # Pascal-case helper for input-class names. The conversion AND the
 # no-word-character emptiness check both live in the shared
 # ``utils.strings.pascal_case_or_raise`` (single-sited, shared with
@@ -212,7 +261,7 @@ def _pascal_case(name: str) -> str:
     return pascal_case_or_raise(
         name,
         make_error=lambda bad: ConfigurationError(
-            f"_pascal_case received {_safe_repr(bad)} which contains no word "
+            f"_pascal_case received {_safe_arg_repr(bad)} which contains no word "
             "characters; rename the RangeFilter's `field_name=` so its "
             "name has at least one alphanumeric token.",
         ),
@@ -308,7 +357,7 @@ def _choice_enum_from_filter(
 
     if model_field is None or not getattr(model_field, "choices", None):
         raise ConfigurationError(
-            f"ChoiceFilter on {_safe_repr(filter_instance)} is not backed by a Django "
+            f"ChoiceFilter on {_safe_arg_repr(filter_instance)} is not backed by a Django "
             "`Choices`-derived enum; wrap the choices through "
             "`django.db.models.TextChoices` / `IntegerChoices` or register a "
             "custom scalar via `SCALAR_MAP`.",
@@ -396,7 +445,7 @@ def _unexpected_filter_dispatch(obj: Any) -> ConfigurationError:
     contract if a handler returns ``MRO_CONTINUE`` all the way through.
     """
     return ConfigurationError(
-        f"internal: filter input dispatch reached fallthrough for {_safe_repr(obj)}",
+        f"internal: filter input dispatch reached fallthrough for {_safe_arg_repr(obj)}",
     )
 
 
@@ -463,7 +512,7 @@ def convert_filter_to_input_annotation(
         method = getattr(matched, "method", None)
         if method is not None and form_field is None:
             raise ConfigurationError(
-                f"Filter(method={_safe_repr(method)}) on {_safe_repr(matched)} exposes no "
+                f"Filter(method={_safe_arg_repr(method)}) on {_safe_arg_repr(matched)} exposes no "
                 "form field; declare an explicit `Filter(method=..., field_class=...)` "
                 "or wrap the method on a typed filter primitive.",
             )
@@ -742,30 +791,26 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 
 
 def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]:
-    """Return ``(python_attr, annotation, field_kwargs)`` triples for ``and_`` / ``or_`` / ``not_``.
+    """Return ``(python_attr, annotation, field_kwargs)`` triples for logical operators.
 
-    Names come from ``_LOGIC_KEYS`` (the same pairing ``FilterSet._normalize_input``
-    consumes) so a new logical operator cannot land in the runtime map without
-    also being emitted on the generated input. The annotations follow the
-    INSIDE-list shape: the ``Annotated[...]`` wraps the
-    forward-reference string directly, and the ``list[...]`` (for ``and_`` /
-    ``or_``) wraps the ``Annotated[...]`` -- NOT the other way around.
-    ``not_`` is a single self-ref. GraphQL surface names ride through
+    Operators come from ``LOGIC_OPERATORS`` so adding an operator automatically
+    emits the field on the generated input without parallel edits. The annotations
+    follow the INSIDE-list shape: the ``Annotated[...]`` wraps the
+    forward-reference string directly, and the ``list[...]`` (for sequence operators)
+    wraps the ``Annotated[...]`` -- NOT the other way around. Non-sequence operators
+    use a single self-ref. GraphQL surface names ride through
     ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
     wire tokens are Python keywords and cannot be dataclass field names.
     """
     self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
     list_ref = list[self_ref]
-    # ``and_`` / ``or_`` take a list of filter inputs; ``not_`` takes one. Arity
-    # is the only per-key divergence from ``_LOGIC_KEYS``'s name pairing.
-    list_attrs = frozenset({"and_", "or_"})
     return [
         (
-            python_attr,
-            (list_ref if python_attr in list_attrs else self_ref) | None,
-            optional_field_kwargs(python_attr, wire_name),
+            op.python_attr,
+            (list_ref if op.is_sequence else self_ref) | None,
+            optional_field_kwargs(op.python_attr, op.wire_name),
         )
-        for python_attr, wire_name in _LOGIC_KEYS
+        for op in LOGIC_OPERATORS
     ]
 
 

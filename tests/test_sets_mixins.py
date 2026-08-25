@@ -313,7 +313,13 @@ def test_set_lifecycle_attrs():
     assert lifecycle.cache == "_cache"
     assert lifecycle.guard == "_guard"
     assert lifecycle.extra == ("_extra1", "_extra2")
-    assert lifecycle.binding_attrs == ("_owner", "_cache", "_guard", "_extra1", "_extra2")
+    assert lifecycle.binding_attrs == (
+        "_owner",
+        "_cache",
+        "_guard",
+        "_extra1",
+        "_extra2",
+    )
 
 
 def test_active_input_permission_mixin_hooks():

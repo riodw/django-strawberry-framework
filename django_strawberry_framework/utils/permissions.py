@@ -34,6 +34,7 @@ from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError, _safe_type_name
 from .input_values import (
+    DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LEAF,
     RELATED,
     SetInputTraversal,
@@ -56,16 +57,6 @@ _GATE_ASYNC_RECOURSE = (
     "an async hook; redefine check_<field>_permission as a sync method (def, not "
     "async def)."
 )
-
-# Fallback cap on the RELATED-branch recursion when a set defines no
-# ``_MAX_LOGIC_DEPTH`` of its own (``OrderSet`` -- ordering has no logical
-# operator-bag, so it never grew the filter side's cap). A self-referential
-# ``RelatedFilter`` / ``RelatedOrder`` (e.g. ``CardFilter.dependencies`` pointing
-# back at ``CardFilter``) lets a client nest the same branch to arbitrary depth;
-# without a cap the input-driven recursion here bottoms out in a raw
-# ``RecursionError`` (a 500) instead of a typed, catchable ``ConfigurationError``.
-# Mirrors ``FilterSet._MAX_LOGIC_DEPTH`` so the two sides share one budget.
-_MAX_RELATED_RECURSION_DEPTH = 8
 
 
 @lru_cache(maxsize=2048)
@@ -708,7 +699,7 @@ def run_active_input_permission_checks(
     ``depth + 1``). A self-referential related branch would otherwise recurse
     input-deep and blow the stack; the cap converts that into a typed
     ``ConfigurationError`` at the source. The per-set cap is ``_MAX_LOGIC_DEPTH``
-    when the set defines one (``FilterSet``) and ``_MAX_RELATED_RECURSION_DEPTH``
+    when the set defines one (``FilterSet``) and ``DEFAULT_SET_INPUT_TRAVERSAL_DEPTH``
     otherwise (``OrderSet``), so both sides share one budget.
 
     ``target_attr`` names the attribute on each related object that resolves the
@@ -753,7 +744,7 @@ def run_active_input_permission_checks(
             # (``CardFilter.dependencies`` -> ``CardFilter``) is capped with a
             # typed error rather than recursing input-deep into a ``RecursionError``.
             next_depth = depth + 1
-            cap = getattr(child_set, "_MAX_LOGIC_DEPTH", _MAX_RELATED_RECURSION_DEPTH)
+            cap = getattr(child_set, "_MAX_LOGIC_DEPTH", DEFAULT_SET_INPUT_TRAVERSAL_DEPTH)
             if next_depth > cap:
                 try:
                     label = getattr(child_set, "__qualname__", None)

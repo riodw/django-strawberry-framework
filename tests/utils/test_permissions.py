@@ -854,7 +854,7 @@ def test_run_active_input_permission_checks_caps_related_recursion():
     """A self-referential related branch is capped with a typed error (report Defect 5).
 
     The shared core threads a depth budget and refuses to recurse past the set's
-    cap (``_MAX_LOGIC_DEPTH`` when defined, ``_MAX_RELATED_RECURSION_DEPTH``
+    cap (``_MAX_LOGIC_DEPTH`` when defined, ``DEFAULT_SET_INPUT_TRAVERSAL_DEPTH``
     otherwise), converting an otherwise input-deep ``RecursionError`` into a
     catchable ``ConfigurationError`` at the source.
     """
@@ -996,6 +996,45 @@ def test_related_depth_error_survives_hostile_child_qualname():
             bare=object(),
             target_attr="child_set",
             related_attr="related",
+        )
+
+
+def test_run_active_input_permission_checks_falls_back_to_default_traversal_depth():
+    """When child set defines no _MAX_LOGIC_DEPTH, traversal uses DEFAULT_SET_INPUT_TRAVERSAL_DEPTH."""
+
+    class _ChildWithoutDepthCap:
+        @classmethod
+        def _run_permission_checks(
+            cls,
+            input_value,
+            request,
+            *,
+            _fired,
+            _depth,
+        ):
+            raise AssertionError("depth gate should fire before recursion")
+
+    related = type("Related", (), {"child_set": _ChildWithoutDepthCap})()
+
+    class _Parent:
+        @classmethod
+        def _active_permission_targets(cls, input_value):
+            return [], [("child", related, input_value)]
+
+    # At depth=8, next_depth=9 > DEFAULT_SET_INPUT_TRAVERSAL_DEPTH (8), raising error
+    with pytest.raises(
+        ConfigurationError,
+        match="nesting exceeded the maximum traversal depth \\(8\\)",
+    ):
+        run_active_input_permission_checks(
+            _Parent,
+            {"child": {}},
+            HttpRequest(),
+            fired={},
+            bare=object(),
+            target_attr="child_set",
+            related_attr="related",
+            depth=8,
         )
 
 

@@ -39,6 +39,12 @@ from typing import Any
 
 from ..exceptions import ConfigurationError, _safe_type_name
 
+# Default maximum traversal depth across set input graphs (logical operators and related branches).
+# Sets with custom depth requirements (e.g. FilterSet._MAX_LOGIC_DEPTH) can override the class-level
+# limit, while traversal algorithms (e.g. permission checks in utils/permissions.py) fall back to this
+# neutral default.
+DEFAULT_SET_INPUT_TRAVERSAL_DEPTH = 8
+
 # ``ActiveField.kind`` markers. A supplied top-level field is exactly one of:
 # a logical operator key (filter ``and_`` / ``or_`` / ``not_``), a related
 # branch (a ``RelatedFilter`` / ``RelatedOrder`` declaration), or a leaf. The

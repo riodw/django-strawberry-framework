@@ -17,7 +17,9 @@ import pytest
 import strawberry
 
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters.sets import FilterSet
 from django_strawberry_framework.utils.input_values import (
+    DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LEAF,
     LOGIC,
     RELATED,
@@ -401,3 +403,9 @@ def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapp
     fields = list(iter_active_fields(_Set, [None, {"name": "x"}], config))
 
     assert [(field.python_attr, field.kind) for field in fields] == [("name", LEAF)]
+
+
+def test_default_set_input_traversal_depth():
+    """DEFAULT_SET_INPUT_TRAVERSAL_DEPTH provides a neutral recursion ceiling across set families."""
+    assert DEFAULT_SET_INPUT_TRAVERSAL_DEPTH == 8
+    assert FilterSet._MAX_LOGIC_DEPTH == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH

@@ -243,6 +243,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
+│   ├── operations.py             # Canonical mutation operation descriptors (spec-036, spec-038, spec-039).
 │   ├── permissions.py            # Shared mutation authorization: permission execution, model permissions, and model-less deny-by-default.
 │   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036).
 │   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).
@@ -367,6 +368,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
+│   ├── operations.py             # Canonical mutation operation descriptors (spec-036, spec-038, spec-039).
 │   ├── permissions.py            # Shared mutation authorization: permission execution, model permissions, and model-less deny-by-default.
 │   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036).
 │   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).

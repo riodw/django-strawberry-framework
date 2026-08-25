@@ -98,13 +98,17 @@ from .plans import (
     order_entry_name_and_direction,
 )
 
+#: The stem prefix for synthesized lateral SQL table aliases and columns.
+#: Single root source of truth for the package-owned lateral SQL namespace.
+LATERAL_SQL_STEM = "__dst"
+
 #: The typed parent-relation alias/column the lateral SQL binds parent ids to.
-#: The ``__dst`` prefix keeps them out of any model's column namespace.
-LATERAL_PARENT_ALIAS = "__dst_parents"
-LATERAL_PARENT_COLUMN = "__dst_parent_id"
-LATERAL_WINDOW_ALIAS = "__dst_window"
-LATERAL_CHILD_ALIAS = "__dst_child"
-LATERAL_THROUGH_ALIAS = "__dst_through"
+#: Derived from ``LATERAL_SQL_STEM`` so changing the SQL namespace is a single edit.
+LATERAL_PARENT_ALIAS = f"{LATERAL_SQL_STEM}_parents"
+LATERAL_PARENT_COLUMN = f"{LATERAL_SQL_STEM}_parent_id"
+LATERAL_WINDOW_ALIAS = f"{LATERAL_SQL_STEM}_window"
+LATERAL_CHILD_ALIAS = f"{LATERAL_SQL_STEM}_child"
+LATERAL_THROUGH_ALIAS = f"{LATERAL_SQL_STEM}_through"
 
 # Django scalar field identities that psycopg can safely adapt as one Postgres
 # array parameter after per-element ``get_db_prep_value``. Unknown/custom and

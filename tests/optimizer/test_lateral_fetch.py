@@ -1454,3 +1454,21 @@ def test_build_window_spec_unsupported_shape_returns_none():
     bad_join = dataclasses.replace(req.join, lateral_shape="UNSUPPORTED_SHAPE")
     req_bad = dataclasses.replace(req, join=bad_join)
     assert _build_lateral_spec(req_bad) is None
+
+
+def test_lateral_sql_namespace_derivation():
+    """All lateral SQL aliases and column names derive from the single LATERAL_SQL_STEM."""
+    from django_strawberry_framework.optimizer.lateral_fetch import (
+        LATERAL_CHILD_ALIAS,
+        LATERAL_PARENT_ALIAS,
+        LATERAL_PARENT_COLUMN,
+        LATERAL_SQL_STEM,
+        LATERAL_THROUGH_ALIAS,
+        LATERAL_WINDOW_ALIAS,
+    )
+
+    assert f"{LATERAL_SQL_STEM}_parents" == LATERAL_PARENT_ALIAS
+    assert f"{LATERAL_SQL_STEM}_parent_id" == LATERAL_PARENT_COLUMN
+    assert f"{LATERAL_SQL_STEM}_window" == LATERAL_WINDOW_ALIAS
+    assert f"{LATERAL_SQL_STEM}_child" == LATERAL_CHILD_ALIAS
+    assert f"{LATERAL_SQL_STEM}_through" == LATERAL_THROUGH_ALIAS

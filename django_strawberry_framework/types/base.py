@@ -51,6 +51,7 @@ from strawberry.relay.types import NodeIDPrivate
 from strawberry.types.auto import StrawberryAuto
 from strawberry.types.field import StrawberryField
 
+from ..conf import RELAY_GLOBALID_STRATEGY_KEY
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
@@ -406,7 +407,7 @@ def _validate_globalid_strategy(
         return None
     is_meta = source == "meta"
     subject = (
-        f"{meta.model.__name__}.Meta.globalid_strategy" if is_meta else "RELAY_GLOBALID_STRATEGY"
+        f"{meta.model.__name__}.Meta.globalid_strategy" if is_meta else RELAY_GLOBALID_STRATEGY_KEY
     )
     if isinstance(value, str):
         if value not in STRING_GLOBALID_STRATEGIES:

@@ -8,9 +8,15 @@ descriptor itself to be hashable. ``TypeRegistry.discard_pending`` still
 matches records by identity, independently of equality or hashing.
 """
 
+from dataclasses import FrozenInstanceError
+
+import pytest
 from apps.products.models import Category, Item
 
-from django_strawberry_framework.types.relations import PendingRelation
+from django_strawberry_framework.types.relations import (
+    PendingRelation,
+    PendingRelationAnnotation,
+)
 
 
 class _NonHashableField:
@@ -122,3 +128,19 @@ def test_pending_relation_hash_falls_back_when_value_and_type_hashing_fail():
             hash(False),
         ),
     )
+
+
+def test_pending_relation_annotation_repr():
+    """``PendingRelationAnnotation`` provides a diagnostic repr for unfinalized schemas."""
+    assert (
+        repr(PendingRelationAnnotation)
+        == "<unfinalized DjangoType relation; call finalize_django_types() before constructing strawberry.Schema>"
+    )
+
+
+def test_pending_relation_is_frozen_dataclass():
+    """``PendingRelation`` attributes cannot be mutated post-construction."""
+    pending = _build_pending()
+
+    with pytest.raises(FrozenInstanceError):
+        pending.field_name = "mutated"  # type: ignore[misc]

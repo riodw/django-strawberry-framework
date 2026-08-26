@@ -5,6 +5,8 @@ Mirrors ``django_strawberry_framework/testing/relay.py`` per the
 Decision 11 - no card conflict for this pair).
 """
 
+import uuid
+
 import pytest
 import strawberry
 from apps.products import services
@@ -301,3 +303,23 @@ def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():
 
     with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
         global_id_for(_HostileClass, 1)
+
+
+def test_global_id_for_accepts_various_id_types_and_round_trips():
+    """global_id_for accepts int, str, and UUID objects, and round-trips through decode_global_id."""
+    category_node = _make_node_type("CategoryNode")
+    finalize_django_types()
+
+    # int id
+    gid_int = global_id_for(category_node, 10)
+    assert decode_global_id(gid_int) == (category_node, "10")
+    assert decode_global_id(relay.GlobalID.from_id(gid_int)) == (category_node, "10")
+
+    # str id
+    gid_str = global_id_for(category_node, "slug-abc-123")
+    assert decode_global_id(gid_str) == (category_node, "slug-abc-123")
+
+    # UUID id
+    uid = uuid.uuid4()
+    gid_uuid = global_id_for(category_node, uid)
+    assert decode_global_id(gid_uuid) == (category_node, str(uid))

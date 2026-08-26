@@ -283,9 +283,15 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
     class _UnreadableMroOrigin(metaclass=_UnreadableMroMeta):
         pass
 
+    class _HostileClassProperty:
+        @property
+        def __class__(self):
+            raise RuntimeError("class exploded")
+
     assert origin_has_custom_id_resolver(_HostileMro, "id") is True
     assert origin_has_custom_id_resolver(_HostileDict, "id") is True
     assert origin_has_custom_id_resolver(_UnreadableMroOrigin, "id") is True
+    assert origin_has_custom_id_resolver(_HostileClassProperty(), "id") is True
 
 
 def test_custom_id_detection_fails_closed_for_hostile_relay_resolver():

@@ -2507,3 +2507,49 @@ def test_validate_optimizer_hints_non_string_keys():
         match="Meta.optimizer_hints keys must be field name strings",
     ):
         _validate_optimizer_hints({123: OptimizerHint()}, fields=(), model=Category)
+
+
+def test_post_finalization_registration_raises():
+    class FirstCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    assert registry.is_finalized()
+
+    with pytest.raises(
+        ConfigurationError,
+        match="finalize_django_types\\(\\) already ran; cannot register LateCategoryType after finalization",
+    ):
+
+        class LateCategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+
+def test_optimizer_hints_unknown_field_raises():
+    with pytest.raises(
+        ConfigurationError,
+        match="Category.Meta.optimizer_hints names unknown fields: \\['nonexistent'\\]. Available:",
+    ):
+
+        class BadHintCategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                optimizer_hints = {"nonexistent": OptimizerHint.select_related()}
+
+
+def test_optimizer_hints_bad_value_raises():
+    with pytest.raises(
+        ConfigurationError,
+        match="optimizer_hints values must be OptimizerHint instances, got non-OptimizerHint for: \\['items'\\]",
+    ):
+
+        class BadValueCategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name", "items")
+                optimizer_hints = {"items": "not_a_hint"}  # type: ignore[dict-item]

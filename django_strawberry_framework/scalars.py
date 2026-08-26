@@ -109,10 +109,12 @@ def _serialize_bigint(value: Any) -> str:
     if isinstance(value, bool):
         raise TypeError(f"BigInt cannot serialize bool value {value!r}")
     if isinstance(value, int):
-        # ``str(value)`` dispatches to a subclass's override.  The scalar wire
-        # format is always canonical decimal, so bypass consumer-supplied
-        # ``__str__`` implementations on otherwise valid int subclasses.
-        return int.__str__(value)
+        # ``str(value)`` dispatches to a subclass's override. In CPython,
+        # ``int.__str__`` inherits ``object.__str__`` which delegates to
+        # ``tp_repr`` (the subclass's ``__repr__``), so we normalize via
+        # ``int.__repr__`` to bypass consumer-supplied ``__repr__`` / ``__str__``
+        # implementations and guarantee canonical decimal serialization.
+        return int.__repr__(value)
     raise TypeError(f"BigInt cannot serialize {_safe_type_name(value)}")
 
 

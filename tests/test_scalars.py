@@ -66,14 +66,30 @@ def test_bigint_int_subclasses_are_normalized_before_serialization():
         def __int__(self):
             raise RuntimeError("int exploded")
 
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
         def __str__(self):
             return "forged"
+
+    class _HexInt(int):
+        def __repr__(self):
+            return hex(self)
+
+        def __str__(self):
+            return hex(self)
 
     value = _HostileInt(7)
     parsed = _parse_bigint(value)
     assert parsed == 7
     assert type(parsed) is int
     assert _serialize_bigint(value) == "7"
+
+    hex_val = _HexInt(255)
+    parsed_hex = _parse_bigint(hex_val)
+    assert parsed_hex == 255
+    assert type(parsed_hex) is int
+    assert _serialize_bigint(hex_val) == "255"
 
 
 # ---------------------------------------------------------------------------

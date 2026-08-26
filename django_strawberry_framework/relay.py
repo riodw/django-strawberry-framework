@@ -57,6 +57,7 @@ from typing import Any, NamedTuple
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 from graphql import GraphQLError
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
@@ -119,6 +120,29 @@ def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
         ) from exc
 
 
+def _node_id_slot(resolved_type: type) -> tuple[str, models.Field | None]:
+    """Resolve a Relay type's id slot to ``(id_attr, concrete field or None)``.
+
+    The single statement of "which concrete model column backs the GlobalID id
+    slot" shared by the READ coercer (``_coerce_pk_or_none``, which needs the
+    field to coerce against) and the WRITE pk-mapper (``_resolve_real_pk``,
+    which needs the attr name to filter on plus its concreteness):
+    ``resolved_type.resolve_id_attr()`` names the slot - the literal ``"pk"``
+    maps to ``model._meta.pk``, any other value resolves through
+    ``model._meta.get_field`` - and a consumer ``relay.NodeID[...]`` over a
+    NON-concrete attr yields ``None`` (no column to coerce or filter on; both
+    consumers fall through with the raw literal, the pre-032 behavior).
+    """
+    id_attr = resolved_type.resolve_id_attr()
+    model = model_for(resolved_type)
+    if id_attr == "pk":
+        return id_attr, model._meta.pk
+    try:
+        return id_attr, model._meta.get_field(id_attr)
+    except FieldDoesNotExist:
+        return id_attr, None
+
+
 def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     """Coerce ``node_id`` to the resolution field's Python type; ``None`` if uncoercible.
 
@@ -135,28 +159,23 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     ``utils/querysets.py::coerce_field_value_or_none`` primitive; this function's only job is
     picking WHICH field to coerce against.
 
-    The coercion field is the SAME one the resolution filters on -
-    ``resolved_type.resolve_id_attr()`` (the value
+    The coercion field is the SAME one the resolution filters on - the concrete
+    field behind ``resolved_type.resolve_id_attr()`` (the value
     ``_resolve_node(s)_default`` build their ``{id_attr: ...}`` / ``__in``
-    filter from) - NOT ``model._meta.pk``. They coincide for the default
-    (``"pk"``) but diverge for a consumer ``id: relay.NodeID[...]`` annotation,
-    which makes the id slot a non-pk column (and is the documented composite-pk
-    escape hatch where ``_meta.pk`` is a ``CompositePrimaryKey`` with no
-    single-column ``to_python``). Coercing against ``_meta.pk`` there would
-    mis-type the value (``"007"`` -> ``7`` -> filters ``code=7`` !=``"007"``) or
-    spuriously reject an existing row. ``"pk"`` maps to the concrete pk field; a
-    NodeID attr that is not a concrete model field skips coercion and passes the
-    raw string (pre-032 behavior - Django handles string lookups on the column).
+    filter from), NOT ``model._meta.pk`` unconditionally. They coincide for the
+    default (``"pk"``) but diverge for a consumer ``id: relay.NodeID[...]``
+    annotation, which makes the id slot a non-pk column (and is the documented
+    composite-pk escape hatch where ``_meta.pk`` is a ``CompositePrimaryKey``
+    with no single-column ``to_python``). Coercing against ``_meta.pk`` there
+    would mis-type the value (``"007"`` -> ``7`` -> filters ``code=7``
+    !=``"007"``) or spuriously reject an existing row. The slot-to-field
+    mapping (including a NodeID attr that is not a concrete model field, which
+    skips coercion and passes the raw string) is the shared
+    ``_node_id_slot`` rule.
     """
-    model = model_for(resolved_type)
-    id_attr = resolved_type.resolve_id_attr()
-    if id_attr == "pk":
-        field = model._meta.pk
-    else:
-        try:
-            field = model._meta.get_field(id_attr)
-        except FieldDoesNotExist:
-            return node_id
+    field = _node_id_slot(resolved_type)[1]
+    if field is None:
+        return node_id
     return coerce_field_value_or_none(field, node_id)
 
 
@@ -239,17 +258,12 @@ def _resolve_real_pk(
     transaction alias; when omitted, an active mutation write pipeline supplies its
     pinned alias, while standalone decode callers retain the default-manager behavior.
     The default (``id_attr == "pk"``: the coerced value
-    already IS the pk) and a NodeID over a non-concrete attr (no column to filter,
-    mirroring ``_coerce_pk_or_none``'s ``FieldDoesNotExist`` fall-through) both
-    return the value unchanged with no query.
+    already IS the pk) and a NodeID over a non-concrete attr (no column to
+    filter - the ``_node_id_slot`` fall-through ``_coerce_pk_or_none`` shares)
+    both return the value unchanged with no query.
     """
-    id_attr = resolved_type.resolve_id_attr()
-    if id_attr == "pk":
-        return coerced_id
-    model = model_for(resolved_type)
-    try:
-        model._meta.get_field(id_attr)
-    except FieldDoesNotExist:
+    id_attr, field = _node_id_slot(resolved_type)
+    if id_attr == "pk" or field is None:
         return coerced_id
     if using is None:
         # Relation and serializer decoders call ``decode_model_global_id`` through
@@ -262,7 +276,7 @@ def _resolve_real_pk(
 
         pipeline = current_write_pipeline()
         using = None if pipeline is None else pipeline.alias
-    manager = model._default_manager
+    manager = model_for(resolved_type)._default_manager
     if using is not None:
         manager = manager.using(using)
     return manager.filter(**{id_attr: coerced_id}).values_list("pk", flat=True).first()

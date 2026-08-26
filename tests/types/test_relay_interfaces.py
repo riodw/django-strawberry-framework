@@ -2388,6 +2388,26 @@ def test_invalid_setting_raises_when_all_types_meta_override(settings):
         finalize_django_types()
 
 
+def test_setting_error_framing_tracks_the_conf_key_constant(settings):
+    """The setting-path error subject IS ``conf.RELAY_GLOBALID_STRATEGY_KEY``.
+
+    Pins the single-source rule: the validator names the setting through
+    conf's key constant rather than a second hard-coded literal, so a
+    settings-key rename moves the error framing in the same change instead
+    of leaving a stale label pointing at a key that no longer exists.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {conf.RELAY_GLOBALID_STRATEGY_KEY: "nonsense"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    with pytest.raises(ConfigurationError, match=conf.RELAY_GLOBALID_STRATEGY_KEY):
+        finalize_django_types()
+
+
 def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(settings):
     """An invalid setting raises even when the only type overrides ``resolve_typename``."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}

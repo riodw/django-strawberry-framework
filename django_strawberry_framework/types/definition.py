@@ -411,7 +411,11 @@ def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
     from strawberry import relay
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
-    if not (isinstance(origin, type) and issubclass(origin, relay.Node)):
+    try:
+        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)
+    except BaseException:
+        return True
+    if not is_node:
         return False
     try:
         id_attr = origin.resolve_id_attr()

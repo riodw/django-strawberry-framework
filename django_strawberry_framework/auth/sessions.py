@@ -51,7 +51,11 @@ from typing import Any
 
 from django.http import HttpRequest
 
-from ..exceptions import ConfigurationError
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_type_name,
+)
 from ..utils.imports import require_optional_module
 from ..utils.permissions import ChannelsRequestAdapter
 from ..utils.sessions import session_store_class
@@ -113,27 +117,94 @@ def classify_transport(request: Any) -> Transport:
     object, and every missing / unrecognized scope type, is rejected with an
     actionable ``ConfigurationError``.
     """
-    if isinstance(request, ChannelsRequestAdapter):
+    try:
+        is_channels = isinstance(request, ChannelsRequestAdapter)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not classify the request transport (got "
+            f"{_safe_type_name(request)}); expected a Django HttpRequest or a Strawberry "
+            "Channels request adapter.",
+        ) from exc
+    if is_channels:
         require_channels()
-        scope_type = request.scope.get("type")
-        if scope_type == "http":
+        try:
+            scope = request.scope
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary could not read the Channels request scope.",
+            ) from exc
+        try:
+            scope_type = scope.get("type")
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary could not read the Channels request scope's `type`.",
+            ) from exc
+        try:
+            is_http = scope_type == "http"
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary received a Channels request scope with an "
+                f'unsupported `type` ({_safe_arg_repr(scope_type)}); expected `"http"` or '
+                '`"websocket"`. Serve GraphQL over HTTP through DjangoGraphQLView in your '
+                "URLconf, and over WebSocket through DjangoGraphQLProtocolRouter, so the scope "
+                "carries a recognized protocol type.",
+            ) from exc
+        if is_http:
             return Transport.CHANNELS_HTTP
-        if scope_type == "websocket":
+        try:
+            is_websocket = scope_type == "websocket"
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary received a Channels request scope with an "
+                f'unsupported `type` ({_safe_arg_repr(scope_type)}); expected `"http"` or '
+                '`"websocket"`. Serve GraphQL over HTTP through DjangoGraphQLView in your '
+                "URLconf, and over WebSocket through DjangoGraphQLProtocolRouter, so the scope "
+                "carries a recognized protocol type.",
+            ) from exc
+        if is_websocket:
             return Transport.CHANNELS_WEBSOCKET
         raise ConfigurationError(
             "The auth session boundary received a Channels request scope with an "
-            f'unsupported `type` ({scope_type!r}); expected `"http"` or `"websocket"`. '
-            "Serve GraphQL over HTTP through DjangoGraphQLView in your URLconf, and "
-            "over WebSocket through DjangoGraphQLProtocolRouter, so the scope carries "
-            "a recognized protocol type.",
+            f'unsupported `type` ({_safe_arg_repr(scope_type)}); expected `"http"` or '
+            '`"websocket"`. Serve GraphQL over HTTP through DjangoGraphQLView in your '
+            "URLconf, and over WebSocket through DjangoGraphQLProtocolRouter, so the scope "
+            "carries a recognized protocol type.",
         )
-    if isinstance(request, HttpRequest):
+    try:
+        is_django = isinstance(request, HttpRequest)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not classify the request transport (got "
+            f"{_safe_type_name(request)}); expected a Django HttpRequest or a Strawberry "
+            "Channels request adapter.",
+        ) from exc
+    if is_django:
         return Transport.DJANGO_HTTP
     raise ConfigurationError(
         "The auth session boundary could not classify the request transport (got "
-        f"{type(request).__name__}); expected a Django HttpRequest or a Strawberry "
+        f"{_safe_type_name(request)}); expected a Django HttpRequest or a Strawberry "
         "Channels request adapter.",
     )
+
+
+def _safe_transport_label(transport: Any) -> str:
+    """Render ``transport`` for an error message without trusting its dunders.
+
+    ``transport`` is expected to be a ``Transport`` enum, but the error path
+    must not propagate ``BaseException`` from a hostile ``transport.value``,
+    ``transport.__repr__``, or a ``str``-subclass ``value``. Falls back to
+    ``_safe_type_name`` so the message stays actionable.
+    """
+    try:
+        raw = transport.value  # type: ignore[union-attr]
+    except BaseException:
+        return _safe_type_name(transport)
+    try:
+        if isinstance(raw, str):
+            return str.__str__(raw)
+        return _safe_arg_repr(raw)
+    except BaseException:
+        return _safe_type_name(transport)
 
 
 def require_session(request: Any, transport: Transport) -> Any:
@@ -149,10 +220,19 @@ def require_session(request: Any, transport: Transport) -> Any:
     ``"session"`` (the failed-login byte-compatible envelope promise does not cover
     this configuration error, so its wording is otherwise free).
     """
-    session = getattr(request, "session", None)
-    if session is None:
+    try:
+        session = getattr(request, "session", None)
+    except BaseException as exc:
+        label = _safe_transport_label(transport)
         raise ConfigurationError(
-            f"The auth session boundary has no session for the {transport.value} transport; "
+            f"The auth session boundary has no session for the {label} transport; "
+            "install Django's SessionMiddleware (and, for Channels, wrap the scope in "
+            "AuthMiddlewareStack) so login/logout can mutate a real session.",
+        ) from exc
+    if session is None:
+        label = _safe_transport_label(transport)
+        raise ConfigurationError(
+            f"The auth session boundary has no session for the {label} transport; "
             "install Django's SessionMiddleware (and, for Channels, wrap the scope in "
             "AuthMiddlewareStack) so login/logout can mutate a real session.",
         )
@@ -168,11 +248,23 @@ def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[st
     communicator; it must fail loudly rather than silently fall back to an
     unserialized path (which would drop the same-scope mutation guarantee).
     """
-    scope = adapter.scope
-    if not isinstance(scope, MutableMapping):
+    try:
+        scope = adapter.scope
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not read the Channels request scope.",
+        ) from exc
+    try:
+        is_mutable = isinstance(scope, MutableMapping)
+    except BaseException as exc:
         raise ConfigurationError(
             "The auth session boundary requires a mutable Channels scope to serialize "
-            f"same-scope session mutations, but got a {type(scope).__name__}; real ASGI "
+            "same-scope session mutations, but the scope kind could not be inspected.",
+        ) from exc
+    if not is_mutable:
+        raise ConfigurationError(
+            "The auth session boundary requires a mutable Channels scope to serialize "
+            f"same-scope session mutations, but got a {_safe_type_name(scope)}; real ASGI "
             "scopes are dictionaries. Do not route auth through an immutable scope.",
         )
     return scope
@@ -202,12 +294,48 @@ async def scope_session_lock(adapter: ChannelsRequestAdapter) -> AsyncIterator[a
     only ever reach the native async body, never the bridge.
     """
     scope = _require_mutable_scope(adapter)
-    lock = scope.get(_SCOPE_LOCK_KEY)
+    try:
+        lock = scope.get(_SCOPE_LOCK_KEY)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not read the Channels request scope.",
+        ) from exc
     if lock is None:
         lock = asyncio.Lock()
-        scope[_SCOPE_LOCK_KEY] = lock
-    async with lock:
+        try:
+            scope[_SCOPE_LOCK_KEY] = lock
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary could not store the per-scope session lock.",
+            ) from exc
+    else:
+        try:
+            is_lock = isinstance(lock, asyncio.Lock)
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The auth session boundary requires an asyncio.Lock per scope, but the "
+                "stored value could not be inspected.",
+            ) from exc
+        if not is_lock:
+            raise ConfigurationError(
+                "The auth session boundary requires an asyncio.Lock per scope, but got a "
+                f"{_safe_type_name(lock)}; the per-scope lock is corrupted.",
+            )
+    try:
+        await lock.acquire()
+    except ConfigurationError:
+        raise
+    except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary's per-scope session lock could not be acquired.",
+        ) from exc
+    try:
         yield lock
+    finally:
+        if lock.locked():
+            lock.release()
 
 
 def uses_signed_cookie_sessions() -> bool:
@@ -225,7 +353,21 @@ def uses_signed_cookie_sessions() -> bool:
         SessionStore as SignedCookieSessionStore,
     )
 
-    return issubclass(session_store_class(), SignedCookieSessionStore)
+    try:
+        store_cls = session_store_class()
+    except ConfigurationError:
+        raise
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not resolve the session store class.",
+        ) from exc
+    try:
+        return issubclass(store_cls, SignedCookieSessionStore)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The auth session boundary could not inspect the session store class "
+            f"({type(exc).__name__}); check settings.SESSION_ENGINE.",
+        ) from exc
 
 
 def login_supported(transport: Transport) -> bool:

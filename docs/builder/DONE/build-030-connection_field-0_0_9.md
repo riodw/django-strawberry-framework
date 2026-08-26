@@ -139,3 +139,115 @@ Recorded here rather than left in the dispatch transcript, per `worker-0.md` `##
 - **Never commit.** Only the maintainer commits.
 - **Never branch or switch branches.**
 - **Source refs are symbol-qualified** (`path::QualifiedName`, `path::QualifiedName #"substring"`, `path #"substring"`) everywhere except these per-cycle `docs/builder/bld-*` scratchpads, where raw `path:NN` is allowed.
+
+## Final gate record (folded in from `bld-final-030.md` before its deletion)
+
+The seven per-slice / rationale / integration artifacts were deleted at close on the maintainer's
+instruction, and `bld-final-030.md` after them; **this plan is the only surviving artifact of the
+cycle.** Each reached `Status: final-accepted` first. Every `Slice N` / `integration pass` /
+`final gate` attribution elsewhere in this file names a source that no longer exists on disk — the
+claims they supported are restated here rather than left as pointers. All eight are recoverable
+from commit `6b3e1c82`, which added them; `aa23d44d` removed them.
+
+Gate commands, in `BUILD.md` order, all PASS at the final gate: `pytest --no-cov`
+(**6570 passed, 42 skipped**; a confirming `-rs` re-run 20 minutes later gave `6571 passed,
+42 skipped` — one row a concurrent session added mid-pass, which is `BUILD.md`'s "a bare count
+rots" hazard observed live); `manage.py check` (`no issues (0 silenced)`);
+`makemigrations --check --dry-run` (no changes); `ruff format --check .` (`429 files already
+formatted`); `ruff check .` (`All checks passed!`); `git diff --check` (silent);
+`check_spec_glossary.py` (`OK: 50 terms`, unchanged across the whole cycle);
+`check_trailing_commas.py --check` over the three `docs/SPECS/` files this cycle wrote — which is
+also the untracked-file gate `git diff --check` structurally cannot be; and
+`import_spec_terms --check` (`OK: 49 done cards have glossary links`, the importer never run
+without `--check`). No `--cov*` flag was used and no coverage figure was read.
+
+**The skip census corrected Worker 1's own first assumption and is recorded that way**: the
+`FAKESHOP_SHARDED` gate was expected, and two sampled rows fit it, but the real breakdown is 37
+Postgres-tier, 2 missing-`psycopg2`, 2 sharded, 1 multi-DB alias — two conforming samples read
+exactly like a measured population.
+
+**Floor verification resolves to `none`, proved inversely rather than asserted**: scope was
+conditional on a slice landing a `.py` change under `connection.py` / `types/base.py` /
+`types/definition.py` / `optimizer/extension.py`, and the cycle's footprint contains **0** `.py`
+files across all eleven paths. No floor venv was built and the shared `.venv` was not mutated.
+Hot-path: none. Boundary count: 0. **CODE GAP list: empty**, for the seventh consecutive pass.
+
+Two facts a green gate would otherwise hide are stated rather than omitted: the sweep is green over
+a tree carrying 27 concurrent-owned dirty `.py` files, and `types/base.py` — a named
+floor-verification trigger file — went dirty mid-pass from that same session, touching zero
+`030`-audited symbols. It was not reverted, edited, or tidied.
+
+Post-gate the cycle was committed as `6b3e1c82` (12 files), its deferred work homed on the board,
+and its artifacts retired by `aa23d44d`.
+
+## Deferred-work homing (Worker 0, post-gate, maintainer-requested)
+
+The next spec author's reading list, carried over in substance from the final gate's
+`### Deferred work catalog` (14 items, every one re-measured rather than inherited). Before the
+artifacts were dropped the catalog was re-derived against the seven files it claimed to have walked,
+rather than trusted: the integration pass's `### Carried items 1-9` dispositions every one, the
+final catalog is a strict superset of the ten items handed to it, and every slice's deferral
+section records `None`.
+
+### Closed — do NOT read these as deferred
+
+- **The terms-CSV `notes` content half.** 12 drifted cells reconciled by the integration pass, and
+  the parser bug behind them fixed: `csv.DictReader` — used by both `check_spec_glossary.py` and
+  the fakeshop `import_spec_terms` command — was silently truncating 8 of 50 `notes` cells at the
+  first unquoted comma. Post-fix 0 of 50 truncate. The **gate** half stays open below.
+- **The `DONE-032-0.0.9` parity row**, the `finalize_django_types()` auto-trigger deferral, and the
+  unused `[goal]` link definition — all resolved in the integration pass against four independent
+  sources apiece.
+- **`test_anonymous_inline_fragment_under_connection_field_resolves` must stay absent from the
+  spec.** Its subject is an optimizer selection-walker behaviour, not a `030` contract, and it only
+  looks like one because it lives in this card's live block. The boundary is now recorded in
+  `docs/SPECS/appx/spec-030-connection_field-0_0_9-rationale.md`, deliberately not in the spec —
+  naming it in the spec is the very thing the boundary forbids.
+- **The `[alpha]` / `docs/TREE.md` instructions are landed work, not drift.** Already stated in the
+  rationale companion, and more precisely than the artifact had it: two of the three `[alpha]`
+  mentions are instruction sites describing completed work, the third is a licensed
+  `## Current state` observation, and a sweep on the tag alone cannot tell the three apart.
+
+### Open — homed on `TODO-ALPHA-052-0.0.16` as scope bullets
+
+- **MF-1** — the three `030` glossary entries never say `totalCount` gating is directive-resolved
+  (`optimizer/selections.py::should_include`). DB-backed regenerate.
+- **MF-2 + MF-3 + MF-7 are ONE maintainer decision, not three** — the keyset / `Meta.cursor_field`
+  feature is missing all three of its documentation homes: no owning spec, no glossary heading, no
+  CHANGELOG entry. The surface is real (`ALLOWED_META_KEYS`, two-stage validation, 31 occurrences
+  in `keyset.py`, four `GraphQLError` raise sites in `connection.py`).
+- **MF-4** — the already-sliced-`QuerySet` `GraphQLError` is undocumented in both `CHANGELOG.md` and
+  `docs/GLOSSARY.md`, under five tested spellings.
+- **MF-5's gate half** — `check_spec_glossary.py` validates only `term,anchor` and never reads
+  `notes`, so that column can assert arbitrary statuses indefinitely. One decision: either `notes`
+  is contract text and needs a gate, or it is scratch and must stop asserting statuses.
+- **MF-6** — stale `docs/spec-…` paths inside kanban card **bodies**, re-derived materially wider
+  than recorded: 8 archived specs at 11 occurrences across 8 cards, against 154 correct
+  `docs/SPECS/` occurrences. **The fix needs a three-way classification, never a global replace** —
+  six further tokens must NOT be swept, three naming specs that do not exist yet (correct-in-advance
+  under `AGENTS.md` rule 26) and three pre-canonical historical names.
+- **The archive-wide inline-link-TEXT rot**, which a resolution-based checker structurally cannot
+  find: the definitions resolve while the visible text names the pre-archival path. The same
+  archival sweep produced every archived spec.
+- **The rationale-companion coverage gap** — closing `030`'s hole makes `031` the leading edge of a
+  21-spec gap (`031`-`043`, `049`-`055`, `063`); two specs carry no terms CSV either.
+
+### Open — method notes, preserved outside the board
+
+- **Card-less commits are this repo's ordinary mode**, not an anomaly — 11 in a bounded
+  `git log -S` sweep over ten symbols, none adding uncontracted surface. The hazard is sharper than
+  "the commit named no card": `6912ca92`, a card-less DRY pass, authored the single-call-site
+  invariant Slice 1's whole guard-reachability audit rests on. And a card-less commit's **doc** debt
+  is invisible to every provenance sweep — MF-3 and MF-4 are exactly that consequence.
+- **`START.md` contains the literal `<!-- LINK DEFINITIONS -->` twice**, so any checker splitting
+  body from definitions at the FIRST occurrence swallows 40 lines of live prose and reports a false
+  unused-definition. Count the delimiter, then split on the LAST. The population is "any file that
+  documents the convention" — which includes this one.
+- **This spec's revision history is not the complete record of what reshaped it.** It lists three
+  revisions and one finding round, yet four finding labels are cited from live code and tests, and
+  two shipped contracts arrived through rounds it does not record. A provenance gap only: the
+  round's contents were never recorded and **must not be reconstructed**.
+- **Decision 13's no-version-bump rule survives only because four spec sites cite
+  `tests/base/test_init.py::test_version` rather than the bare file** — the doc-wrap commit does
+  touch that file. A tidy-up shortening those citations to the filename would falsify four spec
+  sentences at once, and no gate in this repo would see it.

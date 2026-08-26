@@ -510,3 +510,223 @@ def test_explicit_settings_instance_ignores_django_delattr(settings):
     del settings.DJANGO_STRAWBERRY_FRAMEWORK
     assert s.user_settings == {"OWN": 1}
     assert s.OWN == 1
+
+
+# ---------------------------------------------------------------------------
+# Defensive hardening: hostile inputs must become ConfigurationError
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_hostile_isinstance_raises_configurationerror():
+    """``isinstance(value, Mapping)`` raising must be contained as ``ConfigurationError``."""
+
+    class Boom:
+        @property
+        def __class__(self):  # type: ignore[no-redef]
+            raise RuntimeError("hostile __class__ boom")
+
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        conf._normalize_user_settings(Boom())
+
+
+def test_normalize_hostile_iter_raises_configurationerror():
+    """``dict(value)`` raising must be contained as ``ConfigurationError``."""
+    from collections.abc import Mapping
+
+    class HostileIter(Mapping):
+        def __getitem__(self, key):
+            return 1
+
+        def __iter__(self):
+            raise RuntimeError("hostile __iter__ boom")
+
+        def __len__(self):
+            return 1
+
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        conf._normalize_user_settings(HostileIter())
+
+
+def test_normalize_hostile_iter_raising_configurationerror_propagates():
+    """A ``ConfigurationError`` from ``dict(value)`` must propagate without wrapping."""
+    from collections.abc import Mapping
+
+    class HostileConfigError(Mapping):
+        def __getitem__(self, key):
+            raise ConfigurationError("hostile config boom")
+
+        def __iter__(self):
+            yield "x"
+
+        def __len__(self):
+            return 1
+
+    with pytest.raises(ConfigurationError, match="hostile config boom"):
+        conf._normalize_user_settings(HostileConfigError())
+
+
+def test_normalize_dict_subclass_hostile_getitem_is_sanitized():
+    """A ``dict`` subclass with hostile ``__getitem__`` is copied into a plain ``dict``."""
+
+    class HostileDict(dict):
+        def __getitem__(self, key):
+            raise RuntimeError("hostile boom")
+
+    d = HostileDict({"A": 1})
+    # _normalize should copy, neutralizing the hostile descriptor
+    normalized = conf._normalize_user_settings(d)
+    assert type(normalized) is dict
+    assert normalized["A"] == 1
+    s = Settings(d)
+    # Lookup must succeed via the sanitized copy, not raise RuntimeError
+    assert s.A == 1
+
+
+def test_settings_getattr_hostile_lookup_becomes_configurationerror():
+    """A non-``KeyError`` lookup failure via ``__getattr__`` must become ``ConfigurationError``."""
+
+    class HostileLookup(dict):
+        def __getitem__(self, key):
+            raise RuntimeError("hostile lookup boom")
+
+    s = Settings.__new__(Settings)
+    # Bypass _normalize sanitization to exercise the __getattr__ containment directly
+    s._user_settings = HostileLookup({"OTHER": 1})  # type: ignore[attr-defined]
+    s._live_source = conf._LIVE_UNSET  # type: ignore[attr-defined]
+    s._django_backed = False  # type: ignore[attr-defined]
+    with pytest.raises(ConfigurationError, match="lookup of 'MISSING' failed"):
+        _ = s.MISSING
+
+
+def test_upstream_patches_enabled_liar_bool_is_not_bool():
+    """``__class__``-spoofing liar that passes ``isinstance(..., bool)`` must not disable patches."""
+    from collections.abc import Mapping
+
+    class LiarMapping(Mapping):
+        @property
+        def __class__(self):  # type: ignore[no-redef]
+            return bool
+
+        def __getitem__(self, key):
+            return False
+
+        def __iter__(self):
+            return iter([])
+
+        def __len__(self):
+            return 0
+
+        def __bool__(self):
+            return False
+
+    liar = LiarMapping()
+    assert isinstance(liar, bool)  # spoof works
+    assert type(liar) is not bool
+    s = Settings({"APPLY_UPSTREAM_PATCHES": liar})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        # Empty liar mapping -> defensive copy is {} -> defaults to True (not disabled)
+        assert upstream_patches_enabled("django") is True
+
+    class LiarScalar:
+        @property
+        def __class__(self):  # type: ignore[no-redef]
+            return bool
+
+        def __bool__(self):
+            return False
+
+    liar2 = LiarScalar()
+    assert isinstance(liar2, bool)
+    assert type(liar2) is not bool
+    s2 = Settings({"APPLY_UPSTREAM_PATCHES": liar2})
+    with mock.patch.object(conf, "settings", s2):
+        with pytest.raises(ConfigurationError, match="bool or a mapping"):
+            upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror():
+    """``isinstance(configured, Mapping)`` raising must be contained."""
+
+    class Boom:
+        @property
+        def __class__(self):  # type: ignore[no-redef]
+            raise RuntimeError("hostile __class__ boom")
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="bool or a mapping"):
+            upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror():
+    """``dict(configured)`` raising during mapping copy must be contained."""
+    from collections.abc import Mapping
+
+    class HostileIter(Mapping):
+        def __getitem__(self, key):
+            return True
+
+        def __iter__(self):
+            raise RuntimeError("hostile __iter__ boom")
+
+        def __len__(self):
+            return 1
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": HostileIter()})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="iteration failed"):
+            upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationerror():
+    """``isinstance(name, str)`` raising on a hostile key must be contained."""
+
+    class HostileKey:
+        @property
+        def __class__(self):  # type: ignore[no-redef]
+            raise RuntimeError("hostile __class__ boom")
+
+    # Need a mapping whose key is hostile; dict() will preserve that key object
+    hostile_key = HostileKey()
+
+    class HostileMapping(dict):
+        def __init__(self):
+            super().__init__({hostile_key: True})
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": HostileMapping()})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="dependency name strings"):
+            upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configurationerror(
+    monkeypatch,
+):
+    """Any unexpected exception during mapping validation must be contained."""
+    import builtins
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": True}})
+    import unittest.mock as mock
+
+    real_set = builtins.set
+
+    def hostile_set(*args, **kwargs):
+        # Only sabotage the specific set(plain) call inside the function:
+        # it is called with a dict containing the dependency names.
+        # Avoid breaking pytest's own set() calls on other dicts.
+        if args and isinstance(args[0], dict) and "django" in args[0]:
+            raise RuntimeError("hostile set boom")
+        return real_set(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "set", hostile_set)
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="iteration failed"):
+            upstream_patches_enabled("django")

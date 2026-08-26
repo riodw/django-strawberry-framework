@@ -183,13 +183,26 @@ def _normalize_user_settings(value: Any) -> dict[str, Any]:
     """
     if value is None:
         return {}
-    if not isinstance(value, Mapping):
+    try:
+        is_mapping = isinstance(value, Mapping)
+    except Exception as exc:
+        raise ConfigurationError(
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+        ) from exc
+    if not is_mapping:
         raise ConfigurationError(
             f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
         )
-    if isinstance(value, dict):
+    if type(value) is dict:
         return value
-    return dict(value)
+    try:
+        return dict(value)
+    except ConfigurationError:
+        raise
+    except Exception as exc:
+        raise ConfigurationError(
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+        ) from exc
 
 
 class Settings:
@@ -329,6 +342,14 @@ class Settings:
             return self.user_settings[name]
         except KeyError:
             raise AttributeError(f"Invalid setting: `{name}`") from None
+        except ConfigurationError:
+            raise
+        except AttributeError:
+            raise
+        except Exception as exc:
+            raise ConfigurationError(
+                f"`{DJANGO_SETTINGS_KEY}` is not a valid mapping; lookup of {name!r} failed.",
+            ) from exc
 
 
 settings = Settings(None)
@@ -382,33 +403,65 @@ def upstream_patches_enabled(dependency: str) -> bool:
             "patch-module names to UPSTREAM_PATCH_DEPENDENCIES so consumers can opt out.",
         )
     configured = getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True)
-    if isinstance(configured, bool):
+    if type(configured) is bool:
         return configured
-    if isinstance(configured, Mapping):
-        # Key-type guard FIRST so a non-string key never reaches the
-        # unknown-name framing below, whose ``sorted()`` would leak a bare
-        # ``TypeError`` on mixed unorderable key types instead of the
-        # promised ``ConfigurationError`` (the
-        # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
-        for name in configured:
-            if not isinstance(name, str):
+    try:
+        is_mapping = isinstance(configured, Mapping)
+    except Exception as exc:
+        raise ConfigurationError(
+            f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
+            f"to bools; got {type(configured).__name__}.",
+        ) from exc
+    if is_mapping:
+        try:
+            # Defensive copy FIRST so hostile __iter__/__getitem__/__get__
+            # and one-shot generators cannot diverge between validation and
+            # the final ``get``. ``dict()`` iteration is the single
+            # consumption point; the plain copy is then the only object
+            # validated and read.
+            try:
+                plain = dict(configured)
+            except Exception as exc:
                 raise ConfigurationError(
-                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
-                    f"got {name!r}.",
+                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
+                ) from exc
+            # Key-type guard FIRST so a non-string key never reaches the
+            # unknown-name framing below, whose ``sorted()`` would leak a bare
+            # ``TypeError`` on mixed unorderable key types instead of the
+            # promised ``ConfigurationError`` (the
+            # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
+            for name in plain:
+                try:
+                    is_str = isinstance(name, str)
+                except Exception as exc:
+                    raise ConfigurationError(
+                        f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
+                        f"got {name!r}.",
+                    ) from exc
+                if not is_str:
+                    raise ConfigurationError(
+                        f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
+                        f"got {name!r}.",
+                    )
+            unknown = set(plain) - UPSTREAM_PATCH_DEPENDENCIES
+            if unknown:
+                raise ConfigurationError(
+                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
+                    f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
                 )
-        unknown = set(configured) - UPSTREAM_PATCH_DEPENDENCIES
-        if unknown:
+            for name, value in plain.items():
+                if type(value) is not bool:
+                    raise ConfigurationError(
+                        f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
+                        f"got {type(value).__name__}.",
+                    )
+            return plain.get(dependency, True)
+        except ConfigurationError:
+            raise
+        except Exception as exc:
             raise ConfigurationError(
-                f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
-                f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
-            )
-        for name, value in configured.items():
-            if not isinstance(value, bool):
-                raise ConfigurationError(
-                    f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
-                    f"got {type(value).__name__}.",
-                )
-        return configured.get(dependency, True)
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
+            ) from exc
     raise ConfigurationError(
         f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
         f"to bools; got {type(configured).__name__}.",

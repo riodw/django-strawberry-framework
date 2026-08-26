@@ -58,7 +58,6 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
-from django_strawberry_framework.utils.typing import is_async_generator_callable
 
 
 @pytest.fixture(autouse=True)
@@ -940,11 +939,11 @@ async def test_djangolistfield_sync_resolver_returning_async_iterable_is_bounded
 
 @pytest.mark.django_db(transaction=True)
 async def test_djangolistfield_partial_async_generator_resolver_is_bounded(monkeypatch) -> None:
-    """A partial-wrapped async-generator callable instance keeps async dispatch.
+    """A partial-wrapped async-generator callable instance resolves through the async cap.
 
-    Two halves. ``is_async_generator_callable`` sees through the ``partial`` to the
-    instance's ``async def __call__``, and the field dispatches on that
-    classification so the async cap -- not the sync path -- bounds the rows.
+    The wrapper calls the partial, classifies the returned value by VALUE
+    (an async-only iterable), and routes it through the async bound - so
+    the async cap, not the sync path, bounds the rows.
     """
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
@@ -967,7 +966,6 @@ async def test_djangolistfield_partial_async_generator_resolver_is_bounded(monke
                 yield row
 
     resolver = functools.partial(_Resolver(), "ignored")
-    assert is_async_generator_callable(resolver) is True
 
     @strawberry.type
     class Query:

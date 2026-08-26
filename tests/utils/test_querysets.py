@@ -22,6 +22,7 @@ own through-schema coverage lives in the same surface suites plus
 ``__in`` member drop).
 """
 
+import asyncio
 import datetime
 import enum
 import uuid
@@ -53,6 +54,8 @@ from django_strawberry_framework.utils.querysets import (
     _GraphWalk,
     _is_inert_value,
     _join_defect,
+    _normalized_visibility_result,
+    _prepared_visibility_source,
     _query_container_defect,
     _query_genuineness_defect,
     _safe_class_name,
@@ -64,10 +67,16 @@ from django_strawberry_framework.utils.querysets import (
     apply_type_visibility_sync,
     coerce_field_value_or_none,
     initial_queryset,
+    is_async_only_iterable,
     normalize_query_source,
+    pks_all_present,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
+    reject_async_in_sync_context,
+    reject_async_iterable_in_sync_context,
+    reject_awaitable_sync_source,
     run_in_one_sync_boundary,
+    visible_related_object,
     visible_related_objects,
 )
 from django_strawberry_framework.utils.write_transaction import write_pipeline
@@ -4300,3 +4309,149 @@ def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeyp
     monkeypatch.setattr(_HostileModel, "_hostile_meta", True)
 
     assert _concrete_or_none(_HostileModel) is None
+
+
+class _AsyncOnlyIterable:
+    """An async-only iterable: ``__aiter__`` with no ``__iter__`` (no cleanup debt)."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def test_is_async_only_iterable_arms():
+    """The async-only predicate: AsyncIterable without Iterable; a QuerySet is BOTH."""
+    assert is_async_only_iterable(_AsyncOnlyIterable()) is True
+    assert is_async_only_iterable(Category.objects.all()) is False
+    assert is_async_only_iterable([1, 2]) is False
+    assert is_async_only_iterable(None) is False
+
+
+def test_reject_async_iterable_in_sync_context_names_the_flavor():
+    """An async-only source under sync execution raises SyncMisuseError naming the flavor."""
+
+    with pytest.raises(SyncMisuseError, match="A DjangoListField resolver returned"):
+        reject_async_iterable_in_sync_context(
+            _AsyncOnlyIterable(),
+            flavor_noun="DjangoListField",
+        )
+    with pytest.raises(SyncMisuseError, match="A connection resolver returned"):
+        reject_async_iterable_in_sync_context(
+            _AsyncOnlyIterable(),
+            flavor_noun="connection",
+        )
+
+
+def test_reject_async_iterable_in_sync_context_passes_sync_sources():
+    """Sync-iterable sources (lists, QuerySets) pass through untouched."""
+    reject_async_iterable_in_sync_context([1, 2], flavor_noun="connection")
+    reject_async_iterable_in_sync_context(Category.objects.none(), flavor_noun="connection")
+
+
+async def test_reject_async_iterable_in_sync_context_noop_under_async_execution():
+    """Under async execution the guard is a no-op: the async executor consumes it."""
+    source = _AsyncOnlyIterable()
+    reject_async_iterable_in_sync_context(source, flavor_noun="connection")
+
+
+def test_reject_async_in_sync_context_cancels_future():
+    """An unawaited future passed to reject_async_in_sync_context is cancelled before raising."""
+    loop = asyncio.new_event_loop()
+    future = loop.create_future()
+    try:
+        with pytest.raises(SyncMisuseError, match="returned an awaitable"):
+            reject_async_in_sync_context(
+                future,
+                owner="TestOwner",
+                method="test_method",
+                context="test_context",
+                recourse="test_recourse",
+            )
+        assert future.cancelled() is True
+    finally:
+        loop.close()
+
+
+def test_coerce_field_value_or_none_returns_none_for_non_field():
+    """Passing a non-Field object returns None rather than raising an error."""
+    assert coerce_field_value_or_none(None, 42) is None
+    assert coerce_field_value_or_none("not_a_field", 42) is None
+
+
+def test_query_genuineness_defect_with_clean_combined_branches():
+    """_query_genuineness_defect recurses clean combined_queries branches and succeeds."""
+    qs1 = Category.objects.filter(id=1)
+    qs2 = Category.objects.filter(id=2)
+    combined_qs = qs1.union(qs2)
+    walk = _GraphWalk()
+    assert _query_genuineness_defect(combined_qs.query, walk) is None
+
+
+def test_prepared_visibility_source_with_custom_render_error():
+    """_prepared_visibility_source formats defect with custom render_error callable."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    def custom_render(code, detail):
+        return f"custom source error: {code} -> {detail}"
+
+    with pytest.raises(ConfigurationError, match="custom source error: type -> list"):
+        _prepared_visibility_source(DummyType, [1, 2, 3], render_error=custom_render)
+
+
+def test_normalized_visibility_result_with_custom_render_error():
+    """_normalized_visibility_result formats defect with custom render_error callable."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    def custom_render(code, detail):
+        return f"custom result error: {code} -> {detail}"
+
+    with pytest.raises(ConfigurationError, match="custom result error: type -> list"):
+        _normalized_visibility_result(
+            DummyType,
+            [1, 2, 3],
+            required_alias=None,
+            render_error=custom_render,
+        )
+
+
+def test_pks_all_present_subset_check():
+    """pks_all_present stringifies declared pks and tests subset against present set."""
+    assert pks_all_present([1, 2], {"1", "2", "3"}) is True
+    assert pks_all_present(["1", "2"], {"1", "2"}) is True
+    assert pks_all_present([1, 4], {"1", "2", "3"}) is False
+
+
+@pytest.mark.django_db
+def test_visible_related_object_resolution():
+    """visible_related_object resolves the visible object or returns None."""
+    cat = Category.objects.create(name="Electronics")
+    info = SimpleNamespace(context=SimpleNamespace(request=None))
+
+    resolved = visible_related_object(Category, cat.pk, info)
+    assert resolved == cat
+
+    missing = visible_related_object(Category, 999999, info)
+    assert missing is None
+
+
+def test_reject_awaitable_sync_source_noop_for_non_awaitable():
+    """reject_awaitable_sync_source passes non-awaitables without raising."""
+    reject_awaitable_sync_source([1, 2, 3], Category)
+    reject_awaitable_sync_source(Category.objects.none(), Category)
+
+
+def test_reject_awaitable_sync_source_raises_for_awaitable():
+    """reject_awaitable_sync_source raises SyncMisuseError for an awaitable source."""
+
+    async def sample():
+        return Category.objects.all()
+
+    coro = sample()
+    with pytest.raises(SyncMisuseError, match="consumer resolver returned an awaitable"):
+        reject_awaitable_sync_source(coro, Category)

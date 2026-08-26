@@ -7,7 +7,7 @@ Target release: ``0.0.7``.
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncIterable, Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import strawberry
@@ -19,14 +19,15 @@ from .resource_policy import bounded_rows, bounded_rows_async, validate_collecti
 from .types import DjangoType
 from .types.base import _is_relay_shaped
 from .utils.querysets import (
-    SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
+    is_async_only_iterable,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
+    reject_async_iterable_in_sync_context,
 )
-from .utils.typing import is_async_callable, is_async_generator_callable
+from .utils.typing import is_async_callable
 
 __all__ = ("DjangoListField",)
 
@@ -64,15 +65,6 @@ async def _bounded_async(
     a correctness constraint, not a preference.
     """
     return await bounded_rows_async(await awaitable, info, max_rows, trusted=trusted)
-
-
-def _require_async_iterable_context() -> None:
-    """Reject async-only iterable results from synchronous GraphQL execution."""
-    if not in_async_context():
-        raise SyncMisuseError(
-            "A DjangoListField resolver returned an AsyncIterable in a sync execution "
-            "context. Use `await schema.execute(...)` for async iterable resolvers.",
-        )
 
 
 def _validate_djangotype_target(
@@ -232,14 +224,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 trusted=trusted_max_rows,
             )
 
-        if is_async_generator_callable(user_resolver):
-
-            def _wrap(root: Any, info: Info) -> Any:
-                source = user_resolver(root, info)
-                _require_async_iterable_context()
-                return _resolve_async_iterable(source, info)
-
-        elif is_async_callable(user_resolver):
+        if is_async_callable(user_resolver):
 
             async def _wrap(root: Any, info: Info) -> Any:
                 # ``await`` the consumer coroutine BEFORE handing
@@ -260,11 +245,24 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     trusted=trusted_max_rows,
                 )
         else:
+            # ONE sync body serves a plain ``def`` resolver AND a declared
+            # async-generator resolver (the same committed posture the
+            # connection field's sync branch documents): calling either always
+            # yields a NON-awaitable value here, and an async-only return is
+            # classified by VALUE at call time - completed through the async
+            # bound under async execution, rejected through the shared
+            # sync-misuse guard otherwise. No declared-shape check is needed:
+            # calling an async-generator callable (bare, ``partial``-wrapped,
+            # or an async-gen ``__call__`` instance) always produces an
+            # async-only iterable.
 
             def _wrap(root: Any, info: Info) -> Any:
                 source = user_resolver(root, info)
-                if isinstance(source, AsyncIterable) and not isinstance(source, Iterable):
-                    _require_async_iterable_context()
+                if is_async_only_iterable(source):
+                    reject_async_iterable_in_sync_context(
+                        source,
+                        flavor_noun="DjangoListField",
+                    )
                     return _resolve_async_iterable(source, info)
                 return bounded_rows(
                     _post_process_consumer_sync(target_type, source, info),

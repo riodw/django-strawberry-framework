@@ -9,7 +9,7 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
 - ``strings`` - case conversion (``snake_case``, ``pascal_case``).
 - ``typing`` - Strawberry / Python / GraphQL type unwrapping
   (``unwrap_graphql_type``, ``unwrap_return_type``), the partial-aware async
-  predicates (``is_async_callable``, ``is_async_generator_callable``),
+  predicate (``is_async_callable``),
   and the ``_strawberry_schema`` / config digs (``schema_config_from_info``).
 - ``connections`` - the connection window-bounds / sidecar-kwarg contracts.
 - ``sessions`` - the configured ``SESSION_ENGINE``'s ``SessionStore``

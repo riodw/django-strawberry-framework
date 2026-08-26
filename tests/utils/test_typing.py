@@ -6,18 +6,31 @@ from typing import Any
 
 import pytest
 
+import django_strawberry_framework.utils.typing as typing_module
 from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
     _MAX_TYPE_WRAPPER_DEPTH,
     _callable_inspection_target,
     is_async_callable,
-    is_async_generator_callable,
     schema_config_from_info,
     strawberry_schema_from_info,
     strawberry_schema_from_schema,
     unwrap_container_type,
     unwrap_return_type,
 )
+
+
+def test_typing_exports_all():
+    """``django_strawberry_framework.utils.typing`` exports expected public symbols."""
+    assert typing_module.__all__ == (
+        "is_async_callable",
+        "schema_config_from_info",
+        "strawberry_schema_from_info",
+        "strawberry_schema_from_schema",
+        "unwrap_container_type",
+        "unwrap_graphql_type",
+        "unwrap_return_type",
+    )
 
 
 def test_unwrap_return_type_handles_typing_list():
@@ -217,10 +230,14 @@ _async_static_partial_obj = staticmethod(functools.partial(_AsyncCallable()))
     [
         (_async_fn, True),
         (_sync_fn, False),
+        (_AsyncCallable, False),  # class itself: instantiation is sync
         (_AsyncCallable(), True),  # async ``__call__`` instance
+        (_SyncCallable, False),  # class itself: instantiation is sync
         (_SyncCallable(), False),
         (functools.partial(_async_fn), True),  # partial around an async function
+        (functools.partial(_AsyncCallable), False),  # partial around a class constructor
         (functools.partial(_AsyncCallable()), True),  # partial around an async instance
+        (functools.partial(_SyncCallable), False),  # partial around a class constructor
         (functools.partial(_sync_fn), False),
         (_async_static_obj, True),  # raw ``staticmethod`` descriptor around an async def
         (_sync_static_obj, False),
@@ -240,64 +257,6 @@ def test_is_async_callable_sees_through_supported_wrappers(value, expected):
     is not callable, even when its underlying function is async.
     """
     assert is_async_callable(value) is expected
-
-
-# ---------------------------------------------------------------------------
-# is_async_generator_callable -- shared by DjangoListField + DjangoConnectionField
-# ---------------------------------------------------------------------------
-
-
-async def _async_gen_fn():
-    yield 1
-
-
-class _AsyncGenCallable:
-    async def __call__(self):
-        yield 1
-
-
-class _AsyncGenMethodHolder:
-    @staticmethod
-    async def async_gen_static():
-        yield 1
-
-    @staticmethod
-    def sync_static():
-        return 1
-
-
-_async_gen_static_obj = _AsyncGenMethodHolder.__dict__["async_gen_static"]
-_async_gen_sync_static_obj = _AsyncGenMethodHolder.__dict__["sync_static"]
-_async_gen_static_partial_obj = staticmethod(functools.partial(_AsyncGenCallable()))
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (_async_gen_fn, True),
-        (_async_fn, False),  # coroutine, not async generator
-        (_sync_fn, False),
-        (_AsyncGenCallable(), True),
-        (_AsyncCallable(), False),
-        (functools.partial(_async_gen_fn), True),
-        (functools.partial(_AsyncGenCallable()), True),  # the connection gap this closes
-        (functools.partial(_sync_fn), False),
-        (_async_gen_static_obj, True),
-        (_async_gen_sync_static_obj, False),
-        (_async_gen_static_partial_obj, True),  # staticmethod descriptor around a partial instance
-    ],
-)
-def test_is_async_generator_callable_sees_through_supported_wrappers(value, expected):
-    """Async-gen sibling of ``is_async_callable``; same wrapper unwrap contract.
-
-    ``partial(async-gen instance)`` is the shape the connection-local predicate
-    previously missed (``inspect.isasyncgenfunction`` unwraps ``partial(fn)`` but
-    not ``partial(instance)``). Both field factories must share this owner.
-    """
-    assert is_async_generator_callable(value) is expected
-    # The two predicates partition coroutine vs async-generator shapes.
-    if expected:
-        assert is_async_callable(value) is False
 
 
 def test_strawberry_schema_from_info_and_schema():
@@ -434,7 +393,7 @@ def test_callable_inspection_target_raises_on_cyclic_staticmethod_stack():
 
 
 def test_is_async_callable_raises_on_cyclic_wrapper_stack():
-    """Async predicates fail loud via RuntimeError when given cyclic callables."""
+    """The async predicate fails loud via RuntimeError when given a cyclic callable."""
 
     class CyclicPartial(functools.partial):
         @property
@@ -444,5 +403,3 @@ def test_is_async_callable_raises_on_cyclic_wrapper_stack():
     p = CyclicPartial(lambda: 0)
     with pytest.raises(RuntimeError, match="cyclic or corrupt"):
         is_async_callable(p)
-    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
-        is_async_generator_callable(p)

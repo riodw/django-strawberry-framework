@@ -61,7 +61,8 @@ building, and the filter related derive keeps its per-branch recursion. This
 module owns only the source normalization + the colored visibility calls.
 
 Cycle-safe by construction: it depends on ``django``, ``asgiref``,
-``..exceptions``, and the write-transaction ContextVar helpers, so
+``strawberry``'s context probe, ``..exceptions``, and the write-transaction
+ContextVar helpers, so
 ``types/relay.py`` (imported at module top by ``types/base.py``) can import
 from here without closing a load cycle, and it never imports back into
 filters / orders / mutations / permissions.
@@ -76,6 +77,7 @@ import inspect
 import sys
 import uuid
 import zoneinfo
+from collections.abc import AsyncIterable, Iterable
 from decimal import Decimal
 from typing import Any
 
@@ -92,6 +94,7 @@ from django.db.models.query import (
     ValuesIterable,
     ValuesListIterable,
 )
+from strawberry.utils.inspect import in_async_context
 
 try:
     from django.db.models.query import PROHIBITED_FILTER_KWARGS
@@ -322,6 +325,44 @@ def sync_pipeline_recourse(flavor_noun: str) -> str:
         "call on the async surface), so it cannot await an async get_queryset hook; "
         "redefine the target type's get_queryset as a sync method."
     )
+
+
+def is_async_only_iterable(value: Any) -> bool:
+    """Whether ``value`` iterates only asynchronously.
+
+    The one spelling of the async-only-iterable predicate: an
+    ``AsyncIterable`` that is NOT also a plain ``Iterable``. The ``not
+    Iterable`` half is essential - a Django ``QuerySet`` is both sync and
+    async iterable and must never classify as async-only. Shared by
+    ``reject_async_iterable_in_sync_context`` below, ``list_field.py``'s
+    async-completion branch, and ``resource_policy.py::bounded_rows_async``'s
+    bound dispatch, so the shapes the package treats as "async-only" cannot
+    drift between the surface that rejects them and the surfaces that consume
+    them.
+    """
+    return isinstance(value, AsyncIterable) and not isinstance(value, Iterable)
+
+
+def reject_async_iterable_in_sync_context(value: Any, *, flavor_noun: str) -> None:
+    """Reject an async-only resolver SOURCE under synchronous GraphQL execution.
+
+    The read-flavor sibling of ``reject_async_in_sync_context`` (that one
+    refuses an awaitable returned by a sync HOOK; this refuses the
+    ``AsyncIterable`` a plain-``def`` resolver RETURNED). Strawberry's sync
+    list / connection completion routes such a value to its synchronous
+    slicer, which fails with an internal blank ``AssertionError``, so both
+    field flavors fail closed with the public sync-misuse error instead -
+    one rule, one recourse sentence; only the flavor subject differs (the
+    guard fires on the ACTUAL returned source rather than only the callable's
+    declared shape, so every async-only source is caught no matter which
+    construction-time branch produced it). Under async execution this is a
+    no-op: the native async executor consumes the AsyncIterable itself.
+    """
+    if is_async_only_iterable(value) and not in_async_context():
+        raise SyncMisuseError(
+            f"A {flavor_noun} resolver returned an AsyncIterable in a sync execution "
+            "context. Use `await schema.execute(...)` for async iterable resolvers.",
+        )
 
 
 async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -3186,7 +3227,7 @@ def visible_related_objects(
     pks: Any,
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> set:
+) -> set[str]:
     """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query.
 
     The BATCHED counterpart to ``visible_related_object``: instead of one visibility query per

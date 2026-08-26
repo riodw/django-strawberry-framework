@@ -7,14 +7,13 @@ uses ``of_type`` wrapper stacks for ``GraphQLNonNull`` and ``GraphQLList``.
 Both contracts live here so optimizer and schema factories do not grow
 parallel unwrap loops.
 
-Also home to the partial-aware async predicates the public field factories
+Also home to the partial-aware async predicate the public field factories
 and the GlobalID-callable validator share:
 
-- ``is_async_callable`` -- coroutine-callable (``async def`` / async ``__call__``);
-- ``is_async_generator_callable`` -- async-generator-callable (``async def`` with
-  ``yield`` / async-gen ``__call__``), deliberately separate because GraphQL list
-  and connection completion accept ``AsyncIterable`` returns that the coroutine
-  predicate must not claim.
+- ``is_async_callable`` -- coroutine-callable (``async def`` / async ``__call__``).
+  An ``async def`` that ``yield``s is intentionally False here; the field
+  wrappers classify that shape by VALUE at resolve time (the shared
+  async-only-iterable route), not by declared shape.
 
 And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
 accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the
@@ -26,6 +25,16 @@ the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
 import functools
 import inspect
 from typing import Any, get_args, get_origin
+
+__all__ = (
+    "is_async_callable",
+    "schema_config_from_info",
+    "strawberry_schema_from_info",
+    "strawberry_schema_from_schema",
+    "unwrap_container_type",
+    "unwrap_graphql_type",
+    "unwrap_return_type",
+)
 
 
 def strawberry_schema_from_schema(schema: Any) -> Any:
@@ -80,8 +89,8 @@ _MAX_TYPE_WRAPPER_DEPTH = 64
 def _callable_inspection_target(value: Any) -> Any:
     """Unwrap ``partial`` / ``staticmethod`` layers for the async predicates.
 
-    Shared by ``is_async_callable`` and ``is_async_generator_callable`` so the
-    wrapper shapes they see cannot drift. ``partial`` flattens nested partials at
+    Lets ``is_async_callable`` see every supported wrapper shape without
+    drift between them. ``partial`` flattens nested partials at
     construction (``partial(partial(f)).func is f``), but a staticmethod descriptor
     can contain a partial, so peel both wrapper kinds until the callable target is
     reached. This handles both ``partial(staticmethod_obj)`` and
@@ -124,29 +133,18 @@ def is_async_callable(value: Any) -> bool:
     Resolvers whose sync entry point returns an awaitable from elsewhere remain
     undetected -- the contract is to signal async-ness through the standard
     coroutine-function flag, not an opaque awaitable return. An ``async def`` that
-    ``yield``s is an async *generator* function and is intentionally False here;
-    use ``is_async_generator_callable`` for that shape.
+    ``yield``s is an async *generator* function and is intentionally False here:
+    the field wrappers classify an async-generator resolver's return by VALUE at
+    resolve time, so no declared-shape predicate is needed for it.
     """
     target = _callable_inspection_target(value)
+    if inspect.iscoroutinefunction(target):
+        return True
+    if isinstance(target, type):
+        return False
     # Inspecting ``__call__``'s async-ness, not testing callability -- so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
-    return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
-        getattr(target, "__call__", None),  # noqa: B004
-    )
-
-
-def is_async_generator_callable(value: Any) -> bool:
-    """Return whether calling ``value`` yields an async generator / ``AsyncIterable``.
-
-    Sibling of ``is_async_callable`` for the ``async def`` + ``yield`` shape that
-    GraphQL list and connection completion accept as an ``AsyncIterable``. The
-    coroutine predicate must not claim that shape (``iscoroutinefunction`` is
-    False for async-generator functions), so field-factory dispatch keeps a
-    dedicated check. Sees through the same ``partial`` / ``staticmethod`` /
-    async ``__call__`` wrappers as ``is_async_callable``.
-    """
-    target = _callable_inspection_target(value)
-    return inspect.isasyncgenfunction(target) or inspect.isasyncgenfunction(
+    return inspect.iscoroutinefunction(
         getattr(target, "__call__", None),  # noqa: B004
     )
 

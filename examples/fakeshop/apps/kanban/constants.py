@@ -248,6 +248,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_ci_governance.py",
     "tests/test_clean_up.py",
     "tests/test_connection.py",
+    "tests/test_consumers.py",
     "tests/test_cross_web_patches.py",
     "tests/test_django_patches.py",
     "tests/test_error_policy.py",

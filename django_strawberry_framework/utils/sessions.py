@@ -124,7 +124,43 @@ def session_store_class() -> type:
     from django.conf import settings
     from django.utils.module_loading import import_string
 
-    return import_string(f"{settings.SESSION_ENGINE}.SessionStore")
+    from ..exceptions import ConfigurationError, describe_value
+
+    try:
+        engine = settings.SESSION_ENGINE
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        IndexError,
+    ) as exc:
+        raise ConfigurationError(
+            "SESSION_ENGINE could not be read from settings "
+            f"({type(exc).__name__}); check settings.SESSION_ENGINE.",
+        ) from exc
+    if not isinstance(engine, str):
+        raise ConfigurationError(
+            f"SESSION_ENGINE must be a string; got {describe_value(engine)}.",
+        )
+    if not engine:
+        raise ConfigurationError(
+            "SESSION_ENGINE must be a non-empty string; got empty value.",
+        )
+    try:
+        return import_string(f"{engine}.SessionStore")
+    except (
+        ImportError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise ConfigurationError(
+            f"Could not resolve SESSION_ENGINE {engine!r}'s SessionStore "
+            f"({type(exc).__name__}); check settings.SESSION_ENGINE.",
+        ) from exc
 
 
 #: The private scope key one connection's ``ConnectionActorState`` is stored
@@ -176,10 +212,34 @@ def connection_actor_state(scope: MutableMapping[str, Any]) -> ConnectionActorSt
     pay for one. The get-or-create has no ``await`` between the read and the
     store, so it is atomic on the event loop.
     """
-    state = scope.get(_ACTOR_STATE_SCOPE_KEY)
+    from ..exceptions import ConfigurationError
+
+    try:
+        state = scope.get(_ACTOR_STATE_SCOPE_KEY)
+    except BaseException as exc:
+        raise ConfigurationError(
+            "The WebSocket revalidation state could not be read from the scope.",
+        ) from exc
     if state is None:
         state = ConnectionActorState()
-        scope[_ACTOR_STATE_SCOPE_KEY] = state
+        try:
+            scope[_ACTOR_STATE_SCOPE_KEY] = state
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The WebSocket revalidation state could not be stored on the scope.",
+            ) from exc
+    else:
+        try:
+            is_state = isinstance(state, ConnectionActorState)
+        except BaseException as exc:
+            raise ConfigurationError(
+                "The WebSocket revalidation state could not be inspected.",
+            ) from exc
+        if not is_state:
+            raise ConfigurationError(
+                "The WebSocket revalidation state is corrupted; expected a "
+                f"ConnectionActorState, got {type(state).__name__}.",
+            )
     return state
 
 

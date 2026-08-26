@@ -59,6 +59,7 @@ from strawberry.types import Info, get_object_definition
 from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry.utils.inspect import in_async_context
 
+from .exceptions import ConfigurationError, _safe_type_name
 from .keyset import (
     CursorColumn,
     DeclaredCursorState,
@@ -663,6 +664,14 @@ def _consume_window(
             if keyset_state is None:
                 raise
             built = None
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+            IndexError,
+        ) as exc:
+            raise GraphQLError(str(exc)) from exc
         else:
             built = _resolve_from_window(
                 cls,
@@ -729,7 +738,16 @@ def _consume_fallback(
             state=keyset_state,
             **slice_kwargs,
         )
-    conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
+    try:
+        conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(str(exc)) from exc
     if inspect.isawaitable(conn):
         return _attach_count_async(conn, nodes, want_count=want_count)
     return _attach_count_sync(conn, nodes, want_count=want_count)
@@ -745,9 +763,18 @@ def _keyset_order_ref(entry: Any) -> tuple[str, str, bool] | None:
     (the nullable domain the v1 column contract excludes --
     ``order_entry_has_explicit_nulls``).
     """
-    if order_entry_has_explicit_nulls(entry):
+    try:
+        if order_entry_has_explicit_nulls(entry):
+            return None
+        parsed = order_entry_name_and_direction(entry)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
         return None
-    parsed = order_entry_name_and_direction(entry)
     if parsed is None:
         return None
     name, descending = parsed
@@ -985,8 +1012,17 @@ def _resolve_keyset_connection(
     # vocabulary or from the windowed keyset path. The slicer also validates
     # ``last`` because it serves backward pages; the window helper only sees
     # forward shapes (backward raises UnwindowableConnection upstream).
-    for argument, value in (("first", first), ("last", last)):
-        assert_relay_pagination_bound(argument, value, cap=cap)
+    try:
+        for argument, value in (("first", first), ("last", last)):
+            assert_relay_pagination_bound(argument, value, cap=cap)
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(str(exc)) from exc
     last_zero_quirk = (
         isinstance(last, int) and last == 0 and not isinstance(first, int) and not before_supplied
     )
@@ -1492,7 +1528,23 @@ def _guard_source_not_pre_sliced(source: models.QuerySet) -> None:
     structural misuse of the connection ``resolver=`` contract surfaces as a
     package error, never a leaked Django internal.
     """
-    if source.query.is_sliced:
+    try:
+        is_sliced = source.query.is_sliced
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(
+            "A connection resolver returned a QuerySet whose sliced state could not be read "
+            f"({_safe_type_name(exc)}); a connection field manages its own pagination and "
+            "cannot paginate a source whose sliced state is unreadable. Return an unsliced "
+            "QuerySet (or a Manager) and let the connection's `first` / `last` / `before` / "
+            "`after` arguments paginate it.",
+        ) from exc
+    if is_sliced:
         raise GraphQLError(
             "A connection resolver returned an already-sliced QuerySet (e.g. "
             "`qs[:10]`). A connection field manages its own ordering and cursor "
@@ -1512,21 +1564,21 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
     on a lazy queryset):
 
     5. Deterministic TOTAL ordering - the connection's positional offset cursors
-       (Strawberry's ``ListConnection``) are only stable across separate
-       requests when the ``ORDER BY`` is a unique total order. The effective
-       order - a keyset target's declared ``cursor_field`` when no explicit
-       ``orderBy:`` won, else the explicit ``orderBy:`` or model
-       ``Meta.ordering`` made total by a pk terminal tiebreaker - is selected
-       by ``optimizer/plans.py::effective_connection_order``, the SAME
-       implementation the plan-time window order uses, so this resolve-time
-       order cannot drift from the planned window's (the cursor-parity
-       invariant, spec-033 Decision 11). This covers all three cases - fully
-       unordered, a supplied ``orderBy``, and a model ``Meta.ordering``.
-    6. Optimizer plan - ``apply_connection_optimization`` applies
-       ``select_related`` / ``prefetch_related`` / ``only()`` using the node
-       type / model explicitly (the connection field's own cooperation point,
-       Decision 11), because the schema middleware never sees the pre-slice
-       queryset behind ``ConnectionExtension``.
+        (Strawberry's ``ListConnection``) are only stable across separate
+        requests when the ``ORDER BY`` is a unique total order. The effective
+        order - a keyset target's declared ``cursor_field`` when no explicit
+        ``orderBy:`` won, else the explicit ``orderBy:`` or model
+        ``Meta.ordering`` made total by a pk terminal tiebreaker - is selected
+        by ``optimizer/plans.py::effective_connection_order``, the SAME
+        implementation the plan-time window order uses, so this resolve-time
+        order cannot drift from the planned window's (the cursor-parity
+        invariant, spec-033 Decision 11). This covers all three cases - fully
+        unordered, a supplied ``orderBy``, and a model ``Meta.ordering``.
+     6. Optimizer plan - ``apply_connection_optimization`` applies
+        ``select_related`` / ``prefetch_related`` / ``only()`` using the node
+        type / model explicitly (the connection field's own cooperation point,
+        Decision 11), because the schema middleware never sees the pre-slice
+        queryset behind ``ConnectionExtension``.
     """
     target_model = model_for(target_type)
     cursor_field = getattr(
@@ -1534,11 +1586,59 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
         "cursor_field",
         None,
     )
-    explicit = tuple(qs.query.order_by)
-    ordered = effective_connection_order(cursor_field, explicit, target_model)
-    effective = explicit or tuple(target_model._meta.ordering)
+    try:
+        explicit = tuple(qs.query.order_by)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(
+            "A connection resolver returned a QuerySet whose ordering could not be read "
+            f"({_safe_type_name(exc)}); a connection field manages its own ordering and "
+            "cannot paginate a source whose ordering is unreadable. Return a regular "
+            "QuerySet and let the connection's ordering logic handle it.",
+        ) from exc
+    try:
+        ordered = effective_connection_order(cursor_field, explicit, target_model)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(
+            "A connection's ordering could not be resolved "
+            f"({_safe_type_name(exc)}); check the connection's ordering configuration.",
+        ) from exc
+    try:
+        effective = explicit or tuple(target_model._meta.ordering)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise GraphQLError(
+            f"A connection's model ordering could not be read ({_safe_type_name(exc)}).",
+        ) from exc
     if ordered != effective:
-        qs = qs.order_by(*ordered)
+        try:
+            qs = qs.order_by(*ordered)
+        except (
+            TypeError,
+            ValueError,
+            AttributeError,
+            KeyError,
+            IndexError,
+        ) as exc:
+            raise GraphQLError(
+                f"A connection's ordering could not be applied ({_safe_type_name(exc)}).",
+            ) from exc
     return apply_connection_optimization(target_type, qs, info)
 
 
@@ -1818,7 +1918,16 @@ def _window_rows_are_annotated(rows: list) -> bool:
     the parent genuinely has none. ``resolve_connection`` still owns the slice-
     aware page and flag construction.
     """
-    return all(hasattr(row, WINDOW_ROW_NUMBER) for row in rows)
+    try:
+        return all(hasattr(row, WINDOW_ROW_NUMBER) for row in rows)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
+        return False
 
 
 def _build_relation_connection_resolver(
@@ -2004,6 +2113,23 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
             "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)"
         ),
     )
+    if isinstance(directives, (str, bytes)):
+        raise ConfigurationError(
+            "DjangoConnectionField directives must be a sequence of directive instances; "
+            f"got {_safe_type_name(directives)}.",
+        )
+    try:
+        directives = tuple(directives)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise ConfigurationError(
+            f"DjangoConnectionField directives could not be read ({_safe_type_name(exc)}).",
+        ) from exc
     return relay.connection(
         _connection_type_for(target_type),
         resolver=_build_connection_resolver(target_type, resolver),

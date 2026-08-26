@@ -1958,3 +1958,368 @@ async def test_connection_resolver_manager_degrading_to_list_fails_closed_async(
     result = await schema.execute("{ items { edges { node { id } } } }")
     assert result.errors is not None
     assert any("must produce a QuerySet" in str(err.message) for err in result.errors)
+
+
+# =============================================================================
+# Bug-hunt 0.0.14: exception-containment and directive validation
+# =============================================================================
+
+
+def test_connection_field_directives_string_rejected():
+    """A string ``directives=`` is rejected as ``ConfigurationError`` (not iterated char-wise)."""
+    node = _make_node_type("DirStringNode", total_count=None)
+    with pytest.raises(ConfigurationError, match="directives must be a sequence"):
+        DjangoConnectionField(node, directives="not-a-sequence")
+
+
+def test_connection_field_directives_bytes_rejected():
+    """Bytes ``directives=`` is rejected as ``ConfigurationError``."""
+    node = _make_node_type("DirBytesNode", total_count=None)
+    with pytest.raises(ConfigurationError, match="directives must be a sequence"):
+        DjangoConnectionField(node, directives=b"not-a-sequence")
+
+
+def test_connection_field_directives_hostile_iter_rejected():
+    """A ``directives=`` iterable that raises mid-iteration is ``ConfigurationError`` (not ``ValueError``)."""
+
+    class Hostile:
+        def __iter__(self):
+            raise ValueError("hostile iter")
+
+    node = _make_node_type("DirHostileNode", total_count=None)
+    with pytest.raises(ConfigurationError, match="directives could not be read"):
+        DjangoConnectionField(node, directives=Hostile())
+
+
+def test_connection_field_directives_hostile_attribute_rejected():
+    """A ``directives=`` iterable raising ``AttributeError`` is ``ConfigurationError``."""
+
+    class Hostile:
+        def __iter__(self):
+            raise AttributeError("hostile attr")
+
+    node = _make_node_type("DirHostileAttrNode", total_count=None)
+    with pytest.raises(ConfigurationError, match="directives could not be read"):
+        DjangoConnectionField(node, directives=Hostile())
+
+
+def test_guard_source_not_pre_sliced_hostile_query_is_graphql_error():
+    """``_guard_source_not_pre_sliced`` with hostile ``query`` raises ``GraphQLError`` (not ``AttributeError``)."""
+    from django_strawberry_framework.connection import _guard_source_not_pre_sliced
+
+    class HostileQS:
+        @property
+        def query(self):
+            raise AttributeError("hostile query")
+
+    with pytest.raises(GraphQLError, match="sliced state could not be read"):
+        _guard_source_not_pre_sliced(HostileQS())  # type: ignore[arg-type]
+
+
+def test_guard_source_not_pre_sliced_hostile_is_sliced_value_error():
+    """A hostile ``is_sliced`` raising ``ValueError`` is ``GraphQLError``."""
+
+    class HostileQuery:
+        @property
+        def is_sliced(self):
+            raise ValueError("hostile is_sliced")
+
+    class HostileQS:
+        query = HostileQuery()
+
+    from django_strawberry_framework.connection import _guard_source_not_pre_sliced
+
+    with pytest.raises(GraphQLError, match="sliced state could not be read"):
+        _guard_source_not_pre_sliced(HostileQS())  # type: ignore[arg-type]
+
+
+def test_finalize_queryset_hostile_order_by_is_graphql_error():
+    """``_finalize_queryset`` with hostile ``order_by`` raises ``GraphQLError`` (not ``ValueError``)."""
+    from django_strawberry_framework.connection import _finalize_queryset
+
+    node = _make_sidecar_node_type("FinalizeHostileNode")
+    finalize_django_types()
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+    )
+
+    class HostileQuery:
+        @property
+        def order_by(self):
+            raise ValueError("hostile order_by")
+
+    class HostileQS(models.QuerySet):
+        def __init__(self, *a, **kw):
+            pass
+
+        @property
+        def query(self):
+            return HostileQuery()
+
+    qs = HostileQS(model=Category)
+    with pytest.raises(GraphQLError, match="ordering could not be read"):
+        _finalize_queryset(node, qs, info)  # type: ignore[arg-type]
+
+
+def test_window_rows_are_annotated_hostile_iter_returns_false():
+    """``_window_rows_are_annotated`` with hostile ``__iter__`` returns ``False`` (not ``ValueError``)."""
+    from django_strawberry_framework.connection import _window_rows_are_annotated
+
+    class HostileList(list):
+        def __iter__(self):
+            raise ValueError("hostile iter")
+
+    assert _window_rows_are_annotated(HostileList([object()])) is False
+
+
+def test_window_rows_are_annotated_hostile_key_error_returns_false():
+    """A ``KeyError`` during iteration is also contained."""
+
+    class HostileList(list):
+        def __iter__(self):
+            raise KeyError("hostile key")
+
+    from django_strawberry_framework.connection import _window_rows_are_annotated
+
+    assert _window_rows_are_annotated(HostileList([object()])) is False
+
+
+@pytest.mark.django_db
+def test_negative_first_is_graphql_error_not_valueerror():
+    """``first: -1`` through the connection field is ``GraphQLError`` (not raw ``ValueError``)."""
+    node = _make_node_type("NegFirstApiNode", total_count=None)
+    schema = _field_schema(node)
+    result = schema.execute_sync("{ items(first: -1) { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any("non-negative" in str(e.message).lower() for e in result.errors)
+    assert all(
+        not isinstance(getattr(e, "original_error", None), ValueError) for e in result.errors
+    )
+    assert any(isinstance(getattr(e, "original_error", None), GraphQLError) for e in result.errors)
+
+
+@pytest.mark.django_db
+def test_over_cap_first_is_graphql_error():
+    """``first`` over ``relay_max_results`` is ``GraphQLError``."""
+    node = _make_node_type("OverCapApiNode", total_count=None)
+    schema = _field_schema(node, config=strawberry_config(relay_max_results=2))
+    result = schema.execute_sync("{ items(first: 3) { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any("cannot be higher than" in str(e.message) for e in result.errors)
+    assert all(
+        not isinstance(getattr(e, "original_error", None), ValueError) for e in result.errors
+    )
+
+
+@pytest.mark.django_db
+def test_malformed_after_cursor_is_graphql_error():
+    """A malformed ``after:`` cursor is ``GraphQLError`` (not ``ValueError``/``TypeError``)."""
+    node = _make_node_type("BadCursorApiNode", total_count=None)
+    schema = _field_schema(node)
+    result = schema.execute_sync(
+        '{ items(first: 1, after: "not-base64") { edges { node { id } } } }',
+    )
+    assert result.errors is not None
+    # The error message comes from SliceMetadata cursor decode (base64)
+    assert len(result.errors) >= 1
+    assert all(
+        not isinstance(getattr(e, "original_error", None), (ValueError, TypeError))
+        for e in result.errors
+    )
+    assert all(isinstance(getattr(e, "original_error", None), GraphQLError) for e in result.errors)
+
+
+def test_keyset_order_ref_hostile_entry_returns_none():
+    """``_keyset_order_ref`` with hostile ``__str__``/attribute access returns ``None`` (not ``ValueError``)."""
+    from django_strawberry_framework.connection import _keyset_order_ref
+
+    class Hostile:
+        def __getattr__(self, name):
+            raise ValueError("hostile getattr")
+
+    assert _keyset_order_ref(Hostile()) is None
+    assert _keyset_order_ref(None) is None
+
+
+def test_finalize_queryset_hostile_effective_order_is_graphql_error(monkeypatch):
+    """``effective_connection_order`` raising is ``GraphQLError``."""
+    from django_strawberry_framework.connection import _finalize_queryset
+
+    node = _make_sidecar_node_type("FinalizeEffHostileNode")
+    finalize_django_types()
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+    )
+    qs = Category.objects.all()
+
+    def _raise(*a, **kw):
+        raise TypeError("hostile effective order")
+
+    monkeypatch.setattr(
+        "django_strawberry_framework.connection.effective_connection_order",
+        _raise,
+    )
+    with pytest.raises(GraphQLError, match="ordering could not be resolved"):
+        _finalize_queryset(node, qs, info)
+
+
+def test_finalize_queryset_hostile_meta_ordering_is_graphql_error(monkeypatch):
+    """``target_model._meta.ordering`` hostile is ``GraphQLError``."""
+    from django_strawberry_framework.connection import _finalize_queryset
+
+    node = _make_sidecar_node_type("FinalizeMetaHostileNode")
+    finalize_django_types()
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+    )
+    qs = Category.objects.all()
+
+    # Hostile model with _meta.ordering raising
+    class HostileMeta:
+        @property
+        def ordering(self):
+            raise AttributeError("hostile meta ordering")
+
+    class HostileModel:
+        _meta = HostileMeta()
+
+    import django_strawberry_framework.connection as conn_mod
+
+    monkeypatch.setattr(conn_mod, "model_for", lambda _: HostileModel)
+    with pytest.raises(GraphQLError, match="ordering could not be"):
+        _finalize_queryset(node, qs, info)
+
+
+def test_finalize_queryset_hostile_effective_ordering_is_graphql_error(monkeypatch):
+    """``effective = explicit or tuple(ordering)`` hostile is ``GraphQLError`` (cursor_field path)."""
+    # Create a cursor-field type so effective_connection_order returns cursor_field without reading meta
+    from apps.products.models import Category as ProdCategory
+
+    from django_strawberry_framework.connection import _finalize_queryset
+
+    cursor_node = type(
+        "CursorHostileNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": ProdCategory,
+                    "fields": ("id", "name"),
+                    "name": "CursorHostileNode",
+                    "interfaces": (relay.Node,),
+                    "cursor_field": ("id",),
+                },
+            ),
+        },
+    )
+    registry.clear()
+    _connection_type_cache.clear()
+    finalize_django_types()
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+    )
+    qs = ProdCategory.objects.all()  # explicit empty, cursor_field will be used
+
+    class HostileMeta:
+        @property
+        def ordering(self):
+            raise ValueError("hostile effective ordering")
+
+    class HostileModel:
+        _meta = HostileMeta()
+        # Need pk for deterministic_order fallback if called, but cursor path won't call it
+        _meta.pk = ProdCategory._meta.pk
+
+    import django_strawberry_framework.connection as conn_mod
+
+    # Patch model_for to return hostile for the effective line, but keep cursor_field path
+    # effective_connection_order will return cursor_field without reading meta, so we need to ensure it doesn't raise
+    # It will return ("id",) for cursor_field, so ordered = ("id",), effective line will try tuple(meta.ordering) and raise
+    monkeypatch.setattr(conn_mod, "model_for", lambda _: HostileModel)
+    # Also need to ensure the node type still has cursor_field via definition
+    # The definition's model is ProdCategory, but model_for returns hostile - cursor_field still from node
+    with pytest.raises(GraphQLError, match="model ordering could not be read"):
+        _finalize_queryset(cursor_node, qs, info)
+
+
+def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
+    """``qs.order_by(*ordered)`` raising is ``GraphQLError``."""
+    from apps.products.models import Item
+
+    from django_strawberry_framework.connection import _finalize_queryset
+
+    node_item = type(
+        "FinalizeApplyItemNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": Item, "fields": ("id", "name"), "name": "FinalizeApplyItemNode"},
+            ),
+        },
+    )
+    registry.clear()
+    _connection_type_cache.clear()
+    finalize_django_types()
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+    )
+
+    class HostileQS(models.QuerySet):
+        def __init__(self, *a, **kw):
+            model = kw.get("model", Item)
+            super().__init__(model=model)
+
+        def order_by(self, *args, **kwargs):  # type: ignore[override]
+            raise KeyError("hostile order_by apply")
+
+    qs2 = HostileQS(model=Item)
+    qs2.query.order_by = ("name",)  # type: ignore[attr-defined]
+    with pytest.raises(GraphQLError, match="ordering could not be applied"):
+        _finalize_queryset(node_item, qs2, info)
+
+
+def test_consume_window_hostile_pagination_is_graphql_error():
+    """A windowed ``_WindowedConnectionRows`` with ``first: -1`` is ``GraphQLError`` (not ``ValueError``)."""
+    from django_strawberry_framework.connection import _WindowedConnectionRows
+
+    node = _make_sidecar_node_type("WindowHostileNode")
+    finalize_django_types()
+    conn_type = _connection_type_for(node)
+    # Create a window marker with one annotated row
+    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
+
+    row = Category(id=1, name="a")
+    setattr(row, WINDOW_ROW_NUMBER, 1)
+    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Category.objects.all())
+    info = SimpleNamespace(
+        selected_fields=[
+            SimpleNamespace(
+                name="items",
+                selections=[SimpleNamespace(name="edges", selections=[])],
+            ),
+        ],
+        context={},
+        schema=SimpleNamespace(config=strawberry_config()),
+        _raw_info=SimpleNamespace(field_nodes=[]),
+        path=SimpleNamespace(prev=None, key="items"),
+        variable_values={},
+        fragments={},
+        operation=None,
+        field_nodes=[],
+    )
+    with pytest.raises(GraphQLError, match="non-negative"):
+        conn_type.resolve_connection(window, info=info, first=-1)

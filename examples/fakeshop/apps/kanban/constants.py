@@ -144,6 +144,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/conftest.py",
     "examples/fakeshop/test_query/test_auth_api.py",
     "examples/fakeshop/test_query/test_client_api.py",
+    "examples/fakeshop/test_query/test_connection_pagination_api.py",
     "examples/fakeshop/test_query/test_debug_extension_api.py",
     "examples/fakeshop/test_query/test_debug_toolbar_api.py",
     "examples/fakeshop/test_query/test_error_policy_api.py",

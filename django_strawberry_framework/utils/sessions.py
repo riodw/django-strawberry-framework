@@ -100,6 +100,16 @@ import contextlib
 from collections.abc import AsyncIterator, MutableMapping
 from typing import Any
 
+__all__ = (
+    "ConnectionActorState",
+    "actor_lease",
+    "actor_transition",
+    "connection_actor_state",
+    "connection_was_authenticated",
+    "note_authenticated_actor",
+    "session_store_class",
+)
+
 
 def session_store_class() -> type:
     """Resolve the configured ``SESSION_ENGINE``'s ``SessionStore`` class.

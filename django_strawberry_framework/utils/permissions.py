@@ -86,6 +86,7 @@ __all__ = [
     "invoke_permission_method",
     "iter_input_items",
     "request_from_info",
+    "resolve_auth_aliases",
     "run_active_input_permission_checks",
     "verbatim_path",
 ]

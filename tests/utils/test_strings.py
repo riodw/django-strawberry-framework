@@ -177,7 +177,9 @@ def test_string_helpers_reject_non_string_inputs(helper):
 
 
 def test_snake_case_preserves_lru_cache_controls():
-    """The normalization boundary keeps the historical cache-control surface."""
+    """The normalization boundary keeps the historical cache-control surface and public name."""
+    assert snake_case.__name__ == "snake_case"
+    assert snake_case.__qualname__ == "snake_case"
     snake_case.cache_clear()
     assert snake_case.cache_parameters() == {"maxsize": 2048, "typed": False}
     before = snake_case.cache_info()

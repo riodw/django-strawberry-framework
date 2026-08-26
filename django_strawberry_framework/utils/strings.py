@@ -20,6 +20,14 @@ from collections.abc import Callable
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
+__all__ = (
+    "flatten_lookup_path",
+    "graphql_camel_name",
+    "pascal_case",
+    "pascal_case_or_raise",
+    "snake_case",
+)
+
 
 def _plain_text(value: object) -> str:
     """Normalize a string subclass before invoking string methods or cache machinery."""
@@ -97,7 +105,10 @@ def _snake_case_cached(name: str) -> str:
     return "".join(out)
 
 
-@functools.wraps(_snake_case_cached)
+@functools.wraps(
+    _snake_case_cached,
+    assigned=("__module__", "__doc__", "__annotations__"),
+)
 def snake_case(name: str) -> str:
     """Normalize ``name`` before consulting the bounded conversion cache."""
     return _snake_case_cached(_plain_text(name))

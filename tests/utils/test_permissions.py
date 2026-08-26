@@ -1185,3 +1185,12 @@ def test_channels_request_adapter_idempotent_wrapping():
     assert _request_from_context(adapter) is adapter
     assert _request_from_context({"request": adapter}) is adapter
     assert _request_from_context(type("Ctx", (), {"request": adapter})()) is adapter
+
+
+def test_permissions_all_exports_are_complete():
+    """Every symbol in permissions.__all__ exists and resolve_auth_aliases is exported."""
+    import django_strawberry_framework.utils.permissions as perm
+
+    assert "resolve_auth_aliases" in perm.__all__
+    for symbol in perm.__all__:
+        assert hasattr(perm, symbol), f"Symbol {symbol!r} in __all__ but not in permissions module"

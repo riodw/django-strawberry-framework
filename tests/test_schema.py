@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import strawberry
 
+from django_strawberry_framework.error_policy import ErrorPolicy
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.error_policy import DjangoErrorPolicyExtension
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
+from django_strawberry_framework.resource_policy import ResourcePolicy
 from django_strawberry_framework.schema import (
     DjangoMutationExecutionContext,
     DjangoSchema,
+    _async_mutation_lock,
+    _AsyncAliasLock,
     _extension_entry_matches,
     _with_error_policy_extension,
     _with_resource_policy_extension,
@@ -227,3 +234,87 @@ async def test_schema_execute_async_error():
     result = await schema.execute("query { errorField }")
     assert result.errors is not None
     assert len(result.errors) == 1
+
+
+def test_schema_policy_resolution_and_validation():
+    s1 = DjangoSchema(
+        query=DummyQuery,
+        resource_policy={"max_depth": 10},
+        error_policy={"enabled": False},
+    )
+    assert s1.resource_policy.max_depth == 10
+    assert s1.error_policy.enabled is False
+
+    rp = ResourcePolicy(max_depth=12)
+    ep = ErrorPolicy(enabled=True, message="Custom error")
+    s2 = DjangoSchema(query=DummyQuery, resource_policy=rp, error_policy=ep)
+    assert s2.resource_policy.max_depth == 12
+    assert s2.error_policy.message == "Custom error"
+
+    with pytest.raises(ConfigurationError):
+        DjangoSchema(query=DummyQuery, resource_policy={"max_depth": -5})
+
+    with pytest.raises(ConfigurationError):
+        DjangoSchema(query=DummyQuery, error_policy={"enabled": "invalid"})
+
+
+def test_async_mutation_lock_caching_per_alias():
+    lock_default_1 = _async_mutation_lock("default")
+    lock_default_2 = _async_mutation_lock("default")
+    lock_other = _async_mutation_lock("other_alias")
+
+    assert lock_default_1 is lock_default_2
+    assert lock_default_1 is not lock_other
+
+
+@pytest.mark.asyncio
+async def test_async_alias_lock_context_manager():
+    lock = _AsyncAliasLock()
+    async with lock:
+        assert lock._lock.locked()
+    assert not lock._lock.locked()
+
+
+@pytest.mark.django_db
+def test_execute_mutation_field_sync_exception_rolls_back():
+    class DummyMutationCls:
+        _mutation_meta = MagicMock(model=None)
+
+    ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
+    ctx.schema = MagicMock()
+    ctx.errors = []
+
+    with (
+        patch.object(ctx, "_marked_mutation_class", return_value=DummyMutationCls),
+        patch(
+            "graphql.execution.execute.ExecutionContext.execute_field",
+            side_effect=RuntimeError("sync field crash"),
+        ),
+        pytest.raises(RuntimeError, match="sync field crash"),
+    ):
+        ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db
+async def test_execute_mutation_field_async_exception_rolls_back():
+    class DummyMutationCls:
+        _mutation_meta = MagicMock(model=None)
+
+    ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
+    ctx.schema = MagicMock()
+    ctx.errors = []
+    ctx.is_awaitable = lambda val: asyncio.iscoroutine(val) or hasattr(val, "__await__")
+
+    async def async_failing_resolve(*args, **kwargs):
+        raise RuntimeError("async field crash")
+
+    with (
+        patch.object(ctx, "_marked_mutation_class", return_value=DummyMutationCls),
+        patch(
+            "graphql.execution.execute.ExecutionContext.execute_field",
+            return_value=async_failing_resolve(),
+        ),
+        pytest.raises(RuntimeError, match="async field crash"),
+    ):
+        await ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)

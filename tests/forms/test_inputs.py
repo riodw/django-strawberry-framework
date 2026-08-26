@@ -49,6 +49,7 @@ from django_strawberry_framework.forms.converter import (
 )
 from django_strawberry_framework.forms.inputs import (
     CREATE,
+    CREATE_SHAPED_KINDS,
     FORM,
     INPUTS_MODULE_PATH,
     PARTIAL,
@@ -58,6 +59,7 @@ from django_strawberry_framework.forms.inputs import (
     clear_form_input_namespace,
     form_input_type_name,
     get_form_fields,
+    guard_create_required_fields,
     guard_partial_required_column_less_fields,
     materialize_form_input_class,
     normalize_form_field_basis,
@@ -145,13 +147,14 @@ def _make_non_relay_target():
 # ---------------------------------------------------------------------------
 
 
-def test_inputs_module_path_constant():
-    """The hoisted constant matches the actual dotted path of ``forms/inputs.py``."""
+def test_inputs_module_path_and_kind_constants():
+    """The hoisted constants match the expected module path and create-shaped kinds."""
     assert INPUTS_MODULE_PATH == "django_strawberry_framework.forms.inputs"
+    assert frozenset({CREATE, FORM}) == CREATE_SHAPED_KINDS
 
 
 # ---------------------------------------------------------------------------
-# get_form_fields - discovery from base_fields, NO instantiation
+# get_form_fields / basis normalization - discovery from base_fields or hook
 # ---------------------------------------------------------------------------
 
 
@@ -190,6 +193,26 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
         KwargForm()  # proves the form genuinely cannot be instantiated no-arg
 
 
+def test_normalize_form_field_basis_rejects_none():
+    """A mutation hook returning ``None`` raises a fail-loud ``ConfigurationError``."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    with pytest.raises(ConfigurationError, match="must return a mapping.*not None"):
+        normalize_form_field_basis(ProbeForm, None)
+
+
+def test_form_field_basis_rejects_non_mapping_source():
+    """A non-mapping basis object raises a fail-loud ``ConfigurationError``."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    with pytest.raises(ConfigurationError, match="must return a mapping of field names"):
+        normalize_form_field_basis(ProbeForm, 123)
+
+
 def test_form_field_basis_rejects_malformed_names_and_field_values():
     """A hook-returned basis reports every bad key AND every bad value in one error."""
 
@@ -201,6 +224,53 @@ def test_form_field_basis_rejects_malformed_names_and_field_values():
             ProbeForm,
             {1: forms.CharField(), "name": object()},
         )
+
+
+def test_normalize_form_field_basis_valid_mapping():
+    """A valid hook-returned mapping normalizes to a fresh dict of field instances."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    custom = {"custom": forms.CharField()}
+    normalized = normalize_form_field_basis(ProbeForm, custom)
+    assert normalized == custom
+    assert normalized is not custom
+
+
+def test_build_form_inputs_with_custom_form_fields_basis():
+    """``build_form_inputs`` honors an explicit ``form_fields`` basis mapping."""
+
+    class DynamicForm(forms.Form):
+        pass
+
+    custom = {"title": forms.CharField(required=True), "notes": forms.CharField(required=False)}
+    cre, specs, par, _ = build_form_inputs(DynamicForm, form_fields=custom)
+    assert set(_field_map(cre)) == {"title", "notes"}
+    assert set(_field_map(par)) == {"title", "notes"}
+    assert len(specs) == 2
+
+
+def test_guard_create_required_fields_with_custom_form_fields():
+    """``guard_create_required_fields`` honors an explicit ``form_fields`` basis."""
+
+    class DynamicForm(forms.Form):
+        pass
+
+    custom = {"req": forms.CharField(required=True), "opt": forms.CharField(required=False)}
+    with pytest.raises(ConfigurationError, match="req"):
+        guard_create_required_fields(DynamicForm, ("opt",), form_fields=custom)
+
+
+def test_guard_partial_required_column_less_fields_with_custom_form_fields():
+    """``guard_partial_required_column_less_fields`` honors an explicit ``form_fields`` basis."""
+
+    class DynamicForm(forms.Form):
+        pass
+
+    custom = {"req": forms.CharField(required=True), "opt": forms.CharField(required=False)}
+    with pytest.raises(ConfigurationError, match="req"):
+        guard_partial_required_column_less_fields(DynamicForm, ("opt",), form_fields=custom)
 
 
 # ---------------------------------------------------------------------------

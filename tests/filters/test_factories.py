@@ -742,6 +742,47 @@ def test_filter_arguments_factory_rejects_subclassing():
     assert "does not support subclassing" in str(excinfo.value)
 
 
+@pytest.mark.django_db
+def test_filter_arguments_factory_empty_filterset_emits_logic_fields():
+    """A FilterSet with empty fields still emits the and_/or_/not_ logic fields."""
+
+    class EmptyFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = []
+
+    factory = FilterArgumentsFactory(EmptyFilter)
+    input_cls = factory.arguments
+    field_names = {f.python_name for f in input_cls.__strawberry_definition__.fields}
+    assert field_names == {"and_", "or_", "not_"}
+
+
+@pytest.mark.django_db
+def test_filter_arguments_factory_skips_placeholder_related_filter_target():
+    """A RelatedFilter(None, ...) placeholder is skipped during BFS traversal."""
+
+    class BranchFilterPlaceholder(FilterSet):
+        shelves = RelatedFilter(None, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    factory = FilterArgumentsFactory(BranchFilterPlaceholder)
+    input_cls = factory.arguments
+    assert "BranchFilterPlaceholderInputType" in FilterArgumentsFactory.input_object_types
+
+
+@pytest.mark.django_db
+def test_filter_arguments_factory_builds_dynamic_filterset_input():
+    """Dynamic FilterSets produced by get_filterset_class can be built by the factory."""
+    dyn_cls = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
+    factory = FilterArgumentsFactory(dyn_cls)
+    input_cls = factory.arguments
+    assert input_cls is not None
+    assert "CategoryAutoFilterInputType" in FilterArgumentsFactory.input_object_types
+
+
 # Touch `NumberFilter` import to ensure the import is exercised (used
 # implicitly by django-filter for the integer-PK FK in the
 # `test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_relay_target`

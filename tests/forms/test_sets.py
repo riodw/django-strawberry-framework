@@ -1076,3 +1076,75 @@ def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_
             class Meta:
                 form_class = form_cls
                 operation = invalid_op
+
+
+def test_input_type_name_seams():
+    """Both form bases expose input_type_name deriving the canonical input class name."""
+    form_cls = _item_model_form()
+
+    class CreateItem(DjangoModelFormMutation):
+        class Meta:
+            form_class = form_cls
+            operation = "create"
+
+    class UpdateItem(DjangoModelFormMutation):
+        class Meta:
+            form_class = form_cls
+            operation = "update"
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = _contact_form()
+            permission_classes = []
+
+    assert CreateItem.input_type_name(CreateItem._mutation_meta) == "ItemModelFormInput"
+    assert UpdateItem.input_type_name(UpdateItem._mutation_meta) == "ItemModelFormPartialInput"
+    assert Submit.input_type_name(Submit._mutation_meta) == "ContactFormInput"
+
+
+def test_plain_form_check_permission_seam():
+    """DjangoFormMutation.check_permission runs the write-auth permission walk."""
+
+    class AllowMutation(DjangoFormMutation):
+        class Meta:
+            form_class = _contact_form()
+            permission_classes = []
+
+    assert AllowMutation().check_permission(None, operation="form", data={}) is True
+
+    class DenyMutation(DjangoFormMutation):
+        class Meta:
+            form_class = _contact_form()
+            permission_classes = [DenyAll]
+
+    assert DenyMutation().check_permission(None, operation="form", data={}) is False
+
+
+def test_cached_build_form_input_partial_column_less_guard():
+    """PARTIAL build path executes guard_partial_required_column_less_fields and builds partial."""
+
+    class ExtraRequiredForm(forms.ModelForm):
+        confirm = forms.CharField(required=True)
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    with pytest.raises(ConfigurationError, match="confirm"):
+        _cached_build_form_input(
+            ExtraRequiredForm,
+            operation_kind="partial",
+            fields=("name", "category"),
+            exclude=None,
+            guard_required=True,
+        )
+
+    input_cls, field_specs = _cached_build_form_input(
+        _item_model_form(),
+        operation_kind="partial",
+        fields=("name", "category"),
+        exclude=None,
+        guard_required=True,
+    )
+    assert input_cls is not None
+    assert len(field_specs) == 2

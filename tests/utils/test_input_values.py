@@ -405,6 +405,57 @@ def test_active_field_list_skips_inactive_elements_and_accepts_none_related_mapp
     assert [(field.python_attr, field.kind) for field in fields] == [("name", LEAF)]
 
 
+def test_input_field_value_reads_dict_and_dataclass_fields():
+    """``input_field_value`` reads single fields or returns None for missing fields/non-walkable inputs."""
+    assert input_field_value({"a": 10}, "a") == 10
+    assert input_field_value({"a": 10}, "missing") is None
+    assert input_field_value(None, "a") is None
+    assert input_field_value(42, "a") is None
+
+    @strawberry.input
+    class _In:
+        title: str = "item"
+
+    assert input_field_value(_In(), "title") == "item"
+    assert input_field_value(_In(), "missing") is None
+
+
+def test_field_name_bypasses_hostile_str_subclass_str_override():
+    """``_field_name`` safely normalizes string subclass keys without calling overridden __str__."""
+
+    class _HostileStr(str):
+        def __str__(self):
+            raise RuntimeError("hostile __str__ override")
+
+    key = _HostileStr("field_name")
+    assert iter_input_items({key: "value"}) == [("field_name", "value")]
+    assert input_field_value({key: "value"}, key) == "value"
+
+
+def test_order_list_elements_reject_primitive_values():
+    """When handle_top_level_list is True, non-mapping list elements raise ConfigurationError."""
+
+    class _Set:
+        related_orders = {}
+
+    config = SetInputTraversal(
+        field_specs={},
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match="Order input list elements must be mapping or dataclass values",
+    ):
+        list(iter_active_fields(_Set, ["string_element"], config))
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Order input list elements must be mapping or dataclass values",
+    ):
+        list(iter_active_fields(_Set, [123], config))
+
+
 def test_default_set_input_traversal_depth():
     """DEFAULT_SET_INPUT_TRAVERSAL_DEPTH provides a neutral recursion ceiling across set families."""
     assert DEFAULT_SET_INPUT_TRAVERSAL_DEPTH == 8

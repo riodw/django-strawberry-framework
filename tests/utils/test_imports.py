@@ -108,6 +108,38 @@ def test_loaded_attr_returns_none_without_importing_absent_module():
     assert module_path not in sys.modules
 
 
+def test_loaded_attr_returns_none_when_module_is_none_sentinel(monkeypatch):
+    monkeypatch.setitem(sys.modules, "dsf_sentinel_none_module", None)
+    assert loaded_attr("dsf_sentinel_none_module", "Anything") is None
+
+
+def test_loaded_attr_returns_attribute_when_module_is_already_loaded():
+    assert loaded_attr("sys", "version") == sys.version
+
+
+def test_loaded_attr_raises_attribute_error_when_loaded_module_lacks_attr():
+    with pytest.raises(AttributeError):
+        loaded_attr("sys", "definitely_not_a_sys_attribute_12345")
+
+
+def test_import_attr_returns_attribute_on_success():
+    assert import_attr("sys", "version") == sys.version
+
+
+def test_import_attr_raises_import_error_on_unreachable_module():
+    with pytest.raises(ImportError):
+        import_attr("definitely_not_an_installed_module_dsf", "Anything")
+
+
+def test_import_attr_raises_attribute_error_on_missing_attribute():
+    with pytest.raises(AttributeError):
+        import_attr("sys", "definitely_not_a_sys_attribute_12345")
+
+
+def test_import_attr_if_importable_returns_none_on_absent_module():
+    assert import_attr_if_importable("definitely_not_an_installed_module_dsf", "Anything") is None
+
+
 def test_import_helpers_normalize_hostile_string_subclass_names(monkeypatch):
     """A hostile name must not escape through ``sys.modules`` hashing or getattr."""
     module_path = "dsf_hostile_name_module"

@@ -1933,3 +1933,25 @@ def test_validate_nested_fields_child_serializer_errors():
                 serializer_class = Parent2
                 operation = "create"
                 nested_fields = {"child": NestedSerializerConfig()}
+
+
+def test_default_serializer_mutation_instance_hook_methods():
+    """Verify default instance hook methods on SerializerMutation."""
+    from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
+
+    serializer_cls = _item_serializer()
+
+    class CreateItem(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+
+    instance = CreateItem()
+    context = SerializerHookContext(operation="create", write_alias="default", instance_pk=None)
+    data = {"name": "test"}
+
+    assert instance.get_serializer_kwargs(info=None, data=data, hook_context=context) == {
+        "data": data,
+    }
+    assert instance.get_serializer_injected_data(info=None, data=data, hook_context=context) == {}
+    assert instance.get_serializer_save_kwargs(info=None, data=data, hook_context=context) == {}

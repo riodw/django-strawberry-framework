@@ -5,6 +5,7 @@ from enum import Enum
 import pytest
 import strawberry
 from apps.products.models import Category
+from strawberry import relay
 
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.errors import field_error
@@ -27,6 +28,8 @@ from django_strawberry_framework.utils.write_values import (
     relation_into,
     scalar_into,
     store_decoded,
+    type_check_relation_id,
+    unencodable_text_error,
 )
 
 
@@ -502,3 +505,140 @@ def test_decode_provided_fields_handles_none_and_non_strawberry_data():
         is None
     )
     assert dest == {}
+
+
+def test_unencodable_text_error_handles_non_strings_and_valid_strings():
+    """unencodable_text_error returns None for non-strings and valid UTF-8 strings."""
+    assert unencodable_text_error("field", None) is None
+    assert unencodable_text_error("field", 123) is None
+    assert unencodable_text_error("field", object()) is None
+    assert unencodable_text_error("field", "valid unicode string") is None
+
+    err = unencodable_text_error("field", "\ud800")
+    assert err is not None
+    assert err.field == "field"
+    assert err.codes == ["invalid"]
+
+
+@pytest.mark.django_db
+def test_type_check_relation_id_with_global_id():
+    """GlobalID values are decoded against the target model; non-OK results return relation_field_error."""
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.finalizer import finalize_django_types
+
+    class GidCatType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    category = Category.objects.create(name="RelayCatTest")
+    valid_gid = relay.GlobalID("products.category", str(category.pk))
+    pk, error = type_check_relation_id(
+        valid_gid,
+        graphql_name="categoryId",
+        related_model=Category,
+    )
+    assert error is None
+    assert pk == category.pk
+
+    # Wrong model GlobalID
+    wrong_gid = relay.GlobalID("unknown.model", str(category.pk))
+    pk, error = type_check_relation_id(
+        wrong_gid,
+        graphql_name="categoryId",
+        related_model=Category,
+    )
+    assert pk is None
+    assert error is not None
+    assert error.field == "categoryId"
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_handles_invalid_id_and_missing_object():
+    """decode_visible_relation returns field errors for type-check failure or missing/hidden object."""
+    recourse = "Use a synchronous visibility hook."
+
+    # Type check failure branch
+    val, error = decode_visible_relation(
+        "not_an_int",
+        graphql_name="categoryId",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+        skip=lambda x: x is None,
+        project=lambda obj: obj.pk,
+    )
+    assert val is None
+    assert error is not None
+    assert error.field == "categoryId"
+
+    # Missing / hidden object branch (type check passes for 999999, but obj is None)
+    val, error = decode_visible_relation(
+        999999,
+        graphql_name="categoryId",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+        skip=lambda x: x is None,
+        project=lambda obj: obj.pk,
+    )
+    assert val is None
+    assert error is not None
+    assert error.field == "categoryId"
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_rejects_missing_pks():
+    """decode_visible_relation_ids returns relation_field_error when any requested pk is not found."""
+    existing = Category.objects.create(name="BatchExisting")
+    recourse = "Use a synchronous visibility hook."
+
+    pks, error = decode_visible_relation_ids(
+        [existing.pk, 999999],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert pks is None
+    assert error is not None
+    assert error.field == "categoryIds"
+
+
+def test_decode_provided_fields_short_circuits_on_handler_error():
+    """decode_provided_fields immediately halts and returns the error from a failing handler."""
+
+    @strawberry.input
+    class InputData:
+        first: str = "first_val"
+        second: str = "second_val"
+
+    specs = [
+        _spec(attr="first", kind="fail_kind", target="first"),
+        _spec(attr="second", kind=SCALAR, target="second"),
+    ]
+    failing_handler_called = []
+    scalar_handler_called = []
+
+    def failing_handler(spec, val):
+        failing_handler_called.append((spec.input_attr, val))
+        return field_error(spec.graphql_name, "handler failed", codes="custom_error")
+
+    def dummy_scalar(spec, val):
+        scalar_handler_called.append((spec.input_attr, val))
+        return None
+
+    error = decode_provided_fields(
+        specs,
+        InputData(),
+        handlers={"fail_kind": failing_handler},
+        scalar_handler=dummy_scalar,
+    )
+    assert error is not None
+    assert error.field == "first"
+    assert error.codes == ["custom_error"]
+    assert len(failing_handler_called) == 1
+    assert len(scalar_handler_called) == 0

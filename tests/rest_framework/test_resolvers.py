@@ -42,6 +42,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.http import HttpRequest
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
 from rest_framework.validators import UniqueTogetherValidator, UniqueValidator
 from strawberry import relay
 
@@ -66,6 +67,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.utils.inputs import InputFieldSpec
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.write_transaction import (
     managed_write_transaction,
@@ -4943,3 +4945,121 @@ def test_decode_nested_multi_tolerates_none_item_in_list():
         assert any("shelves" in err.field for err in result.errors)
     finally:
         registry.clear()
+
+
+def test_hook_context_and_upload_metadata_invariants():
+    """``SerializerHookContext`` and ``UploadMetadata`` are frozen, slotted, and immutable."""
+    from dataclasses import FrozenInstanceError
+
+    ctx = SerializerHookContext(
+        operation="update",
+        write_alias="default",
+        instance_pk=42,
+    )
+    assert ctx.operation == "update"
+    assert ctx.write_alias == "default"
+    assert ctx.instance_pk == 42
+    assert not hasattr(ctx, "__dict__")
+
+    with pytest.raises(FrozenInstanceError):
+        ctx.operation = "create"  # type: ignore[misc]
+
+    ctx_same = SerializerHookContext(
+        operation="update",
+        write_alias="default",
+        instance_pk=42,
+    )
+    assert ctx == ctx_same
+    assert hash(ctx) == hash(ctx_same)
+
+    meta = UploadMetadata(
+        name="photo.jpg",
+        size=2048,
+        content_type="image/jpeg",
+    )
+    assert meta.name == "photo.jpg"
+    assert meta.size == 2048
+    assert meta.content_type == "image/jpeg"
+    assert not hasattr(meta, "__dict__")
+
+    with pytest.raises(FrozenInstanceError):
+        meta.name = "other.jpg"  # type: ignore[misc]
+
+    meta_same = UploadMetadata(
+        name="photo.jpg",
+        size=2048,
+        content_type="image/jpeg",
+    )
+    assert meta == meta_same
+    assert hash(meta) == hash(meta_same)
+
+
+def test_decode_nested_multi_decodes_items_and_handles_item_error():
+    """_decode_nested decodes items under NESTED_MULTI and short-circuits on child error."""
+    import strawberry
+
+    @strawberry.input
+    class ChildInput:
+        name: str
+
+    spec = InputFieldSpec(
+        input_attr="items",
+        graphql_name="items",
+        target_name="items",
+        kind=NESTED_MULTI,
+        nested_specs=[
+            InputFieldSpec(
+                input_attr="name",
+                graphql_name="name",
+                target_name="name",
+                kind="SCALAR",
+            ),
+        ],
+    )
+
+    val = [ChildInput(name="item1"), ChildInput(name="item2")]
+    decoded, err = serializer_resolvers._decode_nested(spec, val, None, path_prefix="items")
+    assert err is None
+    assert decoded == [{"name": "item1"}, {"name": "item2"}]
+
+    val_bad = [ChildInput(name="item1"), "not_an_input_object"]
+    decoded_bad, err_bad = serializer_resolvers._decode_nested(
+        spec,
+        val_bad,
+        None,
+        path_prefix="items",
+    )
+    assert decoded_bad is None
+    assert err_bad is not None
+    assert err_bad.field == "items.1"
+    assert err_bad.messages == ["Invalid input object."]
+
+
+def test_serializer_errors_to_field_errors_direct_leaf():
+    """serializer_errors_to_field_errors handles direct leaf errors without nested dicts."""
+    err = ErrorDetail("Direct error", code="invalid")
+    res = serializer_resolvers.serializer_errors_to_field_errors(err, {})
+    assert len(res) == 1
+    assert res[0].field == NON_FIELD_ERROR_KEY
+    assert res[0].messages == ["Direct error"]
+    assert res[0].codes == ["invalid"]
+
+
+def test_serializer_decode_step_returns_field_errors_on_decode_failure():
+    """_serializer_decode_step wraps decode error into a list of field errors."""
+
+    class DummyMutation:
+        _input_field_specs = [
+            InputFieldSpec(
+                input_attr="name",
+                graphql_name="name",
+                target_name="name",
+                kind="SCALAR",
+            ),
+        ]
+
+    res = serializer_resolvers._serializer_decode_step(DummyMutation, "not_a_dataclass", None)
+    assert isinstance(res, list)
+    assert len(res) == 1
+    assert res[0].field == NON_FIELD_ERROR_KEY
+    assert res[0].messages == ["Invalid input object."]

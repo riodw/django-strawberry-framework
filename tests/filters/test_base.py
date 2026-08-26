@@ -1265,7 +1265,10 @@ def test_integer_range_filter_malformed_values_pass_through():
 def test_filters_base_edge_cases():
     """Edge cases for _coerce_int_in_members and resolve_globalid_target_definition."""
     from django_strawberry_framework.filters.base import (
+        _GLOBALID_RELATION_PK_ATTR,
         _coerce_int_in_members,
+        _marked_pk_field_name,
+        _relation_uses_non_pk_to_field,
         resolve_globalid_target_definition,
     )
 
@@ -1274,3 +1277,28 @@ def test_filters_base_edge_cases():
 
     # Line 522: owner is None
     assert resolve_globalid_target_definition(None, "shelf__branch__id") is None
+
+    # _relation_uses_non_pk_to_field: non-relation field or None
+    assert _relation_uses_non_pk_to_field(None) is False
+    assert _relation_uses_non_pk_to_field(object()) is False
+
+    # _marked_pk_field_name: unmarked or missing field_name
+    f = GlobalIDFilter()
+    assert _marked_pk_field_name(f) is None
+
+    setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+    f.field_name = None
+    assert _marked_pk_field_name(f) is None
+
+    f.field_name = "target"
+    assert _marked_pk_field_name(f) == "target__pk"
+
+
+def test_related_filter_get_queryset_target_without_model():
+    """`RelatedFilter.get_queryset` safely returns None when target FilterSet has no model."""
+
+    class _NoModelFilterSet:
+        _meta = None
+
+    rel = RelatedFilter(_NoModelFilterSet)
+    assert rel.get_queryset(request=None) is None

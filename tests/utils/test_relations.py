@@ -24,6 +24,8 @@ from django_strawberry_framework.utils.relations import (
     RelationPathHop,
     _is_traversable_relation,
     _path_traverses_to_many_cached,
+    _relation_bool,
+    _resolve_segment_field,
     classify_path,
     has_composite_pk,
     instance_accessor,
@@ -904,6 +906,42 @@ def test_has_composite_pk_hostile_metadata_raises_typed_configuration_error():
     """Composite-PK detection must not leak a malformed model's metadata error."""
     with pytest.raises(ConfigurationError):
         has_composite_pk(_HostileRelationMetadata())
+
+
+def test_has_composite_pk_cardinality():
+    """Composite-PK returns True only when pk_fields contains multiple fields."""
+    assert has_composite_pk(Book) is False
+
+    single_pk_model = SimpleNamespace(
+        _meta=SimpleNamespace(pk_fields=[SimpleNamespace(name="id")]),
+    )
+    assert has_composite_pk(single_pk_model) is False
+
+    multi_pk_model = SimpleNamespace(
+        _meta=SimpleNamespace(
+            pk_fields=[SimpleNamespace(name="tenant_id"), SimpleNamespace(name="id")],
+        ),
+    )
+    assert has_composite_pk(multi_pk_model) is True
+
+
+def test_relation_bool_none_value_falls_back_to_default():
+    """A None-valued attribute in _relation_bool adopts the provided default."""
+    field_with_none = SimpleNamespace(flag=None)
+    assert _relation_bool(field_with_none, "flag", default=True) is True
+    assert _relation_bool(field_with_none, "flag", default=False) is False
+
+
+def test_resolve_segment_field_unexpected_exception_converts_to_field_does_not_exist():
+    """Unexpected exception in get_field converts into FieldDoesNotExist."""
+
+    class _ExplodingMeta:
+        def get_field(self, _segment):
+            raise RuntimeError("meta get_field exploded")
+
+    exploding_model = SimpleNamespace(_meta=_ExplodingMeta())
+    with pytest.raises(FieldDoesNotExist):
+        _resolve_segment_field(exploding_model, "field")
 
 
 def test_relation_metadata_rejects_non_boolean_and_non_string_slots():

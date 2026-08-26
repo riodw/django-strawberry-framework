@@ -350,3 +350,126 @@ def test_active_input_permission_mixin_hooks():
 
     # _run_permission_checks short-circuits on inactive input value
     _ProbePermissionSet._run_permission_checks(None, None)
+
+
+def test_lazy_related_class_mixin_fallback_and_non_class_types():
+    import pytest
+
+    from django_strawberry_framework.sets_mixins import LazyRelatedClassMixin
+
+    class _Scope:
+        pass
+
+    mixin = LazyRelatedClassMixin()
+
+    # Non-callable non-string returned as-is
+    sentinel = 12345
+    assert mixin.resolve_lazy_class(sentinel, None) == sentinel
+
+    # Unresolvable relative import with bound_class raises ImportError
+    with pytest.raises(ImportError):
+        mixin.resolve_lazy_class("NonExistentSiblingClass12345", _Scope)
+
+
+def test_expanded_once_resets_guard_on_exception():
+    import pytest
+
+    from django_strawberry_framework.sets_mixins import expanded_once
+
+    class _ErrorSet:
+        _guard = False
+
+    def _failing_build():
+        assert _ErrorSet._guard is True
+        raise RuntimeError("simulated expansion error")
+
+    with pytest.raises(RuntimeError, match="simulated expansion error"):
+        expanded_once(
+            _ErrorSet,
+            cache_attr="_cache",
+            guard_attr="_guard",
+            build=_failing_build,
+        )
+
+    # Guard is reset via finally block
+    assert _ErrorSet._guard is False
+
+
+def test_active_input_permission_mixin_delegates_and_fires_checks():
+    import types
+    from dataclasses import dataclass
+
+    from django_strawberry_framework.sets_mixins import (
+        ActiveInputPermissionAttrs,
+        ActiveInputPermissionMixin,
+    )
+
+    @dataclass
+    class _FilterInput:
+        title: str = "test"
+
+    class _GatedSet(ActiveInputPermissionMixin):
+        _permission = ActiveInputPermissionAttrs(
+            family_label="Gated",
+            related_attr="related_items",
+            target_attr="gated_target",
+            field_specs={},
+            unset_sentinel=None,
+        )
+        checked_fields: list[str] = []
+
+        def check_title_permission(self, request):
+            self.checked_fields.append("title")
+
+    # Delegate test: request_from_info
+    mock_request = object()
+    mock_info = types.SimpleNamespace(context=types.SimpleNamespace(request=mock_request))
+    assert _GatedSet._request_from_info(mock_info) is mock_request
+
+    # Delegate test: extract_branch_value
+    input_obj = _FilterInput(title="custom")
+    assert _GatedSet._extract_branch_value(input_obj, "title") == "custom"
+
+    # Delegate test: permission fallback path
+    assert _GatedSet._permission_fallback_path("custom_field") == "custom_field"
+
+    # Execution test: run_permission_checks triggers check_title_permission
+    _GatedSet._run_permission_checks(input_obj, mock_request)
+    assert "title" in _GatedSet.checked_fields
+
+
+def test_collect_related_declarations_diamond_tombstone():
+    from django_strawberry_framework.sets_mixins import (
+        RelatedSetTargetMixin,
+        collect_related_declarations,
+    )
+
+    class _Decl(RelatedSetTargetMixin):
+        _target_attr = "_t"
+        _owner_attr = "_o"
+
+    class _Root:
+        pass
+
+    class _BaseLeft(_Root):
+        # Left base has no declaration in its collection map and a class-level tombstone
+        related_items = {}
+        shared_rel = "tombstone_attribute"
+
+    class _BaseRight(_Root):
+        related_items = {"shared_rel": _Decl()}
+
+    class _DiamondSubclass:
+        pass
+
+    # Left base comes first in bases list, has a tombstone attribute shadowing the declaration
+    collected = collect_related_declarations(
+        _DiamondSubclass,
+        (_BaseLeft, _BaseRight),
+        own_items=[],
+        declaration_type=_Decl,
+        collection_attr="related_items",
+        inherit_from_bases=True,
+    )
+    # The tombstone on _BaseLeft shadows and removes shared_rel
+    assert "shared_rel" not in collected

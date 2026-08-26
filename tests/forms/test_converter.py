@@ -35,6 +35,7 @@ from django_strawberry_framework.forms.converter import (
     RELATION_SINGLE,
     SCALAR,
     convert_form_field,
+    form_field_required,
 )
 
 
@@ -52,6 +53,9 @@ from django_strawberry_framework.forms.converter import (
         (forms.URLField(assume_scheme="https"), str),
         (forms.RegexField(regex=r".*"), str),
         (forms.ChoiceField(), str),
+        (forms.TypedChoiceField(), str),
+        (forms.FilePathField(path="/tmp"), str),
+        (forms.GenericIPAddressField(), str),
         (forms.Field(), str),
         (forms.IntegerField(), int),
         (forms.FloatField(), float),
@@ -62,6 +66,7 @@ from django_strawberry_framework.forms.converter import (
         (forms.DateTimeField(), datetime.datetime),
         (forms.TimeField(), datetime.time),
         (forms.MultipleChoiceField(), list[str]),
+        (forms.TypedMultipleChoiceField(), list[str]),
     ],
 )
 def test_scalar_field_annotations(field, expected):
@@ -254,3 +259,75 @@ def test_unknown_field_with_hostile_repr_still_raises_configuration_error():
 
     with pytest.raises(ConfigurationError, match="unprintable HostileField"):
         convert_form_field(HostileField())
+
+
+def test_form_field_required_column_backed_variations():
+    """``form_field_required`` accounts for backing column nullability on exact NullBooleanField."""
+
+    class MockColumn:
+        def __init__(self, null: bool):
+            self.null = null
+
+    class MockColumnNoNull:
+        pass
+
+    nb_req = forms.NullBooleanField(required=True)
+    nb_opt = forms.NullBooleanField(required=False)
+
+    # Exact NullBooleanField is forced optional when column is None or column.null is True
+    assert form_field_required(nb_req, column=None) is False
+    assert form_field_required(nb_opt, column=None) is False
+    assert form_field_required(nb_req, column=MockColumn(null=True)) is False
+    assert form_field_required(nb_req, column=MockColumnNoNull()) is False
+
+    # Backed by non-null column, exact NullBooleanField preserves field.required
+    assert form_field_required(nb_req, column=MockColumn(null=False)) is True
+    assert form_field_required(nb_opt, column=MockColumn(null=False)) is False
+
+    # Non-NullBooleanField always returns field.required regardless of column
+    char_req = forms.CharField(required=True)
+    char_opt = forms.CharField(required=False)
+    assert form_field_required(char_req, column=None) is True
+    assert form_field_required(char_req, column=MockColumn(null=True)) is True
+    assert form_field_required(char_opt, column=None) is False
+    assert form_field_required(char_opt, column=MockColumn(null=False)) is False
+
+
+def test_custom_subclasses_of_precheck_kinds():
+    """Custom subclasses of relation, file, and multi-choice fields resolve to expected kinds."""
+
+    class CustomModelChoiceField(forms.ModelChoiceField):
+        pass
+
+    class CustomModelMultipleChoiceField(forms.ModelMultipleChoiceField):
+        pass
+
+    class CustomFileField(forms.FileField):
+        pass
+
+    class CustomImageField(forms.ImageField):
+        pass
+
+    class CustomMultipleChoiceField(forms.MultipleChoiceField):
+        pass
+
+    assert convert_form_field(CustomModelChoiceField(queryset=None)).kind == RELATION_SINGLE
+    assert convert_form_field(CustomModelMultipleChoiceField(queryset=None)).kind == RELATION_MULTI
+    assert convert_form_field(CustomFileField()).kind == FILE
+    assert convert_form_field(CustomImageField()).kind == FILE
+    conv_multi = convert_form_field(CustomMultipleChoiceField())
+    assert conv_multi.kind == SCALAR
+    assert conv_multi.annotation == list[str]
+
+
+def test_unsupported_django_form_fields_raise():
+    """Form fields without scalar mapping or supported ancestor raise ConfigurationError."""
+    unsupported_fields = [
+        forms.DurationField(),
+        forms.MultiValueField(fields=[forms.CharField()]),
+        forms.SplitDateTimeField(),
+        forms.ComboField(fields=[forms.CharField()]),
+    ]
+    for field in unsupported_fields:
+        with pytest.raises(ConfigurationError, match="Unsupported form field type"):
+            convert_form_field(field)

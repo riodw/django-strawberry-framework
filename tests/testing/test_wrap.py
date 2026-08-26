@@ -200,3 +200,32 @@ def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr(
         safe_wrap_connection_method(connection, "cursor", _HostileRepr())
 
     assert connection.__dict__.get("cursor") is installed_before
+
+
+def test_safe_wrap_connection_method_accepts_callable_class_instance():
+    """Any callable object (such as an instance with __call__) is accepted."""
+    connection = connections["default"]
+    original_cursor = connection.cursor
+
+    class _CallableWrapper:
+        def __call__(self, *args, **kwargs):
+            return original_cursor(*args, **kwargs)
+
+    instance = _CallableWrapper()
+    try:
+        installed = safe_wrap_connection_method(connection, "cursor", instance)
+        assert installed is True
+        assert connection.cursor is instance
+    finally:
+        connection.cursor = original_cursor
+
+
+def test_safe_wrap_connection_method_raises_attribute_error_on_missing_method():
+    """Attempting to wrap a non-existent connection method raises AttributeError."""
+    connection = connections["default"]
+    with pytest.raises(AttributeError):
+        safe_wrap_connection_method(
+            connection,
+            "non_existent_method_on_connection",
+            lambda: None,
+        )

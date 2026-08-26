@@ -526,7 +526,69 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
             self.assertResponseNoErrors(res)
         self.assertIn("boom", str(ctx.exception))
 
+    def test_assert_response_no_errors_fails_with_custom_msg(self):
+        res = self._canned(errors=[{"message": "nope"}], data=None)
+        with self.assertRaises(AssertionError) as ctx:
+            self.assertResponseNoErrors(res, msg="custom no-errors failure")
+        self.assertIn("custom no-errors failure", str(ctx.exception))
+
     def test_assert_response_has_errors_fails_on_a_clean_response(self):
         res = self._canned(errors=None, data={"__typename": "Query"})
         with self.assertRaises(AssertionError):
             self.assertResponseHasErrors(res)
+
+    def test_assert_response_has_errors_fails_with_custom_msg(self):
+        res = self._canned(errors=None, data={"__typename": "Query"})
+        with self.assertRaises(AssertionError) as ctx:
+            self.assertResponseHasErrors(res, msg="custom has-errors failure")
+        self.assertIn("custom has-errors failure", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Login bracket lifecycle and exception cleanup (DB-free mechanics).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingAuthClient:
+    """A minimal client recording force_login and logout calls."""
+
+    def __init__(self):
+        self.logins = []
+        self.logouts = 0
+
+    def force_login(self, user):
+        self.logins.append(user)
+
+    def logout(self):
+        self.logouts += 1
+
+
+def test_sync_login_bracket_guarantees_logout_on_exception():
+    """Sync ``login()`` calls ``force_login`` and runs ``logout`` on exit even on exception."""
+    recording = _RecordingAuthClient()
+    client = TestClient(client=recording)
+    user = object()
+
+    with pytest.raises(RuntimeError):
+        with client.login(user):
+            assert recording.logins == [user]
+            assert recording.logouts == 0
+            raise RuntimeError("sync login error")
+
+    assert recording.logouts == 1
+
+
+@pytest.mark.asyncio
+async def test_async_login_bracket_guarantees_logout_on_exception():
+    """Async ``login()`` calls ``force_login`` and runs ``logout`` on exit even on exception."""
+    recording = _RecordingAuthClient()
+    client = AsyncTestClient(client=recording)
+    user = object()
+
+    with pytest.raises(RuntimeError):
+        async with client.login(user):
+            assert recording.logins == [user]
+            assert recording.logouts == 0
+            raise RuntimeError("async login error")
+
+    assert recording.logouts == 1

@@ -58,6 +58,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     serializer_field_graphql_name,
     serializer_only_relation_annotation,
 )
+from django_strawberry_framework.scalars import Upload
 
 
 @pytest.fixture
@@ -1193,3 +1194,53 @@ def test_unsupported_serializer_field_with_hostile_field_name_repr():
         match="on serializer field <unavailable>",
     ):
         convert_serializer_field(field)
+
+
+def test_backing_model_field_nonexistent_column_returns_none():
+    """A serializer field referencing a non-existent model field returns None."""
+
+    class MissingFieldSer(serializers.ModelSerializer):
+        extra = serializers.CharField(source="nonexistent_column")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("extra",)
+
+    field = MissingFieldSer().fields["extra"]
+    assert backing_model_field(product_models.Item, field) is None
+
+
+def test_resolve_serializer_field_model_backed_file_field():
+    """A FileField backed by a models.FileField resolves to Upload annotation and kind FILE."""
+
+    class FileItem(models.Model):
+        doc = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class FileItemSer(serializers.ModelSerializer):
+        class Meta:
+            model = FileItem
+            fields = ("doc",)
+
+    field = FileItemSer().fields["doc"]
+    python_attr, annotation, spec = resolve_serializer_field(field, FileItem, "FileItemInput")
+    assert python_attr == "doc"
+    assert annotation is Upload
+    assert spec.kind == FILE
+    assert spec.graphql_name == "doc"
+
+
+def test_resolve_serializer_field_column_less_file_field():
+    """A FileField on a plain Serializer resolves to Upload annotation and kind FILE."""
+
+    class PlainFileSer(serializers.Serializer):
+        avatar = serializers.FileField()
+
+    field = PlainFileSer().fields["avatar"]
+    python_attr, annotation, spec = resolve_serializer_field(field, None, "PlainFileInput")
+    assert python_attr == "avatar"
+    assert annotation is Upload
+    assert spec.kind == FILE
+    assert spec.graphql_name == "avatar"

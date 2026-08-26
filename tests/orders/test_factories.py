@@ -526,6 +526,121 @@ def test_get_orderset_class_rejects_non_model_when_dynamic():
         get_orderset_class(None, model=object, fields=["title"])
 
 
+def test_factory_builds_dynamic_orderset():
+    """OrderArgumentsFactory builds input class for dynamic OrderSet from get_orderset_class."""
+    dynamic_cls = get_orderset_class(None, model=library_models.Book, fields=["title"])
+    factory = OrderArgumentsFactory(dynamic_cls)
+    input_cls = factory.arguments
+    assert input_cls.__name__ == "BookAutoOrderInputType"
+    assert "BookAutoOrderInputType" in OrderArgumentsFactory.input_object_types
+    assert OrderArgumentsFactory._type_orderset_registry["BookAutoOrderInputType"] is dynamic_cls
+
+
+def test_factory_handles_diamond_dependency_graph():
+    """A -> B -> D and A -> C -> D diamond graph builds D once and all 4 classes exist."""
+
+    class DOrder(OrderSet):
+        class Meta:
+            model = library_models.Branch
+            fields = ["name"]
+
+    class BOrder(OrderSet):
+        d = RelatedOrder(DOrder, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class COrder(OrderSet):
+        d = RelatedOrder(DOrder, field_name="branch")
+
+        class Meta:
+            model = library_models.Genre
+            fields = ["name"]
+
+    class AOrder(OrderSet):
+        b = RelatedOrder(BOrder, field_name="shelf")
+        c = RelatedOrder(COrder, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(AOrder)
+    input_cls = factory.arguments
+    assert input_cls.__name__ == "AOrderInputType"
+    for name in (
+        "AOrderInputType",
+        "BOrderInputType",
+        "COrderInputType",
+        "DOrderInputType",
+    ):
+        assert name in OrderArgumentsFactory.input_object_types
+        assert name in OrderArgumentsFactory._type_orderset_registry
+    assert OrderArgumentsFactory._type_orderset_registry["DOrderInputType"] is DOrder
+
+
+def test_factory_handles_4_tier_deep_chain():
+    """Book -> Shelf -> Branch -> TaggedItem chain builds all 4 input classes in BFS order."""
+
+    class DOrder(OrderSet):
+        class Meta:
+            model = library_models.TaggedItem
+            fields = ["tag"]
+
+    class COrder(OrderSet):
+        d = RelatedOrder(DOrder, field_name="tags")
+
+        class Meta:
+            model = library_models.Branch
+            fields = ["name"]
+
+    class BOrder(OrderSet):
+        c = RelatedOrder(COrder, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class AOrder(OrderSet):
+        b = RelatedOrder(BOrder, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(AOrder)
+    factory.arguments
+    for name in (
+        "AOrderInputType",
+        "BOrderInputType",
+        "COrderInputType",
+        "DOrderInputType",
+    ):
+        assert name in OrderArgumentsFactory.input_object_types
+
+
+def test_factory_handles_related_order_targeting_callable_factory():
+    """RelatedOrder targeting a callable factory is resolved and enqueued properly in BFS."""
+
+    class TargetOrder(OrderSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class RootOrder(OrderSet):
+        shelf = RelatedOrder(lambda: TargetOrder, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(RootOrder)
+    factory.arguments
+    assert "RootOrderInputType" in OrderArgumentsFactory.input_object_types
+    assert "TargetOrderInputType" in OrderArgumentsFactory.input_object_types
+
+
 # Keep ``strawberry`` import alive for re-exported lazy types under
 # the Annotated forward-references.
 assert strawberry is not None

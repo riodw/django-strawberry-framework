@@ -195,3 +195,35 @@ def test_related_order_orderset_setter_assigns_underscore_orderset():
     related = RelatedOrder(AOrder, field_name="a")
     related.orderset = BOrder
     assert related._orderset is BOrder
+
+
+def test_related_order_accepts_callable_factory():
+    """Pass a callable factory as target; resolves and caches on first access."""
+    invocations = 0
+
+    def factory():
+        nonlocal invocations
+        invocations += 1
+        return AOrder
+
+    related = RelatedOrder(factory, field_name="a")
+    assert invocations == 0
+    assert related.orderset is AOrder
+    assert invocations == 1
+    # Subsequent access reads cached class without invoking factory again
+    assert related.orderset is AOrder
+    assert invocations == 1
+
+
+def test_related_order_default_field_name_is_none():
+    """``field_name`` is optional and defaults to ``None``."""
+    related = RelatedOrder(AOrder)
+    assert related.field_name is None
+    assert related.orderset is AOrder
+
+
+def test_related_order_unbound_absolute_import_path_resolves():
+    """Absolute import string resolves even when ``bound_orderset`` is unset."""
+    related = RelatedOrder("tests.orders.test_base.AOrder", field_name="a")
+    assert not hasattr(related, "bound_orderset")
+    assert related.orderset is AOrder

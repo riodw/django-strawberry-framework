@@ -116,6 +116,33 @@ def test_ordering_resolve_wraps_value_in_f_expression():
     assert expr.expression.name == "shelf__code"
 
 
+def test_ordering_resolve_nulls_variants():
+    """``resolve(value)`` sets nulls_first and nulls_last flags appropriately."""
+    asc_first = Ordering.ASC_NULLS_FIRST.resolve("col")
+    assert isinstance(asc_first, OrderBy)
+    assert asc_first.descending is False
+    assert asc_first.nulls_first is True
+    assert asc_first.nulls_last is None
+
+    asc_last = Ordering.ASC_NULLS_LAST.resolve("col")
+    assert isinstance(asc_last, OrderBy)
+    assert asc_last.descending is False
+    assert asc_last.nulls_first is None
+    assert asc_last.nulls_last is True
+
+    desc_first = Ordering.DESC_NULLS_FIRST.resolve("col")
+    assert isinstance(desc_first, OrderBy)
+    assert desc_first.descending is True
+    assert desc_first.nulls_first is True
+    assert desc_first.nulls_last is None
+
+    desc_last = Ordering.DESC_NULLS_LAST.resolve("col")
+    assert isinstance(desc_last, OrderBy)
+    assert desc_last.descending is True
+    assert desc_last.nulls_first is None
+    assert desc_last.nulls_last is True
+
+
 # ---------------------------------------------------------------------------
 # materialize_input_class
 # ---------------------------------------------------------------------------
@@ -1021,3 +1048,71 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_get_concrete_field_names_for_order_direct():
+    """_get_concrete_field_names_for_order extracts column-backed fields and rejects non-models."""
+    from apps.library.models import Book
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.orders.inputs import (
+        _get_concrete_field_names_for_order,
+    )
+
+    names = _get_concrete_field_names_for_order(Book)
+    assert "id" in names
+    assert "title" in names
+    assert "shelf" in names  # ForeignKey has column shelf_id on Book table
+
+    with pytest.raises(ConfigurationError, match="Expected a Django Model class"):
+        _get_concrete_field_names_for_order("InvalidModel")
+
+    with pytest.raises(ConfigurationError, match="Expected a Django Model class"):
+        _get_concrete_field_names_for_order(None)
+
+
+def test_normalize_input_value_handles_3_tier_deep_related_order_chain():
+    """Normalize walks deeply nested (3 tiers) RelatedOrder hierarchies."""
+    from apps.library.models import Book, Shelf
+
+    from django_strawberry_framework.orders import OrderSet, RelatedOrder
+    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    class Tier3Order(OrderSet):
+        class Meta:
+            fields = ["room"]
+
+    class Tier2Order(OrderSet):
+        tier3 = RelatedOrder(Tier3Order, field_name="tier3")
+
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class Tier1Order(OrderSet):
+        tier2 = RelatedOrder(Tier2Order, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(Tier1Order)
+    Tier1Input = factory.arguments
+    Tier2Input = OrderArgumentsFactory.input_object_types["Tier2OrderInputType"]
+    Tier3Input = OrderArgumentsFactory.input_object_types["Tier3OrderInputType"]
+
+    val = Tier1Input(
+        title=Ordering.ASC,
+        tier2=Tier2Input(
+            code=Ordering.DESC,
+            tier3=Tier3Input(room=Ordering.ASC_NULLS_LAST),
+        ),
+    )
+
+    flat = normalize_input_value(Tier1Order, [val])
+    assert flat == [
+        ("title", Ordering.ASC),
+        ("shelf__code", Ordering.DESC),
+        ("shelf__tier3__room", Ordering.ASC_NULLS_LAST),
+    ]

@@ -19,7 +19,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
-from django_filters import BooleanFilter, CharFilter, ChoiceFilter
+from django_filters import BaseInFilter, BooleanFilter, CharFilter, ChoiceFilter
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType
@@ -61,6 +61,7 @@ from django_strawberry_framework.filters.inputs import (
     clear_filter_input_namespace,
     construct_search,
     convert_filter_to_input_annotation,
+    materialize_input_class,
     normalize_input_value,
 )
 from django_strawberry_framework.registry import registry
@@ -1028,6 +1029,83 @@ def test_normalize_input_value_list_filter_unwraps_each_element():
         [1, 2, 3],
         field_name="ids",
     ) == [1, 2, 3]
+
+
+def test_normalize_input_value_base_csv_filter_unwraps_elements():
+    """``BaseCSVFilter`` normalizes element-by-element unwrapping enum members."""
+
+    class StatusEnum(Enum):
+        A = "a"
+        B = "b"
+
+    class CSVFilter(BaseInFilter, CharFilter):
+        pass
+
+    f = CSVFilter(field_name="status")
+    assert normalize_input_value(
+        f,
+        [StatusEnum.A, StatusEnum.B],
+        field_name="status",
+    ) == ["a", "b"]
+
+
+def test_convert_filter_to_input_annotation_derives_enum_for_choice_fields_on_list_and_csv_filters():
+    """`_element_annotation` resolves choice enum for TypedFilter, ListFilter, and BaseCSVFilter."""
+    model_field = library_models.Book._meta.get_field("circulation_status")
+
+    # TypedFilter
+    tf = TypedFilter(field_name="circulation_status")
+    tf_anno = convert_filter_to_input_annotation(tf, model_field)
+    tf_cls = next(arg for arg in get_args(tf_anno) if arg is not type(None))
+    assert issubclass(tf_cls, Enum)
+
+    # ListFilter
+    lf = ListFilter(field_name="circulation_status")
+    lf_anno = convert_filter_to_input_annotation(lf, model_field)
+    lf_list = next(arg for arg in get_args(lf_anno) if arg is not type(None))
+    assert get_origin(lf_list) is list
+    assert issubclass(get_args(lf_list)[0], Enum)
+
+    # BaseCSVFilter
+    class CSVFilter(BaseInFilter, CharFilter):
+        pass
+
+    csv_f = CSVFilter(field_name="circulation_status")
+    csv_anno = convert_filter_to_input_annotation(csv_f, model_field)
+    csv_list = next(arg for arg in get_args(csv_anno) if arg is not type(None))
+    assert get_origin(csv_list) is list
+    assert issubclass(get_args(csv_list)[0], Enum)
+
+
+def test_element_annotation_fallback_branches_when_model_field_is_none():
+    """`_element_annotation` checks form field when model_field is None, fallback to str."""
+    from django import forms
+
+    class IntTypedFilter(TypedFilter):
+        field_class = forms.IntegerField
+
+    class NoFieldTypedFilter(TypedFilter):
+        @property
+        def field(self):
+            return None
+
+    # Form field present -> resolved via `_scalar_from_form_field`
+    assert convert_filter_to_input_annotation(IntTypedFilter(), None) == int | None
+
+    # Neither model field nor form field -> fallback to `_scalar_from_model_field(None)` (`str`)
+    assert convert_filter_to_input_annotation(NoFieldTypedFilter(), None) == str | None
+
+
+def test_materialize_input_class_registers_in_module_globals():
+    """`materialize_input_class` registers input classes into the module namespace."""
+    from django_strawberry_framework.filters import inputs as inputs_mod
+
+    class ScratchCustomInput:
+        pass
+
+    materialize_input_class("ScratchCustomInput", ScratchCustomInput)
+    assert inputs_mod._materialized_names["ScratchCustomInput"] is ScratchCustomInput
+    assert getattr(inputs_mod, "ScratchCustomInput", None) is ScratchCustomInput
 
 
 def test_build_range_input_class_is_cached_on_the_filter_instance():

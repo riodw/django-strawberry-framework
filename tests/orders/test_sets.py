@@ -1065,6 +1065,80 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error():
         )
 
 
+@pytest.mark.django_db
+def test_orderset_apply_sync_annotates_multiple_to_many_orders():
+    """apply_sync generates distinct aggregate annotations for multiple to-many terms."""
+    from django.db.models import Min
+
+    class ShelfOrderMulti(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BranchOrderMulti(OrderSet):
+        shelves = RelatedOrder(ShelfOrderMulti, field_name="shelves")
+
+        class Meta:
+            model = Branch
+            fields = ["name"]
+
+    factory = OrderArgumentsFactory(BranchOrderMulti)
+    BranchInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderMultiInputType"]
+
+    input_value = [
+        BranchInput(shelves=ShelfInput(code=Ordering.ASC)),
+        BranchInput(name=Ordering.DESC),
+    ]
+
+    b1 = Branch.objects.create(name="Beta", city="NY")
+    Shelf.objects.create(code="S2", branch=b1)
+    b2 = Branch.objects.create(name="Alpha", city="LA")
+    Shelf.objects.create(code="S1", branch=b2)
+
+    qs = BranchOrderMulti.apply_sync(input_value, Branch.objects.all(), _make_info())
+    assert any(isinstance(agg, Min) for agg in qs.query.annotations.values())
+    results = list(qs)
+    assert len(results) == 2
+    assert results[0].name == "Alpha"
+    assert results[1].name == "Beta"
+
+
+def test_orderset_clear_order_input_namespace_clears_subclass_caches():
+    """clear_order_input_namespace clears _expanded_fields on base and subclass OrderSets."""
+    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
+
+    class BaseOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class SubOrder(BaseOrder):
+        class Meta:
+            model = Book
+            fields = ["subtitle"]
+
+    assert list(BaseOrder.get_fields()) == ["title"]
+    assert list(SubOrder.get_fields()) == ["subtitle"]
+    assert BaseOrder._expanded_fields is not None
+    assert SubOrder._expanded_fields is not None
+
+    clear_order_input_namespace()
+
+    assert BaseOrder._expanded_fields is None
+    assert SubOrder._expanded_fields is None
+
+
+def test_orderset_type_name_for_inherits_mixin_naming_convention():
+    """OrderSet inherits ClassBasedTypeNameMixin defaulting to '<Name>InputType'."""
+
+    class CustomOrder(OrderSet):
+        pass
+
+    assert CustomOrder.type_name_for() == "CustomOrderInputType"
+    assert CustomOrder.type_name_for("field") == "CustomOrderFieldInputType"
+
+
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.
 assert F is not None
 assert Genre is not None

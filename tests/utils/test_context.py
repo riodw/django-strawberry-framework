@@ -75,3 +75,39 @@ def test_frozen_context_stash_and_clear_are_noops():
     stash_on_context(context, "dst_context_test", 99)
     clear_context_key(context, "dst_context_test")
     assert get_context_value(context, "dst_context_test") == 42
+
+
+def test_context_none_short_circuits_and_skips_writes_and_clears():
+    """None context returns default on read and silently skips write and clear."""
+    assert get_context_value(None, "dst_context_test") is None
+    assert get_context_value(None, "dst_context_test", "missing") == "missing"
+    stash_on_context(None, "dst_context_test", 42)
+    clear_context_key(None, "dst_context_test")
+
+
+def test_context_distinguishes_explicit_none_from_missing_sentinel():
+    """Stashing an explicit None value returns None rather than falling back to default."""
+    obj_ctx = SimpleNamespace()
+    dict_ctx = {}
+
+    stash_on_context(obj_ctx, "dst_context_test", None)
+    stash_on_context(dict_ctx, "dst_context_test", None)
+
+    assert get_context_value(obj_ctx, "dst_context_test", "default") is None
+    assert get_context_value(dict_ctx, "dst_context_test", "default") is None
+
+
+def test_locked_dict_subclass_stash_and_clear_are_noops():
+    """Immutable dict subclasses (e.g. locked QueryDict) silently skip stash and clear."""
+
+    class LockedDict(dict):
+        def __setitem__(self, key, value):
+            raise AttributeError("This dict is immutable")
+
+        def __delitem__(self, key):
+            raise AttributeError("This dict is immutable")
+
+    ctx = LockedDict({"dst_context_test": 42})
+    stash_on_context(ctx, "dst_context_test", 99)
+    clear_context_key(ctx, "dst_context_test")
+    assert get_context_value(ctx, "dst_context_test") == 42

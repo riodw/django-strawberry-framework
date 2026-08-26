@@ -1,0 +1,253 @@
+# Package review plan: 0.0.14
+
+Source root: `django_strawberry_framework/`
+Versions confirmed in sync: `pyproject.toml` and `django_strawberry_framework/__init__.py` both at `0.0.14`.
+Review rule: one file or folder-summary pass at a time.
+DRY rule: a `rev-*.md` artifact includes `### DRY analysis` only when genuine duplication was found.
+Dispatch mode: autonomous — no pause between items; blockers escalate to the maintainer immediately.
+Cycle baseline: `HEAD` = `12779c99` (tracked tree baseline at plan creation; per-item baselines compared against `HEAD`).
+
+Concurrent work present at plan creation, out of scope, preserved untouched:
+- Modified: `django_strawberry_framework/types/base.py`, `docs/SPECS/appx/spec-004-optimizer_beyond-0_0_3-rationale.md`, `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`, `examples/fakeshop/strategy_schemas.py`, `examples/fakeshop/test_query/test_products_visibility_api.py`, `tests/forms/test_resolvers.py`, `tests/mutations/test_resolvers.py`, `tests/mutations/test_write_transaction.py`, `tests/optimizer/test_extension.py`, `tests/test_ci_governance.py`, `tests/test_relay_connection.py`, `tests/types/test_resolvers.py`
+- Untracked: `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-rationale.md`, `docs/builder/bld-final-029.md`, `docs/builder/bld-integration-029.md`, `docs/builder/bld-slice-1-029-rationale_extraction.md`, `docs/builder/bld-slice-2-029-extensions_forbidden_form_repair.md`, `docs/builder/bld-slice-3-029-spec_reconciliation.md`, `docs/builder/bld-slice-4-029-docstring_rot_repair.md`, `docs/builder/build-029-consumer_dx_cleanup-0_0_9.md`, `tests/mutations/test_operations.py`
+
+## Artifact list
+
+- `docs/review/rev-_boundary_ordering.md`
+- `docs/review/rev-_cross_web_patches.md`
+- `docs/review/rev-_django_patches.md`
+- `docs/review/rev-_request_body.md`
+- `docs/review/rev-_strawberry_patches.md`
+- `docs/review/rev-apps.md`
+- `docs/review/rev-conf.md`
+- `docs/review/rev-connection.md`
+- `docs/review/rev-consumers.md`
+- `docs/review/rev-error_policy.md`
+- `docs/review/rev-exceptions.md`
+- `docs/review/rev-keyset.md`
+- `docs/review/rev-list_field.md`
+- `docs/review/rev-permissions.md`
+- `docs/review/rev-registry.md`
+- `docs/review/rev-relay.md`
+- `docs/review/rev-resource_policy.md`
+- `docs/review/rev-routers.md`
+- `docs/review/rev-scalars.md`
+- `docs/review/rev-schema.md`
+- `docs/review/rev-sets_mixins.md`
+- `docs/review/rev-views.md`
+- `docs/review/rev-auth__mutations.md`
+- `docs/review/rev-auth__queries.md`
+- `docs/review/rev-auth__sessions.md`
+- `docs/review/rev-auth.md`
+- `docs/review/rev-extensions__debug.md`
+- `docs/review/rev-extensions__error_policy.md`
+- `docs/review/rev-extensions__resource_policy.md`
+- `docs/review/rev-extensions.md`
+- `docs/review/rev-filters__base.md`
+- `docs/review/rev-filters__factories.md`
+- `docs/review/rev-filters__inputs.md`
+- `docs/review/rev-filters__sets.md`
+- `docs/review/rev-filters.md`
+- `docs/review/rev-forms__converter.md`
+- `docs/review/rev-forms__inputs.md`
+- `docs/review/rev-forms__resolvers.md`
+- `docs/review/rev-forms__sets.md`
+- `docs/review/rev-forms.md`
+- `docs/review/rev-management__commands___imports.md`
+- `docs/review/rev-management__commands__export_schema.md`
+- `docs/review/rev-management__commands__inspect_django_type.md`
+- `docs/review/rev-management__commands.md`
+- `docs/review/rev-management.md`
+- `docs/review/rev-middleware__debug_toolbar.md`
+- `docs/review/rev-middleware__request_body.md`
+- `docs/review/rev-middleware.md`
+- `docs/review/rev-mutations__fields.md`
+- `docs/review/rev-mutations__inputs.md`
+- `docs/review/rev-mutations__operations.md`
+- `docs/review/rev-mutations__permissions.md`
+- `docs/review/rev-mutations__resolvers.md`
+- `docs/review/rev-mutations__sets.md`
+- `docs/review/rev-mutations.md`
+- `docs/review/rev-optimizer___context.md`
+- `docs/review/rev-optimizer__extension.md`
+- `docs/review/rev-optimizer__field_meta.md`
+- `docs/review/rev-optimizer__hints.md`
+- `docs/review/rev-optimizer__join_taxonomy.md`
+- `docs/review/rev-optimizer__lateral_fetch.md`
+- `docs/review/rev-optimizer__nested_fetch.md`
+- `docs/review/rev-optimizer__nested_planner.md`
+- `docs/review/rev-optimizer__plans.md`
+- `docs/review/rev-optimizer__predicates.md`
+- `docs/review/rev-optimizer__selections.md`
+- `docs/review/rev-optimizer__single_parent_fetch.md`
+- `docs/review/rev-optimizer__walker.md`
+- `docs/review/rev-optimizer.md`
+- `docs/review/rev-orders__base.md`
+- `docs/review/rev-orders__factories.md`
+- `docs/review/rev-orders__inputs.md`
+- `docs/review/rev-orders__sets.md`
+- `docs/review/rev-orders.md`
+- `docs/review/rev-rest_framework__hook_context.md`
+- `docs/review/rev-rest_framework__inputs.md`
+- `docs/review/rev-rest_framework__resolvers.md`
+- `docs/review/rev-rest_framework__serializer_converter.md`
+- `docs/review/rev-rest_framework__sets.md`
+- `docs/review/rev-rest_framework.md`
+- `docs/review/rev-testing___wrap.md`
+- `docs/review/rev-testing__client.md`
+- `docs/review/rev-testing__relay.md`
+- `docs/review/rev-testing.md`
+- `docs/review/rev-types__base.md`
+- `docs/review/rev-types__converters.md`
+- `docs/review/rev-types__definition.md`
+- `docs/review/rev-types__finalizer.md`
+- `docs/review/rev-types__relations.md`
+- `docs/review/rev-types__relay.md`
+- `docs/review/rev-types__resolvers.md`
+- `docs/review/rev-types.md`
+- `docs/review/rev-utils__connections.md`
+- `docs/review/rev-utils__context.md`
+- `docs/review/rev-utils__converters.md`
+- `docs/review/rev-utils__errors.md`
+- `docs/review/rev-utils__imports.md`
+- `docs/review/rev-utils__input_values.md`
+- `docs/review/rev-utils__inputs.md`
+- `docs/review/rev-utils__permissions.md`
+- `docs/review/rev-utils__querysets.md`
+- `docs/review/rev-utils__relations.md`
+- `docs/review/rev-utils__sessions.md`
+- `docs/review/rev-utils__strings.md`
+- `docs/review/rev-utils__typing.md`
+- `docs/review/rev-utils__write_transaction.md`
+- `docs/review/rev-utils__write_values.md`
+- `docs/review/rev-utils.md`
+- `docs/review/rev-django_strawberry_framework.md`
+- `docs/review/rev-final.md`
+
+## Checklist
+
+- `django_strawberry_framework/`
+  - [x] `django_strawberry_framework/_boundary_ordering.py` -> `docs/review/rev-_boundary_ordering.md`
+  - [x] `django_strawberry_framework/_cross_web_patches.py` -> `docs/review/rev-_cross_web_patches.md`
+  - [x] `django_strawberry_framework/_django_patches.py` -> `docs/review/rev-_django_patches.md`
+  - [x] `django_strawberry_framework/_request_body.py` -> `docs/review/rev-_request_body.md`
+  - [x] `django_strawberry_framework/_strawberry_patches.py` -> `docs/review/rev-_strawberry_patches.md`
+  - [x] `django_strawberry_framework/apps.py` -> `docs/review/rev-apps.md`
+  - [x] `django_strawberry_framework/conf.py` -> `docs/review/rev-conf.md`
+  - [x] `django_strawberry_framework/connection.py` -> `docs/review/rev-connection.md`
+  - [x] `django_strawberry_framework/consumers.py` -> `docs/review/rev-consumers.md`
+  - [x] `django_strawberry_framework/error_policy.py` -> `docs/review/rev-error_policy.md`
+  - [x] `django_strawberry_framework/exceptions.py` -> `docs/review/rev-exceptions.md`
+  - [x] `django_strawberry_framework/keyset.py` -> `docs/review/rev-keyset.md`
+  - [x] `django_strawberry_framework/list_field.py` -> `docs/review/rev-list_field.md`
+  - [x] `django_strawberry_framework/permissions.py` -> `docs/review/rev-permissions.md`
+  - [x] `django_strawberry_framework/registry.py` -> `docs/review/rev-registry.md`
+  - [x] `django_strawberry_framework/relay.py` -> `docs/review/rev-relay.md`
+  - [x] `django_strawberry_framework/resource_policy.py` -> `docs/review/rev-resource_policy.md`
+  - [x] `django_strawberry_framework/routers.py` -> `docs/review/rev-routers.md`
+  - [x] `django_strawberry_framework/scalars.py` -> `docs/review/rev-scalars.md`
+  - [x] `django_strawberry_framework/schema.py` -> `docs/review/rev-schema.md`
+  - [x] `django_strawberry_framework/sets_mixins.py` -> `docs/review/rev-sets_mixins.md`
+  - [x] `django_strawberry_framework/views.py` -> `docs/review/rev-views.md`
+- `django_strawberry_framework/auth/`
+  - [x] `django_strawberry_framework/auth/mutations.py` -> `docs/review/rev-auth__mutations.md`
+  - [x] `django_strawberry_framework/auth/queries.py` -> `docs/review/rev-auth__queries.md`
+  - [x] `django_strawberry_framework/auth/sessions.py` -> `docs/review/rev-auth__sessions.md`
+  - [x] folder pass: `django_strawberry_framework/auth/` -> `docs/review/rev-auth.md`
+- `django_strawberry_framework/extensions/`
+  - [x] `django_strawberry_framework/extensions/debug.py` -> `docs/review/rev-extensions__debug.md`
+  - [x] `django_strawberry_framework/extensions/error_policy.py` -> `docs/review/rev-extensions__error_policy.md`
+  - [x] `django_strawberry_framework/extensions/resource_policy.py` -> `docs/review/rev-extensions__resource_policy.md`
+  - [x] folder pass: `django_strawberry_framework/extensions/` -> `docs/review/rev-extensions.md`
+- `django_strawberry_framework/filters/`
+  - [x] `django_strawberry_framework/filters/base.py` -> `docs/review/rev-filters__base.md`
+  - [x] `django_strawberry_framework/filters/factories.py` -> `docs/review/rev-filters__factories.md`
+  - [x] `django_strawberry_framework/filters/inputs.py` -> `docs/review/rev-filters__inputs.md`
+  - [x] `django_strawberry_framework/filters/sets.py` -> `docs/review/rev-filters__sets.md`
+  - [x] folder pass: `django_strawberry_framework/filters/` -> `docs/review/rev-filters.md`
+- `django_strawberry_framework/forms/`
+  - [x] `django_strawberry_framework/forms/converter.py` -> `docs/review/rev-forms__converter.md`
+  - [x] `django_strawberry_framework/forms/inputs.py` -> `docs/review/rev-forms__inputs.md`
+  - [x] `django_strawberry_framework/forms/resolvers.py` -> `docs/review/rev-forms__resolvers.md`
+  - [x] `django_strawberry_framework/forms/sets.py` -> `docs/review/rev-forms__sets.md`
+  - [x] folder pass: `django_strawberry_framework/forms/` -> `docs/review/rev-forms.md`
+- `django_strawberry_framework/management/`
+  - `django_strawberry_framework/management/commands/`
+    - [x] `django_strawberry_framework/management/commands/_imports.py` -> `docs/review/rev-management__commands___imports.md`
+    - [x] `django_strawberry_framework/management/commands/export_schema.py` -> `docs/review/rev-management__commands__export_schema.md`
+    - [x] `django_strawberry_framework/management/commands/inspect_django_type.py` -> `docs/review/rev-management__commands__inspect_django_type.md`
+    - [x] folder pass: `django_strawberry_framework/management/commands/` -> `docs/review/rev-management__commands.md`
+  - [x] folder pass: `django_strawberry_framework/management/` -> `docs/review/rev-management.md`
+- `django_strawberry_framework/middleware/`
+  - [x] `django_strawberry_framework/middleware/debug_toolbar.py` -> `docs/review/rev-middleware__debug_toolbar.md`
+  - [x] `django_strawberry_framework/middleware/request_body.py` -> `docs/review/rev-middleware__request_body.md`
+  - [x] folder pass: `django_strawberry_framework/middleware/` -> `docs/review/rev-middleware.md`
+- `django_strawberry_framework/mutations/`
+  - [x] `django_strawberry_framework/mutations/fields.py` -> `docs/review/rev-mutations__fields.md`
+  - [x] `django_strawberry_framework/mutations/inputs.py` -> `docs/review/rev-mutations__inputs.md`
+  - [x] `django_strawberry_framework/mutations/operations.py` -> `docs/review/rev-mutations__operations.md`
+  - [x] `django_strawberry_framework/mutations/permissions.py` -> `docs/review/rev-mutations__permissions.md`
+  - [x] `django_strawberry_framework/mutations/resolvers.py` -> `docs/review/rev-mutations__resolvers.md`
+  - [x] `django_strawberry_framework/mutations/sets.py` -> `docs/review/rev-mutations__sets.md`
+  - [x] folder pass: `django_strawberry_framework/mutations/` -> `docs/review/rev-mutations.md`
+- `django_strawberry_framework/optimizer/`
+  - [x] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
+  - [x] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
+  - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
+  - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
+  - [x] `django_strawberry_framework/optimizer/join_taxonomy.py` -> `docs/review/rev-optimizer__join_taxonomy.md`
+  - [x] `django_strawberry_framework/optimizer/lateral_fetch.py` -> `docs/review/rev-optimizer__lateral_fetch.md`
+  - [x] `django_strawberry_framework/optimizer/nested_fetch.py` -> `docs/review/rev-optimizer__nested_fetch.md`
+  - [x] `django_strawberry_framework/optimizer/nested_planner.py` -> `docs/review/rev-optimizer__nested_planner.md`
+  - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
+  - [x] `django_strawberry_framework/optimizer/predicates.py` -> `docs/review/rev-optimizer__predicates.md`
+  - [x] `django_strawberry_framework/optimizer/selections.py` -> `docs/review/rev-optimizer__selections.md`
+  - [x] `django_strawberry_framework/optimizer/single_parent_fetch.py` -> `docs/review/rev-optimizer__single_parent_fetch.md`
+  - [x] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+  - [x] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
+- `django_strawberry_framework/orders/`
+  - [x] `django_strawberry_framework/orders/base.py` -> `docs/review/rev-orders__base.md`
+  - [x] `django_strawberry_framework/orders/factories.py` -> `docs/review/rev-orders__factories.md`
+  - [x] `django_strawberry_framework/orders/inputs.py` -> `docs/review/rev-orders__inputs.md`
+  - [x] `django_strawberry_framework/orders/sets.py` -> `docs/review/rev-orders__sets.md`
+  - [x] folder pass: `django_strawberry_framework/orders/` -> `docs/review/rev-orders.md`
+- `django_strawberry_framework/rest_framework/`
+  - [x] `django_strawberry_framework/rest_framework/hook_context.py` -> `docs/review/rev-rest_framework__hook_context.md`
+  - [x] `django_strawberry_framework/rest_framework/inputs.py` -> `docs/review/rev-rest_framework__inputs.md`
+  - [x] `django_strawberry_framework/rest_framework/resolvers.py` -> `docs/review/rev-rest_framework__resolvers.md`
+  - [x] `django_strawberry_framework/rest_framework/serializer_converter.py` -> `docs/review/rev-rest_framework__serializer_converter.md`
+  - [x] `django_strawberry_framework/rest_framework/sets.py` -> `docs/review/rev-rest_framework__sets.md`
+  - [x] folder pass: `django_strawberry_framework/rest_framework/` -> `docs/review/rev-rest_framework.md`
+- `django_strawberry_framework/testing/`
+  - [x] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
+  - [x] `django_strawberry_framework/testing/client.py` -> `docs/review/rev-testing__client.md`
+  - [x] `django_strawberry_framework/testing/relay.py` -> `docs/review/rev-testing__relay.md`
+  - [x] folder pass: `django_strawberry_framework/testing/` -> `docs/review/rev-testing.md`
+- `django_strawberry_framework/types/`
+  - [x] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
+  - [x] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
+  - [x] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
+  - [x] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
+  - [x] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
+  - [x] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
+  - [x] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
+  - [x] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
+- `django_strawberry_framework/utils/`
+  - [x] `django_strawberry_framework/utils/connections.py` -> `docs/review/rev-utils__connections.md`
+  - [x] `django_strawberry_framework/utils/context.py` -> `docs/review/rev-utils__context.md`
+  - [x] `django_strawberry_framework/utils/converters.py` -> `docs/review/rev-utils__converters.md`
+  - [x] `django_strawberry_framework/utils/errors.py` -> `docs/review/rev-utils__errors.md`
+  - [x] `django_strawberry_framework/utils/imports.py` -> `docs/review/rev-utils__imports.md`
+  - [x] `django_strawberry_framework/utils/input_values.py` -> `docs/review/rev-utils__input_values.md`
+  - [x] `django_strawberry_framework/utils/inputs.py` -> `docs/review/rev-utils__inputs.md`
+  - [x] `django_strawberry_framework/utils/permissions.py` -> `docs/review/rev-utils__permissions.md`
+  - [x] `django_strawberry_framework/utils/querysets.py` -> `docs/review/rev-utils__querysets.md`
+  - [x] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`
+  - [x] `django_strawberry_framework/utils/sessions.py` -> `docs/review/rev-utils__sessions.md`
+  - [x] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
+  - [x] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
+  - [x] `django_strawberry_framework/utils/write_transaction.py` -> `docs/review/rev-utils__write_transaction.md`
+  - [x] `django_strawberry_framework/utils/write_values.py` -> `docs/review/rev-utils__write_values.md`
+  - [x] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
+- [x] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
+- [x] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`

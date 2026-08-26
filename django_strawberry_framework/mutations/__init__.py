@@ -1,9 +1,11 @@
 """Mutations subsystem - the write side (spec-036).
 
-A five-module subpackage in the spirit of ``filters/`` / ``orders/`` (Decision 4's
+A six-module subpackage in the spirit of ``filters/`` / ``orders/`` (Decision 4's
 ``inputs`` / ``sets`` / ``resolvers`` / ``fields`` quartet plus ``permissions.py``
-for Decision 15 write-auth):
+for Decision 15 write-auth and ``operations.py`` for canonical operation descriptors):
 
+- ``operations.py`` - canonical ``MutationOperationDescriptor`` instances and
+  operation predicates (``create``, ``update``, ``delete``, ``form``).
 - ``inputs.py`` - generated ``<Model>Input`` / ``<Model>PartialInput`` classes,
   the public ``FieldError`` envelope, and the ``<Name>Payload`` wrapper.
 - ``sets.py`` - the ``DjangoMutation`` base, its metaclass ``Meta`` validation,

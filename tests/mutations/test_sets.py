@@ -2101,3 +2101,35 @@ def test_django_mutation_validate_meta_hostile_values_containment():
                 model = product_models.Item
                 operation = "create"
                 input_class = hostile
+
+
+def test_validate_permission_classes_custom_base_label_and_flavor_forwarding():
+    """_validate_permission_classes and model_backed_permission_and_lock format with base_label."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import (
+        _validate_permission_classes,
+        model_backed_permission_and_lock,
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"CustomFlavor BadPermsMutation\.Meta\.permission_classes must be a sequence of permission classes",
+    ):
+        _validate_permission_classes("BadPermsMutation", "bad_sequence", base_label="CustomFlavor")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"CustomFlavor BadPermsMutation\.Meta\.permission_classes entry 123 is not a permission class exposing has_permission",
+    ):
+        _validate_permission_classes("BadPermsMutation", [123], base_label="CustomFlavor")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoModelFormMutation BadPermsMutation\.Meta\.permission_classes entry 123 is not a permission class exposing has_permission",
+    ):
+        model_backed_permission_and_lock(
+            "BadPermsMutation",
+            SimpleNamespace(permission_classes=[123]),
+            flavor="DjangoModelFormMutation",
+        )

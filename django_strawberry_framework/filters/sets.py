@@ -1513,7 +1513,7 @@ class FilterSet(
 
         Decision-4 conditional. Resolves the relation target via
         `_owner_definition.related_target_for(field_name)` (the owner
-        binding) and falls back to `registry.primary_for(target_model)`
+        binding) and falls back to `registry.get(target_model)`
         when the owner has not been bound yet. A target type implementing
         `relay.Node` produces `GlobalIDMultipleChoiceFilter` for
         multi-valued relations (M2M / reverse FK / reverse M2M) and
@@ -2038,7 +2038,7 @@ class FilterSet(
 
         Consults `_owner_definition.related_target_for(...)` when the
         finalizer phase-2.5 binding has landed; otherwise falls back to
-        `registry.primary_for(field.related_model)`. Non-relation fields
+        `registry.get(field.related_model)`. Non-relation fields
         return `None`.
         """
         if not getattr(field, "is_relation", False):
@@ -2063,10 +2063,11 @@ class FilterSet(
         related_model = getattr(field, "related_model", None)
         if related_model is None:
             return None
-        # `registry.primary_for(...)` returns the explicitly-declared
-        # primary type only; fall back to `registry.get(...)` for the
-        # single-type-no-primary case (the common shape today).
-        return registry.primary_for(related_model) or registry.get(related_model)
+        # ``registry.get`` owns the primary-first precedence (its first
+        # return state IS the declared primary; the lone-type fallback is
+        # the common shape today) - do not re-derive it by composing
+        # ``primary_for`` / ``get`` here.
+        return registry.get(related_model)
 
     # ------------------------------------------------------------------
     # spec-027 Decision 8 apply pipeline.
@@ -2683,7 +2684,9 @@ class FilterSet(
         child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
         if child_model is None:
             return None
-        return registry.primary_for(child_model) or registry.get(child_model)
+        # ``registry.get`` owns the primary-first precedence; see
+        # ``_resolve_relation_target_type`` for the same collapse.
+        return registry.get(child_model)
 
     @classmethod
     def _check_permission_depth(cls, _depth: int) -> None:

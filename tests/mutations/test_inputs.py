@@ -1332,6 +1332,35 @@ def test_payload_slot_never_model_derived_for_property_like_model():
     assert "node" in fields
 
 
+def test_payload_model_less_shape():
+    """A model-less payload (object_type=None) yields ``ok: bool`` + ``errors`` with no object slot."""
+    payload = build_payload_type("DoAction", object_type=None)
+    assert payload.__name__ == "DoActionPayload"
+    fields = {f.python_name: f for f in payload.__strawberry_definition__.fields}
+    assert "ok" in fields
+    assert fields["ok"].type is bool
+    assert "errors" in fields
+    assert isinstance(fields["errors"].type, StrawberryList)
+    assert fields["errors"].type.of_type is FieldError
+    assert "node" not in fields
+    assert "result" not in fields
+
+
+def test_payload_slot_defaults_from_object_type():
+    """When object_slot is omitted, it defaults to the uniform slot via payload_object_slot."""
+    _, relay_type = _make_relay_target()
+    payload_relay = build_payload_type("CreateRelayAuto", object_type=relay_type)
+    fields_relay = {f.python_name for f in payload_relay.__strawberry_definition__.fields}
+    assert "node" in fields_relay
+    assert "errors" in fields_relay
+
+    _, plain_type = _make_non_relay_target()
+    payload_plain = build_payload_type("CreatePlainAuto", object_type=plain_type)
+    fields_plain = {f.python_name for f in payload_plain.__strawberry_definition__.fields}
+    assert "result" in fields_plain
+    assert "errors" in fields_plain
+
+
 # ---------------------------------------------------------------------------
 # mutation_input_field_specs - bind-time reverse map (spec-051 D3)
 # ---------------------------------------------------------------------------

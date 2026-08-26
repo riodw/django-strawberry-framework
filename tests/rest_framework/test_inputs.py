@@ -44,6 +44,7 @@ from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
     SerializerInputShape,
+    _fingerprint_relation_target,
     build_serializer_input_class,
     build_serializer_inputs,
     clear_serializer_input_namespace,
@@ -52,7 +53,11 @@ from django_strawberry_framework.rest_framework.inputs import (
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
     normalize_nested_serializer_configs,
+    raise_writable_source_ownership_errors,
     resolve_effective_serializer_fields,
+    resolve_injected_field_specs,
+    resolve_optional_fields,
+    runtime_validated_data_fields,
 )
 from django_strawberry_framework.rest_framework.serializer_converter import (
     NESTED_MULTI,
@@ -1743,3 +1748,70 @@ def test_build_nested_serializer_spec_child_fields_configuration_error():
             operation_kind="create",
             nested_configs={"child": NestedSerializerConfig()},
         )
+
+
+def test_fingerprint_relation_target():
+    """_fingerprint_relation_target resolves target model qualname for single/many relations, else None."""
+
+    class RelSer(serializers.Serializer):
+        category = serializers.PrimaryKeyRelatedField(
+            queryset=product_models.Category.objects.all(),
+        )
+        categories = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=product_models.Category.objects.all(),
+        )
+        plain = serializers.CharField()
+
+    fields = dict(RelSer().fields)
+    assert _fingerprint_relation_target(fields["category"]) == "apps.products.models.Category"
+    assert _fingerprint_relation_target(fields["categories"]) == "apps.products.models.Category"
+    assert _fingerprint_relation_target(fields["plain"]) is None
+
+
+def test_runtime_validated_data_fields_defaults_and_supplied():
+    """runtime_validated_data_fields excludes read_only and includes supplied/defaulted fields."""
+
+    class SampleSer(serializers.Serializer):
+        req = serializers.CharField()
+        opt_def = serializers.CharField(default="default_val")
+        ro = serializers.CharField(read_only=True)
+
+    fields = dict(SampleSer().fields)
+    res1 = runtime_validated_data_fields(fields, supplied_fields={"req"}, apply_defaults=False)
+    assert set(res1) == {"req"}
+
+    res2 = runtime_validated_data_fields(fields, supplied_fields={"req"}, apply_defaults=True)
+    assert set(res2) == {"req", "opt_def"}
+
+
+def test_raise_writable_source_ownership_errors_clean():
+    """raise_writable_source_ownership_errors is a no-op when sources are unique and non-star."""
+    raise_writable_source_ownership_errors("TestMutation", {"a": "source_a", "b": "source_b"})
+
+
+def test_resolve_optional_fields_unknown_field_raises():
+    """resolve_optional_fields raises ConfigurationError when optional_fields names an absent field."""
+
+    class S(serializers.Serializer):
+        name = serializers.CharField()
+
+    with pytest.raises(ConfigurationError, match="not in the effective input set"):
+        resolve_optional_fields(S, ("unknown_field",), ("name",))
+
+
+def test_resolve_injected_field_specs_valid():
+    """resolve_injected_field_specs returns InputFieldSpecs for declared injected fields."""
+
+    class InjectedSer(serializers.Serializer):
+        injected_str = serializers.CharField()
+        injected_int = serializers.IntegerField()
+
+    field_map = dict(InjectedSer().fields)
+    assert resolve_injected_field_specs(InjectedSer, field_map, None) == []
+    assert resolve_injected_field_specs(InjectedSer, field_map, ()) == []
+
+    specs = resolve_injected_field_specs(InjectedSer, field_map, ("injected_str", "injected_int"))
+    assert len(specs) == 2
+    assert specs[0].target_name == "injected_str"
+    assert specs[1].target_name == "injected_int"

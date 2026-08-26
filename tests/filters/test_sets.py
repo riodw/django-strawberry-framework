@@ -4629,6 +4629,83 @@ def test_resolve_relation_target_type_returns_none_without_related_model():
     assert CategoryFilter._resolve_relation_target_type(field, None) is None
 
 
+def test_resolve_relation_target_type_registry_fallback_prefers_declared_primary():
+    """The registry fallback resolves the declared primary when two types share a model.
+
+    Pins the consolidation contract relied upon at
+    ``django_strawberry_framework/filters/sets.py``
+    ``FilterSet._resolve_relation_target_type`` - the fallback is
+    ``target_type = registry.get(related_model)``, NOT the historical
+    ``registry.primary_for(related_model) or registry.get(related_model)``
+    chain. The collapse is safe only because ``registry.get`` itself
+    honors ``_primaries`` as its first return state; this test pins
+    that end-to-end so a future change that breaks the primary-first
+    rule in ``registry.get`` surfaces here before the Relay-aware
+    filter selection silently swings to the wrong target (the
+    ``tests/types/test_definition_relations.py`` twin pins the same
+    contract for ``DjangoTypeDefinition.related_target_for``).
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class AdminShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    from types import SimpleNamespace
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    relation_field = SimpleNamespace(is_relation=True, related_model=library_models.Shelf)
+    resolved = CategoryFilter._resolve_relation_target_type(relation_field, "shelf")
+    assert resolved is AdminShelfType
+
+
+def test_target_type_for_related_filter_registry_fallback_prefers_declared_primary():
+    """The unbound-child fallback resolves the declared primary for the child model.
+
+    Twin of
+    ``test_resolve_relation_target_type_registry_fallback_prefers_declared_primary``
+    for ``FilterSet._target_type_for_related_filter``: with no bound child
+    owner the method resolves via ``registry.get(child_model)`` - NOT the
+    historical ``registry.primary_for(child_model) or registry.get(child_model)``
+    chain - so a shared-target primary wins here exactly as it does for every
+    other plain-``get`` consumer.
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class AdminShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    resolved = CategoryFilter._target_type_for_related_filter(RelatedFilter(ShelfFilter))
+    assert resolved is AdminShelfType
+
+
 @pytest.mark.django_db
 def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
     """An active branch with neither child qs nor explicit qs is skipped."""

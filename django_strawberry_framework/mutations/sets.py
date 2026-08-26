@@ -70,7 +70,6 @@ from .inputs import (
     materialize_mutation_input_class,
     mutation_input_field_specs,
     mutation_input_shape,
-    payload_object_slot,
     relation_input_annotation,
 )
 from .operations import (
@@ -786,6 +785,7 @@ def _validate_permission_classes(
     value: Any,
     *,
     unset_default: tuple[Any, ...] = (DjangoModelPermission,),
+    base_label: str = "DjangoMutation",
 ) -> list[Any]:
     """Validate + normalize ``Meta.permission_classes`` at class creation.
 
@@ -817,14 +817,14 @@ def _validate_permission_classes(
         return list(unset_default)
     if isinstance(value, (str, bytes, type)):
         raise ConfigurationError(
-            f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
+            f"{base_label} {mutation_name}.Meta.permission_classes must be a sequence of "
             f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         )
     try:
         classes = list(value)
     except BaseException as exc:
         raise ConfigurationError(
-            f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
+            f"{base_label} {mutation_name}.Meta.permission_classes must be a sequence of "
             f"permission classes (e.g. [DjangoModelPermission]); got {_safe_arg_repr(value)}.",
         ) from exc
     for entry in classes:
@@ -834,7 +834,7 @@ def _validate_permission_classes(
             has_perm = None
         if not isinstance(entry, type) or not callable(has_perm):
             raise ConfigurationError(
-                f"DjangoMutation {mutation_name}.Meta.permission_classes entry "
+                f"{base_label} {mutation_name}.Meta.permission_classes entry "
                 f"{_safe_arg_repr(entry)} is not a permission class exposing has_permission; "
                 "each entry must be a class with a "
                 "has_permission(info, mutation, operation, data, instance) method.",
@@ -884,6 +884,7 @@ def model_backed_permission_and_lock(
     permission_classes = _validate_permission_classes(
         name,
         getattr(meta, "permission_classes", None),
+        base_label=flavor,
     )
     return permission_classes, validate_select_for_update(flavor, name, meta)
 
@@ -1532,7 +1533,6 @@ def bind_mutation_outputs(
     payload_cls = build_payload_type(
         mutation_cls.__name__,
         object_type=object_type,
-        object_slot=None if object_type is None else payload_object_slot(object_type),
     )
     materialize_mutation_input_class(payload_cls.__name__, payload_cls)
     mutation_cls._primary_type = object_type

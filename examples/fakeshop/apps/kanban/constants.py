@@ -205,6 +205,7 @@ TRACKED_FILE_PATHS = (
     "tests/mutations/__init__.py",
     "tests/mutations/test_fields.py",
     "tests/mutations/test_inputs.py",
+    "tests/mutations/test_operations.py",
     "tests/mutations/test_permissions.py",
     "tests/mutations/test_resolvers.py",
     "tests/mutations/test_sets.py",

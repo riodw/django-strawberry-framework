@@ -457,3 +457,24 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
         CreateItemViaSerializer.resolve_sync.__func__ is not DjangoMutation.resolve_sync.__func__
     )
     assert serializer_resolvers.resolve_serializer_sync is not None
+
+
+def test_mutation_field_metadata_passthrough():
+    """`DjangoMutationField` forwards description and deprecation_reason to Strawberry."""
+    _declare_item_primaries()
+    CreateItem, _, _ = _operation_mutations()
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(
+            CreateItem,
+            description="Create a new item entity",
+            deprecation_reason="Use createItemV2 instead",
+        )
+
+    finalize_django_types()
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
+    mutation_type = schema._schema.mutation_type
+    field = mutation_type.fields["createItem"]
+    assert field.description == "Create a new item entity"
+    assert field.deprecation_reason == "Use createItemV2 instead"

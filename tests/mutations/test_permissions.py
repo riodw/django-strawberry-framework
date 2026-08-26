@@ -37,7 +37,12 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.mutations.permissions import _OPERATION_PERMISSION_ACTION
+from django_strawberry_framework.mutations.permissions import (
+    _OPERATION_PERMISSION_ACTION,
+    DenyAll,
+    _require_sync_bool_auth_result,
+    run_permission_classes,
+)
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 
@@ -624,3 +629,92 @@ def test_request_without_user_attribute_is_denied():
     mutation = _create_item_mutation()
     info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace()))
     assert DjangoModelPermission().has_permission(info, mutation, "create", data=None) is False
+
+
+def test_deny_all_always_returns_false():
+    """``DenyAll.has_permission`` returns ``False`` unconditionally across all operations."""
+    deny = DenyAll()
+    info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=None)))
+    mutation = _create_item_mutation()
+    assert (
+        deny.has_permission(info, mutation, "create", data={"name": "test"}, instance=None)
+        is False
+    )
+    assert deny.has_permission(info, mutation, "update", data=None, instance=None) is False
+    assert deny.has_permission(info, mutation, "delete", data=None, instance=None) is False
+    assert deny.has_permission(info, mutation, "form", data={"ping": True}, instance=None) is False
+
+
+def test_run_permission_classes_short_circuits_on_first_denial():
+    """``run_permission_classes`` evaluates classes sequentially and short-circuits on first False."""
+    eval_order: list[str] = []
+
+    class AllowingPerm:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            eval_order.append("AllowingPerm")
+            return True
+
+    class DenyingPerm:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            eval_order.append("DenyingPerm")
+            return False
+
+    class NeverReachedPerm:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            eval_order.append("NeverReachedPerm")
+            return True
+
+    class FakeMutation:
+        _mutation_meta = SimpleNamespace(
+            permission_classes=[AllowingPerm, DenyingPerm, NeverReachedPerm],
+        )
+
+    result = run_permission_classes(
+        FakeMutation(),
+        info=SimpleNamespace(),
+        operation="create",
+        data=None,
+        instance=None,
+    )
+    assert result is False
+    assert eval_order == ["AllowingPerm", "DenyingPerm"]
+
+
+@pytest.mark.parametrize(
+    "invalid_result",
+    [
+        1,
+        0,
+        "true",
+        "false",
+        None,
+        [],
+        {},
+        object(),
+    ],
+)
+def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result):
+    """``_require_sync_bool_auth_result`` rejects non-bool values without coercion."""
+    with pytest.raises(ConfigurationError, match="must return a bool"):
+        _require_sync_bool_auth_result(invalid_result, owner="CustomPerm", method="has_permission")

@@ -197,8 +197,8 @@ def clear_mutation_input_namespace() -> None:
     _clear_input_namespace()
 
 
-# Register the mutation input-namespace clear as a canonical PRE-BIND clear
-#: the ``finalize_django_types`` pre-bind reset AND
+# Register the mutation input-namespace clear as a canonical PRE-BIND clear:
+# the ``finalize_django_types`` pre-bind reset AND
 # ``TypeRegistry.clear()`` both iterate ``registry.iter_subsystem_clears()``.
 # This owner registers the executable callback once; the stable owner key makes
 # reload replace it without a central attribute lookup that can drift.
@@ -880,7 +880,7 @@ def build_payload_type(
     mutation_name: str,
     *,
     object_type: type | None,
-    object_slot: str | None,
+    object_slot: str | None = None,
 ) -> type:
     """Build the ``<Name>Payload`` ``@strawberry.type`` wrapper (spec-036 Decision 7 / spec-038 Decision 6).
 
@@ -889,7 +889,8 @@ def build_payload_type(
 
     - **model-backed** (``object_type`` is non-``None``): ``object_slot`` is the
       UNIFORM object-field name from ``payload_object_slot(primary_type)`` -
-      ``"node"`` for a Relay-Node target, ``"result"`` otherwise. It is
+      ``"node"`` for a Relay-Node target, ``"result"`` otherwise (derived
+      automatically if ``object_slot`` is omitted). It is
       NEVER model-derived, so a ``Property`` payload exposes ``node`` / ``result``,
       never a ``property``-named field. Fields: ``<object_slot>: object_type | None``
       (nullable - ``null`` on a validation failure) and ``errors:
@@ -913,9 +914,10 @@ def build_payload_type(
             "errors": strawberry.field(default_factory=list),
         }
     else:
+        slot = object_slot if object_slot is not None else payload_object_slot(object_type)
         namespace = {
-            "__annotations__": {object_slot: object_type | None, "errors": list[FieldError]},
-            object_slot: None,
+            "__annotations__": {slot: object_type | None, "errors": list[FieldError]},
+            slot: None,
             "errors": strawberry.field(default_factory=list),
         }
     cls = type(f"{mutation_name}Payload", (), namespace)

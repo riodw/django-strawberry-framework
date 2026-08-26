@@ -156,7 +156,7 @@ def clear_serializer_input_namespace() -> None:
 
 # Register the serializer input-namespace clear as a canonical PRE-BIND clear
 # (the seam centerpiece). The row is a static STRING pair, so
-# Importing this owner only happens with DRF present, so the callback exists
+# importing this owner only happens with DRF present, so the callback exists
 # exactly when serializer state can exist. A DRF-absent build imports neither
 # state nor callback, preserving the soft-dependency boundary.
 register_subsystem_clear(
@@ -1398,7 +1398,7 @@ def _resolve_nested_field(
     ``build_serializer_input_class`` the top level uses. The nested input is deduped +
     materialized (so identical nested shapes share one type), and the returned
     ``InputFieldSpec`` records ``nested_specs`` (the nested input's own reverse map) so the
-    The decode recurses with the same per-field machinery. The annotation is the nested
+    decode recurses with the same per-field machinery. The annotation is the nested
     input class (single) or ``list[<nested input>]`` (many); the caller applies the
     required / ``allow_null`` widening. The cycle / depth guard runs BEFORE the recursion.
 

@@ -430,7 +430,7 @@ uv run python manage.py audit_n1 --depth 5 --include-mutations --seed fakeshop
 
 **Difficulty**: 3/10 — No new compilation strategy; path validation at finalization plus one predicate builder. Row identity is preserved because it never crosses a to-many hop.
 
-**Source**: the five-root schedule-graph audit (2026-08-06), Finding 12. Deferred out of the graph substrate as a FilterSet-layer concern — see `docs/SPECS/spec-053-graph_substrate-0_1_1.md` (Non-goals and Out-of-scope both name this entry as the promotion target).
+**Source**: the five-root schedule-graph audit (2026-08-06), Finding 12. Deferred out of the graph substrate as a FilterSet-layer concern — see `docs/SPECS/spec-054-graph_substrate-0_1_1.md` (Non-goals and Out-of-scope both name this entry as the promotion target).
 
 **What we'd do**: ship a declarative compound filter for interval overlap, so a consumer declares the two bounding fields and the null rule once instead of rebuilding the predicate per model.
 
@@ -1875,7 +1875,7 @@ Cards in this section are intentionally unscheduled — kept for design context,
 must define exactly which concrete schema hookups count and keep multi-type-per-model support
 intentional.
 
-**Source**: relocated 2026-07-20 from the migration-guides card (now `TODO-BETA-067-0.1.8`; targeting `0.1.6` at relocation time), where it was implementation scope on a docs-only card.
+**Source**: relocated 2026-07-20 from the migration-guides card (now `TODO-BETA-068-0.1.8`; targeting `0.1.6` at relocation time), where it was implementation scope on a docs-only card.
 
 **What we'd do**: Add a DSF settings knob capping the number of schema hookups per model, raising a loud error when a model exceeds the cap (original card bullet: "Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more").
 

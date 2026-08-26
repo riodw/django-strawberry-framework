@@ -7,4 +7,4 @@ connection-aware optimizer planning,connection-aware-optimizer-planning,the nest
 strictness mode,strictness-mode,strict targets raise on unproven row identity; keys publish after binding
 `Meta.filterset_class`,metafilterset_class,applied exactly once per sidecar batch
 `Meta.orderset_class`,metaorderset_class,applied exactly once per sidecar batch
-joint version cut,joint-version-cut,the explain card (064) lands last and owns the 0.1.6 release state
+joint version cut,joint-version-cut,the explain card (065) lands last and owns the 0.1.6 release state

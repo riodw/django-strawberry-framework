@@ -288,7 +288,7 @@ The move and the reconciliation ran in one pass, so this file carries both recor
 
 ### What this cycle deliberately did not fix
 
-- **The `[spec-013]` ref-id cluster in [`spec-025-scalar_map_helper-0_0_7.md`][spec-025]** — five links whose *label* is a pre-renumber artifact although the definition resolves correctly. `KANBAN.md` already records the whole multi-surface cluster as carded onto `TODO-ALPHA-051-0.0.15` / `TODO-ALPHA-052-0.1.0`. Correcting one surface would leave the cluster divergently rather than uniformly wrong.
+- **The `[spec-013]` ref-id cluster in [`spec-025-scalar_map_helper-0_0_7.md`][spec-025]** — five links whose *label* is a pre-renumber artifact although the definition resolves correctly. `KANBAN.md` already records the whole multi-surface cluster as carded onto `TODO-ALPHA-051-0.0.15` / `TODO-ALPHA-053-0.1.0`. Correcting one surface would leave the cluster divergently rather than uniformly wrong.
 - **Standing-doc staleness** (`KANBAN.md`'s `DONE-017-0.0.6` body still claiming the deprecation is "suppressed at the definition site"; `docs/GLOSSARY.md`; `CHANGELOG.md`; `docs/README.md`; `TODAY.md`). These belong to this cycle's R3 round and are enumerated in the R1 artifact for it.
 - **Any code change.** The audit found no gap and no defect, so no R2 round was opened.
 

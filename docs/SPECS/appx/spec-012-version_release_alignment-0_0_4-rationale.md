@@ -345,7 +345,7 @@ Spec: the link-definitions block, `<!-- Root -->` group.
 the definition itself. It is **deliberately left in place**, exactly as the spec-011 cycle left its
 own. The board already owns the pattern: `KANBAN.md` catalogues 71 unused link definitions across 23
 files, "including an unused `[backlog]` definition in eight archived specs (`spec-011`, `spec-012`,
-`spec-013`, `spec-016`, `spec-024`, `spec-026`, `spec-036`, `spec-054`)", to be retired in one sweep
+`spec-013`, `spec-016`, `spec-024`, `spec-026`, `spec-036`, `spec-055`)", to be retired in one sweep
 by the checker card. Fixing one file of a cross-surface pattern leaves the surface *divergently*
 wrong rather than uniformly wrong, which is the disposition [`worker-0.md`][worker-0] `## Closing out
 a kanban card` prescribes, so it goes to this cycle's deferred-work catalog instead.

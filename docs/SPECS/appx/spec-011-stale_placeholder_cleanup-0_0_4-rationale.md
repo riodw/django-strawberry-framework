@@ -254,7 +254,7 @@ done
 ```
 
 lists `spec-011`, `spec-012`, `spec-013`, `spec-016`, `spec-024`, `spec-026`, `spec-036`, and
-`spec-054`, and a repo-wide sweep of every `.md` defining `[backlog]` finds the same eight. Fixing
+`spec-055`, and a repo-wide sweep of every `.md` defining `[backlog]` finds the same eight. Fixing
 one file of a cross-surface pattern leaves the surface *divergently* wrong rather than uniformly
 wrong, which is the disposition [`worker-0.md`][worker-0] `## Closing out a kanban card` prescribes,
 so it goes to this cycle's deferred-work catalog instead. **This cycle's build plan says fifteen

@@ -8,7 +8,7 @@ predicate bodies, does NO ``OR`` grouping, and never calls ``.filter()``,
 only outer mutation. Predicate meaning stays with the caller: the FilterSet
 flat-leaf applicator (``filters/sets.py::FilterSet._apply_flat_leaves``) applies
 one original filter invocation inside the correlated root, and the search-fields
-feature (docs/SPECS/spec-055-search_fields-0_1_2.md) builds its own same-value search
+feature (docs/SPECS/spec-056-search_fields-0_1_2.md) builds its own same-value search
 disjunctions. Keeping those semantics outside this module also keeps request
 values out of the selection optimizer's cross-request ``OptimizationPlan`` cache.
 

@@ -700,7 +700,7 @@ land under their own specs". Five of the seven have landed:
 | permissions | `0.0.8` and `0.0.10` | the `check_<field>_permission` filter/order gates at `0.0.8`; `apply_cascade_permissions` / `aapply_cascade_permissions` cascade visibility at `0.0.10` |
 
 Aggregates and fieldsets are still ahead, carded on the beta line: `FieldSet` at
-`TODO-BETA-054-0.1.1` and the aggregation subsystem at `TODO-BETA-057-0.1.3` in
+`TODO-BETA-055-0.1.1` and the aggregation subsystem at `TODO-BETA-058-0.1.3` in
 [`KANBAN.md`][kanban].
 
 *Note the permissions row is not a single version.* The spec's flat list treats "permissions" as one
@@ -892,8 +892,8 @@ Spec: [Remaining follow-ups][spec-014-follow-ups].
 
 *The claim as reconciled.* Layer-3 features "are each owned by their own spec". Six of the seven are:
 filters `spec-027`, orders `spec-028`, `DjangoConnectionField` `spec-030`, Relay nodes `spec-032`,
-permissions `spec-034`, fieldsets `spec-054`. **Aggregates has no spec authored** — `ls
-docs/SPECS/ | grep -i aggregat` returns nothing; it is carded as `TODO-BETA-057-0.1.3` in
+permissions `spec-034`, fieldsets `spec-055`. **Aggregates has no spec authored** — `ls
+docs/SPECS/ | grep -i aggregat` returns nothing; it is carded as `TODO-BETA-058-0.1.3` in
 [`KANBAN.md`][kanban] and referenced there as an amendment obligation on the graph-substrate card.
 
 *Why it was worth an edit.* The sentence's job is to route a reader who asks "who owns this?" to the

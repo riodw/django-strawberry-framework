@@ -235,7 +235,7 @@ class Query:
     siblings (`itemsConnection`, `entriesConnection`, ...) already exist live
     and plan through windowed `Prefetch`es.
 
-    Still deferred to `TODO-BETA-061-0.1.5` (the fakeshop-activation card): the
+    Still deferred to `TODO-BETA-062-0.1.5` (the fakeshop-activation card): the
     root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection`
     (`totalCount`) opt-ins. This conversion intentionally adds neither.
     """

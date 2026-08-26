@@ -752,7 +752,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 - Any package split or new distribution — rejected, Decision 1.
 - Test-tree DRY, docstring-volume reduction, and process/ceremony changes —
   raised in the maintainer conversation, not carded here.
-- The beta-release cleanup card (now `TODO-ALPHA-052-0.1.0` after the
+- The beta-release cleanup card (now `TODO-ALPHA-053-0.1.0` after the
   renumbers — it ushers in the beta and closes the Alpha column) — this
   card's squeeze does not absorb its verification scope.
 - The `DjangoDebugExtension` extraction — card `050`

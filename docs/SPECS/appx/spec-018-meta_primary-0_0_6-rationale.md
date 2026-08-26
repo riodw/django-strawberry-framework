@@ -349,7 +349,7 @@ The move and the reconciliation ran in one pass, so this file carries both recor
 ### What this cycle deliberately did not fix
 
 - **Any code change.** The audit found no gap and no defect, so no code round was opened.
-- **The live `KANBAN.md` card body**, which still carries the public `audit_primary_ambiguity()` name. It renders from the fakeshop kanban DB, which this cycle's do-not-touch list covers; the stale statement is recorded under the Slice 6 entry above. **Corrected 2026-08-18:** this bullet also named the retired duplicate-primary message, which the live board does not carry — that half belongs to the verbatim copy reproduced under Slice 6, not to the board. Homed as one edit, not two, on `TODO-ALPHA-052-0.1.0`.
+- **The live `KANBAN.md` card body**, which still carries the public `audit_primary_ambiguity()` name. It renders from the fakeshop kanban DB, which this cycle's do-not-touch list covers; the stale statement is recorded under the Slice 6 entry above. **Corrected 2026-08-18:** this bullet also named the retired duplicate-primary message, which the live board does not carry — that half belongs to the verbatim copy reproduced under Slice 6, not to the board. Homed as one edit, not two, on `TODO-ALPHA-053-0.1.0`.
 - **Standing-doc staleness generally** (`docs/GLOSSARY.md`, `CHANGELOG.md`, `docs/README.md`, `TODAY.md`). All four were verified to reflect shipped state for this card and none needed an edit.
 - **The `#metaprimary` in-page-shaped link inside Slice 6's glossary drop-in.** It does not resolve against a heading in the spec, and must not: it is text to be written into `docs/GLOSSARY.md`, where the anchor is real. Left verbatim so the drop-in stays character-identical to its destination.
 

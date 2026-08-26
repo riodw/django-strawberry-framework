@@ -150,7 +150,7 @@ Revision history (kept inline so the spec is self-contained):
   the package-tests-only placement justified as genuinely-unreachable-live, with
   communicator-driven real execution
   ([Decision 8](#decision-8--test-strategy-package-tests-only-communicator-driven-execution-eviction-simulated-absence));
-  the migration-guide one-row handoff to [`TODO-BETA-067-0.1.8`][kanban]
+  the migration-guide one-row handoff to [`TODO-BETA-068-0.1.8`][kanban]
   ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name));
   and the joint-cut version deferral
   ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
@@ -799,7 +799,7 @@ A true description of the repo as this spec is authored:
   question this card only scopes ([Risks](#risks-and-open-questions)).
 - **A fakeshop ASGI surface.** No `asgi.py`, no `channels` in the example's runtime
   path, no live `/graphql/` Channels tests. A future fakeshop ASGI dogfooding pass
-  belongs with the fakeshop-activation card ([`TODO-BETA-061-0.1.5`][kanban]) if the
+  belongs with the fakeshop-activation card ([`TODO-BETA-062-0.1.5`][kanban]) if the
   maintainer wants it at all
   ([Decision 8](#decision-8--test-strategy-package-tests-only-communicator-driven-execution-eviction-simulated-absence)).
 - **Subscriptions machinery.** `GraphQLWSConsumer` speaks the `graphql-transport-ws`
@@ -1041,7 +1041,7 @@ Alternatives considered (and rejected):
 - **Add the fakeshop `asgi.py` now for dogfooding.** Rejected: it drags `channels`
   into the example's runtime and the live suite is WSGI `django.test.Client` —
   the new surface would be dead weight until a Channels-aware acceptance harness
-  exists ([`TODO-BETA-061-0.1.5`][kanban] territory).
+  exists ([`TODO-BETA-062-0.1.5`][kanban] territory).
 
 ### Decision 3 — The symbol is `DjangoGraphQLProtocolRouter` — distinctly ours, pinned now
 
@@ -1375,7 +1375,7 @@ Alternatives considered (and rejected):
 
 ### Decision 9 — Migration ergonomics live in the migration-guide row, not the symbol name
 
-The card's DoD hands [`TODO-BETA-067-0.1.8`][kanban] (Migration and adoption
+The card's DoD hands [`TODO-BETA-068-0.1.8`][kanban] (Migration and adoption
 guides) a one-row entry for its "symbol equivalents" table:
 `strawberry_django.routers.AuthGraphQLProtocolTypeRouter` →
 `django_strawberry_framework.routers.DjangoGraphQLProtocolRouter`, with the note
@@ -2040,10 +2040,10 @@ implemented-on-main docs update here; release-status wording defers to the joint
   [Auth mutations][glossary-auth-mutations] GLOSSARY wording is corrected in
   Slice 2 either way.
 - **Fakeshop ASGI activation / Channels acceptance lane** — the
-  fakeshop-activation card [`TODO-BETA-061-0.1.5`][kanban] if ever.
+  fakeshop-activation card [`TODO-BETA-062-0.1.5`][kanban] if ever.
 - **Subscriptions as a package surface** — no card; the router transports whatever
   the consumer's schema defines.
-- **The migration guide itself** — [`TODO-BETA-067-0.1.8`][kanban]; this card only
+- **The migration guide itself** — [`TODO-BETA-068-0.1.8`][kanban]; this card only
   hands it the one-row symbol mapping
   ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name)).
 - **The `0.0.14` version bump and release-status flips** — the joint `0.0.14` cut
@@ -2104,7 +2104,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
       suite and no `channels` import added to `utils/`
       ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
 - [ ] The migration-guide handoff row content is recorded for
-      [`TODO-BETA-067-0.1.8`][kanban]
+      [`TODO-BETA-068-0.1.8`][kanban]
       (`AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, signature
       unchanged) ([Decision 9](#decision-9--migration-ergonomics-live-in-the-migration-guide-row-not-the-symbol-name)).
 - [ ] Slice 2 doc updates land per [Doc updates](#doc-updates): the GLOSSARY entry

@@ -10,11 +10,11 @@ project, and the invariants a fix has to satisfy.
 It is **not** the acceptance surface. The normative reproductions live in the
 two specs' test plans:
 
-- [`spec-053`][spec-053] (card `TODO-BETA-053-0.1.1`) — the graph substrate:
+- [`spec-054`][spec-054] (card `TODO-BETA-054-0.1.1`) — the graph substrate:
   reproductions R2–R6 and R9.
-- [`spec-063`][spec-063] (card `TODO-BETA-063-0.1.6`) — structural templates
+- [`spec-064`][spec-064] (card `TODO-BETA-064-0.1.6`) — structural templates
   and nested sidecar batching: reproductions R1, R7, R8, R10, plus the R3
-  filtered-connection arm `spec-053` pins as characterized-only.
+  filtered-connection arm `spec-054` pins as characterized-only.
 
 R11 (an optional PostgreSQL repeatable-read snapshot policy) is non-gating and
 unscheduled. R12 was consumer-repository work and is closed there.
@@ -325,8 +325,8 @@ evidence.
 <!-- docs/ -->
 
 <!-- docs/SPECS/ -->
-[spec-053]: SPECS/spec-053-graph_substrate-0_1_1.md
-[spec-063]: SPECS/spec-063-structural_templates-0_1_6.md
+[spec-054]: SPECS/spec-054-graph_substrate-0_1_1.md
+[spec-064]: SPECS/spec-064-structural_templates-0_1_6.md
 
 <!-- docs/builder/ -->
 

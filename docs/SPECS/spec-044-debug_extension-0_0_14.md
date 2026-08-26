@@ -1685,7 +1685,7 @@ test-client family, and this card's own entry; the [`README.md`][readme] /
 section under the Slice 3 grant. `0.0.14` is a routine patch cut, **not** a
 milestone (`.0`) cut — the alpha → beta milestone chores (the `0.1.0`
 GLOSSARY constraint lifts, the board's progress section, the README
-milestone prose) belong to [`TODO-ALPHA-052-0.1.0`][kanban], not here.
+milestone prose) belong to [`TODO-ALPHA-053-0.1.0`][kanban], not here.
 
 The bump moves only in Slice 3, after the extension and its docs are
 complete — never in Slice 1.
@@ -2622,7 +2622,7 @@ against a real ASGI-request prototype rather than prose:
 - **Fakeshop opting into the extension** (and replacing the probe URLconf
   with the shipped URLconf in the existing live tests) — the
   fakeshop-activation beta card
-  ([`TODO-BETA-061-0.1.5`][kanban]) is the natural host
+  ([`TODO-BETA-062-0.1.5`][kanban]) is the natural host
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - **Production-gating knobs** (enable predicates, slow-query thresholds,
   row caps, redaction) — follow-on once a consumer asks
@@ -2640,7 +2640,7 @@ against a real ASGI-request prototype rather than prose:
   ([Edge cases](#edge-cases-and-constraints)); the non-interference rule
   still protects the response.
 - **The `0.1.0` milestone chores** (alpha-constraint lifts, the board's
-  progress section, milestone prose) — [`TODO-ALPHA-052-0.1.0`][kanban]; this
+  progress section, milestone prose) — [`TODO-ALPHA-053-0.1.0`][kanban]; this
   card's cut is a routine patch cut
   ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
 

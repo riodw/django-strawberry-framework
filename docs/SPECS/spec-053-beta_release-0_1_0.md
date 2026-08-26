@@ -1,11 +1,11 @@
 # Spec: Beta release — cleanup, verification, and the alpha → beta cut-over to `0.1.0`
 
-Planned for `0.1.0` (card `TODO-ALPHA-052-0.1.0`); **this card is the only
+Planned for `0.1.0` (card `TODO-ALPHA-053-0.1.0`); **this card is the only
 card at `0.1.0` and owns the version bump**
 ([Decision 3](#decision-3--lone-card-at-010--the-release-slice-owns-the-version-cut)).
 Number conventions in this spec: bare three-digit numbers (`050` / `051` /
-`052` / `067`) are **kanban card numbers**, dotted numbers (`0.0.15` /
-`0.1.0` / `1.0.0`) are **package versions** — card `052` is the card that
+`053`) are **kanban card numbers**, dotted numbers (`0.0.15` /
+`0.1.0` / `1.0.0`) are **package versions** — card `053` is the card that
 cuts version `0.1.0`.
 This card is a **release / verification card**: it ships no new subsystem and
 no new consumer-facing symbol
@@ -296,7 +296,7 @@ to happen once, in order, with evidence.
   discovered mid-verification that needs code gets its own card
   ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
 - **No API freeze.** Strict SemVer begins at `1.0.0`
-  (`TODO-STABLE-069-1.0.0`), not here. Beta may still break pre-`1.0`
+  (`TODO-STABLE-070-1.0.0`), not here. Beta may still break pre-`1.0`
   contracts with documented migrations, exactly as alpha did.
 - **No beta-line feature pull-forward.** [`FieldSet`][glossary-fieldset] /
   [`Meta.fields_class`][glossary-metafields_class] (`0.1.1`),
@@ -306,7 +306,7 @@ to happen once, in order, with evidence.
   [`Meta.choice_enum_names`][glossary-metachoice_enum_names] (`0.1.4`) stay
   `planned`; the doc flips must not soften their status.
 - **No migration-guide authoring.** Migration and adoption guides are
-  `TODO-BETA-067-0.1.8`.
+  `TODO-BETA-068-0.1.8`.
 - **No CI matrix redesign.** The matrix is exercised as it exists; adding
   rows or version floors is not this card.
 
@@ -372,7 +372,7 @@ written — all verified as already satisfied.
 **Rationale**: the card's Definition-of-done range was written before cards
 050 / 051 entered the queue (the card predates the renumber that
 [`spec-051`][spec-051]'s Out-of-scope section records: "the beta-release
-cleanup card (now `TODO-ALPHA-052-0.1.0` after the renumbers)"). The board
+cleanup card (now `TODO-ALPHA-053-0.1.0` after the renumbers)"). The board
 column's own framing — "The final card in this column is the `0.1.0` release
 itself" — is the intent; a literal reading of the stale range would let this
 card cut `0.1.0` while `0.0.15` sits unshipped, which would strand that
@@ -694,7 +694,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   fakeshop activation + Layer-3 HTTP tests + optimizer explain mode
   (`0.1.5`), mutation idempotency + the filter-key namespace (`0.1.6`),
   and migration guides + the adversarial suite (`0.1.7`).
-- The API freeze and stable cut-over — `TODO-STABLE-069-1.0.0`.
+- The API freeze and stable cut-over — `TODO-STABLE-070-1.0.0`.
 - Release-pipeline automation (CI-driven tag/publish) — raised and rejected
   in Decision 8; a future card if the beta cadence warrants it.
 - The [Cross-subsystem invariants][glossary-cross-subsystem-invariants]

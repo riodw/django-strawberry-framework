@@ -118,7 +118,7 @@ shipped spec is correct as history and is not in a sweep.
 **The residual risk, stated rather than fixed.** A symbol-qualified citation to a retired symbol
 still reads as a live pointer to a reader who does not notice the section it sits in. The
 countermeasure available today is the section framing; the durable one is the source-symbol-citation
-checker scoped by `TODO-ALPHA-052-0.1.0`, whose own specification already names this exact case —
+checker scoped by `TODO-ALPHA-053-0.1.0`, whose own specification already names this exact case —
 distinguishing a live spec's claim from a shipped spec's history — as the thing it must get right.
 
 ### `## Strawberry finalization strategy` and `### Unresolved-target error format` — two inbound citations repointed

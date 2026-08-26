@@ -9,15 +9,15 @@ worker enacting the acceptance steps today pins the current exact floor, `Django
 ## Identity and completion ownership
 
 This document is the working plan for the **pre-card groundwork slice of
-[spec 055][spec-055]** (its "Slice 0"): the shipped-defect fixes and
-search-independent machinery land ahead of card `TODO-BETA-055-0.1.2`, and
+[spec 056][spec-056]** (its "Slice 0"): the shipped-defect fixes and
+search-independent machinery land ahead of card `TODO-BETA-056-0.1.2`, and
 that card owns the completion bookkeeping for everything this plan ships —
 `docs/GLOSSARY.md`, `docs/TREE.md`, `KANBAN.md`, and the
 `django_strawberry_framework/exceptions.py::OptimizerError` raise-site
 documentation (second Part 1 review, findings 9 and 10). The plan itself
 carries a final documentation slice (Slice D) so the shipped `FilterSet`
 semantics change and the new `optimizer/predicates.py` module never sit
-undocumented between Part 1 landing and card 055 wrapping. Version and
+undocumented between Part 1 landing and card 056 wrapping. Version and
 `CHANGELOG.md` ownership stay with the maintainer; no `CHANGELOG.md` entry
 is added unless separately requested.
 
@@ -26,8 +26,8 @@ is added unless separately requested.
 This plan enacts the "now" half of the to-many fan-out investigation
 (the since-removed `to-many-search-optimizer-reproduction.md`): everything that fixes
 shipped behavior or builds search-independent machinery lands ahead of card
-`TODO-BETA-055-0.1.2`, so that card later wires the `search:` surface onto a
-finished engine ([spec-055][spec-055], Decision 7). The postponed half — the
+`TODO-BETA-056-0.1.2`, so that card later wires the `search:` surface onto a
+finished engine ([spec-056][spec-056], Decision 7). The postponed half — the
 `search:` argument, `Meta.search_fields` validation, the pipeline step, live
 search fixtures, benchmarking — stays with the respecced card.
 
@@ -262,7 +262,7 @@ Investigation grounding that still stands (validated on Django 6.0.5 /
 fakeshop / SQLite): the `Exists` form removes membership tables from the
 outer `alias_map`, keeps `query.distinct` False, returns one row per parent
 with multiple matching children, and adds no distinct wrapper to `.count()`;
-`EXISTS` distributes over OR for same-value disjunctions (card 055's future
+`EXISTS` distributes over OR for same-value disjunctions (card 056's future
 grouping is a cost choice there); no surveyed prior art implements a
 positive-filter `EXISTS` rewrite. Django core does it only for `exclude()`.
 Django admin's `lookup_spawns_duplicates()` detects potentially multiplying
@@ -338,7 +338,7 @@ django-filter semantics live in one adapter:
 2. **`optimizer/predicates.py`** — correlation, alias allocation, and
    attachment of `Exists` for an **already-defined inner queryset**
    (Slice B). It never builds predicate bodies, never ORs groups, and knows
-   nothing about django-filter or Strawberry. Card 055 later builds its
+   nothing about django-filter or Strawberry. Card 056 later builds its
    same-value OR groups and calls this layer directly.
 3. **`filters/sets.py`** — the django-filter leaf adapter (Slice C): builds
    the correlated inner root, applies **one original eligible filter
@@ -369,7 +369,7 @@ Per first-review finding 5, classification and lookup validation are
 **separate contracts**:
 
 - `classify_path(model, field_path)` classifies a **model-field path only**
-  (the shape `FilterSet.filter_for_field` and card 055 declarations
+  (the shape `FilterSet.filter_for_field` and card 056 declarations
   actually hold — `lookup_expr` arrives separately at every real call
   site). It returns an immutable plan: relation hops (segment, kind, target
   model, many-side flag), the terminal — either a concrete field **or the
@@ -521,7 +521,7 @@ Surface (two pieces, both value-free and filter-semantics-free):
   alias, and returns `(queryset, Q(<alias>=True))` for the caller to
   compose. No `negated` parameter: negation placement belongs to the caller
   whose boolean semantics are proven (the adapter never needs it — see
-  Slice C; card 055's positive OR never needs it either).
+  Slice C; card 056's positive OR never needs it either).
   - Input validation covers what actually creates hazards: the inner root
     model matches the outer model and both resolve to the same database
     alias. **There is no evaluated-outer-queryset rejection** (second
@@ -980,7 +980,7 @@ asserts the old oracle duplicates while the production result does not.
 
 **The shared Medtrics reproduction fixture (cross-spec review).** The
 production issue does not stay prose: one named, deterministic fixture is
-consumed by this plan and later by card 055, built on existing library
+consumed by this plan and later by card 056, built on existing library
 models with no migration —
 
 ```text
@@ -1030,7 +1030,7 @@ compare the test-local outer-invocation baseline against the
 row-preserving production adapter; the row-semantics comparison lives in
 the fakeshop tier (live `/graphql/` where the surface is reachable,
 `examples/fakeshop/tests/` otherwise), per the live-first mandate;
-(b) **card 055 integration test** — the live `/graphql/` `search:`
+(b) **card 056 integration test** — the live `/graphql/` `search:`
 request over the same rows (owned by the card); (c) **SQL-shape test** —
 package-tier (`tests/`) query-object inspection proving the result came
 from a correlated `EXISTS`, not JOIN-plus-`DISTINCT` or a scalar
@@ -1147,7 +1147,7 @@ machinery while leaving fakeshop's canonical schema permanently list-only.
 
 ## Slice D — documentation of the shipped semantics (completion slice)
 
-Owned by card 055's completion bookkeeping (see Identity above), but the
+Owned by card 056's completion bookkeeping (see Identity above), but the
 Part 1 landing itself updates the source-of-truth artifacts its changes
 make stale:
 
@@ -1164,7 +1164,7 @@ make stale:
 - `examples/fakeshop/test_query/README.md`'s suite descriptions are
   updated for the new live coverage (the loan reverse-FK surface and the
   C.5 flat-leaf regressions) so the tier guide stays accurate;
-- `docs/GLOSSARY.md` / `KANBAN.md` updates flow through card 055's DB
+- `docs/GLOSSARY.md` / `KANBAN.md` updates flow through card 056's DB
   fold-in per the shipping-slice rule; the staged TODO pseudocode blocks
   in `filters/sets.py`, `optimizer/predicates.py`, and
   `utils/relations.py` are consumed (deleted) by their implementing
@@ -1191,10 +1191,10 @@ make stale:
   corrections are documented: the flattened-leaf duplicate-row defect fix,
   and the multiset contract's end to accidental global deduplication of
   pre-fanned consumer inputs.)
-- Everything card-055-shaped: no `search:` argument, no `Meta.search_fields`
+- Everything card-056-shaped: no `search:` argument, no `Meta.search_fields`
   handling, no pipeline step, no same-value OR grouping, no
   `Meta.search_strategy`, no benchmark harness. Release-state artifacts
-  beyond Slice D's source-of-truth updates stay with card 055.
+  beyond Slice D's source-of-truth updates stay with card 056.
 
 ## Sequencing and validation
 
@@ -1233,7 +1233,7 @@ make stale:
    aliases, routers, visibility querysets, and request values stay
    resolve-time inputs.
 10. Slice D documentation updates; leave search grouping and the `search:`
-    surface to card 055.
+    surface to card 056.
 
 After every edit: `uv run ruff format .` and `uv run ruff check --fix .`
 only; tests run when explicitly requested; the change must hold
@@ -1249,7 +1249,7 @@ the previous commit added tracked files.
   or accidental result sets to correct ones — both called out in Slice D.
 - **Low-selectivity regime.** Many independent `EXISTS` branches over a
   large root set can lose to one multi-join + `DISTINCT` on some planners.
-  No escape hatch here (card 055 holds `Meta.search_strategy` in reserve);
+  No escape hatch here (card 056 holds `Meta.search_strategy` in reserve);
   structure is gated in tests, wall-clock never.
 - **Eligibility misclassification.** Fail-closed construction provenance
   means the failure mode is a missed optimization, never a wrong result
@@ -1272,7 +1272,7 @@ the previous commit added tracked files.
 
 <!-- docs/SPECS/ -->
 [spec-027-filters]: SPECS/spec-027-filters-0_0_8.md
-[spec-055]: SPECS/spec-055-search_fields-0_1_2.md
+[spec-056]: SPECS/spec-056-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

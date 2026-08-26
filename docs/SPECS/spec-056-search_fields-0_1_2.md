@@ -1,10 +1,10 @@
 # Spec: `Meta.search_fields` — declarative OR'd search on connection fields
 
-Planned for `0.1.2` (card `TODO-BETA-055-0.1.2`); **`TODO-BETA-056-0.1.2`
+Planned for `0.1.2` (card `TODO-BETA-056-0.1.2`); **`TODO-BETA-057-0.1.2`
 (Postgres full-text search filter primitives) shares this patch version and
 depends on this card, so the `0.1.2` version bump belongs to the joint cut
 and this spec defers every release-state artifact to it**
-([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-056)).
+([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-057)).
 The Strawberry analogue of `django-graphene-filters`' `Meta.search_fields`:
 a `DjangoType` declares a tuple of model-field paths
 (`search_fields = ("name", "description", "galaxy__name")`), and every
@@ -27,7 +27,7 @@ Both dependencies have shipped (`DONE-027-0.0.8`
 Filtering, `DONE-030-0.0.9` `DjangoConnectionField`) and the landing seams
 already exist in the tree: `filters/inputs.py::LOOKUP_PREFIXES` +
 `construct_search` (landed by spec-027 Decision 2 under a broad
-future-search reservation that Slice 1 retargets to card 056) and the
+future-search reservation that Slice 1 retargets to card 057) and the
 `connection.py::_synthesized_signature` docstring's "The `search:` argument
 is NOT generated (search is `0.1.2`)" reservation.
 
@@ -65,7 +65,7 @@ documentation all wrap under this card (second Part 1 review, findings
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This card does not touch `CHANGELOG.md`; card
-055's joint-cut slice must carry the maintainer's explicit grant.
+056's joint-cut slice must carry the maintainer's explicit grant.
 
 ---
 
@@ -73,13 +73,13 @@ without explicit permission. This card does not touch `CHANGELOG.md`; card
 
 Every project-specific symbol below is anchored in
 [`docs/GLOSSARY.md`][glossary]; the companion
-[`spec-055-search_fields-0_1_2-terms.csv`][search-terms]
+[`spec-056-search_fields-0_1_2-terms.csv`][search-terms]
 is the audit ledger. Load-bearing entries:
 
 - [`Meta.search_fields`][glossary-metasearch_fields] — the surface this card
-  implements (card 056's joint cut owns the final shipped-release status;
+  implements (card 057's joint cut owns the final shipped-release status;
   this card moves the entry to a precise intermediate status,
-  [Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-056)).
+  [Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-057)).
 - [`DjangoConnectionField`][glossary-djangoconnectionfield] — where the
   `search:` argument surfaces.
 - [`FilterSet`][glossary-filterset] /
@@ -114,7 +114,7 @@ is the audit ledger. Load-bearing entries:
   (Decision 13), the shared `active_search` predicate (canonical home
   `utils/connections.py`, re-exported — Decision 3), the
   `SEARCH_MAX_LENGTH` cap, explicit rejection of the `LOOKUP_PREFIXES`
-  vocabulary reserved to card 056, and unit tests under
+  vocabulary reserved to card 057, and unit tests under
   `tests/filters/test_search_fields.py`.
 - [ ] **Slice 2 — Meta surface.** Declaration-time shape validation
   (including duplicate-path and padded-path rejection) in `types/base.py`,
@@ -157,11 +157,11 @@ is the audit ledger. Load-bearing entries:
   [`Meta.search_fields`][glossary-metasearch_fields] reads "implemented on
   `main`; release pending the joint `0.1.2` cut" and regenerate
   `docs/GLOSSARY.md`, **audit the four Slice-0 fold-in obligations named
-  in the opener** (below), flip card 055 + regenerate the board. Leave
+  in the opener** (below), flip card 056 + regenerate the board. Leave
   README/docs README shipped-surface wording, GOAL/TODAY release status,
   `CHANGELOG.md`, and the version quintet untouched — all are owned by the
-  `TODO-BETA-056-0.1.2` joint cut
-  ([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-056)).
+  `TODO-BETA-057-0.1.2` joint cut
+  ([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-057)).
 
 ## Problem statement
 
@@ -176,7 +176,7 @@ with a typed [`ConfigurationError`][glossary-configurationerror], so the
 declaration — flat names AND relation-traversal paths in one tuple —
 cannot be written — the fakeshop products schema stages four commented
 `search_fields` tuples that this card's Slice 4 activates (card
-`TODO-BETA-061-0.1.5`, recut to the `node` / `nodes` entry points plus
+`TODO-BETA-062-0.1.5`, recut to the `node` / `nodes` entry points plus
 `totalCount`, no longer gates them). The consumer-facing promise is small and sharp: one
 declarative tuple, one generated `search: String` argument, OR'd
 case-insensitive containment across every declared path, composed with
@@ -193,11 +193,11 @@ viewer cannot see.
 - `filters/inputs.py::LOOKUP_PREFIXES` (`^` → `istartswith`, `=` → `iexact`,
   `@` → `search`, `$` → `iregex`) and `filters/inputs.py::construct_search`
   landed with spec-027 Decision 2 under a broad future-search
-  reservation. Canonical card 055 subsequently narrowed this card to basic
-  OR'd `icontains`; card 056 owns the shortcut parity decision and its
+  reservation. Canonical card 056 subsequently narrowed this card to basic
+  OR'd `icontains`; card 057 owns the shortcut parity decision and its
   Postgres guard. Slice 1 retargets the stale reservation wording.
 - `filters/sets.py::FilterSet.get_filters` carries a
-  `TODO(spec-055 Slice 1)` comment directing prefix translation to wire in
+  `TODO(spec-056 Slice 1)` comment directing prefix translation to wire in
   there. This spec supersedes that placement
   ([Decision 1](#decision-1--search-support-lives-in-filterssearchpy-not-inside-filterset));
   Slice 1 removes the TODO.
@@ -300,7 +300,7 @@ viewer cannot see.
 
 - **Ranked / weighted / similarity full-text search and search-field shortcut
   prefixes.** Those are
-  `TODO-BETA-056-0.1.2` (Postgres `SearchQueryFilter` / `SearchRankFilter`
+  `TODO-BETA-057-0.1.2` (Postgres `SearchQueryFilter` / `SearchRankFilter`
   / `TrigramFilter` primitives plus the `^` / `=` / `@` / `$` parity
   watch-item), explicitly distinct from this card's basic OR'd `icontains`
   surface and gated on it.
@@ -336,7 +336,7 @@ upstream shipping this shape is `django-graphene-filters` (verified in
 `recipes/schema.py`), and the consumer-facing contract —
 [Cookbook parity][glossary-cookbook-parity] — is that an unprefixed
 graphene-era `search_fields` tuple carries over verbatim when the import line
-changes. Prefix-bearing declarations belong to card 056.
+changes. Prefix-bearing declarations belong to card 057.
 Element classification:
 
 - **Borrowed verbatim**: the Meta key name and tuple-of-paths shape; the
@@ -373,7 +373,7 @@ Element classification:
   typo'd paths fail loudly at finalize with
   [`ConfigurationError`][glossary-configurationerror] instead of upstream's
   silent runtime `FieldError`; shortcut-prefixed declarations fail loudly
-  until card 056 resolves their parity and backend-safety contract.
+  until card 057 resolves their parity and backend-safety contract.
 
 ## User-facing API
 
@@ -420,7 +420,7 @@ Semantics:
   ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
 - `search_fields = ("=code",)` (or any leading `^` / `@` / `$`) raises
   [`ConfigurationError`][glossary-configurationerror] at declaration time;
-  card 056 owns those shortcuts and the non-Postgres behavior of `@`.
+  card 057 owns those shortcuts and the non-Postgres behavior of `@`.
 - `search_fields = ("name", "name")` (duplicates) or `(" name",)`
   (padding) raise at declaration time
   ([Decision 2](#decision-2--declaration-time-shape-validation-finalize-time-path-validation)).
@@ -498,7 +498,7 @@ corrective message (a padded model path must never be silently stripped
 or allowed to fail later with a less useful resolution error). A
 declaration beginning with any key in
 `filters/inputs.py::LOOKUP_PREFIXES` raises at declaration time with a
-message that assigns shortcut support to card 056; it must never be
+message that assigns shortcut support to card 057; it must never be
 treated as a literal model-field name or escape to a backend error. The
 validated tuple lands on a new
 `types/definition.py::DjangoTypeDefinition.search_fields` slot
@@ -594,7 +594,7 @@ user-visible, so it must be pinned now: **this package ships phrase
 semantics.** Rationale beyond card fidelity: phrase semantics are the
 conservative subset (every phrase match is also a term-AND match), so a
 later opt-in to term splitting (e.g. a `Meta.search_mode` key, or riding
-`TODO-BETA-056-0.1.2`'s full-text surface where ranked term handling
+`TODO-BETA-057-0.1.2`'s full-text surface where ranked term handling
 belongs) widens results without breaking existing queries, whereas
 launching with term-AND and narrowing later silently drops rows.
 Term-splitting as the default is therefore rejected for `0.1.2`; the
@@ -616,19 +616,19 @@ when one value contains both words, the test plan retains a distinct
 multi-field phrase case where separate words match different fields — so
 the deliberate upstream divergence stays unmistakable.
 
-### Decision 5 — Card 055 is `icontains`-only; shortcut prefixes fail loudly
+### Decision 5 — Card 056 is `icontains`-only; shortcut prefixes fail loudly
 
 Every entry is a model-field path and always becomes `<path>__icontains`.
 The `^` / `=` / `@` / `$` vocabulary is not silently accepted: those leading
 characters raise [`ConfigurationError`][glossary-configurationerror] during
-declaration validation. Canonical card 055 pins the basic OR-of-`icontains`
-contract, while card 056 explicitly owns the shortcut parity watch-item and
+declaration validation. Canonical card 056 pins the basic OR-of-`icontains`
+contract, while card 057 explicitly owns the shortcut parity watch-item and
 already requires a clear non-Postgres posture for its full-text surface.
 
 This also keeps SQLite safe: `@` cannot become a late `__search` lookup and
-fail at query execution before card 056 has specified and tested the backend
+fail at query execution before card 057 has specified and tested the backend
 gate. Slice 1 retargets the stale `construct_search` docstring/TODO reservation
-from this card to card 056 rather than deleting the shared
+from this card to card 057 rather than deleting the shared
 `LOOKUP_PREFIXES` constant. Automatically adopting the vocabulary here is
 rejected because it expands the KANBAN contract and splits ownership of the
 same public syntax across two cards.
@@ -821,14 +821,14 @@ Slice 2, because this card ships the key applied end-to-end (declaration →
 definition slot → SDL argument → queryset mutation → live fakeshop
 coverage) — the exact promotion criterion the DoD states ("only when the
 pipeline applies it end-to-end"). The DoD's parenthetical "(per
-`TODO-BETA-058-0.1.3`)" is read as pointing at card 058's *generalized
+`TODO-BETA-059-0.1.3`)" is read as pointing at card 059's *generalized
 promotion machinery* for the remaining deferred keys
-(`aggregate_class`), not as deferring this key's promotion to 058 — the
-same reading spec-054 Decision 8 pinned for `fields_class`, and 058's own
+(`aggregate_class`), not as deferring this key's promotion to 059 — the
+same reading spec-055 Decision 8 pinned for `fields_class`, and 059's own
 title ("Layer 3 Meta key promotion") describes the sweep, not ownership of
 each key. Ambiguity + fallback recorded in Risks. `aggregate_class`
 remains the sole `DEFERRED_META_KEYS` member after this card and
-`TODO-BETA-054-0.1.1` land.
+`TODO-BETA-055-0.1.1` land.
 
 ### Decision 9 — No `search` key inside the `filter:` input type
 
@@ -845,15 +845,15 @@ This is a deliberate, documented upstream divergence (Borrowing posture);
 migrating consumers who used the nested spelling rewrite it to the
 top-level argument.
 
-### Decision 10 — Joint cut at `0.1.2` — release state defers to card 056
+### Decision 10 — Joint cut at `0.1.2` — release state defers to card 057
 
 Two non-Done cards share the `0.1.2` patch version: this card and
-`TODO-BETA-056-0.1.2` (Postgres full-text primitives), and 056 explicitly
-depends on 055 ("basic search lands first"). The
+`TODO-BETA-057-0.1.2` (Postgres full-text primitives), and 057 explicitly
+depends on 056 ("basic search lands first"). The
 [Joint version cut][glossary-joint-version-cut] rule therefore assigns card
-056 the release-cut artifacts: the version quintet, README/docs README
+057 the release-cut artifacts: the version quintet, README/docs README
 shipped-surface moves, GOAL/TODAY release wording, and the cumulative
-`0.1.2` CHANGELOG entry covering both cards. Card 055 ships its
+`0.1.2` CHANGELOG entry covering both cards. Card 056 ships its
 implementation, card-local spec/TREE updates, and card flip.
 
 The generated GLOSSARY is NOT deferred wholesale: [`AGENTS.md`][agents]
@@ -863,9 +863,9 @@ completing spec's Slice 5, so leaving
 after the implementation lands would make the source-of-truth lie. Slice
 5 updates the glossary database and regenerates `docs/GLOSSARY.md` to the
 precise intermediate status **"implemented on `main`; release pending the
-joint `0.1.2` cut"**; card 056's cut rewords it to shipped. Writing
+joint `0.1.2` cut"**; card 057's cut rewords it to shipped. Writing
 release notes or marking the surface *released* while the package still
-reports `0.1.1` remains rejected. If the maintainer re-sequences and 055
+reports `0.1.1` remains rejected. If the maintainer re-sequences and 056
 is descoped or retargeted, the cut ownership returns here — recorded in
 Risks.
 
@@ -1156,11 +1156,11 @@ implement the original per-action policy.
 
 | Slice | Files touched | Delta |
 | --- | --- | --- |
-| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 056; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
+| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 057; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
 | 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan built after `_bind_filtersets` (assign only after both succeed, retry-safe) |
 | 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; combined-queryset preflight; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
-| 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 056 (Decision 10) |
+| 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 057 (Decision 10) |
 
 ## Helper-reuse obligations (DRY)
 
@@ -1252,7 +1252,7 @@ implement the original per-action policy.
   no dead cached window, and strictness can report the per-parent access.
   This is a documented performance consequence, not a correctness one.
 - **Shortcut prefix** — declaration-time `ConfigurationError` assigning the
-  syntax to card 056; no backend-specific lookup reaches execution.
+  syntax to card 057; no backend-specific lookup reaches execution.
 - **`%` / `_` / quotes in input** — literal characters (Decision 11).
 - **Non-queryset consumer resolver + active `search:` input** — the
   extended sidecar guard raises, matching `filter:` / `orderBy:` behavior;
@@ -1486,7 +1486,7 @@ compiler shape.
   [`Meta.search_fields`][glossary-metasearch_fields] reads "implemented on
   `main`; release pending the joint `0.1.2` cut" and regenerate
   `docs/GLOSSARY.md` (Decision 10); README/docs README, GOAL/TODAY, and
-  `CHANGELOG.md` release status stay untouched for card 056's joint cut.
+  `CHANGELOG.md` release status stay untouched for card 057's joint cut.
 - The spec/public docs state the contracts explicitly: relational search
   honors related-type visibility (Decision 12); search honors FilterSet
   field-permission gates and a filterset-less type's search is
@@ -1552,16 +1552,16 @@ compiler shape.
   before first release of the surface — it must be decided before `0.1.2`
   ships because the two differ user-visibly on multi-word input and
   switching later is a semantic break.
-- **Prefix ownership (Decision 5).** Card 055 rejects shortcut-prefixed
-  declarations. Card 056 must decide which shortcuts ship, pin the migration
+- **Prefix ownership (Decision 5).** Card 056 rejects shortcut-prefixed
+  declarations. Card 057 must decide which shortcuts ship, pin the migration
   contract, and define the `@` backend guard before accepting any of them.
 - **Promotion ownership (Decision 8).** The DoD's "(per
-  `TODO-BETA-058-0.1.3`)" parenthetical is ambiguous, exactly as it was
-  for `fields_class` in spec-054. Preferred: promote here (end-to-end
-  criterion met). Fallback: leave in `DEFERRED_META_KEYS` and have 058
+  `TODO-BETA-059-0.1.3`)" parenthetical is ambiguous, exactly as it was
+  for `fields_class` in spec-055. Preferred: promote here (end-to-end
+  criterion met). Fallback: leave in `DEFERRED_META_KEYS` and have 059
   promote — but then Slice 4's fakeshop activation cannot land, so the
   fallback effectively descopes Slice 4 to package-schema tests only.
-- **Joint-cut re-sequencing (Decision 10).** If `TODO-BETA-056-0.1.2` is
+- **Joint-cut re-sequencing (Decision 10).** If `TODO-BETA-057-0.1.2` is
   descoped/retargeted after this card ships, the `0.1.2` cut ownership
   returns to this card as a post-ship follow-up; the maintainer owns that
   call.
@@ -1597,16 +1597,16 @@ compiler shape.
 ## Out of scope (explicitly tracked elsewhere)
 
 - Ranked / weighted / trigram full-text search and the `^` / `=` / `@` / `$`
-  shortcut parity decision — `TODO-BETA-056-0.1.2` (depends on this card;
+  shortcut parity decision — `TODO-BETA-057-0.1.2` (depends on this card;
   owns the `0.1.2` cut).
 - The generalized deferred-key promotion sweep and
   [`Meta.aggregate_class`][glossary-metaaggregate_class] /
-  [`AggregateSet`][glossary-aggregateset] — `TODO-BETA-058-0.1.3`.
+  [`AggregateSet`][glossary-aggregateset] — `TODO-BETA-059-0.1.3`.
 - [`FieldSet`][glossary-fieldset] /
-  [`Meta.fields_class`][glossary-metafields_class] composition — spec-053
-  (`TODO-BETA-054-0.1.1`; ships before this card).
+  [`Meta.fields_class`][glossary-metafields_class] composition — spec-054
+  (`TODO-BETA-055-0.1.1`; ships before this card).
 - The Relay `node` / `nodes` root entry points and the connection
-  `totalCount` opt-in — `TODO-BETA-061-0.1.5` (the product-catalog root
+  `totalCount` opt-in — `TODO-BETA-062-0.1.5` (the product-catalog root
   schema is already live; this card's Slice 4 owns only the
   `search_fields` activations).
 - A dedicated search permission hook and any nested-connection search
@@ -1617,13 +1617,13 @@ compiler shape.
 
 ## Definition of done
 
-- [ ] `docs/SPECS/spec-055-search_fields-0_1_2.md` (this file) is the card's
+- [ ] `docs/SPECS/spec-056-search_fields-0_1_2.md` (this file) is the card's
   spec of record.
 - [ ] `filters/search.py` ships `apply_search_sync` / `apply_search_async`
   / `build_search_path_plan` / `active_search` / `SEARCH_MAX_LENGTH`;
   prefix/duplicate/padded declarations fail loudly and the
   `filters/sets.py` / `construct_search` reservations are retargeted to
-  card 056.
+  card 057.
 - [ ] `Meta.search_fields` validates at declaration (shape) and finalize
   (one strict plan builder, assign-after-success), lands on
   `DjangoTypeDefinition`, and is promoted to `ALLOWED_META_KEYS`.
@@ -1676,7 +1676,7 @@ compiler shape.
   rewritten; no release-cut artifact is changed.
 - [ ] **No release-cut edit** — the `0.1.2` quintet, README shipped-surface
   moves, and CHANGELOG entry belong to the
-  `TODO-BETA-056-0.1.2` joint cut (Decision 10).
+  `TODO-BETA-057-0.1.2` joint cut (Decision 10).
 
 <!-- LINK DEFINITIONS -->
 
@@ -1714,7 +1714,7 @@ compiler shape.
 [part1-plan]: ../row-preserving-predicates-part1-plan.md
 
 <!-- docs/SPECS/ -->
-[search-terms]: appx/spec-055-search_fields-0_1_2-terms.csv
+[search-terms]: appx/spec-056-search_fields-0_1_2-terms.csv
 [spec-027]: spec-027-filters-0_0_8.md
 [spec-030]: spec-030-connection_field-0_0_9.md
 [spec-043]: spec-043-test_client-0_0_14.md

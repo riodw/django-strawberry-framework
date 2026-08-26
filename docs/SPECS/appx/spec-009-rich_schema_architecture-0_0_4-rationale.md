@@ -200,7 +200,7 @@ Layer 9 specifies, and would synthesize one permission class per managed field. 
 lost for the same reason, one level up: it is machinery whose only job is to host a wrapper that a
 wrapper can host directly, and it charges every generated field for a feature most fields do not use.
 Resolver wrapping costs nothing on an unmanaged field, keeps the cascade in one readable body, and is
-upstream-parity. `spec-054-fieldset-0_1_1.md` pinned it, and pinning it is what removed the last surface
+upstream-parity. `spec-055-fieldset-0_1_1.md` pinned it, and pinning it is what removed the last surface
 `DjangoModelField` was being reserved for.
 
 ### ``### Borrow `StrawberryDjangoDefinition` `` — the sketch declared five things the dataclass never grew
@@ -277,7 +277,7 @@ carried its dataclass sketch and a five-behavior borrow list. `### Decision 3`, 
 `types/fields.py` were the same claim's other five sites.
 
 It was never built, is absent from `docs/TREE.md`'s target layout, and has now been declined three
-times, the last decisively (`spec-054-fieldset-0_1_1.md` #"field class is unnecessary machinery").
+times, the last decisively (`spec-055-fieldset-0_1_1.md` #"field class is unnecessary machinery").
 The parity test it fails is **consumer-visible capability, not symbol
 presence**: `StrawberryDjangoField` is upstream *internal plumbing*, graphene-django has no analogue
 class at all, and every capability the class was to carry already ships through this package's own
@@ -438,7 +438,7 @@ Three separate reasons, and the second is the interesting one.
    whole-query `OptimizationPlan` is what shipped; there is no `annotate` hint in any form.
 
 The one live fragment — annotation dependencies as an optimizer input — is **already carded** on
-`TODO-BETA-053-0.1.1`, so it needed no new card here either. The rewritten section states the
+`TODO-BETA-054-0.1.1`, so it needed no new card here either. The rewritten section states the
 value-not-callable rule positively, because that rule changes how a future hint is designed and
 therefore belongs in the spec rather than here.
 
@@ -533,7 +533,7 @@ introducing a flag should state what the flag does **not** decide.
 
 **`aggregates` does not exist yet**, and this is the one place in this pass where a spec claim was kept
 rather than corrected: it is the Graphene reference's shape, it is genuinely owed, and
-`TODO-BETA-057-0.1.3` owns it. The correction is only that it lands through the generated-subclass
+`TODO-BETA-058-0.1.3` owns it. The correction is only that it lands through the generated-subclass
 mechanism rather than by widening the generic base. The rejected alternative — deleting `aggregates`
 because it is unshipped — would have dropped a real target-outcome commitment on a technicality about
 today's code.
@@ -597,11 +597,11 @@ module, and omitted `orders/inputs.py`.
 `types/fields.py` is the dead `DjangoModelField` proposal and went with it. `fieldset.py` contradicted
 the section's **own preamble**, which declares the package layout canonical because it determines import
 paths, public-surface promotion, and test-tree mirroring — and `docs/TREE.md` plans `fieldset/` at
-`TODO-BETA-054-0.1.1`. `orders/inputs.py` ships and is required by shipped code (it owns the direction
+`TODO-BETA-055-0.1.1`. `orders/inputs.py` ships and is required by shipped code (it owns the direction
 enum), so a layout omitting it would have a reader believe the order inputs live somewhere they do not.
 
 `permissions.py` was correct and is now annotated with its planned migration to a `permissions/` package
-at `TODO-BETA-059-0.1.4`, on the same forward-looking-ownership principle as the deferred `Meta` keys.
+at `TODO-BETA-060-0.1.4`, on the same forward-looking-ownership principle as the deferred `Meta` keys.
 The rejected alternative was regenerating the whole layout from `docs/TREE.md`: that would make this
 section a second copy of a script-rendered document and guarantee drift, when the section's job is to
 state the *intended* shape of the Layer 3 subsystems and nothing more.

@@ -11,9 +11,11 @@ non-``__init__.py`` Python file, a package-integration item, and the final
 test gate. Matching shadows are optional baseline aids for those live files.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt-<release>.md``, where
-``<release>`` is the matching version in ``pyproject.toml`` and the package
-``__init__.py`` (dots become underscores). This matches the review and DRY
-agentflow progress-file naming; ``--target-release`` overrides the version.
+``<release>`` is the package ``__version__`` in
+``django_strawberry_framework/__init__.py`` (dots become underscores) -- the
+single version source, from which hatchling also derives packaging metadata.
+This matches the review and DRY agentflow progress-file naming;
+``--target-release`` overrides the version.
 Existing progress is preserved unless ``--force`` is passed for an
 explicit restart.
 
@@ -33,11 +35,6 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    tomllib = None
-
 if __package__:
     from scripts import review_historical_package_snapshot_at_commit as snapshot
 else:
@@ -53,12 +50,6 @@ PACKAGE_INIT = Path("django_strawberry_framework/__init__.py")
 
 # Dotted-digit release such as 0.0.13; shared with the review and DRY flows.
 RELEASE_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
-_PROJECT_TABLE_PATTERN = re.compile(
-    r"(?ms)^\[project\][ \t]*(?:#.*)?\n(?P<body>.*?)(?=^\[|\Z)",
-)
-_VERSION_ASSIGNMENT_PATTERN = re.compile(
-    r"""(?m)^version\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
-)
 _INIT_VERSION_PATTERN = re.compile(
     r"""(?m)^__version__\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
 )
@@ -118,37 +109,6 @@ def _head_sha() -> str:
     return _run_git(["rev-parse", "HEAD"]).strip()
 
 
-def _pyproject_version(repo_root: Path) -> str:
-    """Read ``[project] version`` from pyproject.toml."""
-    pyproject_path = repo_root / "pyproject.toml"
-    try:
-        text = pyproject_path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise RuntimeError(f"could not read pyproject.toml: {error}") from error
-
-    if tomllib is None:
-        project_match = _PROJECT_TABLE_PATTERN.search(text)
-        version_match = (
-            _VERSION_ASSIGNMENT_PATTERN.search(project_match.group("body"))
-            if project_match is not None
-            else None
-        )
-        if version_match is None:
-            raise RuntimeError("[project] version not found in pyproject.toml")
-        return version_match.group("version")
-
-    try:
-        project = tomllib.loads(text)["project"]
-        version = project["version"]
-    except (KeyError, tomllib.TOMLDecodeError) as error:
-        raise RuntimeError(
-            f"could not read [project] version from pyproject.toml: {error}",
-        ) from error
-    if not isinstance(version, str) or not version:
-        raise RuntimeError("[project] version in pyproject.toml must be a non-empty string")
-    return version
-
-
 def _init_version(repo_root: Path) -> str:
     """Read ``__version__`` from the package ``__init__.py``."""
     init_path = repo_root / PACKAGE_INIT
@@ -163,20 +123,13 @@ def _init_version(repo_root: Path) -> str:
 
 
 def _package_release(repo_root: Path) -> str:
-    """Return the release shared by pyproject.toml and the package ``__init__``.
+    """Return the release from the single version source, the package ``__init__``.
 
-    Mirrors the review flow: the release is read from the matching versions so
-    the three agentflows name their progress files identically. A mismatch is
-    an error -- the two versions must be bumped together.
+    Hatchling derives packaging metadata from the same ``__version__`` literal
+    via ``[tool.hatch.version]``, so there is no second declaration to compare
+    against and no mismatch state to police.
     """
-    pyproject_version = _pyproject_version(repo_root)
-    init_version = _init_version(repo_root)
-    if pyproject_version != init_version:
-        raise RuntimeError(
-            f"version mismatch: pyproject.toml has {pyproject_version!r} but "
-            f"{PACKAGE_INIT.as_posix()} has {init_version!r}; bump them together",
-        )
-    return pyproject_version
+    return _init_version(repo_root)
 
 
 def _live_python_sources(repo_root: Path, package_dir: str) -> list[str]:
@@ -380,8 +333,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=None,
         help=(
             "Release used to name the progress file, matching the review and DRY "
-            "flows. Defaults to the matching version in pyproject.toml and "
-            f"{PACKAGE_INIT.as_posix()}."
+            f"flows. Defaults to the package version in {PACKAGE_INIT.as_posix()}."
         ),
     )
     parser.add_argument(

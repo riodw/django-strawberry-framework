@@ -24,7 +24,6 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     release = "0.0.13"
     package_root = tmp_path / bug_hunt.DEFAULT_PACKAGE_DIR
     _write(package_root / "__init__.py", f'__version__ = "{release}"\n')
-    _write(tmp_path / "pyproject.toml", f'[project]\nversion = "{release}"\n')
     _write(package_root / "module.py", "VALUE = None\n")
     _write(package_root / "testing" / "client.py", "class Client:\n    pass\n")
     _write(package_root / "testing" / "fresh.py", "FRESH = None\n")
@@ -135,7 +134,6 @@ def test_empty_dicta_still_renders_the_package_questions_section(
     """
     package_root = tmp_path / bug_hunt.DEFAULT_PACKAGE_DIR
     _write(package_root / "__init__.py", '__version__ = "0.0.13"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "0.0.13"\n')
     _write(package_root / "module.py", "VALUE = None\n")
     _write(tmp_path / bug_hunt.DICTA_PATH, "\n   \n")
 
@@ -466,11 +464,10 @@ def test_package_dir_normalization_rejects_paths_outside_the_repository(
         snapshot.normalize_package_dir(tmp_path, "linked-package")
 
 
-def test_target_release_overrides_mismatched_package_versions(tmp_path: Path, monkeypatch) -> None:
+def test_target_release_overrides_the_package_version(tmp_path: Path, monkeypatch) -> None:
     package_root = tmp_path / bug_hunt.DEFAULT_PACKAGE_DIR
-    _write(package_root / "__init__.py", '__version__ = "0.0.12"\n')
+    _write(package_root / "__init__.py", '__version__ = "0.0.13"\n')
     _write(package_root / "module.py", "VALUE = None\n")
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "0.0.13"\n')
 
     def fake_run_git(args: Sequence[str]) -> str:
         responses = {
@@ -496,28 +493,6 @@ def test_target_release_overrides_mismatched_package_versions(tmp_path: Path, mo
     assert "# Bug hunt: 0.0.14" in output.read_text(encoding="utf-8")
 
 
-def test_generator_rejects_mismatched_package_versions(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    package_root = tmp_path / bug_hunt.DEFAULT_PACKAGE_DIR
-    _write(package_root / "__init__.py", '__version__ = "0.0.12"\n')
-    _write(tmp_path / "pyproject.toml", '[project]\nversion = "0.0.13"\n')
-
-    def fake_run_git(args: Sequence[str]) -> str:
-        responses = {
-            ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
-            ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
-        }
-        return responses[tuple(args)]
-
-    monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
-
-    assert bug_hunt.main([]) == 1
-    assert "version mismatch" in capsys.readouterr().err
-
-
 def test_generator_rejects_invalid_target_release(tmp_path: Path, monkeypatch, capsys) -> None:
     def fake_run_git(args: Sequence[str]) -> str:
         responses = {
@@ -532,13 +507,3 @@ def test_generator_rejects_invalid_target_release(tmp_path: Path, monkeypatch, c
     assert "invalid release '0_0_14'" in capsys.readouterr().err
     assert bug_hunt.main(["--target-release", ""]) == 1
     assert "invalid release ''" in capsys.readouterr().err
-
-
-def test_python_310_fallback_reads_only_the_project_table(tmp_path: Path, monkeypatch) -> None:
-    _write(
-        tmp_path / "pyproject.toml",
-        "version = \"9.9.9\"\n\n[project]\nversion = '0.0.13'\n\n[tool.example]\n",
-    )
-    monkeypatch.setattr(bug_hunt, "tomllib", None)
-
-    assert bug_hunt._pyproject_version(tmp_path) == "0.0.13"

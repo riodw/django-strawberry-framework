@@ -400,6 +400,20 @@ Four sites described work that has since shipped as still ahead. Two instruments
 - The [Relation handling][glossary-relation-handling] Key-glossary bullet said the sibling story "upgrades to relation-as-Connection **after this card lands**" — a future-tense pointer at shipped work whose antecedent (this card landing) is long satisfied. `Meta.relation_shapes` reads `shipped (0.0.9)` in the glossary. It now states the ownership split without a tense.
 - **The fourth site was found only by checking the table row by row, and it has a different shape.** The `apply_cascade_permissions` row read `planned (0.0.10)`, and `0.0.10` shipped — the glossary entry reads `shipped (0.0.10)`, [`django_strawberry_framework/permissions.py`][permissions] defines the helper pair, the package exports both, and [`CHANGELOG.md`][changelog] documents them. It survived every sweep aimed at the *first* defect because it carries no `DONE-` card id: the instrument that found the Relay-Root row was "a `planned` status beside a `DONE-` card id", and this row is a `planned` status beside a bare version number. **A finding's own shape is not its population's shape.** The two rows genuinely still planned (`FieldSet` at `0.1.1`, `AggregateSet` at `0.1.3`) were confirmed against their glossary entries and left alone, and the table carries no row for `DONE-031-0.0.9` at all — the upstream cookbook has no GlobalID counterpart, so there is nothing to pair.
 
+### Post-ship: the neighbouring live test that is deliberately NOT a `030` contract
+
+`test_anonymous_inline_fragment_under_connection_field_resolves` lives inside
+this card's own live block in [`test_library_api.py`][fakeshop-test-library] and
+is **not** a `030` contract: its subject is an optimizer selection-walker
+behaviour, and the connection field is only the surface it happens to be
+exercised through. The spec therefore names it nowhere, and that absence is a
+postcondition to preserve rather than an oversight to correct - a later sweep of
+that live block would otherwise adopt it into the `## Test plan` on proximity,
+since every other test in the block belongs there. The check is
+`grep -c 'test_anonymous_inline_fragment' docs/SPECS/spec-030-connection_field-0_0_9.md`,
+which must stay `0`; recording the boundary here rather than in the spec is what
+keeps it so.
+
 ### The spec-wide reshaping Revision 2's P1 findings forced
 
 The four P1 findings were foundational rather than local: three rewrote a Decision outright ([3](#decision-3--build-on-strawberrys-native-relay-machinery-but-own-the-first--last-guard), [4](#decision-4--djangoconnectiont-base-plus-per-target-concrete-connection-classes), [6](#decision-6--sidecar-derived-arguments-via-a-synthesized-resolver-signature)) and the optimizer one ([11](#decision-11--the-connection-field-owns-its-optimizer-cooperation-point)) propagated into the Problem statement, Current state, Goals, Implementation plan, Slice checklist, [Test plan][spec-030-test-plan] and Definition of done, because it turned a no-source-change slice into source work. That is why the spec's non-Decision sections read as though the extracted helper was always the plan: they were rewritten to match, not amended. The record that they were rewritten is here.

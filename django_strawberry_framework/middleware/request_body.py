@@ -352,6 +352,10 @@ def _require_boundary_before_csrf() -> None:
     dotted path, so a subclass of either middleware is recognized as what it is;
     a non-class entry (a function middleware) is neither and is skipped.
 
+    The first entry of each middleware type in ``MIDDLEWARE`` is what decides the
+    comparison: the first boundary entry is what runs first to measure the body,
+    and the first CSRF entry is what would parse it.
+
     Nothing is raised when the chain contains no CSRF middleware at all: there is
     then no read to run behind, and the package view's own CSRF continuation
     still protects the endpoint.
@@ -361,7 +365,7 @@ def _require_boundary_before_csrf() -> None:
         entry = import_string(path)
         if not isinstance(entry, type):
             continue
-        if issubclass(entry, GraphQLRequestBodyBoundaryMiddleware):
+        if issubclass(entry, GraphQLRequestBodyBoundaryMiddleware) and boundary_index is None:
             boundary_index = index
         elif issubclass(entry, CsrfViewMiddleware) and csrf_index is None:
             csrf_index = index

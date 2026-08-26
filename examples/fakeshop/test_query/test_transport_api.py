@@ -2033,6 +2033,81 @@ async def test_the_async_view_rejects_the_same_multipart_map_shape():
     _assert_no_graphql_envelope(response)
 
 
+#: A document nested past ``json.loads``' C-stack budget on every supported
+#: interpreter - ~150 KB clears CPython 3.14's ~74k-depth limit and stays far
+#: under the package's own 1 MiB request-body cap; earlier interpreters break
+#: on a couple of kilobytes.
+_PATHOLOGICAL_NESTING_DEPTH = 120_000
+_PATHOLOGICAL_BODY = b"[" * _PATHOLOGICAL_NESTING_DEPTH + b"]" * _PATHOLOGICAL_NESTING_DEPTH
+
+
+def _deeply_nested_operations_document():
+    """A valid-JSON ``operations`` document whose VALUE nesting overflows.
+
+    ``json.loads`` survives this depth everywhere (its C budget dwarfs
+    Python's recursion limit), so the envelope guard passes it as a
+    well-typed object - and ``replace_placeholders_with_files``' unconditional
+    ``copy.deepcopy`` then overflows at pure-Python recursion depth.
+    """
+    nested: list = []
+    for _ in range(1500):
+        nested = [nested]
+    return json.dumps({"0": nested}).encode()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_post_pathologically_nested_body_returns_400_on_the_async_view_too():
+    """Async transport: a body nested past the parser's C stack -> controlled 400.
+
+    Both views inherit the one patched ``BaseView.parse_json``, but the wire
+    answer deserves its own row per transport: pre-fix this escaped as an
+    unhandled ``RecursionError`` -> ``500`` from ``run`` on the event loop.
+    """
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_bytes(AsyncClient(), _PATHOLOGICAL_BODY, path="/async-graphql/")
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse request body as JSON"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_multipart_operations_document_nested_past_the_c_stack_is_refused():
+    """Valid-JSON ``operations`` whose depth overflows the upload utility.
+
+    ``json.loads`` survives this ~3 KB document, so the generic guard passes
+    it as a well-typed object - and ``replace_placeholders_with_files``'s
+    unconditional ``copy.deepcopy`` then raised ``RecursionError``, which the
+    delegates' traversal tuple missed: an unhandled ``500`` for a tiny body.
+    The translated answer is the delegates' own multipart-parse ``400``,
+    provenance-scoped to the utility's frame.
+    """
+    seed_data(1)
+
+    response = _post_multipart(
+        Client(),
+        "/graphql/",
+        [("operations", _deeply_nested_operations_document()), ("map", b"{}")],
+    )
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse the multipart body"
+    _assert_no_graphql_envelope(response)
+
+
+async def test_the_async_view_refuses_the_same_deep_operations_document():
+    """The async delegate scopes the deepcopy recursion identically."""
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_multipart(
+            AsyncClient(),
+            "/async-multipart/",
+            [("operations", _deeply_nested_operations_document()), ("map", b"{}")],
+        )
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse the multipart body"
+    _assert_no_graphql_envelope(response)
+
+
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
 @pytest.mark.django_db
 def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(field, raw):

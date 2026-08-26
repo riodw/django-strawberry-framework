@@ -324,6 +324,21 @@ def _measured_remaining(stream: Any) -> int | _Probe:
       body file at the supported floor - capability is decided by ``tell()``
       instead, which the same ``io.UnsupportedOperation`` reports for a
       pipe-backed stream.
+    - having no ``seek`` method at all is ``UNMEASURABLE`` too, decided by
+      :func:`_lacks_seek` once the stream has reported a usable built-in ``int``
+      position and before anything moves. Believing a missing ``seekable``
+      declaration - the bullet above - admits streams that genuinely cannot
+      seek, a forward-only body-inspection middleware's position-tracking
+      wrapper among them, and for such a stream the probe must not run its
+      end-seek at all: the ``AttributeError`` of an absent method would fall
+      into the restore-or-``CORRUPTED`` path below and refuse, as over-limit, a
+      request nothing had moved - while logging that the probe moved the
+      stream, which for this shape is provably false. Absence is checkable, so
+      it is checked before anything is called: nothing to move means nothing
+      moved, and the bounded read starts where the request started by
+      construction. A ``seek`` that exists but raises keeps the stricter
+      treatment below, because a raise from a method that ran is not something
+      absence can prove harmless.
     - the seek to the end raising leaves the position **unknown**, so it is not
       trusted either way: the restore runs regardless, and the outcome is
       ``UNMEASURABLE`` only if the restore proves the original position is back.
@@ -385,6 +400,8 @@ def _measured_remaining(stream: Any) -> int | _Probe:
         return _Probe.UNMEASURABLE
     if type(position) is not int:
         return _Probe.UNMEASURABLE
+    if _lacks_seek(stream):
+        return _Probe.UNMEASURABLE
     try:
         end = stream.seek(0, os.SEEK_END)
     except Exception:  # the position is now unknown rather than known-intact
@@ -429,6 +446,31 @@ def _declares_seekable(stream: Any) -> bool:
     try:
         return bool(seekable())
     except Exception:  # a capability query that fails answers no, not maybe
+        return False
+
+
+def _lacks_seek(stream: Any) -> bool:
+    """Whether ``stream`` has no ``seek`` method at all, before anything moves.
+
+    The other half of believing a missing ``seekable`` declaration
+    (:func:`_declares_seekable`): the belief admits streams that report
+    positions but cannot take them, and for those a probe that attempted its
+    end-seek would classify an unmovable stream as :attr:`_Probe.CORRUPTED` -
+    refusing valid requests and logging a movement that could not have
+    happened. Absence is decided here instead, after the position gate has
+    established the one fact this verdict rests on, so the answer is
+    :attr:`_Probe.UNMEASURABLE`: nothing to move means nothing moved, and the
+    bounded read is both safe and the answer. The lookup is guarded like
+    ``_declares_seekable``'s, with the answer flipped: an attribute read that
+    fails is not a proven absence, so it stays on the seek-and-verify path,
+    whose guards already know how to fail closed over an unreadable capability.
+    A ``seek`` marker that is present but not callable is likewise not an
+    absence - calling one raises ``TypeError``, which the end-seek's guard
+    handles as any other failed move attempt.
+    """
+    try:
+        return getattr(stream, "seek", None) is None
+    except Exception:  # a capability read that fails proves no absence
         return False
 
 

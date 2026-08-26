@@ -397,6 +397,32 @@ async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps()
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
+class _UnformableRequest:
+    """An adapter whose form-data read fails the way a broken multipart body does."""
+
+    async def get_form_data(self):
+        raise ValueError("malformed multipart body")
+
+
+async def test_the_multipart_reason_is_upstreams_own_native_literal():
+    """The delegates' 400 reason stays byte-identical to Strawberry's own.
+
+    ``_UPSTREAM_MULTIPART_PARSE_REASON`` reproduces the one native multipart-400
+    reason upstream raises - the async parser wraps a failing
+    ``get_form_data()`` in exactly this ``HTTPException`` - so the structural
+    failures the delegates translate are indistinguishable on the wire from
+    upstream's own multipart rejections. The malformed-map rows above compare
+    the wrapper's output to this very constant, so only a pin against the
+    native raise - the JSON reason's ``tests/test_views.py`` precedent - catches
+    an upstream rewording instead of letting the copy drift silently.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        await patches._original_async_parse_multipart(_MultipartView(), _UnformableRequest())
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
+
+
 def test_patched_sync_parse_multipart_preserves_a_non_structural_parser_exception():
     """The malformed-envelope wrapper cannot hide a consumer JSON hook failure."""
 
@@ -746,3 +772,89 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     supersede".
     """
     assert patches._captured_upstream_method(None, "parse_json") is None
+
+
+#: A document nested past ``json.loads``' C-stack budget on every supported
+#: interpreter - ~150 KB clears CPython 3.14's ~74k-depth limit and stays far
+#: under the package's own 1 MiB request-body cap; earlier interpreters break
+#: on a couple of kilobytes.
+_DEEP_ARRAY_TEXT = "[" * 120_000 + "]" * 120_000
+
+#: A depth ``json.loads`` survives everywhere (its C budget dwarfs Python's
+#: recursion limit) while ``copy.deepcopy``'s pure-Python recursion does not.
+_DEEP_COPY_WINDOW_DEPTH = 1500
+
+
+def test_patched_parse_json_translates_a_pathologically_nested_body():
+    """A body nested past the parser's C stack -> controlled 400, not a raw escape.
+
+    The second half of gap 1: ``json.loads`` answers a pathologically nested
+    document with ``RecursionError`` - a ``RuntimeError``, so neither
+    upstream's ``except json.JSONDecodeError`` nor a ``ValueError`` widening
+    catches it, and it escaped as an unhandled ``500`` from every one of the
+    nine call sites. The translation is the same ``HTTPException(400, ...)``
+    upstream already gives unparseable JSON, indistinguishable but for
+    ``__cause__``.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_json(BaseView(), _DEEP_ARRAY_TEXT)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
+    assert type(excinfo.value.__cause__) is RecursionError
+
+
+@pytest.mark.parametrize("param", ["variables", "extensions"])
+def test_patched_parse_query_params_translates_a_deep_param(param):
+    """The GET shield owns gap 1's error channel without owning its guard.
+
+    The shield routes the two query-param parses around the envelope guard
+    (upstream's per-param handling owns validity there), but a deep param
+    still drives ``json.loads`` past the C stack - client input that must
+    meet the same controlled ``400`` as malformed JSON, not an unhandled
+    ``RecursionError`` -> ``500`` on a bodyless GET.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_query_params(
+            BaseView(),
+            {"query": "{ __typename }", param: _DEEP_ARRAY_TEXT},
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
+    assert type(excinfo.value.__cause__) is RecursionError
+
+
+def test_patched_sync_parse_multipart_translates_a_deep_operations_document():
+    """The upload utility's ``copy.deepcopy`` recursion becomes its own 400.
+
+    A valid-JSON ``operations`` document whose value nesting exceeds Python's
+    recursion limit parses cleanly (so the envelope guard passes it) and then
+    overflows the utility's unconditional ``copy.deepcopy`` - inside the very
+    frame the provenance check scopes by, hence a client-input translation to
+    the multipart-parse ``400``, not a server-bug ``500``.
+    """
+    nested = []
+    for _ in range(_DEEP_COPY_WINDOW_DEPTH):
+        nested = [nested]
+    request = _SyncMultipartRequest(json.dumps({"0": nested}), "{}", {})
+
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_sync_parse_multipart(_MultipartView(), request)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
+
+
+async def test_patched_async_parse_multipart_translates_a_deep_operations_document():
+    """The async delegate scopes the deepcopy recursion identically."""
+    nested = []
+    for _ in range(_DEEP_COPY_WINDOW_DEPTH):
+        nested = [nested]
+    request = _AsyncMultipartRequest(json.dumps({"0": nested}), "{}", {})
+
+    with pytest.raises(HTTPException) as excinfo:
+        await patches._patched_async_parse_multipart(_MultipartView(), request)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON

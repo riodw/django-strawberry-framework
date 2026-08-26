@@ -1003,6 +1003,34 @@ class _UnrestorableStream(_UndeclaredSeekableStream):
         raise OSError("this stream cannot seek back")
 
 
+class _TellWithoutSeekStream(_RecordingNonSeekableStream):
+    """Reports positions but has no ``seek`` method anywhere in its MRO.
+
+    The forward-only body-inspection middleware shape: ``seekable`` is absent
+    (the ``None`` marker standing in for that absence exactly as
+    ``_UndeclaredSeekableStream`` uses it) and ``tell()`` works, so the probe's
+    capability fallback accepts it - but there is no ``seek`` to call, so
+    nothing the probe does can ever have moved it. That provable intactness is
+    what makes the verdict ``UNMEASURABLE`` rather than ``CORRUPTED``: before
+    the fix the absent method's ``AttributeError`` fell into the
+    restore-or-refuse path, so an under-limit request was refused ``413`` and
+    the operator was told the probe had moved a stream that had no way to move.
+    """
+
+    seekable = None
+
+    def tell(self):
+        return self._buffer.tell()
+
+
+class _UnreadableSeekAttributeStream(_UndeclaredSeekableStream):
+    """A descriptor that raises before the probe can even read ``seek``."""
+
+    @property
+    def seek(self):
+        raise RuntimeError("this stream refuses attribute inspection")
+
+
 class _ReadRaisingStream(_RecordingNonSeekableStream):
     """A non-seekable request stream whose ``read`` fails before delivering anything.
 
@@ -1624,6 +1652,92 @@ def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(vie
     assert stream.delivered == 0
     assert hasattr(request, "_body") is False
     assert request._stream is stream
+    _assert_the_corrupted_probe_was_recorded(caplog, stream)
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_stream_with_no_seek_method_is_measured_rather_than_refused(view_class, caplog):
+    """A stream nothing could have moved is unmeasurable, never corrupted.
+
+    Believing a missing ``seekable`` declaration - the Python 3.10 spool's
+    capability fallback - also admits streams that report positions but have no
+    ``seek`` to call, a forward-only body-inspection middleware's wrapper among
+    them. For such a stream the end-seek cannot run at all: its
+    ``AttributeError`` used to fall into the restore-or-``CORRUPTED`` path, so
+    an under-limit request was refused as over-limit and the ``WARNING``
+    claimed the probe had moved a stream that had no way to move. Absence is
+    now decided before any call, so the verdict is "unmeasurable, position
+    provably intact" and the bounded read supplies the bound.
+
+    Both halves are asserted: the under-limit body reaches Django whole through
+    the bounded branch (the refusal would have been a silent loss of service),
+    and no corrupted-probe record exists, because a log whose premise is false
+    is worse than none.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _TellWithoutSeekStream(_UNDER_LIMIT_BODY)
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        view._enforce_request_body_limit(request)
+
+    assert stream.delivered == len(_UNDER_LIMIT_BODY)
+    assert max(stream.requested) <= _PROBE_CAP + 1
+    assert request.body == _UNDER_LIMIT_BODY
+    assert not any(
+        _CORRUPTED_PROBE_LOG_MESSAGE.split("(")[0] in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_stream_with_no_seek_method_over_limit_is_still_bounded(view_class):
+    """The same shape refuses through the bounded read, not by verdict.
+
+    Measured rather than believed in both directions: the probe-less stream is
+    read to exactly ``limit + 1`` bytes and refused there, with bytes left
+    unread and nothing materialized - the same security property its seekable
+    and non-seekable siblings assert, because classifying it unmeasurable must
+    not quietly become trusting it.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _TellWithoutSeekStream(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.delivered == _PROBE_CAP + 1
+    assert stream.unread > 0
+    assert hasattr(request, "_body") is False
+
+
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_an_unreadable_seek_attribute_is_not_a_proven_absence(view_class, caplog):
+    """A raising ``seek`` descriptor stays on the conservative path.
+
+    The guard inside the absence check has one answer for an attribute read
+    that fails: not proven absent, so the stream keeps the end-seek-and-verify
+    treatment, whose own guards fail closed. Here every attempt to touch
+    ``seek`` raises, so the restore cannot verify and the request is refused
+    with the ordinary ``413`` and the corrupted-probe record - the correct
+    outcome when the package cannot even establish what the stream can do,
+    unlike the sibling rows where absence itself is the proof of intactness.
+    """
+    view = _capped_view(_PROBE_CAP, view_class=view_class)
+    stream = _UnreadableSeekAttributeStream(b"x" * (_PROBE_CAP * 16))
+    request = _asgi_request(stream, None)
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        with pytest.raises(HTTPException) as excinfo:
+            view._enforce_request_body_limit(request)
+
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.reason == _BODY_LIMIT_REASON
+    assert stream.requested == []
+    assert hasattr(request, "_body") is False
     _assert_the_corrupted_probe_was_recorded(caplog, stream)
 
 
@@ -3322,7 +3436,6 @@ def test_middleware_ignores_an_unreadable_optional_mount_handoff():
             return None
 
     class Callback:
-        graphql_request_body_boundary = True
         view_class = BoundaryView
         view_initkwargs = {}
 
@@ -3333,6 +3446,8 @@ def test_middleware_ignores_an_unreadable_optional_mount_handoff():
 
         def __call__(self, request):
             return HttpResponse()
+
+    setattr(Callback, _BOUNDARY_MARKER, True)
 
     request = RequestFactory().get("/graphql/")
     with _chain(_ORDERED_CHAIN):
@@ -3463,6 +3578,26 @@ def test_the_first_csrf_entry_is_the_one_the_ordering_is_measured_against():
     ):
         with pytest.raises(ConfigurationError, match="must appear BEFORE"):
             GraphQLRequestBodyBoundaryMiddleware(_plain_view)
+
+
+def test_the_first_boundary_entry_is_the_one_the_ordering_is_measured_against():
+    """A chain carrying multiple boundary entries is judged by the earliest one.
+
+    ``MIDDLEWARE`` may legitimately list more than one boundary middleware entry
+    (such as a subclass for logging or metrics alongside a base entry), and the
+    ordering requirement is satisfied as long as the FIRST boundary entry precedes
+    the CSRF check. An audit that recorded the last boundary entry instead would
+    falsely reject a chain where a boundary entry precedes CSRF whenever another
+    boundary entry appears later in the chain.
+    """
+    with override_settings(
+        MIDDLEWARE=[
+            _BOUNDARY_MIDDLEWARE_PATH,
+            _CSRF_MIDDLEWARE_PATH,
+            _DERIVED_BOUNDARY_MIDDLEWARE_PATH,
+        ],
+    ):
+        assert GraphQLRequestBodyBoundaryMiddleware(_plain_view) is not None
 
 
 async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_call():

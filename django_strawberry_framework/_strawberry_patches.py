@@ -58,7 +58,12 @@ instead of returning a controlled ``400``. Strawberry clearly intends a
 turns malformed JSON into ``HTTPException(400, ...)`` - but it catches
 only ``json.JSONDecodeError``. ``UnicodeDecodeError`` is a ``ValueError``
 and is **not** a ``JSONDecodeError``, so it escapes the ``except`` and
-surfaces as an unhandled ``500``:
+surfaces as an unhandled ``500``. The same escape applies to
+``RecursionError``: a pathologically nested document drives ``json.loads``
+past the interpreter's C-stack budget, and that is a
+``RuntimeError``, not a ``JSONDecodeError`` either - reachable on this
+interpreter with a ~150 KB body, and with a couple of kilobytes on
+interpreters whose C-stack budget is smaller:
 
 - On the **sync** view *upstream* decodes in ``cross_web``'s request
   adapter, before ``parse_json`` is even entered - a raise inside a
@@ -72,11 +77,12 @@ surfaces as an unhandled ``500``:
 
 ``BaseView.parse_json`` is the single method both the sync and async
 views inherit, so widening its ``except`` to also catch
-``UnicodeDecodeError`` fixes both transports from one site. Combined
-with the ``cross_web`` patch (which routes the sync path's bytes through
-``parse_json`` rather than decoding them eagerly), every malformed-body
-request becomes a clean ``400`` for every consumer of the installed
-Strawberry - including one who mounts Strawberry's own view.
+``UnicodeDecodeError`` and ``RecursionError`` fixes both transports from
+one site. Combined with the ``cross_web`` patch (which routes the sync
+path's bytes through ``parse_json`` rather than decoding them eagerly),
+every malformed-body request becomes a clean ``400`` for every consumer
+of the installed Strawberry - including one who mounts Strawberry's own
+view.
 
 Where the strict UTF-8 wire contract lives (and why not here)
 -------------------------------------------------------------
@@ -96,9 +102,9 @@ a security contract along with them. Two owners now:
   package views, ungated - together with the body source that feeds it,
   ``views.py::_RawBodyRequestAdapter``, because a decode the bytes never
   reach is not an enforcement;
-- this module keeps translating the ``UnicodeDecodeError`` that
-  upstream's ``except json.JSONDecodeError`` misses, which is a bug fix
-  and stays opt-out-able.
+- this module keeps translating the ``UnicodeDecodeError`` and
+  ``RecursionError`` that upstream's ``except json.JSONDecodeError``
+  misses, which is a bug fix and stays opt-out-able.
 
 The two compose without overlapping. On a package view the strict decode
 runs first, so the delegate here only ever receives ``str`` and the
@@ -109,9 +115,10 @@ undecodable remainder that would otherwise be a ``500``.
 
 The patch wraps the original ``parse_json`` rather than reimplementing
 it: the original is called unchanged and only the previously-uncaught
-``UnicodeDecodeError`` is translated to the same ``HTTPException(400,
-...)`` Strawberry already raises for malformed JSON. This keeps the
-patch robust to upstream changes in the body of ``parse_json``.
+``UnicodeDecodeError`` / ``RecursionError`` are translated to the same
+``HTTPException(400, ...)`` Strawberry already raises for malformed JSON.
+This keeps the patch robust to upstream changes in the body of
+``parse_json``.
 
 A second gap: non-object JSON bodies
 ------------------------------------
@@ -220,11 +227,12 @@ still catches only ``json.JSONDecodeError``:
 No upstream issue or PR tracks this exact ``UnicodeDecodeError`` gap.
 The closest ticket, #1214 (closed), covers graceful handling of
 malformed-but-valid-UTF-8 JSON - i.e. the ``JSONDecodeError`` case that
-is *already* caught - not the non-UTF-8 subclass case this patch fixes:
+is *already* caught - not the non-UTF-8 subclass case this patch fixes
+(or the ``RecursionError`` sibling translated alongside it):
 <https://github.com/strawberry-graphql/strawberry/issues/1214>. This
 patch can be retired once upstream broadens the catch to also cover
-``UnicodeDecodeError`` (or ``ValueError``); a future upstream shape change
-fails loudly so that retirement is deliberate.
+``UnicodeDecodeError`` and ``RecursionError``; a future upstream shape
+change fails loudly so that retirement is deliberate.
 
 The second gap (non-object body) is likewise unfixed in 0.317.2 and
 ``main`` (checked 2026-06-19). ``parse_http_body`` still handles only the
@@ -246,10 +254,12 @@ cause. Retire the envelope guard once #3398 lands ``isinstance`` checks
 
 The third gap is present in the installed upstream multipart utility:
 ``replace_placeholders_with_files`` calls ``files_map.items()`` and then
-``path.split(".")`` without first validating those values' JSON shapes. Retire
-the multipart delegates once Strawberry validates the map is a mapping and
-every file path is a string before traversal (or catches the same structural
-errors at its HTTP boundary).
+``path.split(".")`` without first validating those values' JSON shapes, and its
+unconditional ``copy.deepcopy`` of the operations document recurses per nesting
+level - a valid-JSON document nested past Python's recursion limit (a couple of
+kilobytes) overflows there. Retire the multipart delegates once Strawberry validates the map is a mapping and
+every file path is a string before traversal, and bounds the document depth it
+will copy (or catches the same structural errors at its HTTP boundary).
 
 Three lifecycles, and one that left
 -----------------------------------
@@ -257,9 +267,10 @@ Three lifecycles, and one that left
 Read the retirement question per concern, because this module carries three
 independent upstream *bugs* that do not retire together:
 
-1. **The ``UnicodeDecodeError`` translation** - retirable once upstream
-   broadens its ``except`` to cover ``UnicodeDecodeError`` (or
-   ``ValueError``).
+1. **The ``UnicodeDecodeError`` / ``RecursionError`` translation** -
+   retirable once upstream broadens its ``except`` to cover both
+   (``ValueError`` subsumes the decode error; the recursion escape needs
+   its own clause).
 2. **The body-envelope guard and its ``parse_query_params`` shield** -
    retirable together once upstream #3398 lands the ``isinstance``
    checks; the shield exists only to keep the guard off the GET path, so
@@ -325,10 +336,11 @@ see "Three lifecycles" above):
        from django_strawberry_framework import _strawberry_patches as p
        from strawberry.http.base import BaseView
 
-       # Gap 1 (UnicodeDecodeError): b'{' + an invalid UTF-8 byte
+       # Gap 1 (UnicodeDecodeError / RecursionError): b'{' + an invalid
+       # UTF-8 byte, or a pathologically nested document for the second.
        try:
            p._original_parse_json(BaseView(), bytes([0x7b, 0x80]))
-       except UnicodeDecodeError:
+       except (UnicodeDecodeError, RecursionError):
            print("GAP 1 STILL NEEDED")  # upstream catch is still too narrow
        except Exception as exc:  # noqa: BLE001
            print("GAP 1 RETIRABLE:", type(exc).__name__)  # e.g. HTTPException
@@ -534,18 +546,53 @@ def _validate_upstream_shape() -> None:
         )
 
 
+def _translated_parse_json(self: Any, data: "str | bytes") -> Any:
+    """The captured original plus the raises its ``except`` lets escape as 500s.
+
+    Upstream's ``parse_json`` translates ``json.JSONDecodeError`` into
+    ``HTTPException(400, ...)`` and nothing else. Two further client-input
+    raises escape it as unhandled ``500``s, from every one of its call sites:
+
+    - ``UnicodeDecodeError`` - ``json.loads`` on ``bytes`` that are not
+      decodable under the encoding it detects; a ``ValueError``, so a bare
+      ``except ValueError`` would have covered it.
+    - ``RecursionError`` - a pathologically nested document drives the
+      parser past the interpreter's C-stack budget (a ~150 KB body on this
+      interpreter, a couple of kilobytes where that budget is smaller); a
+      ``RuntimeError``, reachable with input no larger than the body cap.
+
+    Both mean "the request body is not a parseable JSON document", which is
+    exactly the condition upstream already answers with
+    ``HTTPException(400, _UPSTREAM_JSON_PARSE_REASON)`` - so each is
+    translated into that same rejection, indistinguishable from upstream's
+    own except for ``__cause__``.
+
+    Shared by :func:`_patched_parse_json` (which adds the envelope guard)
+    and :func:`_patched_parse_query_params` (whose GET parses must keep
+    upstream's per-param semantics but own this same error channel), so the
+    two cannot drift about which raises count as client input.
+    """
+    try:
+        return _original_parse_json(self, data)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
+    except RecursionError as exc:
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
+
+
 def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     """Wrapper around ``BaseView.parse_json`` closing two upstream gaps.
 
-    1. **The ``UnicodeDecodeError`` translation.** Upstream's ``parse_json``
-       catches only ``json.JSONDecodeError``, but ``json.loads`` on
-       ``bytes`` that are not decodable under the encoding it detects
-       raises ``UnicodeDecodeError`` - a ``ValueError``, and not a
-       ``JSONDecodeError``, so it escapes upstream's ``except`` and
-       surfaces as an unhandled ``500``. It is translated here to the
-       same ``HTTPException(400, ...)`` Strawberry already raises for
+    1. **The ``UnicodeDecodeError`` / ``RecursionError`` translation.**
+       Upstream's ``parse_json`` catches only ``json.JSONDecodeError``, but
+       two further client-input raises escape it as unhandled ``500``s:
+       ``json.loads`` on ``bytes`` that are not decodable under the encoding
+       it detects raises ``UnicodeDecodeError`` (a ``ValueError``, and not a
+       ``JSONDecodeError``), and a pathologically nested document raises
+       ``RecursionError`` (a ``RuntimeError``). Both are translated here to
+       the same ``HTTPException(400, ...)`` Strawberry already raises for
        unparseable JSON, which is why closing the gap needs no new status
-       code or message.
+       code or message; see :func:`_translated_parse_json`.
     2. A successfully-parsed body that is not a GraphQL-over-HTTP envelope
        is rejected with ``HTTPException(400, ...)``. ``parse_http_body``
        handles a JSON object (a single operation) and a JSON array of
@@ -591,10 +638,7 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     other outcome - a successful object / well-typed-array parse, or any
     other exception - is passed through untouched.
     """
-    try:
-        parsed = _original_parse_json(self, data)
-    except UnicodeDecodeError as exc:
-        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
+    parsed = _translated_parse_json(self, data)
     if isinstance(parsed, dict):
         return parsed
     if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
@@ -611,8 +655,8 @@ def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
 
     Byte-for-byte upstream semantics (the superseded body is pinned as
     ``_UPSTREAM_PARSE_QUERY_PARAMS_SOURCE``) except that the two nested
-    ``self.parse_json`` calls go through the captured
-    ``_original_parse_json`` instead of the patched method. That keeps
+    ``self.parse_json`` calls go through :func:`_translated_parse_json`
+    instead of the patched method. That keeps
     :func:`_patched_parse_json`'s scalar guard - a request-*body*
     contract - out of the GET query-param path, where upstream's
     ``parse_http_body`` has its own precise handling downstream:
@@ -623,10 +667,14 @@ def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
       per-param ``400`` ("must be an object or null, if provided"),
       not the guard's request-body message on a bodyless GET;
     - malformed JSON still becomes upstream's ``HTTPException(400,
-      ...)``, raised inside the delegated original. Gap 1 is moot on
-      this path: query params arrive as ``str`` (Django has already
-      decoded the query string), so ``json.loads`` cannot raise
-      ``UnicodeDecodeError`` here.
+      ...)``, raised inside the delegated original. Of gap 1's two
+      translated raises, the decode half is moot on this path - query
+      params arrive as ``str`` (Django has already decoded the query
+      string), so ``json.loads`` cannot raise ``UnicodeDecodeError``
+      here - while the recursion half is real: a pathologically deep
+      param reaches the same C-stack overflow, and the shared
+      translator turns it into the same controlled ``400`` instead of
+      an unhandled ``500``.
 
     An empty-string param is left unparsed (upstream's falsy skip),
     exactly as upstream leaves it. Installed by :func:`apply` alongside
@@ -639,24 +687,32 @@ def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
         variables = params["variables"]
 
         if variables:
-            params["variables"] = _original_parse_json(self, variables)
+            params["variables"] = _translated_parse_json(self, variables)
 
     if "extensions" in params:
         extensions = params["extensions"]
 
         if extensions:
-            params["extensions"] = _original_parse_json(self, extensions)
+            params["extensions"] = _translated_parse_json(self, extensions)
 
     return params
 
 
 # The exception types the upstream upload utility raises on malformed client
-# input while it walks the ``map`` document: ``.items()`` on a non-mapping,
-# ``.split(".")`` on a non-string path, ``int(key)`` on a non-numeric list
-# index, and an out-of-range list index.
+# input while it consumes the ``operations`` / ``map`` documents: ``.items()``
+# on a non-mapping, ``.split(".")`` on a non-string path, ``int(key)`` on a
+# non-numeric list index, an out-of-range list index, and - from its
+# unconditional ``copy.deepcopy`` of the operations document -
+# ``RecursionError`` for a valid-JSON document nested past the interpreter's
+# recursion limit (a couple of kilobytes; ``json.loads`` itself survives far
+# deeper before its own C-stack budget ends it). Provenance scoping keeps each
+# of these a CLIENT-input translation: the utility's own logic is iterative,
+# so a same-typed server-side bug elsewhere in the delegated parse never wears
+# its frame.
 _MULTIPART_TRAVERSAL_ERRORS = (
     AttributeError,
     IndexError,
+    RecursionError,
     TypeError,
     ValueError,
 )

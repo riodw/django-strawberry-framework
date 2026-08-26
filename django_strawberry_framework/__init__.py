@@ -55,6 +55,9 @@ from .types.converters import (  # noqa: E402
 # Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.
 
+# The single source of the release. Hatchling derives packaging metadata from
+# this literal via ``[tool.hatch.version]`` in pyproject.toml; no second version
+# declaration exists anywhere in the repository.
 __version__ = "0.0.14"
 
 

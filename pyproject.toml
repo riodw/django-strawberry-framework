@@ -1,7 +1,11 @@
 # https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 [project]
 name = "django-strawberry-framework"
-version = "0.0.14"
+# The release is single-sourced in ``django_strawberry_framework/__init__.py``
+# (``__version__``); hatchling derives the packaging metadata from it via the
+# ``[tool.hatch.version]`` table below, so there is no second version literal
+# to keep in lockstep.
+dynamic = ["version"]
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
 license = "MIT"
@@ -75,14 +79,15 @@ dev = [
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
-    # tomli is a test-only dependency, and NOT a dependency of the package
+    # tomli is a script/test-only dependency, and NOT a dependency of the package
     # ([project].dependencies is untouched): stdlib ``tomllib`` only arrives in
     # 3.11, but the advertised floor -- and the Django 5.2.16 / Python 3.10 CI
     # cell -- is 3.10, where ``import tomllib`` is a ModuleNotFoundError. The
     # marker mirrors the one coverage and pytest already carry, so this adds no
     # wheel on 3.11+; it only makes the floor's parser an explicit dependency of
-    # tests/base/test_init.py::test_version_parity_with_pyproject rather than
-    # something inherited by accident from another package's requirements.
+    # scripts/check_trailing_commas.py (which reads this file's line length)
+    # rather than something inherited by accident from another package's
+    # requirements.
     "tomli>=2.0.1; python_version < '3.11'",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
@@ -95,6 +100,11 @@ pg = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The one version source: hatchling reads ``__version__`` from the package
+# init (default regex source) for sdist/wheel metadata and any direct build.
+[tool.hatch.version]
+path = "django_strawberry_framework/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["django_strawberry_framework"]

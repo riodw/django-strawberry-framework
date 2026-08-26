@@ -117,34 +117,6 @@ def test_file_upload_exports_resolve_to_their_source_definitions():
     assert DjangoImageType is converters.DjangoImageType
 
 
-def test_version_parity_with_pyproject():
-    """Verify package __version__ stays byte-synchronized with pyproject.toml.
-
-    ``tomllib`` entered the stdlib in 3.11, but the advertised floor - and the
-    ``Django 5.2.16 / Python 3.10`` push/PR matrix cell - is 3.10, where a bare
-    ``import tomllib`` raises ``ModuleNotFoundError`` and takes this gate down
-    with it. The dev group declares the ``tomli`` backport behind the matching
-    marker, so the parity assertion runs on EVERY cell instead of only the ones
-    whose interpreter ships the stdlib module. Same guard shape as
-    ``scripts/bug_hunt.py`` and ``scripts/check_trailing_commas.py``, which read
-    this file on the same floor.
-    """
-    from pathlib import Path
-
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # Python 3.10 floor.
-        import tomli as tomllib
-
-    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-    assert pyproject_path.exists(), f"pyproject.toml not found at {pyproject_path}"
-
-    with open(pyproject_path, "rb") as f:
-        data = tomllib.load(f)
-
-    assert __version__ == data["project"]["version"]
-
-
 def test_dynamic_drf_soft_exports_via_getattr():
     """Verify DRF soft exports resolve dynamically through package __getattr__."""
     from django_strawberry_framework import (

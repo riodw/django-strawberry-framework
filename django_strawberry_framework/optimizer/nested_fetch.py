@@ -117,7 +117,8 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
         return "combined"
     if getattr(query, "distinct", False):
         return "distinct"
-    if getattr(queryset, "_iterable_class", ModelIterable) is not ModelIterable:
+    iterable_class = getattr(queryset, "_iterable_class", ModelIterable)
+    if not (isinstance(iterable_class, type) and issubclass(iterable_class, ModelIterable)):
         return "values"
     return None
 

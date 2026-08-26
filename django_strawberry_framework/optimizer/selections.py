@@ -556,7 +556,7 @@ def connection_field_names(info: Any) -> ConnectionFieldNames:
     if not callable(apply_naming_config):
         return DEFAULT_CONNECTION_FIELD_NAMES
     return ConnectionFieldNames(
-        *(apply_naming_config(f.name) for f in fields(ConnectionFieldNames)),
+        *(apply_naming_config(name) for name in _CONNECTION_FIELD_PYTHON_NAMES),
     )
 
 

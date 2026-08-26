@@ -258,10 +258,12 @@ class FieldMeta:
         kind = relation_kind(field)
 
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
-        if is_m2m or is_o2m:
+        if is_many_side_relation_kind(kind):
             nullable = False
+        elif kind == "reverse_one_to_one":
+            nullable = True
         else:
-            nullable = kind == "reverse_one_to_one" or _relation_bool(field, "null", False)
+            nullable = _relation_bool(field, "null", False)
 
         field_rel = _relation_attr(field, "field", None)
         reverse_connector_attname = (
@@ -292,8 +294,6 @@ class FieldMeta:
                 and related_model is not None
                 and target_pk_name is not None
                 and target_field_name == target_pk_name
-                and not is_m2m
-                and not is_o2m
                 and kind == "forward_single"
                 and not has_composite_pk(related_model)
             ),

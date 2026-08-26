@@ -253,6 +253,7 @@ def test_unwindowable_child_queryset_reason_matrix():
     queryset (with or without projection/ordering) maps to ``None``.
     """
     from apps.library.models import Book
+    from django.db.models.query import ModelIterable
 
     from django_strawberry_framework.optimizer.nested_fetch import (
         unwindowable_child_queryset_reason,
@@ -270,5 +271,20 @@ def test_unwindowable_child_queryset_reason_matrix():
     )
     assert unwindowable_child_queryset_reason(Book.objects.distinct()) == "distinct"
     assert unwindowable_child_queryset_reason(Book.objects.values_list("id")) == "values"
+    assert unwindowable_child_queryset_reason(Book.objects.values("id")) == "values"
+
+    # A custom ModelIterable subclass still yields model instances and is windowable.
+    class CustomModelIterable(ModelIterable):
+        pass
+
+    custom_qs = Book.objects.all()
+    custom_qs._iterable_class = CustomModelIterable
+    assert unwindowable_child_queryset_reason(custom_qs) is None
+
+    # A non-type or invalid iterable class is rejected as values.
+    invalid_qs = Book.objects.all()
+    invalid_qs._iterable_class = "invalid"
+    assert unwindowable_child_queryset_reason(invalid_qs) == "values"
+
     assert unwindowable_child_queryset_reason(Book.objects.only("id", "title")) is None
     assert unwindowable_child_queryset_reason(Book.objects.order_by("title")) is None

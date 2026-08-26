@@ -729,3 +729,44 @@ def test_from_django_field_non_string_attributes():
     assert fm.target_field_attname is None
     assert fm.attname is None
     assert fm.reverse_connector_attname is None
+
+
+def test_from_django_field_many_side_nullability_short_circuits():
+    """Many-side relations force nullable=False regardless of descriptor null attribute."""
+    # Duck-typed GenericRelation with null=True
+    generic_with_null = SimpleNamespace(
+        name="comments",
+        is_relation=True,
+        content_type_field_name="content_type",
+        object_id_field_name="object_id",
+        null=True,
+    )
+    fm_generic = FieldMeta.from_django_field(generic_with_null)
+    assert fm_generic.relation_kind == "generic"
+    assert fm_generic.is_many_side is True
+    assert fm_generic.nullable is False
+
+    # Duck-typed M2M with null=True
+    m2m_with_null = SimpleNamespace(
+        name="members",
+        is_relation=True,
+        many_to_many=True,
+        null=True,
+    )
+    fm_m2m = FieldMeta.from_django_field(m2m_with_null)
+    assert fm_m2m.relation_kind == "many"
+    assert fm_m2m.is_many_side is True
+    assert fm_m2m.nullable is False
+
+    # Duck-typed reverse FK with null=True
+    reverse_fk_with_null = SimpleNamespace(
+        name="items",
+        is_relation=True,
+        one_to_many=True,
+        auto_created=True,
+        null=True,
+    )
+    fm_rev_fk = FieldMeta.from_django_field(reverse_fk_with_null)
+    assert fm_rev_fk.relation_kind == "reverse_many_to_one"
+    assert fm_rev_fk.is_many_side is True
+    assert fm_rev_fk.nullable is False

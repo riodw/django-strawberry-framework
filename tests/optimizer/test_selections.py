@@ -19,7 +19,9 @@ from graphql import parse
 from graphql.language.ast import FragmentDefinitionNode, FragmentSpreadNode
 
 from django_strawberry_framework.optimizer.selections import (
+    _CONNECTION_FIELD_PYTHON_NAMES,
     DEFAULT_CONNECTION_FIELD_NAMES,
+    ConnectionFieldNames,
     ast_child_selections,
     ast_to_converted_selections,
     connection_count_required,
@@ -535,6 +537,21 @@ def test_connection_field_names_fall_back_without_a_reachable_converter():
     assert (
         connection_field_names(_info_with_converter(SimpleNamespace()))
         is DEFAULT_CONNECTION_FIELD_NAMES
+    )
+
+
+def test_connection_field_python_names_matches_dataclass_fields():
+    """``_CONNECTION_FIELD_PYTHON_NAMES`` exactly matches the field attributes of ``ConnectionFieldNames``."""
+    from dataclasses import fields
+
+    expected = tuple(f.name for f in fields(ConnectionFieldNames))
+    assert expected == _CONNECTION_FIELD_PYTHON_NAMES
+    assert _CONNECTION_FIELD_PYTHON_NAMES == (
+        "edges",
+        "node",
+        "page_info",
+        "total_count",
+        "has_next_page",
     )
 
 

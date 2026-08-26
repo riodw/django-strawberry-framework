@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from itertools import islice
 from typing import Any
@@ -58,6 +58,8 @@ from graphql import GraphQLError
 from .conf import resource_policy_setting
 from .exceptions import ConfigurationError, DjangoStrawberryFrameworkError, describe_value
 from .utils.context import clear_context_key, get_context_value, stash_on_context
+from .utils.policies import resolve_policy
+from .utils.querysets import is_async_only_iterable
 
 __all__ = (
     "DEFAULT_RESOURCE_POLICY",
@@ -143,6 +145,21 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
                 self.detail,
             ),
             self.__dict__,
+        )
+
+
+def _require_positive_int(value: Any, label: str) -> None:
+    """Reject a non-positive-integer bound under whatever name declared it.
+
+    The package's bound-domain rule, stated once for the two spellings of the
+    same rule: a ``ResourcePolicy`` field validated at construction and a
+    field-declared collection bound validated at its factory line. ``True`` is
+    rejected on purpose - ``isinstance(True, int)`` is ``True``, and a bound of
+    ``True`` would silently become ``1``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConfigurationError(
+            f"{label} must be a positive integer; got {describe_value(value)}.",
         )
 
 
@@ -293,11 +310,7 @@ class ResourcePolicy:
                         f"positive number of seconds; got {describe_value(value)}.",
                     )
                 continue
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ConfigurationError(
-                    f"ResourcePolicy.{field.name} must be a positive integer; "
-                    f"got {describe_value(value)}.",
-                )
+            _require_positive_int(value, f"ResourcePolicy.{field.name}")
 
     def narrowed(self, **overrides: Any) -> ResourcePolicy:
         """Return a copy with ``overrides`` applied, rejecting any that widen a bound.
@@ -354,25 +367,20 @@ def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None)
     Both override sources are *trusted declarations* and may therefore widen a
     package default - that is the distinction the narrowing rule draws between a
     deployment's deliberate choice and a per-field value.
+
+    The normalization contract itself is the shared
+    ``utils/policies.py::resolve_policy``, stated once alongside
+    ``error_policy.py::resolve_error_policy``, which resolves by the same
+    ladder.
     """
-    if isinstance(explicit, ResourcePolicy):
-        return explicit
-    overrides = explicit if explicit is not None else resource_policy_setting()
-    if overrides is None:
-        return DEFAULT_RESOURCE_POLICY
-    if not isinstance(overrides, Mapping):
-        raise ConfigurationError(
-            "The resource policy must be a ResourcePolicy or a mapping of bound "
-            f"names to values; got {describe_value(overrides)}.",
-        )
-    known = {field.name for field in fields(ResourcePolicy)}
-    unknown = sorted(str(name) for name in overrides if name not in known)
-    if unknown:
-        raise ConfigurationError(
-            f"Unknown resource-policy bound(s): {', '.join(unknown)}. "
-            f"Valid bounds: {', '.join(sorted(known))}.",
-        )
-    return ResourcePolicy(**dict(overrides))
+    return resolve_policy(
+        explicit,
+        policy_cls=ResourcePolicy,
+        default=DEFAULT_RESOURCE_POLICY,
+        read_setting=resource_policy_setting,
+        display_name="resource policy",
+        unit="bound",
+    )
 
 
 def stash_resource_policy(context: Any, policy: ResourcePolicy) -> None:
@@ -443,6 +451,18 @@ def check_deadline(info: Any) -> None:
     )
 
 
+def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
+    """Deadline check plus the effective raw-list row bound, spelled once for both colors.
+
+    ``bounded_rows`` and ``bounded_rows_async`` enforce the same seam - the last
+    look at the clock before rows are fetched, then the tighter of
+    ``max_list_rows`` and the field's own declaration - so neither execution
+    color can drift onto a different bound than the other.
+    """
+    check_deadline(info)
+    return effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
+
+
 def bounded_rows(
     result: Any,
     info: Any,
@@ -469,10 +489,9 @@ def bounded_rows(
     unconditional: there is no argument or configuration that turns it off, only
     values that make it larger.
     """
-    check_deadline(info)
+    limit = _raw_list_bound(info, declared, trusted=trusted)
     if result is None:
         return None
-    limit = effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
     try:
         return result[:limit]
     except TypeError:
@@ -507,10 +526,9 @@ async def bounded_rows_async(
     source error remains primary and the cleanup failure is attached as a note
     rather than masking the useful failure.
     """
-    if not isinstance(result, AsyncIterable) or isinstance(result, Iterable):
+    if not is_async_only_iterable(result):
         return bounded_rows(result, info, declared, trusted=trusted)
-    check_deadline(info)
-    limit = effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
+    limit = _raw_list_bound(info, declared, trusted=trusted)
     iterator = aiter(result)
     rows: list[Any] = []
     exhausted = False
@@ -557,10 +575,7 @@ def validate_collection_bound(declared: Any, *, field: str) -> None:
     written rather than on the first request that reaches the resolver -
     the constructor-site posture the field factories' target guards already take.
     """
-    if isinstance(declared, bool) or not isinstance(declared, int) or declared < 1:
-        raise ConfigurationError(
-            f"{field} must be a positive integer; got {describe_value(declared)}.",
-        )
+    _require_positive_int(declared, field)
 
 
 def effective_bound(policy_value: int, declared: int | None, *, trusted: bool = False) -> int:

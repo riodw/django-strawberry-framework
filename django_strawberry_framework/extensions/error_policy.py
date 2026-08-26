@@ -160,7 +160,7 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     because there is no exception this one could be resolved to in the log. The
     server-side log record names the failure instead.
     """
-    message = getattr(policy, "message", "An unexpected error occurred.")
+    message = getattr(policy, "message", DEFAULT_ERROR_POLICY.message)
     return GraphQLError(message=message)
 
 

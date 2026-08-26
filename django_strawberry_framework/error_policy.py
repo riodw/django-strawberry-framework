@@ -40,11 +40,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Any
 
 from .conf import error_policy_setting
 from .exceptions import ConfigurationError, describe_value
+from .utils.policies import resolve_policy
 
 __all__ = (
     "DEFAULT_ERROR_POLICY",
@@ -111,28 +112,19 @@ def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, Any] | None) -> Er
     already validated itself); a mapping from either source is applied over the
     package defaults so a deployment overrides only what it cares about.
 
-    The structural twin of ``resource_policy.py::resolve_resource_policy`` - the
-    two are deliberately the same shape, because a consumer who has learned how
-    one schema-construction policy is configured has learned both.
+    The structural twin of ``resource_policy.py::resolve_resource_policy`` -
+    both delegate the shared resolution contract to
+    ``utils/policies.py::resolve_policy``, because a consumer who has learned
+    how one schema-construction policy is configured has learned both.
     """
-    if isinstance(explicit, ErrorPolicy):
-        return explicit
-    overrides = explicit if explicit is not None else error_policy_setting()
-    if overrides is None:
-        return DEFAULT_ERROR_POLICY
-    if not isinstance(overrides, Mapping):
-        raise ConfigurationError(
-            "The error policy must be an ErrorPolicy or a mapping of option names "
-            f"to values; got {describe_value(overrides)}.",
-        )
-    known = {field.name for field in fields(ErrorPolicy)}
-    unknown = sorted(str(name) for name in overrides if name not in known)
-    if unknown:
-        raise ConfigurationError(
-            f"Unknown error-policy option(s): {', '.join(unknown)}. "
-            f"Valid options: {', '.join(sorted(known))}.",
-        )
-    return ErrorPolicy(**dict(overrides))
+    return resolve_policy(
+        explicit,
+        policy_cls=ErrorPolicy,
+        default=DEFAULT_ERROR_POLICY,
+        read_setting=error_policy_setting,
+        display_name="error policy",
+        unit="option",
+    )
 
 
 def new_correlation_id() -> str:

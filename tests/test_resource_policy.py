@@ -525,6 +525,34 @@ async def test_bounded_rows_async_preserves_none():
     assert await bounded_rows_async(None, info) is None
 
 
+async def test_bounded_rows_async_exhausted_iterator_without_truncation():
+    """An async iterator yielding fewer items than the bound exhausts normally without early aclose."""
+
+    class ShortRows:
+        def __init__(self):
+            self.items = [1, 2]
+            self.closed = False
+
+        def __aiter__(self):
+            self.iter = iter(self.items)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.iter)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+        async def aclose(self):
+            self.closed = True
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=5))
+    rows = ShortRows()
+    assert await bounded_rows_async(rows, info) == [1, 2]
+    assert rows.closed is False
+
+
 # ---------------------------------------------------------------------------
 # The pre-parse text scan
 # ---------------------------------------------------------------------------

@@ -296,6 +296,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
+    ├── policies.py               # Shared schema-construction policy normalization.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
@@ -422,6 +423,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
+    ├── policies.py               # Shared schema-construction policy normalization.
     ├── predicates.py             # planned by TODO-BETA-054-0.1.1 - Graph substrate: shared graph policy and dependency planning
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
@@ -512,6 +514,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
+│   ├── test_operations.py        # Tests for canonical mutation operation descriptors (operations.py).
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036).
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036).
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
@@ -574,8 +577,10 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
+    ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
+    ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
     ├── test_typing.py            # Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping.
     └── test_write_values.py      # Tests for the shared write-value decoding substrate.
@@ -741,6 +746,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
+│   ├── test_operations.py        # Tests for canonical mutation operation descriptors (operations.py).
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036).
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036).
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
@@ -803,8 +809,10 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
+    ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
+    ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
     ├── test_typing.py            # Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping.
     └── test_write_values.py      # Tests for the shared write-value decoding substrate.

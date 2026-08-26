@@ -28,7 +28,7 @@
 - Markdown cross-file links use reference-style `[text][ref-id]` with one `<!-- LINK DEFINITIONS -->` bottom block and the 10 canonical group headers always present — full convention in START.md "Markdown link convention"; AGENTS.md and CLAUDE.md are the only exempt files
 - `FAKESHOP_SHARDED=1` swaps DATABASES to `db_shard_a.sqlite3` (default) and `db_shard_b.sqlite3` (shard_b); modes are mutually exclusive; `seed_shards` materializes both shards idempotently
 - Sharded-specific tests live behind `FAKESHOP_SHARDED` and skip under the default pytest invocation (`FAKESHOP_SHARDED=1 uv run pytest` runs them)
-- Bump pyproject.toml `[project].version` and `django_strawberry_framework/__init__.py` `__version__` together; both must match
+- The release is single-sourced in `django_strawberry_framework/__init__.py` `__version__`; hatchling derives pyproject packaging metadata from it via `[tool.hatch.version]`, so a bump touches that one literal only (no second version declaration exists)
 - Only the maintainer commits; never auto-commit unless explicitly asked; NEVER add `Co-Authored-By` or any author-attribution footer — the commit message body is the change description and nothing else
 - NEVER create or switch branches without explicit maintainer authorization (`git branch`/`git switch`/`git checkout -b` all count); stay on the current branch; a commit request is not branch authorization
 - Files dirty at task start or changing mid-task without your edits are concurrent work (this repo is worked on concurrently); ignore as out-of-scope or check whether they belong in the current task (if so recalculate the task); never auto-revert without explicit maintainer authorization; diff against `git show HEAD:<path>` instead of stashing

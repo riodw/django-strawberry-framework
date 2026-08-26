@@ -258,6 +258,58 @@ def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
 
 
 @pytest.mark.django_db
+def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
+    """Hostile ``request.user`` / ``is_authenticated`` raising TypeError/ValueError collapses to ``null``.
+
+    Exception containment (hunt 0.0.14): a hostile descriptor or a hostile
+    ``is_authenticated`` that raises ``TypeError`` / ``ValueError`` /
+    ``AttributeError`` / ``KeyError`` / ``IndexError`` must not escape as an
+    unhandled top-level error. Those shapes collapse to anonymous (``None``) -
+    a fail-closed nullable return - while any other exception (e.g. a
+    ``DatabaseError`` from a ``SimpleLazyObject`` that hits the DB) is left to
+    propagate.
+    """
+    from django.http import HttpRequest
+
+    class HostileRequest(HttpRequest):
+        @property
+        def user(self):
+            raise TypeError("hostile user getter")
+
+    schema = _me_schema()
+    hostile_req = HostileRequest()
+    hostile_req.method = "POST"
+    res = schema.execute_sync(_ME_Q, context_value=hostile_req)
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+
+    class HostileIsAuth:
+        @property
+        def is_authenticated(self):
+            raise ValueError("hostile is_authenticated")
+
+    req = RequestFactory().post("/graphql/")
+    req.user = HostileIsAuth()
+    res2 = schema.execute_sync(_ME_Q, context_value=req)
+    assert res2.errors is None, res2.errors
+    assert res2.data["me"] is None
+
+
+def test_current_user_hostile_directives_raise_configuration_error():
+    """A hostile ``directives`` iterable or a bare string must raise ``ConfigurationError``."""
+
+    class HostileIter:
+        def __iter__(self):
+            raise ValueError("hostile directives")
+
+    with pytest.raises(ConfigurationError):
+        current_user(directives=HostileIter())
+
+    with pytest.raises(ConfigurationError):
+        current_user(directives="oops")
+
+
+@pytest.mark.django_db
 def test_gated_me_denies_the_anonymous_caller_with_the_exact_pinned_string():
     """An ``IsAuthenticated``-style gate turns anonymous ``null`` into the ``GraphQLError``."""
     schema = _me_schema(permission_classes=[_IsAuthenticated])

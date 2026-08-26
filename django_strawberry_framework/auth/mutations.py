@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import inspect
 from typing import Any
 
 import strawberry
@@ -41,7 +42,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from strawberry.utils.inspect import in_async_context
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
@@ -367,6 +368,27 @@ def _make_auth_field(
     ``(name, annotation)`` list of keyword-only GraphQL args (empty for ``logout`` /
     ``me``).
     """
+    # Hostile-container containment for the directives iterable (axis 1 / 4):
+    # a bare string would be iterated character-wise and a hostile iterator
+    # raising mid-iteration would escape as ValueError/TypeError. Validate before
+    # handing to Strawberry so the factory fails loud as ConfigurationError.
+    if isinstance(directives, (str, bytes)):
+        raise ConfigurationError(
+            "auth field directives must be a sequence of directive instances; "
+            f"got {_safe_arg_repr(directives)}.",
+        )
+    try:
+        directives = tuple(directives)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ) as exc:
+        raise ConfigurationError(
+            f"auth field directives could not be read ({_safe_type_name(exc)}).",
+        ) from exc
 
     def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         if in_async_context():
@@ -395,9 +417,59 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     ``current_user``'s nullable return both derive from this result
     (``actor is not None`` / the actor itself) so the classification cannot drift
     between the two fields.
+
+    Exception containment (hunt 0.0.14): a hostile ``request.user`` descriptor
+    or a hostile ``user.is_authenticated`` that raises ``TypeError`` /
+    ``ValueError`` / ``AttributeError`` / ``KeyError`` / ``IndexError`` must
+    not escape as an unhandled top-level error. Those shapes collapse to
+    anonymous (``None``) - a fail-closed nullable return - while any other
+    exception (e.g. a ``DatabaseError`` from a ``SimpleLazyObject`` that hits
+    the DB) is left to propagate so a real store outage is not hidden as
+    anonymous.
     """
-    user = getattr(request, "user", None)
-    if user is not None and getattr(user, "is_authenticated", False):
+    try:
+        user = getattr(request, "user", None)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
+        return None
+    if user is None:
+        return None
+    try:
+        is_authenticated = getattr(user, "is_authenticated", False)
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
+        return None
+    # Legacy callable form (pre-1.10 ``is_authenticated()``) - call safely.
+    if callable(is_authenticated):
+        try:
+            is_authenticated = is_authenticated()
+        except (
+            TypeError,
+            ValueError,
+            AttributeError,
+            KeyError,
+            IndexError,
+        ):
+            return None
+        if inspect.isawaitable(is_authenticated):
+            with contextlib.suppress(BaseException):
+                is_authenticated.close()
+            return None
+    elif inspect.isawaitable(is_authenticated):
+        with contextlib.suppress(BaseException):
+            is_authenticated.close()
+        return None
+    if is_authenticated:
         return user
     return None
 

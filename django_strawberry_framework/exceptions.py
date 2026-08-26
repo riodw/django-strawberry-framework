@@ -57,12 +57,44 @@ def _safe_type_name(value: object) -> str:
     return "object"
 
 
+def _unprintable(value: object) -> str:
+    """The one standalone placeholder for a value that defeated rendering.
+
+    Single home of the ``<unprintable {T}>`` grammar so its spelling cannot
+    drift between the repr-based renderer (``_safe_arg_repr``), the str-based
+    renderer (``_safe_text``), and the write-error envelope that consumes the
+    latter (``utils/errors.py``).
+    """
+    return f"<unprintable {_safe_type_name(value)}>"
+
+
 def _safe_arg_repr(value: object) -> str:
     """``repr(value)`` if it succeeds, else a placeholder naming the arg type."""
     try:
         return str.__str__(repr(value))
     except BaseException:
-        return f"<unprintable {_safe_type_name(value)}>"
+        return _unprintable(value)
+
+
+def _safe_text(value: object, fallback: str = "") -> str:
+    """Render ``value`` as a plain base ``str`` without ever raising.
+
+    The one body behind the write-error envelope's message / path coercion
+    (``utils/errors.py``) and the field converter's ``Model.field`` diagnostic
+    labels (``types/converters.py``): a ``str`` input is read through the base
+    ``str`` slot so a subclass's overridden ``__str__`` / ``__format__`` never
+    runs while an error envelope is being assembled; any other value renders
+    through ``str()`` guarded by ``BaseException`` (a display operation must
+    never propagate ``SystemExit`` / ``KeyboardInterrupt``). An empty render
+    degrades to ``fallback`` so callers can name the slot ("``<unknown>``")
+    instead of publishing nothing; a raising dunder degrades to the shared
+    ``_unprintable`` placeholder.
+    """
+    try:
+        rendered = str.__str__(value) if isinstance(value, str) else str(value)
+    except BaseException:
+        return _unprintable(value)
+    return rendered or fallback
 
 
 def _safe_class_name(value: object, *, qualified: bool = False) -> str:
@@ -145,24 +177,27 @@ def describe_value(value: object) -> str:
     the package's **transport boundary** renders its tail through here - the
     ``max_request_body_bytes`` cap (``views.py``), the WebSocket revalidation
     window (``consumers.py``), and the router's three factory / consumer
-    rejections (``routers.py``). Those are the rejections whose argument is a
-    value a hostile or fat-fingered deployment hands the package directly, which
-    is where a message that raises while being formatted destroys the typed
-    contract. Dozens of other ``got {...}`` tails elsewhere in the package still
-    interpolate their own values; routing them is a separate change with its own
-    surface and is deliberately not claimed here. A new rejection whose value came
-    from outside the package belongs on
+    rejections (``routers.py``) - and so do the schema-construction policy
+    rejections whose argument is equally deployment-supplied (``error_policy.py``,
+    ``resource_policy.py``, ``extensions/debug.py``). Those are the rejections
+    whose argument is a value a hostile or fat-fingered deployment hands the
+    package directly, which is where a message that raises while being formatted
+    destroys the typed contract. Dozens of other ``got {...}`` tails elsewhere in
+    the package still interpolate their own values; routing them is a separate
+    change with its own surface and is deliberately not claimed here. A new
+    rejection whose value came from outside the package belongs on
     this helper.
     """
     try:
         return f"{_safe_type_name(value)} {value!r}"
     except BaseException:
-        # Deliberately NOT the ``<unprintable {T}>`` spelling its two siblings use
-        # (``_safe_arg_repr`` and ``DjangoStrawberryFrameworkError.__str__``): those
-        # render STANDALONE, while this one is a FRAGMENT interpolated into prose
-        # ("got an unprintable Foo."). Three sites carrying two spellings is the
-        # cost of that grammatical difference - do not unify them, or one of the
-        # three sites reads wrongly.
+        # Deliberately NOT the ``<unprintable {T}>`` spelling the standalone
+        # renderers share (``_safe_arg_repr``, ``_safe_text`` through its shared
+        # ``_unprintable`` placeholder, and ``DjangoStrawberryFrameworkError.__str__``):
+        # those render STANDALONE, while this one is a FRAGMENT interpolated into
+        # prose ("got an unprintable Foo."). Two spellings across these sites is
+        # the cost of that grammatical difference - do not unify them, or one of
+        # the sites reads wrongly.
         return f"an unprintable {_safe_type_name(value)}"
 
 
@@ -195,7 +230,7 @@ class DjangoStrawberryFrameworkError(Exception):
     def __str__(self) -> str:
         """Render ``str`` safely from the current args (see class docstring)."""
         try:
-            rendered = super().__str__()
+            rendered = str.__str__(super().__str__())
         except BaseException:
             rendered = (
                 f"<unprintable {_safe_type_name(self.args[0])}>"
@@ -207,7 +242,7 @@ class DjangoStrawberryFrameworkError(Exception):
     def __repr__(self) -> str:
         """Render ``repr`` safely from the current args (see class docstring)."""
         try:
-            rendered = super().__repr__()
+            rendered = str.__str__(super().__repr__())
         except BaseException:
             args = ", ".join(_safe_arg_repr(a) for a in self.args)
             rendered = f"{_safe_type_name(self)}({args})"

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.utils.functional import Promise
 
-from ..exceptions import _safe_type_name
+from ..exceptions import _safe_text, _unprintable
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..mutations.inputs import FieldError
@@ -121,28 +121,6 @@ def _str_list(value: Any) -> list[str]:
     except BaseException:
         return [_unprintable(value)]
     return [_safe_text(item) for item in items]
-
-
-def _safe_text(value: Any, *, fallback: str = "") -> str:
-    """Render one error value without dispatching a hostile string dunder.
-
-    Validation messages and field names are normally Django-owned strings, but
-    ``ValidationError`` also accepts consumer objects and ``str`` subclasses.
-    Error normalization is the last step before a mutation envelope reaches
-    GraphQL, so a failing ``__str__`` must not replace that expected envelope
-    with a raw exception.  Calling ``str.__str__`` directly also normalizes a
-    string subclass whose overridden ``__str__`` / ``__repr__`` is hostile.
-    """
-    try:
-        rendered = str.__str__(value) if isinstance(value, str) else str(value)
-    except BaseException:
-        return _unprintable(value)
-    return rendered or fallback
-
-
-def _unprintable(value: Any) -> str:
-    """Return a stable placeholder for an error value that cannot be rendered."""
-    return f"<unprintable {_safe_type_name(value)}>"
 
 
 def _validation_messages(error: Any) -> list[Any]:

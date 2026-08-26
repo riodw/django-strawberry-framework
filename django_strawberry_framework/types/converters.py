@@ -71,7 +71,7 @@ from typing import Any
 import strawberry
 from django.db import models
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
@@ -300,15 +300,6 @@ _HSTORE_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
     "django.contrib.postgres.fields",
     "HStoreField",
 )
-
-
-def _safe_text(value: Any, fallback: str) -> str:
-    """Render field metadata without allowing a hostile descriptor to escape."""
-    try:
-        rendered = str(value)
-    except BaseException:
-        return f"<unprintable {_safe_type_name(value)}>"
-    return rendered or fallback
 
 
 def _field_label(field: Any) -> str:

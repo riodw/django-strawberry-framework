@@ -17,9 +17,12 @@ from django_strawberry_framework.exceptions import (
     _safe_class_name,
     _safe_model_label,
     _safe_terminal_label,
+    _safe_text,
     _safe_type_name,
     describe_value,
 )
+from django_strawberry_framework.types import converters as _converters_module
+from django_strawberry_framework.utils import errors as _errors_module
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
 
@@ -521,3 +524,79 @@ def test_safe_arg_repr_falls_back_for_hostile_values_and_type_metadata():
             raise RuntimeError("repr unavailable")
 
     assert _safe_arg_repr(_NonStringName()) == "<unprintable object>"
+
+
+def test_framework_error_str_and_repr_strip_str_subclasses():
+    """__str__ and __repr__ strip str subclasses so hostile __format__ cannot detonate."""
+
+    class _HostileFormatStr(str):
+        def __str__(self) -> str:
+            return self
+
+        def __format__(self, format_spec: str) -> str:
+            raise RuntimeError("hostile __format__ detonated")
+
+    err = ConfigurationError(_HostileFormatStr("safe-message"))
+    s = str(err)
+    r = repr(err)
+
+    assert type(s) is str
+    assert type(r) is str
+    assert s == "safe-message"
+    assert "ConfigurationError('safe-message')" in r
+    # Formatting the rendered strings never detonates
+    assert f"{s}" == "safe-message"
+    assert f"{r}" == repr(err)
+
+
+def test_safe_class_name_on_standard_classes():
+    """_safe_class_name resolves __name__ and __qualname__ on normal classes and instances."""
+
+    class _FooClass:
+        pass
+
+    assert _safe_class_name(_FooClass) == "_FooClass"
+    assert _safe_class_name(_FooClass, qualified=True).endswith("_FooClass")
+    assert _safe_class_name(_FooClass()) == "_FooClass"
+
+
+def test_describe_value_on_printable_and_unprintable_values():
+    """describe_value renders type and value for normal inputs and falls back on error."""
+    assert describe_value(100) == "int 100"
+    assert describe_value("test") == "str 'test'"
+    assert describe_value(None) == "NoneType None"
+    assert describe_value(_Unprintable()) == "an unprintable _Unprintable"
+    assert describe_value(_UnprintableBase()) == "an unprintable _UnprintableBase"
+
+    huge_int = 10**5000
+    try:
+        str(huge_int)
+    except ValueError:
+        assert describe_value(huge_int) == "an unprintable int"
+
+
+def test_safe_text_is_the_shared_str_renderer():
+    """The consolidated renderer strips str subclasses, falls back, and degrades."""
+
+    class _HostileStrStr(str):
+        def __str__(self) -> str:
+            raise RuntimeError("string normalization failed")
+
+    class _RaisingStr:
+        def __str__(self) -> str:
+            raise RuntimeError("str failed")
+
+    rendered = _safe_text(_HostileStrStr("content"))
+    assert type(rendered) is str
+    assert rendered == "content"
+    assert _safe_text(7) == "7"
+    assert _safe_text("", fallback="fallback") == "fallback"
+    assert _safe_text(_RaisingStr()) == "<unprintable _RaisingStr>"
+
+
+def test_safe_text_is_single_sourced_across_consumer_modules():
+    """utils.errors and types.converters import the ONE renderer, not local twins."""
+
+    assert _errors_module._safe_text is _safe_text
+    assert _errors_module._unprintable.__module__ == ("django_strawberry_framework.exceptions")
+    assert _converters_module._safe_text is _safe_text

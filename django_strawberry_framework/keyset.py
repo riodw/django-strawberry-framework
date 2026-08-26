@@ -264,6 +264,45 @@ def cursor_columns_for(
     return tuple(columns)
 
 
+@dataclass(frozen=True)
+class DeclaredCursorState:
+    """The DECLARED ``Meta.cursor_field`` vocabulary of one DjangoType.
+
+    ``definition`` / ``cursor_field`` are the declaring definition and raw
+    order tuple; ``columns`` / ``fingerprint`` their canonical resolution
+    through ``cursor_columns_for`` / ``order_fingerprint`` - the vocabulary
+    every cursor over the type mints and decodes under.
+    """
+
+    definition: Any
+    cursor_field: tuple[str, ...]
+    columns: tuple[CursorColumn, ...]
+    fingerprint: str
+
+
+def resolve_declared_cursor_state(target_type: Any) -> DeclaredCursorState | None:
+    """Resolve one DjangoType's declared ``Meta.cursor_field`` state.
+
+    The ONE derivation of the declared keyset vocabulary. Every consumer -
+    the resolve-time connection state (``connection.py``'s class-cached
+    keyset mode) and the plan-time nested window (``nested_planner.py``'s
+    keyset context) - reads it through here, so plan-time decode and
+    resolve-time mint share columns and fingerprint by construction (the
+    cross-strategy byte-parity invariant). ``None`` when the type carries no
+    declaration (or is not a DjangoType) - the offset vocabulary applies.
+    """
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    cursor_field = getattr(definition, "cursor_field", None)
+    if cursor_field is None:
+        return None
+    return DeclaredCursorState(
+        definition=definition,
+        cursor_field=cursor_field,
+        columns=cursor_columns_for(definition.model, cursor_field),
+        fingerprint=order_fingerprint(cursor_field),
+    )
+
+
 def validate_cursor_field_columns(
     type_name: str,
     model: type[models.Model],

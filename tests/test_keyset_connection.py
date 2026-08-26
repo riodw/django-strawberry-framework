@@ -35,10 +35,13 @@ from django_strawberry_framework.connection import (
     _resolve_order_path_field,
     _WindowedConnectionRows,
 )
-from django_strawberry_framework.keyset import cursor_columns_for, order_fingerprint
+from django_strawberry_framework.keyset import (
+    cursor_columns_for,
+    order_fingerprint,
+    resolve_declared_cursor_state,
+)
 from django_strawberry_framework.optimizer.nested_planner import (
     _extend_only_projection,
-    _keyset_cursor_context,
     _keyset_window_slice_from_arguments,
 )
 from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, WINDOW_TOTAL_COUNT
@@ -97,10 +100,20 @@ def test_keyset_connection_context_is_none_for_offset_types():
     assert _keyset_connection_context(connection_type) is None
 
 
-def test_walker_keyset_cursor_context_none_without_cursor_field():
+def test_resolve_declared_cursor_state_resolves_the_declared_vocabulary():
+    issue_type = _make_issue_type()
+    state = resolve_declared_cursor_state(issue_type)
+    assert state is not None
+    assert state.definition is issue_type.__django_strawberry_definition__
+    assert state.cursor_field == ISSUE_ORDER
+    assert state.columns == cursor_columns_for(Issue, ISSUE_ORDER)
+    assert state.fingerprint == order_fingerprint(ISSUE_ORDER)
+
+
+def test_resolve_declared_cursor_state_none_without_cursor_field():
     plain_type = make_django_type("PlainIssueNode2", Issue, ("id", "number"))
-    assert _keyset_cursor_context(plain_type) is None
-    assert _keyset_cursor_context(None) is None
+    assert resolve_declared_cursor_state(plain_type) is None
+    assert resolve_declared_cursor_state(None) is None
 
 
 # =============================================================================
@@ -515,7 +528,9 @@ class _FakeInfo:
 def test_keyset_window_slice_from_arguments_arms():
     issue_type = _make_issue_type("KeysetWalkerSliceNode")
     finalize_django_types()
-    columns, fingerprint = _keyset_cursor_context(issue_type)
+    state = resolve_declared_cursor_state(issue_type)
+    assert state is not None
+    columns, fingerprint = state.columns, state.fingerprint
     info = _FakeInfo()
 
     # No cursor: a plain forward window, no seek.

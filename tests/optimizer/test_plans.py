@@ -26,6 +26,7 @@ from django_strawberry_framework.optimizer.plans import (
     apply_window_pagination,
     deterministic_order,
     diff_plan_for_queryset,
+    effective_connection_order,
     ends_in_unique_column,
     lookup_paths,
     order_entry_has_explicit_nulls,
@@ -1201,6 +1202,46 @@ class TestDeterministicOrderHoistParity:
 
         assert _ends_in_unique_column is ends_in_unique_column
 
+    def test_ends_in_unique_column_defensive_for_non_model(self):
+        """Non-model objects without ``_meta`` safely return False."""
+        assert ends_in_unique_column(("id",), object()) is False
+        assert ends_in_unique_column(("id",), SimpleNamespace()) is False
+
+
+class TestEffectiveConnectionOrder:
+    """The shared default-order precedence for BOTH connection order sites.
+
+    ``effective_connection_order`` is the one spelling of "which ORDER BY does a
+    connection paginate under by default" consumed by the plan-time window
+    (``nested_planner.py::plan_connection_relation``) and the resolve-time
+    pipeline (``connection.py::_finalize_queryset``) - the cursor-parity
+    invariant's order leg (spec-033 Decision 11).
+    """
+
+    def test_keyset_cursor_field_is_the_default_order_when_no_explicit_won(self):
+        """A declared ``cursor_field`` IS the connection order with no explicit orderBy."""
+        assert effective_connection_order(("-number", "id"), (), Item) == ("-number", "id")
+
+    def test_explicit_orderby_beats_the_declared_cursor_field(self):
+        """An explicit ``orderBy:`` keeps the shipped derivation even for a keyset target."""
+        assert effective_connection_order(("-number", "id"), ("name",), Item) == ("name", "id")
+
+    def test_falls_back_to_meta_ordering_through_deterministic_order(self):
+        """No explicit order: model ``Meta.ordering`` is honored, made total if needed.
+
+        ``Status`` orders by the non-unique ``order`` column implicitly, so the pk
+        is appended; ``Card.number`` is unique-terminal, so it is returned
+        unchanged.
+        """
+        from apps.kanban.models import Card, Status
+
+        assert effective_connection_order(None, (), Status) == ("order", "id")
+        assert effective_connection_order(None, (), Card) == ("number",)
+
+    def test_no_order_source_anywhere_appends_the_pk(self):
+        """An unordered model with no explicit order paginates by the pk alone."""
+        assert effective_connection_order(None, (), Item) == ("id",)
+
 
 class TestReverseOrderBy:
     """``_reverse_order_by`` mirrors Django's ``queryset.reverse()`` (spec-033 Decision 4)."""
@@ -1235,6 +1276,14 @@ class TestReverseOrderBy:
         assert nulls_last.descending is False
         assert nulls_last.nulls_first is True
         assert nulls_last.nulls_last is None
+
+    def test_swaps_explicit_nulls_positioning_with_boolean_flags(self):
+        """Swaps explicit nulls_first / nulls_last even when values are boolean False."""
+        order = SimpleNamespace(descending=False, nulls_first=False, nulls_last=None)
+        reversed_entry = _reverse_order_by([order])[0]
+        assert reversed_entry.descending is True
+        assert reversed_entry.nulls_first is None
+        assert reversed_entry.nulls_last is False
 
     def test_bare_expression_reverses_through_desc(self):
         """A term with no ``.descending`` is IMPLICITLY ascending; its reverse is ``desc()``.

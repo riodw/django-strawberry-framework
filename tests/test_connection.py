@@ -60,7 +60,6 @@ from django_strawberry_framework.orders import OrderSet, _helper_referenced_orde
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
-from django_strawberry_framework.utils.typing import is_async_generator_callable
 
 
 @pytest.fixture(autouse=True)
@@ -1080,13 +1079,11 @@ async def test_connection_async_generator_resolver_executes_on_async_path():
 
 @pytest.mark.django_db
 def test_connection_partial_async_generator_resolver_raises_sync_misuse():
-    """``partial`` around an async-gen callable instance still takes the async-gen branch.
+    """``partial`` around an async-gen callable instance still fails closed under sync execution.
 
-    Two halves. ``is_async_generator_callable`` sees through the ``partial`` to the
-    instance's ``async def __call__`` -- the wrapper shape a bare
-    ``inspect.isasyncgenfunction`` misses. Downstream, the connection field routes
-    that classification to its async-generator branch, which a sync execution
-    rejects with ``SyncMisuseError`` instead of falling through to the sync path.
+    The wrapper calls the partial, classifies the returned value by VALUE
+    (an async-only iterable), and the sync-misuse guard rejects it before
+    Relay's synchronous slicer can consume it.
     """
     import functools
 
@@ -1104,7 +1101,6 @@ def test_connection_partial_async_generator_resolver_raises_sync_misuse():
                 yield row
 
     resolver = functools.partial(_Resolver(), "ignored")
-    assert is_async_generator_callable(resolver) is True
 
     schema = _field_schema(
         _make_sidecar_node_type("PartialAsyncGeneratorNode"),

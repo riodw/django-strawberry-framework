@@ -833,8 +833,11 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
     if parsed is None:
         return False
     ref = parsed[0]
-    pk = model._meta.pk
-    if ref in ("pk", pk.name, pk.attname):
+    meta = getattr(model, "_meta", None)
+    if meta is None:
+        return False
+    pk = getattr(meta, "pk", None)
+    if pk is not None and ref in ("pk", getattr(pk, "name", None), getattr(pk, "attname", None)):
         return True
     if "__" in ref:
         # A relation traversal (e.g. ``shelf__code``) is not the model's own
@@ -842,7 +845,7 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
         # parent ordering a total order.
         return False
     try:
-        field_obj = model._meta.get_field(ref)
+        field_obj = meta.get_field(ref)
     except FieldDoesNotExist:
         # Annotation alias (e.g. a to-many aggregate) or a transform - not a
         # model column we can call unique.
@@ -851,9 +854,34 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
     # NULLs, so terminal ties among NULL rows are nondeterministic and the pk must
     # be appended as a tiebreaker.
     return bool(
-        (getattr(field_obj, "unique", False) and not field_obj.null)
+        (getattr(field_obj, "unique", False) and not getattr(field_obj, "null", False))
         or getattr(field_obj, "primary_key", False),
     )
+
+
+def effective_connection_order(cursor_field: tuple | None, explicit: tuple, model: type) -> tuple:
+    """Return the effective ORDER BY a connection paginates under by default.
+
+    The precedence ladder shared by the plan-time window
+    (``nested_planner.py::plan_connection_relation``) and the resolve-time
+    pipeline (``connection.py::_finalize_queryset``), so a planned window's row
+    order can never drift from the per-parent pipeline's (the cursor-parity
+    invariant, spec-033 Decision 11 - this completes the hoist that gave
+    ``deterministic_order`` its one source):
+
+    - a keyset target's declared ``Meta.cursor_field`` IS the connection
+      default order when no explicit ``orderBy:`` won (finalization validates
+      it ends in a unique column, so ``deterministic_order`` would return it
+      unchanged);
+    - otherwise the effective ordering is an explicit ``orderBy:`` or model
+      ``Meta.ordering``, made total by ``deterministic_order``. Django applies
+      ``_meta.ordering`` implicitly, so an empty ``explicit`` does NOT mean
+      unordered - reading ``explicit`` in isolation would drop ``Meta.ordering``
+      and rewrite ``ORDER BY name`` into ``ORDER BY pk``.
+    """
+    if cursor_field is not None and not explicit:
+        return tuple(cursor_field)
+    return deterministic_order(explicit or tuple(model._meta.ordering), model)
 
 
 def deterministic_order(effective: tuple, model: type) -> tuple:
@@ -1220,7 +1248,7 @@ def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
         clone.descending = not descending
         nulls_first = getattr(clone, "nulls_first", None)
         nulls_last = getattr(clone, "nulls_last", None)
-        if nulls_first or nulls_last:
+        if nulls_first is not None or nulls_last is not None:
             clone.nulls_first, clone.nulls_last = nulls_last, nulls_first
         reversed_order.append(clone)
     return reversed_order

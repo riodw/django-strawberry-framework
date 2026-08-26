@@ -61,12 +61,13 @@ from strawberry.utils.inspect import in_async_context
 
 from .keyset import (
     CursorColumn,
+    DeclaredCursorState,
     KeysetSeek,
     _is_supported_cursor_field,
-    cursor_columns_for,
     decode_keyset_cursor,
     encode_keyset_cursor,
     order_fingerprint,
+    resolve_declared_cursor_state,
 )
 from .list_field import _validate_relay_djangotype_target
 from .optimizer.extension import apply_connection_optimization
@@ -79,7 +80,7 @@ from .optimizer.plans import (
     WINDOW_KEYSET_SEEK_COUNT,
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
-    deterministic_order,
+    effective_connection_order,
     ends_in_unique_column,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
@@ -107,12 +108,12 @@ from .utils.connections import (
     window_range_plan,
 )
 from .utils.querysets import (
-    SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
     normalize_query_source,
+    reject_async_iterable_in_sync_context,
     reject_awaitable_sync_source,
     reject_residual_async_source,
 )
@@ -135,24 +136,7 @@ NodeType = TypeVar("NodeType")
 _TOTAL_COUNT_ATTR = "_django_total_count"
 
 
-@dataclass(frozen=True)
-class _KeysetConnectionState:
-    """The keyset-mode context a generated connection class resolves once.
-
-    ``columns`` / ``fingerprint`` are the DECLARED ``Meta.cursor_field``
-    contract - the vocabulary every nested window and default-ordered root
-    page mints and decodes under. A root ``orderBy:`` page derives its own
-    per-order columns/fingerprint instead (``_keyset_order_state``); the
-    declared state still marks the connection as keyset-mode.
-    """
-
-    definition: Any
-    cursor_field: tuple[str, ...]
-    columns: tuple[CursorColumn, ...]
-    fingerprint: str
-
-
-def _keyset_connection_context(cls: type) -> _KeysetConnectionState | None:
+def _keyset_connection_context(cls: type) -> DeclaredCursorState | None:
     """Resolve (and cache on the class) a connection's keyset-mode state.
 
     The generated ``<TypeName>Connection`` carries its node type on
@@ -160,22 +144,18 @@ def _keyset_connection_context(cls: type) -> _KeysetConnectionState | None:
     declared ``Meta.cursor_field`` on that type's definition makes every
     connection over it KEYSET-MODE - value cursors minted/decoded through
     the canonical codec, offset cursors rejected. ``None`` (the cached
-    ``False`` sentinel internally) keeps the shipped offset behavior.
+    ``False`` sentinel internally) keeps the shipped offset behavior. The
+    declaration itself resolves once through
+    ``keyset.resolve_declared_cursor_state`` - the same derivation the
+    plan-time nested window reads.
     """
     cached = cls.__dict__.get("_dst_keyset_state")
     if cached is not None:
         return cached or None
     target_type = getattr(cls, "_dst_node_type", None)
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
-    cursor_field = getattr(definition, "cursor_field", None)
     state: Any = False
-    if cursor_field is not None:
-        state = _KeysetConnectionState(
-            definition=definition,
-            cursor_field=cursor_field,
-            columns=cursor_columns_for(definition.model, cursor_field),
-            fingerprint=order_fingerprint(cursor_field),
-        )
+    if target_type is not None:
+        state = resolve_declared_cursor_state(target_type) or False
     cls._dst_keyset_state = state
     return state or None
 
@@ -302,7 +282,7 @@ def _resolve_from_window(
     limit: int | None,
     reverse: bool = False,
     want_count: bool,
-    keyset_state: _KeysetConnectionState | None = None,
+    keyset_state: DeclaredCursorState | None = None,
     keyset_after: str | None = None,
     **kwargs: Any,
 ) -> Any:
@@ -810,7 +790,7 @@ def _resolve_order_path_field(model: type, path: str) -> Any:
 
 
 def _keyset_order_state(
-    state: _KeysetConnectionState,
+    state: DeclaredCursorState,
     queryset: models.QuerySet,
 ) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet]:
     """Resolve the ROOT slicing state for a keyset queryset's effective order.
@@ -943,7 +923,7 @@ def _resolve_keyset_connection(
     *,
     info: Info,
     want_count: bool,
-    state: _KeysetConnectionState,
+    state: DeclaredCursorState,
     before: str | None = None,
     after: str | None = None,
     first: int | None = None,
@@ -1533,21 +1513,15 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
 
     5. Deterministic TOTAL ordering - the connection's positional offset cursors
        (Strawberry's ``ListConnection``) are only stable across separate
-       requests when the ``ORDER BY`` is a unique total order. So append the pk
-       as a terminal tiebreaker UNLESS the effective ordering already ends in a
-       unique column. The decision lives in
-       ``optimizer/plans.py::deterministic_order`` (hoisted there per spec-033
-       Decision 11 so the plan-time window order and this resolve-time order can
-       never disagree - the cursor-parity invariant). This covers all three
-       cases - fully unordered, a supplied ``orderBy``, and a model
-       ``Meta.ordering`` - not just the unordered one.
-
-       The effective ordering must NOT be read from ``qs.query.order_by`` alone:
-       that tuple is EMPTY when the order comes from model ``Meta.ordering``
-       (Django applies ``_meta.ordering`` implicitly) even though ``qs.ordered``
-       is True, so reading it in isolation would drop ``Meta.ordering`` and
-       rewrite ``ORDER BY name`` into ``ORDER BY pk``. Fall back to
-       ``_meta.ordering`` when ``qs.query.order_by`` is empty.
+       requests when the ``ORDER BY`` is a unique total order. The effective
+       order - a keyset target's declared ``cursor_field`` when no explicit
+       ``orderBy:`` won, else the explicit ``orderBy:`` or model
+       ``Meta.ordering`` made total by a pk terminal tiebreaker - is selected
+       by ``optimizer/plans.py::effective_connection_order``, the SAME
+       implementation the plan-time window order uses, so this resolve-time
+       order cannot drift from the planned window's (the cursor-parity
+       invariant, spec-033 Decision 11). This covers all three cases - fully
+       unordered, a supplied ``orderBy``, and a model ``Meta.ordering``.
     6. Optimizer plan - ``apply_connection_optimization`` applies
        ``select_related`` / ``prefetch_related`` / ``only()`` using the node
        type / model explicitly (the connection field's own cooperation point,
@@ -1561,21 +1535,8 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
         None,
     )
     explicit = tuple(qs.query.order_by)
-    if cursor_field is not None and not explicit:
-        # Keyset-mode default order: the declared ``cursor_field`` IS the
-        # connection order (the BACKLOG "enforced matching order" contract) -
-        # it beats model ``Meta.ordering``, whose columns the cursors do not
-        # encode. It is finalization-validated to end in a unique column, so
-        # it is already a total order. An explicit ``orderBy:`` (a non-empty
-        # ``query.order_by``) keeps the shipped derivation below; the keyset
-        # slicer then fingerprints THAT order into its cursors.
-        return apply_connection_optimization(target_type, qs.order_by(*cursor_field), info)
+    ordered = effective_connection_order(cursor_field, explicit, target_model)
     effective = explicit or tuple(target_model._meta.ordering)
-    # Deterministic total order shared with the plan-time window (the
-    # cursor-parity invariant, spec-033 Decision 11): the helper appends the pk
-    # as a terminal tiebreaker unless the effective ordering already ends in a
-    # unique column.
-    ordered = deterministic_order(effective, target_model)
     if ordered != effective:
         qs = qs.order_by(*ordered)
     return apply_connection_optimization(target_type, qs, info)
@@ -1794,32 +1755,6 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
       its return and the async ``get_queryset`` / ``apply_async`` hooks run on
       the async path.
     """
-
-    def _require_async_iterable_context(source: Any) -> None:
-        """Reject an async-only source before the synchronous Relay slicer sees it.
-
-        A declared async-generator resolver takes its own construction-time
-        branch below, but a plain ``def`` can return the exact same
-        ``AsyncIterable`` at runtime. Strawberry's sync ``ConnectionExtension``
-        routes that value to ``ListConnection``'s sync slicer, which first tries
-        subscripting and then asserts that it is a synchronous iterable - an
-        internal blank ``AssertionError``. Guard the actual returned source,
-        rather than only the callable's declaration, so every async-only source
-        gets the public sync-misuse error while async execution still hands it to
-        Strawberry's native async completion path. A Django ``QuerySet`` is both
-        sync and async iterable, so the ``not Iterable`` half is essential.
-        """
-        if (
-            isinstance(source, AsyncIterable)
-            and not isinstance(source, Iterable)
-            and not in_async_context()
-        ):
-            raise SyncMisuseError(
-                "A connection resolver returned an AsyncIterable in a sync execution "
-                "context. Use `await schema.execute(...)` for async-generator "
-                "resolvers.",
-            )
-
     if is_async_callable(resolver):
 
         async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
@@ -1840,16 +1775,17 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
         # deliberately False for async-generator functions). Strawberry's async
         # ConnectionExtension accepts the generator's AsyncIterable directly;
         # the sync-shaped wrapper is intentional, letting the native async
-        # executor consume it while the guard turns execute_sync misuse into a
-        # typed package error. The guard is a no-op for the default branch (a
-        # QuerySet is synchronously iterable).
+        # executor consume it while the shared
+        # ``utils/querysets.py::reject_async_iterable_in_sync_context`` guard
+        # turns execute_sync misuse into a typed package error. The guard is a
+        # no-op for the default branch (a QuerySet is synchronously iterable).
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
             if resolver is None:
                 source = initial_queryset(target_type)
             else:
                 source = resolver(root, info)
-                _require_async_iterable_context(source)
+                reject_async_iterable_in_sync_context(source, flavor_noun="connection")
             filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,

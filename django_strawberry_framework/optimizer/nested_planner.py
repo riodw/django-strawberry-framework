@@ -23,10 +23,10 @@ from django.db import models
 from graphql import GraphQLError
 
 from ..keyset import (
+    DeclaredCursorState,
     KeysetSeek,
-    cursor_columns_for,
     decode_keyset_cursor,
-    order_fingerprint,
+    resolve_declared_cursor_state,
 )
 from ..utils.connections import (
     FetchMode,
@@ -53,7 +53,7 @@ from .plans import (
     append_unique,
     append_unique_many,
     deferred_loading_of,
-    deterministic_order,
+    effective_connection_order,
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
@@ -858,24 +858,6 @@ def _connection_window_slice_from_arguments(
     return bounds.offset, bounds.limit, bounds.reverse
 
 
-def _keyset_cursor_context(
-    target_type: type | None,
-) -> tuple[tuple[Any, ...], str] | None:
-    """Resolve a relation target's keyset context: ``(cursor columns, fingerprint)``.
-
-    ``None`` when the target type is absent or does not declare
-    ``Meta.cursor_field`` - the offset-window vocabulary applies. For a
-    keyset target the connection's effective order IS the declared
-    ``cursor_field`` (the BACKLOG "enforced matching order" contract), so
-    the fingerprint every nested cursor embeds is derived from it directly.
-    """
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
-    cursor_field = getattr(definition, "cursor_field", None)
-    if cursor_field is None:
-        return None
-    return (cursor_columns_for(definition.model, cursor_field), order_fingerprint(cursor_field))
-
-
 def _keyset_window_slice_from_arguments(
     arguments: dict[str, Any],
     info: Any,
@@ -941,7 +923,7 @@ def _keyset_window_slice_from_arguments(
 def _divergent_key_windows(
     response_key_arguments: Mapping[str | None, dict[str, Any]],
     info: Any,
-    keyset_context: tuple[tuple[Any, ...], str] | None = None,
+    keyset_context: DeclaredCursorState | None = None,
 ) -> tuple[
     list[tuple[str | None, tuple[int, int | None, bool], KeysetSeek | None]],
     list[str | None],
@@ -996,12 +978,11 @@ def _divergent_key_windows(
         seek: KeysetSeek | None = None
         try:
             if keyset_context is not None:
-                columns, fingerprint = keyset_context
                 keyed = _keyset_window_slice_from_arguments(
                     key_arguments,
                     info,
-                    columns=columns,
-                    fingerprint=fingerprint,
+                    columns=keyset_context.columns,
+                    fingerprint=keyset_context.fingerprint,
                 )
                 window = keyed[0] if keyed is not None else None
                 seek = keyed[1] if keyed is not None else None
@@ -1150,7 +1131,7 @@ def plan_connection_relation(
     # engine, and the connection order is the DECLARED ``cursor_field``
     # rather than the child queryset / model ``Meta.ordering`` (the BACKLOG
     # "enforced matching order" contract - the cursor columns ARE the order).
-    keyset_context = _keyset_cursor_context(target_type)
+    keyset_context = resolve_declared_cursor_state(target_type)
 
     # (e/f) Slice window(s) from the selection's resolved pagination arguments.
     # Pure (mutates nothing), so resolve BEFORE the child build - a malformed
@@ -1290,18 +1271,22 @@ def plan_connection_relation(
     # strategy-independent gate; later child-plan application only adds the
     # package's optimizer directives.
 
-    # (d) Deterministic total order shared with the resolve-time pipeline. A
-    # keyset target's connection order IS its declared ``cursor_field`` (the
-    # unique-terminal contract is finalization-validated, so
-    # ``deterministic_order`` returns it unchanged); everything else keeps
-    # the child-queryset / model ``Meta.ordering`` derivation.
-    if keyset_context is not None:
-        effective = target_type.__django_strawberry_definition__.cursor_field
-    else:
-        effective = tuple(child_queryset.query.order_by) or tuple(
-            django_field.related_model._meta.ordering,
-        )
-    order_by = list(deterministic_order(effective, django_field.related_model))
+    # (d) Deterministic total order shared with the resolve-time pipeline. The
+    # precedence ladder - a keyset target's declared ``cursor_field`` when no
+    # explicit order won (the BACKLOG "enforced matching order" contract; a
+    # sidecar-bearing connection is never window-planned, so this branch sees
+    # no user ``orderBy:``), else child-queryset / model ``Meta.ordering``
+    # through ``deterministic_order`` - lives ONCE in
+    # ``plans.py::effective_connection_order`` so this plan-time window order
+    # and ``connection.py::_finalize_queryset`` cannot drift (the cursor-parity
+    # invariant).
+    order_by = list(
+        effective_connection_order(
+            keyset_context.cursor_field if keyset_context is not None else None,
+            tuple(child_queryset.query.order_by),
+            django_field.related_model,
+        ),
+    )
 
     # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
     # so the child plan added no `.only()` projection; restrict it to the minimal
@@ -1322,7 +1307,7 @@ def plan_connection_relation(
         # scalar-only branch above already carries its order columns).
         child_queryset = _extend_only_projection(
             child_queryset,
-            tuple(column.field.attname for column in keyset_context[0]),
+            tuple(column.field.attname for column in keyset_context.columns),
         )
 
     # Conditional total count (workstream B) + count-free ``hasNextPage``
@@ -1358,7 +1343,7 @@ def plan_connection_relation(
     # Per-field strategy selection: a
     # ``OptimizerHint.strategy(name)`` overrides the extension default; otherwise
     # the active strategy applies. It is field-static (the same for every keyed
-    # window), so resolve it once here rather than per window. The composite-index
+    # window), so resolve it once here rather than per window. The
     # composite-index advisory is likewise field-static, but it is emitted from INSIDE
     # the loop, only after the FIRST window a strategy accepts - a public
     # consumer-authored strategy may return ``False`` for every window (no nested

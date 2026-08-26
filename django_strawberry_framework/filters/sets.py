@@ -66,7 +66,6 @@ from ..utils.input_values import (
     DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LOGIC,
     RELATED,
-    SetInputTraversal,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
@@ -133,17 +132,6 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
     python_attr: django_lookup
     for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
 }
-
-# The filter-normalize traversal config is request-independent (it references the
-# same module-level ``_field_specs`` map by reference, which ``inputs.py`` mutates
-# in place at bind), so it is a module singleton rather than rebuilt per
-# ``_normalize_input`` call.
-_NORMALIZE_TRAVERSAL: SetInputTraversal = SetInputTraversal(
-    field_specs=_field_specs,
-    related_attr="related_filters",
-    logic_keys=_LOGIC_PYTHON_ATTRS,
-    unset_sentinel=UNSET,
-)
 
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
@@ -2238,14 +2226,16 @@ class FilterSet(
         # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
         # the ``_field_specs`` lookup, and the leaf / related / logic
         # classification are the shared traversal mechanics owned by
-        # ``utils/input_values.py::iter_active_fields``. Each
-        # yielded ``ActiveField`` is dispatched here by ``kind``: ``LOGIC`` copies
+        # ``utils/input_values.py::iter_active_fields``, driven by the family's
+        # ONE canonical traversal config derived from ``_permission`` (the same
+        # derivation the permission walkers classify through). Each yielded
+        # ``ActiveField`` is dispatched here by ``kind``: ``LOGIC`` copies
         # the raw sub-tree under its ``django-filter`` wire key, ``RELATED`` is
         # stripped (owned by ``_apply_related_constraints``, since the parent form
         # cannot validate a nested-dict shape), and ``LEAF`` runs the per-field
         # operator-bag / range normalization that stays local to the filter family.
         data: dict[str, Any] = {}
-        for field in iter_active_fields(cls, input_value, _NORMALIZE_TRAVERSAL):
+        for field in iter_active_fields(cls, input_value, cls._input_traversal()):
             if field.kind == LOGIC:
                 wire_key = LOGIC_OPERATORS_BY_PYTHON_ATTR[field.python_attr].wire_name
                 cls._validate_logic_branch_shape(wire_key, field.raw_value)

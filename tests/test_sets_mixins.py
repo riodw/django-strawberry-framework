@@ -473,3 +473,209 @@ def test_collect_related_declarations_diamond_tombstone():
     )
     # The tombstone on _BaseLeft shadows and removes shared_rel
     assert "shared_rel" not in collected
+
+
+def test_collect_related_declarations_base_declarations_precedence():
+    from django_strawberry_framework.sets_mixins import (
+        RelatedSetTargetMixin,
+        collect_related_declarations,
+    )
+
+    class _Decl(RelatedSetTargetMixin):
+        _target_attr = "_t"
+        _owner_attr = "_o"
+
+    class _NonDecl:
+        pass
+
+    rel_decl = _Decl()
+    non_decl = _NonDecl()
+
+    class _BaseWithAllDecls:
+        related_items = {"rel_key": rel_decl, "scalar_key": _Decl()}
+        all_declarations = {
+            "rel_key": rel_decl,
+            "scalar_key": non_decl,  # scalar declaration shadows related decl
+        }
+
+    class _Subclass:
+        pass
+
+    collected = collect_related_declarations(
+        _Subclass,
+        (_BaseWithAllDecls,),
+        own_items=[],
+        declaration_type=_Decl,
+        collection_attr="related_items",
+        base_declarations_attr="all_declarations",
+        inherit_from_bases=True,
+    )
+    assert "rel_key" in collected
+    assert collected["rel_key"] is rel_decl
+    assert "scalar_key" not in collected
+
+
+def test_active_input_permission_mixin_field_paths_and_branches():
+    import types
+    from dataclasses import dataclass
+
+    from django_strawberry_framework.sets_mixins import (
+        ActiveInputPermissionAttrs,
+        ActiveInputPermissionMixin,
+    )
+
+    @dataclass
+    class _ChildInput:
+        sub_field: str = "val"
+
+    @dataclass
+    class _ParentInput:
+        title: str = "hello"
+        child: _ChildInput = None
+
+    class _ChildSet(ActiveInputPermissionMixin):
+        _permission = ActiveInputPermissionAttrs(
+            family_label="ChildSet",
+            related_attr="related_children",
+            target_attr="childset",
+            field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},
+            unset_sentinel=None,
+        )
+
+    class _ParentSet(ActiveInputPermissionMixin):
+        related_children = {
+            "child": types.SimpleNamespace(
+                _resolved_target=lambda: _ChildSet,
+                _target=_ChildSet,
+            ),
+        }
+        _permission = ActiveInputPermissionAttrs(
+            family_label="ParentSet",
+            related_attr="related_children",
+            target_attr="childset",
+            field_specs={"title": types.SimpleNamespace(django_source_path="title")},
+            unset_sentinel=None,
+        )
+
+    parent_input = _ParentInput(title="custom_title", child=_ChildInput(sub_field="sub"))
+
+    # _active_permission_field_paths returns active leaf source paths
+    paths = _ParentSet._active_permission_field_paths(parent_input)
+    assert paths == ["title"]
+
+    # _iter_active_related_branches returns active related branches
+    branches = _ParentSet._iter_active_related_branches(parent_input)
+    assert len(branches) == 1
+    assert branches[0][0] == "child"
+    assert branches[0][2] == _ChildInput(sub_field="sub")
+
+
+def test_family_input_traversal_is_derived_from_the_permission_config():
+    from strawberry import UNSET as _UNSET
+
+    from django_strawberry_framework.filters.inputs import _field_specs as _filter_specs
+    from django_strawberry_framework.orders.inputs import _field_specs as _order_specs
+    from django_strawberry_framework.utils.input_values import SetInputTraversal
+
+    filter_traversal = FilterSet._input_traversal()
+    assert isinstance(filter_traversal, SetInputTraversal)
+    assert filter_traversal.related_attr == "related_filters"
+    assert filter_traversal.logic_keys == frozenset({"and_", "or_", "not_"})
+    assert filter_traversal.unset_sentinel is _UNSET
+    assert filter_traversal.handle_top_level_list is False
+    assert filter_traversal.field_specs is _filter_specs
+
+    order_traversal = OrderSet._input_traversal()
+    assert order_traversal.related_attr == "related_orders"
+    assert order_traversal.logic_keys == frozenset()
+    assert order_traversal.unset_sentinel is _UNSET
+    assert order_traversal.handle_top_level_list is True
+    assert order_traversal.field_specs is _order_specs
+
+
+def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
+    import django_strawberry_framework.orders.inputs as order_inputs
+    from django_strawberry_framework.sets_mixins import ActiveInputPermissionAttrs
+
+    sentinel = object()
+    captured = {}
+
+    def _spy(set_cls, input_value, config):
+        captured["config"] = config
+        return iter(())
+
+    monkeypatch.setattr(order_inputs, "iter_active_fields", _spy)
+
+    class _StubFamily(ActiveInputPermissionMixin):
+        _permission = ActiveInputPermissionAttrs(
+            family_label="StubFamily",
+            related_attr="related_stub",
+            target_attr="stubset",
+            field_specs={"a": "spec-a"},
+            logic_keys=frozenset({"custom_op"}),
+            unset_sentinel=sentinel,
+            handle_top_level_list=True,
+        )
+
+    assert order_inputs.normalize_input_value(_StubFamily, None) == []
+    config = captured["config"]
+    assert config.related_attr == "related_stub"
+    assert config.unset_sentinel is sentinel
+    assert config.handle_top_level_list is True
+    assert config.field_specs == {"a": "spec-a"}
+    assert config.logic_keys == frozenset({"custom_op"})
+
+
+def test_filter_normalizer_consumes_the_family_permission_traversal(monkeypatch):
+    """``FilterSet._normalize_input`` classifies through the derived config.
+
+    The filter-side twin of
+    ``test_order_normalizer_consumes_the_family_permission_traversal``: the
+    normalizer drives ``iter_active_fields`` with ``cls._input_traversal()``, so
+    the grammar the apply path reads is the one ``_permission`` declares. This
+    replaces an assertion that a module-level singleton NAME was absent, which
+    any differently-named singleton would also have satisfied.
+    """
+    import django_strawberry_framework.filters.sets as filter_sets
+
+    captured = {}
+
+    def _spy(set_cls, input_value, config):
+        captured["config"] = config
+        return iter(())
+
+    monkeypatch.setattr(filter_sets, "iter_active_fields", _spy)
+
+    assert FilterSet._normalize_input({"title": "anything"}) == {}
+    assert captured["config"] == FilterSet._input_traversal()
+
+
+def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
+    """An overridden ``_permission.unset_sentinel`` governs the apply path too.
+
+    The defect the derived config closes: ``_normalize_input`` used to read a
+    module-level singleton pinned to ``UNSET`` while the permission walkers read
+    ``_permission``, so a subclass narrowing the sentinel was GATED on one
+    grammar and FILTERED on another. Both sides now classify identically.
+    """
+    from dataclasses import replace
+
+    from apps.library.models import Book
+    from strawberry import UNSET
+
+    marker = object()
+
+    class _SentinelOverrideFilter(FilterSet):
+        _permission = replace(FilterSet._permission, unset_sentinel=marker)
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    assert _SentinelOverrideFilter._input_traversal().unset_sentinel is marker
+    # ``marker`` is "not supplied" under the override ...
+    assert _SentinelOverrideFilter._normalize_input({"title": marker}) == {}
+    # ... while ``UNSET`` is an ordinary supplied value, which the default
+    # family (whose sentinel IS ``UNSET``) would have skipped instead.
+    assert "title" in _SentinelOverrideFilter._normalize_input({"title": UNSET})
+    assert FilterSet._normalize_input({"title": UNSET}) == {}

@@ -138,11 +138,11 @@ def is_inactive_value(value: Any, *, unset_sentinel: Any = None) -> bool:
     """Return ``True`` when ``value`` should be treated as "not supplied".
 
     The single active-input rule shared by every traversal surface: a value is
-    inactive when it is ``None`` or the family's ``unset_sentinel``. The filter
-    side passes ``unset_sentinel=strawberry.UNSET`` (Strawberry input dataclasses
-    default unsupplied fields to ``UNSET``); the order side leaves it ``None``
-    (order inputs default unsupplied fields to ``None``), which makes the
-    sentinel arm a harmless ``value is None`` repeat. Defined once so the
+    inactive when it is ``None`` or the family's ``unset_sentinel``. Both shipped
+    families pass ``unset_sentinel=strawberry.UNSET``: load-bearing on the filter
+    side, whose operator-bag dataclasses default unsupplied lookups to ``UNSET``;
+    defensive on the order side, whose generated inputs default unsupplied fields
+    to ``None``, so the sentinel arm is inert there. Defined once so the
     ``UNSET`` / ``None`` decision cannot drift between the normalizers, the
     permission walkers, and ``extract_branch_value``.
     """
@@ -166,8 +166,9 @@ class SetInputTraversal:
     * ``logic_keys`` -- the python-attr tokens of the logical operators (filter
       ``and_`` / ``or_`` / ``not_``); empty for the order side, which has no
       logical operator bag.
-    * ``unset_sentinel`` -- the family's "not supplied" sentinel (``UNSET`` for
-      filters, ``None`` for orders); threaded into ``is_inactive_value``.
+    * ``unset_sentinel`` -- the family's "not supplied" sentinel
+      (``strawberry.UNSET`` on both shipped families); threaded into
+      ``is_inactive_value``.
     * ``handle_top_level_list`` -- the order side's top-level ``list[<T>]`` input
       shape; when set, a list ``input_value`` is flattened element-by-element.
     """

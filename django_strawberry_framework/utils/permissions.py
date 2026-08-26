@@ -10,8 +10,10 @@ easy to miss on the other -- so the neutral mechanics are single-sited here.
 This module owns mechanics only; the family-specific shape lives on
 ``sets_mixins.ActiveInputPermissionAttrs`` (one instance per set class):
 
-* the filter side passes ``unset_sentinel=strawberry.UNSET`` (its inputs default
-  unsupplied fields to ``UNSET``); the order side leaves it ``None``;
+* both families pass ``unset_sentinel=strawberry.UNSET`` (load-bearing on the
+  filter side, whose operator-bag dataclasses default unsupplied lookups to
+  ``UNSET``; defensive on the order side, whose generated inputs default to
+  ``None``);
 * the filter side's logical ``and`` / ``or`` / ``not`` recursion and depth cap
   stay in ``FilterSet._run_logic_permission_checks`` /
   ``FilterSet._check_permission_depth`` (hooks around
@@ -330,9 +332,9 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
     Collapses ``None`` (and ``unset_sentinel``, when the family supplies one) to
     "branch not supplied" so the active-branch caller treats absent branches
     uniformly. The filter side passes ``unset_sentinel=strawberry.UNSET`` because
-    Strawberry input dataclasses default unsupplied fields to ``UNSET``; the
-    order side leaves it ``None`` (its inputs default to ``None``), which makes
-    the sentinel check a harmless ``value is None`` no-op.
+    its operator-bag dataclasses default unsupplied fields to ``UNSET``; the
+    order side passes it too, defensively -- its generated inputs default to
+    ``None``, so the sentinel arm is a no-op there.
 
     Shares the active-value rule with every traversal surface via
     ``input_values.is_inactive_value``. Used by the filter

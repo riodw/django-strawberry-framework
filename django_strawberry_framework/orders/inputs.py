@@ -31,13 +31,7 @@ from django.db.models.expressions import OrderBy
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
-from ..utils.input_values import (
-    RELATED,
-    SetInputTraversal,
-    is_inactive_value,
-    iter_active_fields,
-    iter_input_items,
-)
+from ..utils.input_values import RELATED, iter_active_fields
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
@@ -301,12 +295,15 @@ def normalize_input_value(
     The dataclass-vs-dict walk, the top-level ``list[<T>]`` flattening, the
     ``None`` active-input skip, the ``_field_specs`` lookup, and the
     leaf-vs-related classification are the shared traversal mechanics owned by
-    ``utils/input_values.py::iter_active_fields``. This function
+    ``utils/input_values.py::iter_active_fields``, driven by the family's ONE
+    canonical traversal config derived from ``OrderSet._permission``
+    (``sets_mixins.ActiveInputPermissionMixin._input_traversal``) -- the same
+    derivation the permission walkers classify through. This function
     keeps only the order-side leaf semantics: a ``RelatedOrder`` branch recurses into
     the target orderset with the django source path as a prefix (e.g. ``shelf`` ->
     ``shelf__code``); a leaf appends ``(django_source_path, Ordering | None)``.
-    ``handle_top_level_list`` is set because the resolver-facing order argument shape
-    is ``list[<T>OrderInputType] | None``.
+    ``handle_top_level_list`` is set on the family config because the
+    resolver-facing order argument shape is ``list[<T>OrderInputType] | None``.
     """
     # Direct callers may provide the mapping shape without first constructing
     # an ``OrderArgumentsFactory`` input class. Build the provenance entries
@@ -315,14 +312,8 @@ def normalize_input_value(
     # silently discarded when ``field.spec`` is absent.
     _ensure_field_specs(orderset_cls, input_value)
 
-    config = SetInputTraversal(
-        field_specs=_field_specs,
-        related_attr="related_orders",
-        unset_sentinel=strawberry.UNSET,
-        handle_top_level_list=True,
-    )
     result: list[tuple[str, Ordering | None]] = []
-    for field in iter_active_fields(orderset_cls, input_value, config):
+    for field in iter_active_fields(orderset_cls, input_value, orderset_cls._input_traversal()):
         if field.spec is None:
             continue  # Defensive -- should be impossible after a finalize.
         if field.kind == RELATED:
@@ -349,22 +340,20 @@ def normalize_input_value(
 
 
 def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: Any) -> None:
-    """Populate provenance before direct normalization or permission checks."""
+    """Populate provenance before direct normalization or permission checks.
 
-    def _has_active_fields(value: Any) -> bool:
-        if is_inactive_value(value, unset_sentinel=strawberry.UNSET):
-            return False
-        if isinstance(value, list):
-            return any(_has_active_fields(element) for element in value)
-        items = iter_input_items(value)
-        if items is None:
-            return False
-        return any(
-            not is_inactive_value(raw_value, unset_sentinel=strawberry.UNSET)
-            for _, raw_value in items
-        )
-
-    if not _has_active_fields(input_value):
+    The "is anything supplied?" warm-up gate is answered THROUGH the family
+    classifier -- ``orderset_cls._input_traversal()`` drives
+    ``iter_active_fields`` here exactly as it drives ``normalize_input_value``
+    and the permission walkers -- so every grammar fact (the sentinel, the
+    top-level-list shape) is read only from ``orderset_cls._permission``.
+    Hardcoding ``strawberry.UNSET`` beside a hand-rolled list flatten made this
+    gate disagree with a consumer subclass overriding
+    ``_permission.unset_sentinel``: a miss skipped spec building, the
+    normalizer silently discarded the very fields the gates fired for.
+    """
+    traversal = orderset_cls._input_traversal()
+    if not any(iter_active_fields(orderset_cls, input_value, traversal)):
         return
     if (
         isinstance(orderset_cls, type)

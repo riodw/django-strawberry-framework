@@ -909,6 +909,61 @@ def test_normalize_input_value_ignores_unset_sentinel_in_mappings_and_lists():
     ]
 
 
+def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declaration():
+    """The warm-up gate asks the family classifier, not a hardcoded UNSET.
+
+    ``_ensure_field_specs`` answers "is anything supplied?" through
+    ``orderset_cls._input_traversal()`` -- the same derived grammar the
+    normalizer and the permission walkers consume -- so a consumer subclass
+    overriding ``_permission.unset_sentinel`` gets ONE classification
+    everywhere. With the old hardcoded gate, a ``UNSET``-valued field was
+    invisible to warm-up, so specs were never built and the normalizer
+    silently discarded the field while its permission gate still fired.
+    """
+    from dataclasses import replace
+
+    from apps.library.models import Book
+    from strawberry import UNSET
+
+    from django_strawberry_framework.orders.inputs import (
+        clear_order_input_namespace,
+        normalize_input_value,
+    )
+
+    clear_order_input_namespace()
+    marker = object()
+    fired: list[str] = []
+
+    class OverrideOrder(OrderSet):
+        _permission = replace(OrderSet._permission, unset_sentinel=marker)
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def check_title_permission(cls, request):
+            fired.append(request)
+
+    # The override IS the family's unsupplied rule end-to-end.
+    assert normalize_input_value(OverrideOrder, {"title": marker}) == []
+    assert fired == []
+
+    # Fresh ledger so the warm-up decision below is observed on its own.
+    clear_order_input_namespace()
+    fired.clear()
+
+    # ``UNSET`` is SUPPLIED under the override: the derived gate builds the
+    # specs and the field reaches leaf validation (a loud refusal of the
+    # non-direction) instead of the silent ``spec is None`` discard ...
+    with pytest.raises(ConfigurationError, match="invalid order direction"):
+        normalize_input_value(OverrideOrder, {"title": UNSET})
+    # ... and the permission side classifies the identical input identically;
+    # apply-time / gate-time agreement is the invariant this pins.
+    OverrideOrder._run_permission_checks({"title": UNSET}, "request")
+    assert fired == ["request"]
+
+
 def test_normalize_input_value_rejects_invalid_direction_type():
     """Invalid non-Ordering direction values raise ConfigurationError."""
     from apps.library.models import Book

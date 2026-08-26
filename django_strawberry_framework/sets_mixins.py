@@ -49,7 +49,7 @@ from typing import Any, ClassVar
 from django.utils.module_loading import import_string
 
 from .exceptions import ConfigurationError
-from .utils.input_values import is_inactive_value
+from .utils.input_values import SetInputTraversal, is_inactive_value
 from .utils.permissions import (
     active_permission_targets,
     active_related_branches,
@@ -440,6 +440,32 @@ class ActiveInputPermissionMixin:
     """
 
     _permission: ClassVar[ActiveInputPermissionAttrs]
+
+    @classmethod
+    def _input_traversal(cls) -> SetInputTraversal:
+        """Derive the family's canonical active-input traversal config.
+
+        The ONE translation of the grammar ``_permission`` declares into the
+        ``SetInputTraversal`` shape ``utils.input_values.iter_active_fields``
+        consumes. Both family normalizers (``FilterSet._normalize_input`` /
+        ``orders.inputs.normalize_input_value``) and the permission walkers
+        classify input through this derivation, so apply-time and gate-time
+        classification cannot drift apart -- a divergence would let a field be
+        filtered without its permission gate (or gate a field never applied).
+        Values flow by reference: ``field_specs`` is the same map the family's
+        ``inputs`` module mutates in place at bind time. Built per call rather
+        than cached as a module singleton, which is what let a subclass's
+        ``_permission`` override reach the apply path at all; the construction is
+        a sub-microsecond dataclass build against a handful of calls per request.
+        """
+        cfg = cls._permission
+        return SetInputTraversal(
+            field_specs=cfg.field_specs,
+            related_attr=cfg.related_attr,
+            logic_keys=cfg.logic_keys,
+            unset_sentinel=cfg.unset_sentinel,
+            handle_top_level_list=cfg.handle_top_level_list,
+        )
 
     @classmethod
     def _request_from_info(cls, info: Any) -> Any:

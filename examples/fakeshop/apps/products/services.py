@@ -152,6 +152,13 @@ def _fake_value(fake: Faker, method_name: str) -> str:
     return str(result)
 
 
+# Item/Entry privacy is drawn from this fixed-seed stream rather than the process
+# RNG: an unseeded draw makes every derived expectation probabilistic, and a run
+# that happens to hide the whole Item -> Category chain turns a prefetch-count
+# assertion into a false failure.
+PRIVACY_STREAM_SEED = 20260827
+
+
 @cache
 def _seed_provider_methods() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Discover the process-stable provider shape used by repeated seed calls."""
@@ -182,8 +189,10 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
 
     ``is_private`` for Categories and Properties alternates by sorted index
     (even index -> public, odd index -> private) giving an exact 50/50 split
-    that is deterministic across runs.  Items and Entries still use random
-    assignment since their names vary per run.
+    that is deterministic across runs.  Items and Entries draw theirs from a
+    fixed-seed stream (``PRIVACY_STREAM_SEED``), so the mix stays uncorrelated
+    with the index parities above while the visible set a caller derives is the
+    same on every run.  Only the Faker-generated text varies per run.
 
     Args:
         count: Desired number of ``Item`` instances per provider.
@@ -198,6 +207,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
     from faker import Faker
 
     fake = Faker()
+    privacy = random.Random(PRIVACY_STREAM_SEED)
 
     total_categories = 0
     total_properties = 0
@@ -231,7 +241,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
             if created:
                 total_properties += 1
 
-        # --- Items + Entries (random is_private - names vary per run) ---
+        # --- Items + Entries (fixed-seed is_private - names vary per run) ---
         existing_count = Item.objects.using(db_alias).filter(category=category).count()
         needed = max(0, count - existing_count)
 
@@ -240,7 +250,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
                 name=f"{provider_name}_{fake.uuid4()[:8]}",
                 description=f"Generated {provider_name} instance",
                 category=category,
-                is_private=random.choice([True, False]),
+                is_private=privacy.choice([True, False]),
             )
             total_items += 1
 
@@ -250,7 +260,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
                     description="",
                     property=prop,
                     item=item,
-                    is_private=random.choice([True, False]),
+                    is_private=privacy.choice([True, False]),
                 )
                 for prop in properties
             ]

@@ -194,7 +194,7 @@ def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(inst
     """
     assert settings.DEBUG is False  # proving the bracket did the work
     seed_data(1)
-    # One deterministically anonymous-visible row (seed_data randomizes Item
+    # One deterministically anonymous-visible row (seed_data fixed-seeds Item
     # privacy; the test_products_api precedent creates targeted rows after the
     # seed), so ``first: 1`` always has an edge to return.
     Item.objects.create(
@@ -243,13 +243,13 @@ def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_
     already pins, re-read here through the debug payload instead of
     ``CaptureQueriesContext``. Run anonymously so no auth queries pollute the
     rows; the expected edge count derives from the equivalent post-cascade ORM
-    query (API == ORM), robust across ``seed_data``'s random privacy.
+    query (API == ORM), robust across ``seed_data``'s fixed-seed privacy.
     """
     seed_data(2)
     # One deterministically visible edge (scenario 1's idiom), created BEFORE
     # the derived count: guarantees a non-empty item slice so the category
     # Prefetch always executes and the two-SELECT assertion cannot flake on
-    # ``seed_data``'s random Item privacy.
+    # ``seed_data``'s fixed-seed Item privacy.
     Item.objects.create(
         name="DebugPrefetchWidget",
         category=Category.objects.filter(is_private=False).order_by("pk").first(),

@@ -1160,7 +1160,7 @@ def test_emitted_globalid_is_model_anchored():
     ``relay.GlobalID.from_id`` and assert the model-label payload.
 
     Runs as ``staff_1`` so the first item is visible regardless of its
-    (``seed_data``-randomized) ``is_private`` / category privacy under the
+    (``seed_data`` fixed-seed) ``is_private`` / category privacy under the
     activated cascade hooks (spec-034); the GlobalID emit/decode subject
     is orthogonal to visibility.
     """
@@ -1230,7 +1230,7 @@ def test_type_strategy_opt_out_reproduces_type_name(project_schema_override):
     function-scoped override fixture re-reloads the default-strategy schema for siblings.
 
     Runs as ``staff_1`` so the first item is visible regardless of its
-    (``seed_data``-randomized) privacy under the activated cascade hooks
+    (``seed_data`` fixed-seed) privacy under the activated cascade hooks
     (spec-034); the strategy opt-out subject is orthogonal to visibility.
     """
     seed_data(1)
@@ -1271,7 +1271,7 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     queries pollute the count); the cascade narrows rows to the anonymously
     visible set (public items under public categories), so the expected rows are
     derived from the equivalent post-cascade ORM query (API == ORM), keeping the
-    pin robust across `seed_data`'s random Item privacy. The appended
+    pin robust across `seed_data`'s fixed-seed Item privacy. The appended
     deterministic `ORDER BY pk` matches `.order_by("id")` (`id` IS the pk).
     """
     seed_data(1)
@@ -1281,6 +1281,9 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
         .filter(is_private=False, category__is_private=False)
         .order_by("id")
     ]
+    assert expected, (
+        "fixture must be non-empty - an empty page skips the category prefetch this test counts"
+    )
 
     with CaptureQueriesContext(connection) as captured:
         response = _post_graphql(
@@ -1327,7 +1330,7 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     items under them; entries passing the full Entry -> Item -> Category /
     Entry -> Property -> Category chain). Counts are therefore derived from the
     equivalent post-cascade ORM queries (API == ORM), keeping the pin robust
-    across `seed_data`'s random Item/Entry privacy. The deterministic Category
+    across `seed_data`'s fixed-seed Item/Entry privacy. The deterministic Category
     `% 2` split keeps the public-category count well under the
     `relay_max_results` cap.
     """
@@ -1341,8 +1344,9 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
         property__is_private=False,
         property__category__is_private=False,
     )
-    assert visible_categories.count() < _RELAY_MAX_RESULTS, (
-        "fixture must stay under the cap so the full-set assertion is not silently truncated"
+    assert 0 < visible_categories.count() < _RELAY_MAX_RESULTS, (
+        "fixture must be non-empty (an empty page skips the prefetch queries this test "
+        "counts) and stay under the cap so the full-set assertion is not silently truncated"
     )
 
     with CaptureQueriesContext(connection) as captured:
@@ -1407,7 +1411,7 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
     Entry -> Item -> Category / Entry -> Property -> Category chain, well under the
     `relay_max_results` cap, so the expected page is the entire visible set in pk
     order, derived from the equivalent post-cascade ORM query (API == ORM, robust
-    across `seed_data`'s random Item/Entry/Property privacy). The appended
+    across `seed_data`'s fixed-seed Item/Entry/Property privacy). The appended
     `ORDER BY pk` matches `.order_by("id")` (`id` IS the pk).
     """
     seed_data(1)
@@ -1422,8 +1426,9 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
         )
         .order_by("id")
     )
-    assert visible_entries.count() <= _RELAY_MAX_RESULTS, (
-        "cascade-narrowed visible set must stay under the cap for the full-set assertion"
+    assert 0 < visible_entries.count() <= _RELAY_MAX_RESULTS, (
+        "cascade-narrowed visible set must be non-empty (an empty page skips the item and "
+        "category prefetches this test counts) and stay under the cap for the full-set assertion"
     )
     expected = [
         {
@@ -2139,9 +2144,9 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
 #
 # Each test seeds the private/public split it needs as a dedicated ORM chain
 # AFTER `create_users(1)` / `seed_data(N)`, so the assertions are deterministic
-# regardless of `seed_data`'s random Item/Entry `is_private` assignment (the
-# Category/Property split is the deterministic `% 2` alternation; Item/Entry are
-# `random.choice`). The hooks resolve the user from `info.context.request.user`
+# regardless of `seed_data`'s Item/Entry `is_private` assignment (the
+# Category/Property split is the deterministic `% 2` alternation; Item/Entry draw
+# from a fixed-seed stream). The hooks resolve the user from `info.context.request.user`
 # (the Strawberry-Django context shape; see schema.py), so these run real logins.
 # =============================================================================
 
@@ -2303,7 +2308,7 @@ def test_cascade_query_count_fixed():
     (the shipped ``get_queryset`` -> ``Prefetch`` rule; spec-034). The
     anonymous request issues no auth queries, so the products query count is a
     deterministic 3 (one entry slice + one ``item`` prefetch + one ``category``
-    prefetch), independent of how ``seed_data`` randomized row privacy. The
+    prefetch), independent of how ``seed_data`` assigned row privacy. The
     cascade's nested ``IN (SELECT`` subqueries appear in the SQL, so the test
     cannot pass on a fall-through that skipped the cascade.
     """

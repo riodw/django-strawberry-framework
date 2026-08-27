@@ -156,6 +156,11 @@ with a Worker 1 pass that performs the CODE GAP audit and the spec reconciliatio
 
 ## Artifact list
 
+All `bld-031-*` slice artifacts were **deleted after the cycle committed** (`0ff3cea5`), per the
+per-cycle-scratchpad rule. They are recoverable with `git show 0ff3cea5:<path>`. Everything from
+`bld-031-final.md` that outlives the cycle is folded into this file below, under
+`## Final gate record` and `## Deferred-work homing`.
+
 - `docs/builder/bld-031-slice-0-rationale_extraction.md` — pre-flight step 7, the rationale move
 - `docs/builder/bld-031-slice-1-meta_key_setting_precedence.md` — Slice 1
 - `docs/builder/bld-031-slice-2-encode_seam.md` — Slice 2
@@ -183,3 +188,69 @@ with a Worker 1 pass that performs the CODE GAP audit and the spec reconciliatio
 - [x] Slice 7: correct the card-052 rationale-companion census this cycle falsified, and re-render the board -> `docs/builder/bld-031-slice-7-card_052_companion_census.md`
 - [x] Slice 8: repair `spec-032`'s citations into text the **spec-030** rationale move relocated -> `docs/builder/bld-031-slice-8-spec_032_spec_030_citations.md`
 - [x] Slice 9: home the two open items that live only in this cycle's artifacts onto card 052, and re-render -> `docs/builder/bld-031-slice-9-card_052_homing.md`
+
+## Final gate record (folded in from `bld-031-final.md` before its deletion)
+
+**The commissioning question — did the `031` build skip, drop, or forget anything the spec planned?
+No.** Every one of the five spec slices closed with an **empty CODE GAP list**, across **111
+contracted surfaces** audited at HEAD:
+
+| Slice | Contracted surfaces audited | CODE GAP |
+|---|---|---|
+| 1 — `Meta.globalid_strategy` + `RELAY_GLOBALID_STRATEGY` + the precedence resolver | 33 (21 source + 12 `## Test plan` rows) | empty |
+| 2 — the encode seam (four encoders, Phase-2.5 install, default flip, filter validation) | 14 | empty |
+| 3 — the decode seam (`decode_global_id` dispatch, symmetry, transitional `type+model`) | 32 (21 source + 11 test rows) | empty |
+| 4 — live HTTP coverage on a Relay-Node-shaped fakeshop type | 16 | empty |
+| 5 — doc updates + card wrap (audit-only, out of fence) | 16 across four tables | empty |
+
+Rows were read for shape and behaviour against the spec sentence they file under, not name-matched.
+
+**The cycle's only source change was three comment-only docstring corrections**, and no slice found
+them — the cross-slice integration read did. Five per-slice audits each reading their own region
+found nothing wrong in source; reading the document as one thing found three false sentences in it.
+
+Gates at closure: full parallel sweep **6870 passed / 42 skipped**; Django `check` and
+`makemigrations --check --dry-run`, `ruff format --check`, `ruff check`, and `git diff --check` all
+clean. Floor declaration `none`, established rather than defaulted into: four independent inverse
+proofs on four axes (`ast.unparse`, `ast.dump` with sentinel substitution, and the code-object graph
+under CPython `optimize=2` twice) show both changed files byte-equivalent to HEAD in executable
+bytes.
+
+## Deferred-work homing (Worker 0, post-gate, maintainer-requested)
+
+### Closed — do NOT read these as deferred
+
+- **`spec-032`'s dangling citations into relocated text — repaired, 11 sites.** Eight into
+  `spec-031`'s companion (this cycle's rationale move) and three into `spec-030`'s (the prior
+  cycle's, authorized late). All eleven links *resolved* the whole time; what had gone false was the
+  claim each line made about the target's content, which is why no gate saw them.
+
+### Open — homed on `TODO-ALPHA-052-0.0.16` as scope bullets
+
+- **`spec-032` attributes the wrong remediation tail to the `Meta.connection` Relay-Node gate**, in
+  three places (two spec sites plus `tests/types/test_base.py::test_connection_key_requires_relay_node`'s
+  docstring, whose own assertion pins the correct string). Board row `CardItem` pk 1409.
+- **The three-section rationale-companion template census**, re-measured. Board row pk 1278.
+
+### Open — method notes, preserved outside the board
+
+- **`docs/GLOSSARY.md`'s `"Relay"` / `"Type generation"` Browse-by-category slash is NOT a defect.**
+  The Slice-5 checklist sentence admits two readings and the glossary satisfies the better one (each
+  symbol filed under the row it belongs in). Worth one sentence only if a future spec's template
+  disambiguates the slash. Do not re-open it as a divergence.
+- **`tests/types/test_relay_interfaces.py::test_type_strategy_child_shadows_inherited_framework_closure`'s
+  "goes live for exactly this shape" docstring: examined, no change owed.** It is an *installation*
+  claim inside a test whose whole subject is closure installation — narrower than the population
+  claim the `encode_typename` docstring fix retired, and true as written.
+- **`types/finalizer.py::_first_model_label_emitter` and `::_audit_model_label_routing`'s
+  "registered type has no `DjangoTypeDefinition`" raises are a deliberate non-contract.** They assert
+  an internal invariant the finalizer's own construction excludes; giving them spec sentences would
+  invite a reader to treat an impossible registry state as supported. Pinned by
+  `tests/types/test_finalizer.py`. Recorded because a future audit grepping shipped raises against
+  spec sentences will find these two and needs the verdict, not a fifth re-derivation.
+- **A rationale extraction breaks FOREIGN specs' citations, and nothing in the process looks for
+  it.** The mover repairs the citations in the file it is editing; it never opens the specs that cite
+  the text being moved. Run `grep -rln 'spec-<NNN>' docs/` BEFORE the move and treat every hit as a
+  post-move repair obligation. Grade hits by content, not by token: a line naming `spec-NNN` beside
+  `Revision K` usually means the *citing* spec's own revision — that false-positive rate was 12 of 17
+  in one sweep and 4 of 7 in another.

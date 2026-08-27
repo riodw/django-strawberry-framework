@@ -14,6 +14,8 @@ anonymous over ``/graphql/``) is earned in
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
@@ -307,6 +309,138 @@ def test_current_user_hostile_directives_raise_configuration_error():
 
     with pytest.raises(ConfigurationError):
         current_user(directives="oops")
+
+
+def _legacy_callable_user(outcome):
+    """Patch the concrete user model's ``is_authenticated`` into a pre-1.10 CALLABLE.
+
+    ``mock.patch.object`` deletes the shadowing attribute on exit because the
+    real one is inherited from ``AbstractBaseUser``, so the model class is left
+    exactly as found. Patching the real model (rather than substituting a duck
+    object) is what keeps the authenticated arm serializable: the ``me`` field's
+    return type is the concrete ``UserT``, and GraphQL rejects anything else.
+    """
+
+    def _is_authenticated(self):
+        return outcome()
+
+    return mock.patch.object(User, "is_authenticated", _is_authenticated)
+
+
+@pytest.mark.django_db
+def test_legacy_callable_is_authenticated_is_called_and_authenticates():
+    """A legacy ``is_authenticated()`` returning true resolves to the actor, not ``null``."""
+    User.objects.create_user(username="legacy", password="pw")
+    schema = _me_schema()
+    req = RequestFactory().post("/graphql/")
+    req.user = User.objects.get(username="legacy")
+
+    with _legacy_callable_user(lambda: True):
+        res = schema.execute_sync(_ME_Q, context_value=req)
+
+    assert res.errors is None, res.errors
+    assert res.data["me"]["username"] == "legacy"
+
+
+@pytest.mark.django_db
+def test_legacy_callable_is_authenticated_returning_false_is_anonymous():
+    """A legacy ``is_authenticated()`` returning false is the anonymous ``null``."""
+    User.objects.create_user(username="legacy-off", password="pw")
+    schema = _me_schema()
+    req = RequestFactory().post("/graphql/")
+    req.user = User.objects.get(username="legacy-off")
+
+    with _legacy_callable_user(lambda: False):
+        res = schema.execute_sync(_ME_Q, context_value=req)
+
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "raised",
+    [
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ],
+)
+def test_legacy_callable_is_authenticated_raising_collapses_to_anonymous_null(raised):
+    """A legacy ``is_authenticated()`` raising any of the five shapes collapses to ``null``.
+
+    The CALL is a third hostile surface alongside the ``request.user`` and
+    ``user.is_authenticated`` reads: a pre-1.10 callable that raises must not
+    escape as an unhandled top-level error carrying the hostile message.
+    """
+    User.objects.create_user(username="legacy-hostile", password="pw")
+    schema = _me_schema()
+    req = RequestFactory().post("/graphql/")
+    req.user = User.objects.get(username="legacy-hostile")
+
+    def _raise():
+        raise raised("hostile is_authenticated()")
+
+    with _legacy_callable_user(_raise):
+        res = schema.execute_sync(_ME_Q, context_value=req)
+
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+
+
+@pytest.mark.django_db
+def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
+    """A NON-callable awaitable ``is_authenticated`` is closed and read as anonymous.
+
+    A pending coroutine is neither true nor false; leaving it unawaited would
+    also leak a "never awaited" warning out of the resolver. The helper closes
+    it and classifies the request as anonymous.
+    """
+
+    async def _pending():  # pragma: no cover - closed, never awaited
+        return True
+
+    coro = _pending()
+
+    class _AwaitableIsAuth:
+        is_authenticated = coro
+
+    schema = _me_schema()
+    req = RequestFactory().post("/graphql/")
+    req.user = _AwaitableIsAuth()
+    res = schema.execute_sync(_ME_Q, context_value=req)
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+    # Closed by the helper: awaiting a closed coroutine is a RuntimeError.
+    with pytest.raises(RuntimeError):
+        coro.send(None)
+
+
+@pytest.mark.django_db
+def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous():
+    """A legacy ``is_authenticated()`` returning a coroutine is closed, not awaited."""
+    captured = []
+
+    class _AsyncCallableIsAuth:
+        def is_authenticated(self):
+            async def _pending():  # pragma: no cover - closed, never awaited
+                return True
+
+            coro = _pending()
+            captured.append(coro)
+            return coro
+
+    schema = _me_schema()
+    req = RequestFactory().post("/graphql/")
+    req.user = _AsyncCallableIsAuth()
+    res = schema.execute_sync(_ME_Q, context_value=req)
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+    assert len(captured) == 1
+    with pytest.raises(RuntimeError):
+        captured[0].send(None)
 
 
 @pytest.mark.django_db

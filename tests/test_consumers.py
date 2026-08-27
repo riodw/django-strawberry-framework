@@ -533,6 +533,341 @@ async def test_send_json_control_frame_respects_revoked():
 
 
 # ---------------------------------------------------------------------------
+# The fail-closed handlers' OWN failures: revoking is itself a suspending call
+# on a hostile transport, so each nested revoke needs its own containment proof.
+# A checkpoint whose denial path raises is a checkpoint that did not deny.
+# ---------------------------------------------------------------------------
+
+
+def _revalidating_consumer(scope=None):
+    """A consumer duck-shape accepted by the module-level checkpoints."""
+    consumer = Mock()
+    consumer.scope = _fresh_scope() if scope is None else scope
+    consumer._revocation = cmod._ConnectionRevocation()
+    consumer.revalidation_window = 0.0
+    return consumer
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_hostile_ws_consumer_with_failing_revoke_is_contained():
+    """A hostile ``ws_consumer`` whose REVOKE also raises still does not escape."""
+
+    class HostileWS:
+        @property
+        def ws_consumer(self):
+            raise KeyError("hostile ws_consumer")
+
+    with patch.object(
+        cmod,
+        "_revoke_connection",
+        new_callable=AsyncMock,
+        side_effect=ValueError("hostile close"),
+    ) as mock_revoke:
+        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+        mock_revoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_cancellation_reading_revoked_is_re_raised():
+    """``CancelledError`` reading the revocation flag propagates, not logged as a failure.
+
+    These paths suspend, so a cancellation can genuinely arrive at them; recording
+    one as a failed revalidation would misreport an ordinary shutdown.
+    """
+
+    class CancellingRevocation:
+        @property
+        def revoked(self):
+            raise asyncio.CancelledError
+
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+    ws.ws_consumer._revocation = CancellingRevocation()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cmod.send_revalidated_operation_frame(ws, {"type": "next"}, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_cancellation_in_the_actor_check_is_re_raised():
+    """``CancelledError`` from the actor check propagates rather than reading as denial."""
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+
+    with patch.object(
+        cmod,
+        "_actor_is_current",
+        new_callable=AsyncMock,
+        side_effect=asyncio.CancelledError,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await cmod.send_revalidated_operation_frame(ws, {"type": "next"}, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_stale_actor_with_failing_revoke_is_contained():
+    """A stale actor whose revoke raises is contained; the frame is still suppressed.
+
+    The stale-actor revoke is deliberately UNGUARDED, so its failure lands in the
+    function's outer handler, which revokes again: two attempts, no escape. The
+    retry is the point - one failed close must not leave the connection live.
+    """
+    send = AsyncMock()
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+
+    with (
+        patch.object(cmod, "_actor_is_current", new_callable=AsyncMock, return_value=False),
+        patch.object(
+            cmod,
+            "_revoke_connection",
+            new_callable=AsyncMock,
+            side_effect=ValueError("hostile close"),
+        ) as mock_revoke,
+    ):
+        await cmod.send_revalidated_operation_frame(ws, {"type": "next"}, send)
+
+    assert mock_revoke.await_count == 2
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_failing_send_with_failing_revoke_is_contained():
+    """A current actor whose SEND raises, and whose revoke then raises too, is contained.
+
+    This is the one arm where the frame was authorized: the actor is current, so
+    the failure is the transport's, and the revoke that answers it has its own
+    guard rather than falling through to the outer handler.
+    """
+    send = AsyncMock(side_effect=ValueError("hostile transport"))
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+
+    with (
+        patch.object(cmod, "_actor_is_current", new_callable=AsyncMock, return_value=True),
+        patch.object(
+            cmod,
+            "_revoke_connection",
+            new_callable=AsyncMock,
+            side_effect=ValueError("hostile close"),
+        ) as mock_revoke,
+    ):
+        await cmod.send_revalidated_operation_frame(ws, {"type": "next"}, send)
+
+    send.assert_awaited_once()
+    mock_revoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_cancellation_in_each_nested_revoke_is_re_raised():
+    """A ``CancelledError`` from a NESTED revoke propagates from all three of its sites.
+
+    The nested revokes swallow ordinary failures so a hostile transport cannot
+    keep the connection alive; a cancellation is the one thing they must not
+    swallow, because it means the surrounding task is being torn down and there
+    is nothing left to fail closed for.
+    """
+
+    class HostileWS:
+        @property
+        def ws_consumer(self):
+            raise KeyError("hostile ws_consumer")
+
+    cancelling_revoke = {"new_callable": AsyncMock, "side_effect": asyncio.CancelledError}
+
+    # 1. The hostile-``ws_consumer`` arm.
+    with patch.object(cmod, "_revoke_connection", **cancelling_revoke):
+        with pytest.raises(asyncio.CancelledError):
+            await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+
+    # 2. The authorized-frame arm, where ``send`` itself failed first.
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+    with (
+        patch.object(cmod, "_actor_is_current", new_callable=AsyncMock, return_value=True),
+        patch.object(cmod, "_revoke_connection", **cancelling_revoke),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await cmod.send_revalidated_operation_frame(
+                ws,
+                {"type": "next"},
+                AsyncMock(side_effect=ValueError("hostile transport")),
+            )
+
+    # 3. The outer arm, reached when the lease itself is hostile.
+    ws2 = Mock()
+    ws2.ws_consumer = _revalidating_consumer()
+    with (
+        patch.object(cmod, "actor_lease", side_effect=TypeError("hostile lease")),
+        patch.object(cmod, "_revoke_connection", **cancelling_revoke),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await cmod.send_revalidated_operation_frame(ws2, {"type": "next"}, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_send_revalidated_outer_failure_with_failing_revoke_is_contained():
+    """A hostile lease AND a failing revoke together still do not escape."""
+    send = AsyncMock()
+    ws = Mock()
+    ws.ws_consumer = _revalidating_consumer()
+
+    with (
+        patch.object(cmod, "actor_lease", side_effect=TypeError("hostile lease")),
+        patch.object(
+            cmod,
+            "_revoke_connection",
+            new_callable=AsyncMock,
+            side_effect=ValueError("hostile close"),
+        ) as mock_revoke,
+    ):
+        await cmod.send_revalidated_operation_frame(ws, {"type": "next"}, send)
+
+    mock_revoke.assert_awaited_once()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_actor_is_current_hostile_is_authenticated_and_hostile_provenance_denies():
+    """When BOTH the actor read and the provenance check fail, the answer is denial."""
+
+    class HostileIsAuth:
+        @property
+        def is_authenticated(self):
+            raise ValueError("hostile is_authenticated")
+
+    consumer = _revalidating_consumer()
+    consumer.scope["user"] = HostileIsAuth()
+
+    with patch.object(
+        cmod,
+        "connection_was_authenticated",
+        side_effect=KeyError("hostile provenance"),
+    ):
+        assert await cmod._actor_is_current(consumer) is False
+
+
+@pytest.mark.asyncio
+async def test_actor_is_current_cancellation_in_the_provenance_check_is_re_raised():
+    """``CancelledError`` from the provenance fallback propagates."""
+
+    class HostileIsAuth:
+        @property
+        def is_authenticated(self):
+            raise ValueError("hostile is_authenticated")
+
+    consumer = _revalidating_consumer()
+    consumer.scope["user"] = HostileIsAuth()
+
+    with patch.object(
+        cmod,
+        "connection_was_authenticated",
+        side_effect=asyncio.CancelledError,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await cmod._actor_is_current(consumer)
+
+
+@pytest.mark.asyncio
+async def test_send_json_cancellation_reading_the_message_type_is_re_raised():
+    """``CancelledError`` from the frame's own ``get`` propagates out of the adapter."""
+    _, adapter = _build_consumer_and_adapter()
+
+    class CancellingMessage(dict):
+        def get(self, k, d=None):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.send_json(CancellingMessage({"type": "next"}))  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_send_json_hostile_message_with_failing_delegate_is_contained():
+    """An unreadable frame whose fail-closed delegate ALSO raises does not escape."""
+    _, adapter = _build_consumer_and_adapter()
+
+    class HostileMessage(dict):
+        def get(self, k, d=None):
+            raise ValueError("hostile get")
+
+    with patch.object(
+        cmod,
+        "send_revalidated_operation_frame",
+        new_callable=AsyncMock,
+        side_effect=ValueError("hostile delegate"),
+    ) as mock_send:
+        await adapter.send_json(HostileMessage({"type": "next"}))  # type: ignore[arg-type]
+        mock_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_json_control_frame_unreadable_revoked_flag_suppresses_the_frame():
+    """A control frame reads an unreadable revocation flag as REVOKED and sends nothing."""
+    _, adapter = _build_consumer_and_adapter()
+
+    class HostileRevocation:
+        @property
+        def revoked(self):
+            raise ValueError("hostile revoked")
+
+    adapter.ws_consumer._revocation = HostileRevocation()  # type: ignore[attr-defined]
+
+    with patch.object(
+        adapter.__class__.__bases__[0],
+        "send_json",
+        new_callable=AsyncMock,
+    ) as mock_super:
+        await adapter.send_json({"type": "ping"})
+        mock_super.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_json_control_frame_cancellation_reading_revoked_is_re_raised():
+    """``CancelledError`` reading the flag for a control frame propagates."""
+    _, adapter = _build_consumer_and_adapter()
+
+    class CancellingRevocation:
+        @property
+        def revoked(self):
+            raise asyncio.CancelledError
+
+    adapter.ws_consumer._revocation = CancellingRevocation()  # type: ignore[attr-defined]
+
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.send_json({"type": "ping"})
+
+
+@pytest.mark.asyncio
+async def test_send_json_information_frame_with_failing_delegate_is_contained():
+    """A failing outbound checkpoint on an information-bearing frame does not escape."""
+    _, adapter = _build_consumer_and_adapter()
+
+    with patch.object(
+        cmod,
+        "send_revalidated_operation_frame",
+        new_callable=AsyncMock,
+        side_effect=ValueError("hostile delegate"),
+    ) as mock_send:
+        await adapter.send_json({"type": "next"})
+        mock_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_json_information_frame_cancellation_is_re_raised():
+    """``CancelledError`` from the outbound checkpoint propagates."""
+    _, adapter = _build_consumer_and_adapter()
+
+    with patch.object(
+        cmod,
+        "send_revalidated_operation_frame",
+        new_callable=AsyncMock,
+        side_effect=asyncio.CancelledError,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await adapter.send_json({"type": "next"})
+
+
+# ---------------------------------------------------------------------------
 # _revoke_connection - hostile websocket
 # ---------------------------------------------------------------------------
 

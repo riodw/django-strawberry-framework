@@ -14,6 +14,7 @@ from django.contrib.sessions.backends.signed_cookies import (
 )
 from django.test import override_settings
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.sessions import (
     _ACTOR_STATE_SCOPE_KEY,
     ConnectionActorState,
@@ -57,6 +58,71 @@ def test_session_store_class_resolves_custom_engine(monkeypatch):
 
     with override_settings(SESSION_ENGINE=module_name):
         assert session_store_class() is CustomSessionStore
+
+
+def test_session_store_class_reports_an_unreadable_setting_as_configuration_error(
+    monkeypatch,
+):
+    """A ``settings.SESSION_ENGINE`` read that RAISES becomes ``ConfigurationError``.
+
+    A settings object whose ``SESSION_ENGINE`` descriptor raises is the
+    hostile-configuration shape the five-shape guard exists for: the resolver
+    must name the setting rather than let the descriptor's own exception escape
+    through the session boundary.
+    """
+    from django.conf import settings as django_settings
+
+    class _RaisingSettings:
+        def __getattr__(self, name):
+            raise KeyError(name)
+
+    monkeypatch.setattr("django.conf.settings", _RaisingSettings())
+    with pytest.raises(ConfigurationError, match="SESSION_ENGINE could not be read"):
+        session_store_class()
+
+    # The module attribute is restored by monkeypatch; prove the resolver is
+    # not left wedged on the stand-in.
+    monkeypatch.undo()
+    assert django_settings.SESSION_ENGINE
+    assert session_store_class() is DBSessionStore
+
+
+@override_settings(SESSION_ENGINE=object())
+def test_session_store_class_rejects_a_non_string_engine():
+    """A non-string ``SESSION_ENGINE`` is rejected before any import is attempted."""
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        session_store_class()
+
+
+@override_settings(SESSION_ENGINE="")
+def test_session_store_class_rejects_an_empty_engine():
+    """An empty ``SESSION_ENGINE`` is rejected rather than importing ``.SessionStore``."""
+    with pytest.raises(ConfigurationError, match="non-empty string"):
+        session_store_class()
+
+
+@override_settings(SESSION_ENGINE="tests.utils._no_such_session_engine")
+def test_session_store_class_reports_an_unresolvable_engine_as_configuration_error():
+    """An engine that does not import is a ``ConfigurationError`` naming the engine."""
+    with pytest.raises(ConfigurationError, match="_no_such_session_engine"):
+        session_store_class()
+
+
+def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
+    monkeypatch,
+):
+    """An engine module WITHOUT ``SessionStore`` is a ``ConfigurationError``, not an ImportError.
+
+    ``import_string`` raises ``ImportError`` for a missing module and for a
+    missing attribute alike; both arrive at the same guard, so the module-exists
+    arm needs its own proof.
+    """
+    module_name = "tests.utils._stub_storeless_session_engine"
+    monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
+
+    with override_settings(SESSION_ENGINE=module_name):
+        with pytest.raises(ConfigurationError, match="SessionStore"):
+            session_store_class()
 
 
 # ---------------------------------------------------------------------------

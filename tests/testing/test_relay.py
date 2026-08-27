@@ -1,7 +1,7 @@
 """Public Relay helper tests for global_id_for and decode_global_id.
 
 Mirrors ``django_strawberry_framework/testing/relay.py`` per the
-``docs/TREE.md`` one-to-one rule (``docs/spec-032-full_relay-0_0_9.md``
+``docs/TREE.md`` one-to-one rule (``docs/SPECS/spec-032-full_relay-0_0_9.md``
 Decision 11 - no card conflict for this pair).
 """
 

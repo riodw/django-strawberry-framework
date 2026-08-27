@@ -1,6 +1,6 @@
 """DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 
-Spec: ``docs/spec-030-connection_field-0_0_9.md``. Package tests; system-under-test is
+Spec: ``docs/SPECS/spec-030-connection_field-0_0_9.md``. Package tests; system-under-test is
 ``django_strawberry_framework`` itself. The flat file mirrors the flat
 ``connection.py`` module per ``docs/TREE.md`` and the ``tests/test_list_field.py``
 precedent.

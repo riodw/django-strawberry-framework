@@ -1,6 +1,6 @@
 """DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
 
-Spec: ``docs/spec-020-list_field-0_0_7.md``.
+Spec: ``docs/SPECS/spec-020-list_field-0_0_7.md``.
 
 Package tests; system-under-test is ``django_strawberry_framework``
 (``AGENTS.md #"Package source lives in django_strawberry_framework"``). The file

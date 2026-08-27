@@ -1912,9 +1912,11 @@ def test_products_items_filter_and_order_compose():
 # Nested relation-connection windowed-prefetch coverage (spec-033,
 # DoD item 10). The reverse-FK windowed nested-connection shape the M2M-only
 # library graph cannot express live: ``Category.items`` synthesizes an
-# ``itemsConnection`` sibling (both ``CategoryType`` and ``ItemType`` are
-# Relay-Node-shaped, so the ``DONE-032-0.0.9`` implicit ``"both"`` default made
-# it), and the optimizer plans it as a single windowed ``Prefetch``.
+# ``itemsConnection`` (both ``CategoryType`` and ``ItemType`` are
+# Relay-Node-shaped, so the ``DONE-032-0.0.9`` synthesis covers it), and the
+# optimizer plans it as a single windowed ``Prefetch``. The raw ``items``
+# list stands beside it only because ``CategoryType.Meta`` carries an
+# explicit ``{"items": "both"}`` opt-in; the package default drops it.
 # ---------------------------------------------------------------------------
 
 # itemsConnection carries ONLY ``first:`` -- a ``filter:`` / ``orderBy:`` sidecar

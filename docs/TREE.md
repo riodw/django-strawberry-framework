@@ -457,6 +457,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
+├── test_consumers.py             # Hostile-input containment for the WebSocket consumer (spec-046).
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
@@ -645,6 +646,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
 ├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests (spec-040).
 ├── test_client_api.py            # Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
+├── test_connection_pagination_api.py  # Live /graphql pagination error containment for connections.
 ├── test_debug_extension_api.py   # Live GraphQL HTTP tests for ``DjangoDebugExtension`` (spec-044 Test plan 1-7).
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 ├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
@@ -686,6 +688,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
+├── test_consumers.py             # Hostile-input containment for the WebSocket consumer (spec-046).
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).

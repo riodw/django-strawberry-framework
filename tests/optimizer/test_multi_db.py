@@ -1,6 +1,6 @@
 """Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 
-Scope (per spec ``docs/spec-023-multi_db-0_0_7.md`` Decision 5 + Test plan
+Scope (per spec ``docs/SPECS/spec-023-multi_db-0_0_7.md`` Decision 5 + Test plan
 ``### tests/optimizer/test_multi_db.py``): this file holds the
 optimizer-plan-level multi-db test that cannot be earned through a live
 ``/graphql/`` query against the example project. It does not exercise

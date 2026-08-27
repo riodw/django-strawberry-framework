@@ -1,7 +1,7 @@
 """Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 
 Covers the ``Meta.relation_shapes`` Phase-2.5 synthesis surface
-(``docs/spec-032-full_relay-0_0_9.md`` Decisions 6/7; Decision 11 pins the
+(``docs/SPECS/spec-032-full_relay-0_0_9.md`` Decisions 6/7; Decision 11 pins the
 card-named two-file split). The ``Meta``-key *validation* tests sit with the
 other Meta validation in ``tests/types/test_base.py``. These stay package-side
 because they assert what a live query cannot: finalization
@@ -122,7 +122,7 @@ def _seed_library_books(titles, *, genre_name="fiction"):
 
 
 # =============================================================================
-# Default "both": connection siblings per eligible relation kind
+# Default "connection": the list sibling is dropped; "both" opts it back in
 # =============================================================================
 
 
@@ -783,9 +783,12 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 # connection (Decision 9). The live PRIMARY matrix runs against the shipped
 # root ``allLibraryGenresConnection``; this mirror exercises the same matrix
 # through the relation-manager-seeded pipeline on a reverse-FK cardinality
-# fixture (``Shelf.books``), parametrized over the implicit ``"both"`` default
-# and the narrowed ``"connection"`` shape. These schemas run WITHOUT the
-# optimizer (the per-parent pipeline baseline), so the assertions are
+# fixture (``Shelf.books``), parametrized over the keyless implicit default
+# and an explicit ``"connection"`` key. Both arms resolve to the same
+# ``"connection"`` shape, so what the pair separates is default resolution
+# from explicit lookup, not one shape from another. These schemas run
+# WITHOUT the optimizer (the per-parent pipeline baseline), so the assertions
+# are
 # behavior-only (rows, cursors, ``pageInfo``); the windowed SQL-shape pins live
 # in the ``_genres_list_schema(optimizer=True)`` fast-path tests below.
 # =============================================================================
@@ -794,9 +797,11 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 def _shelf_books_connection_schema(shape):
     """Build the reverse-FK ``Shelf.books`` cardinality-fixture schema.
 
-    ``shape == "connection"`` passes the explicit narrowing;
-    ``shape == "both"`` passes no ``relation_shapes`` key so the implicit
-    default path is the thing tested. Either way the nested field is
+    ``shape == "connection"`` passes an explicit ``relation_shapes`` key;
+    ``shape == "default"`` passes none, so the implicit default path is the
+    thing tested. The two resolve to the same shape - the package default
+    is ``"connection"`` - so the parametrization separates default
+    resolution from explicit lookup. Either way the nested field is
     ``booksConnection``.
     """
     _make_type("BookType", Book, ("id", "title"))
@@ -824,7 +829,7 @@ def _books_connection(schema, args, selection):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_first_zero(shape):
     """``first: 0`` yields empty edges + well-formed ``pageInfo``.
 
@@ -846,7 +851,7 @@ def test_relation_connection_first_zero(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_first_overrun(shape):
     """``first: N`` past the remainder returns the actual remainder."""
     _seed_library_books(["a", "b", "c"])
@@ -862,7 +867,7 @@ def test_relation_connection_first_overrun(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_stale_after_no_error(shape):
     """A deleted-row ``after`` cursor does NOT error.
 
@@ -893,7 +898,7 @@ def test_relation_connection_stale_after_no_error(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_first_and_last_rejected(shape):
     """``first`` + ``last`` together surface the shipped package guard error."""
     _seed_library_books(["a", "b", "c"])
@@ -907,7 +912,7 @@ def test_relation_connection_first_and_last_rejected(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_page_info_four_fields(shape):
     """All four ``pageInfo`` fields are correct across a forward page walk."""
     _seed_library_books(["a", "b", "c"])
@@ -933,7 +938,7 @@ def test_relation_connection_page_info_four_fields(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_has_next_page_when_edges_unrequested(shape):
     """A nested ``pageInfo``-only selection still computes ``hasNextPage``.
 
@@ -952,7 +957,7 @@ def test_relation_connection_has_next_page_when_edges_unrequested(shape):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["both", "connection"])
+@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_backward_pagination_last_before(shape):
     """``last`` / ``before`` row identity through the relation-seeded pipeline."""
     _seed_library_books(

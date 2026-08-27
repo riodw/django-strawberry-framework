@@ -548,7 +548,7 @@ def test_connection_key_requires_relay_node():
     """Re-affirmation pin: ``Meta.connection`` on a non-Relay-Node type raises.
 
     No behavior change (spec-030 Decision 8 gate); pins the full documented
-    add-``relay.Node``-or-remove-the-key remediation (spec-032).
+    add-``relay.Node``-or-inherit-it-directly remediation (spec-032).
     """
     with pytest.raises(ConfigurationError) as excinfo:
 
@@ -705,8 +705,8 @@ def test_relation_shapes_on_consumer_annotated_relation_raises():
 
     Spec-032 Decision 7: the consumer annotation owns the
     field's shape; the silent-accept-then-skip path must not exist. (The
-    implicit ``"both"`` default still skips consumer-authored relations
-    silently - only the explicit key fails loud.)
+    implicit default still skips consumer-authored relations silently -
+    only the explicit key fails loud, whatever that default's value is.)
     """
     with pytest.raises(ConfigurationError) as excinfo:
         _declare_relation_shapes_type(

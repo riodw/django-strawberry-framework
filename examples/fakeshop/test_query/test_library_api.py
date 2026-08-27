@@ -5168,8 +5168,8 @@ def test_book_loans_relation_stays_list_only():
     """``BookType.loans`` (reverse FK to non-Relay ``LoanType``) stays list-only.
 
     The live graceful-degradation proof: no ``loansConnection`` is
-    synthesized under the implicit ``"both"`` default because the target is
-    not Relay-shaped; ``genresConnection`` in the same field set is the
+    synthesized under the implicit default because the target is not
+    Relay-shaped; ``genresConnection`` in the same field set is the
     positive control.
     """
     introspected = _post_graphql('query { __type(name: "BookType") { fields { name } } }')

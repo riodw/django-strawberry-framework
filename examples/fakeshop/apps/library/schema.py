@@ -155,8 +155,8 @@ class BookType(DjangoType):
         # many-side relation on a Relay-Node-shaped type is ``"connection"``
         # alone, so the raw list sibling is a shape a schema author asks for.
         # These two keep it because the raw-list relation surface (and its row
-        # bound) needs live coverage; ``ItemType.properties`` in the products app
-        # is deliberately left on the default so the connection-only shape is
+        # bound) needs live coverage; ``CategoryType.properties`` in the products
+        # app is deliberately left on the default so the connection-only shape is
         # covered live too.
         relation_shapes = {"genres": "both"}
         filterset_class = filters.BookFilter

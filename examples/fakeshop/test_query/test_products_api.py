@@ -2653,16 +2653,8 @@ def test_get_query_with_scalar_variables_keeps_upstream_message():
     assert b"request body" not in response.content
 
 
-#: A document nested past ``json.loads``' C-stack budget on every supported
-#: interpreter - ~150 KB clears CPython 3.14's ~74k-depth limit and stays far
-#: under the package's own 1 MiB request-body cap; earlier interpreters break
-#: on a couple of kilobytes.
-_PATHOLOGICAL_NESTING_DEPTH = 120_000
-_PATHOLOGICAL_BODY = b"[" * _PATHOLOGICAL_NESTING_DEPTH + b"]" * _PATHOLOGICAL_NESTING_DEPTH
-
-
 @pytest.mark.django_db(transaction=True)
-def test_post_pathologically_nested_body_returns_400_not_500():
+def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_body):
     """A valid-JSON body nested past the parser's C stack -> controlled 400.
 
     Upstream's ``parse_json`` catches only ``json.JSONDecodeError``; a
@@ -2672,7 +2664,7 @@ def test_post_pathologically_nested_body_returns_400_not_500():
     translated rejection is byte-identical to upstream's own malformed-JSON
     answer, so one unparseable body has one wire meaning.
     """
-    response = _post_graphql_raw(_PATHOLOGICAL_BODY)
+    response = _post_graphql_raw(pathological_json_body)
 
     assert response.status_code == 400
     assert response.content == b"Unable to parse request body as JSON"
@@ -2680,7 +2672,10 @@ def test_post_pathologically_nested_body_returns_400_not_500():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_get_query_with_pathologically_nested_param_returns_400_not_500(param):
+def test_get_query_with_pathologically_nested_param_returns_400_not_500(
+    param,
+    pathological_json_text,
+):
     """GET ``?<param>=<deep>`` -> the shield translates the same escape.
 
     The shield deliberately routes the GET parses around the envelope guard,
@@ -2692,7 +2687,7 @@ def test_get_query_with_pathologically_nested_param_returns_400_not_500(param):
 
     response = client.get(
         "/graphql/",
-        {"query": "{ __typename }", param: _PATHOLOGICAL_BODY.decode()},
+        {"query": "{ __typename }", param: pathological_json_text},
     )
 
     assert response.status_code == 400

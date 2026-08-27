@@ -30,6 +30,8 @@ only covers the first):
 
 import asyncio
 import contextlib
+import copy
+import json
 import threading
 from typing import Any
 
@@ -118,3 +120,120 @@ def pytest_collection_modifyitems(config: Any, items: list) -> None:  # noqa: AR
     for item in items:
         if "pg" in item.keywords:
             item.add_marker(skip_pg)
+
+
+# ---------------------------------------------------------------------------
+# Interpreter-derived nesting depths for the transport depth guards.
+#
+# Three test trees drive the same two guards with a pathologically nested
+# document, and each one used to carry its own hard-coded depth. Both bounds
+# are properties of the RUNNING interpreter, not constants:
+#
+# * ``json.loads``' scanner is bounded by the C stack. ``sys.setrecursionlimit``
+#   does not move it (lowering the limit changes nothing), and the budget varies
+#   by platform and interpreter - CPython 3.14 overflows near 74k depth on macOS
+#   and tolerates well past 120k on the Linux CI runner.
+# * ``copy.deepcopy`` recurses in pure Python, so IT is bounded by
+#   ``sys.getrecursionlimit()`` and overflows around depth 500 everywhere.
+#
+# A hard-coded depth is therefore a document that overflows on whoever tuned it
+# and parses cleanly everywhere else - and a depth guard whose input no longer
+# overflows is a test that passes without exercising anything. Probe instead,
+# once per session, and fail loudly when the interpreter offers no usable depth
+# rather than skipping into a silent pass.
+# ---------------------------------------------------------------------------
+
+#: Ceiling for both probes. The array text is two bytes per level, so this
+#: caps a document at 512 KiB - still under the package's own 1 MiB
+#: request-body cap, which the live POST tiers actually hit.
+_MAX_NESTING_PROBE_DEPTH = 262_144
+
+
+def _nested_array_text(depth: int) -> str:
+    """A syntactically valid JSON array nested ``depth`` levels deep."""
+    return "[" * depth + "]" * depth
+
+
+def _json_loads_overflow_depth() -> int:
+    """The shallowest probed depth whose parse overflows ``json.loads``."""
+    depth = 1024
+    while depth <= _MAX_NESTING_PROBE_DEPTH:
+        try:
+            json.loads(_nested_array_text(depth))
+        except RecursionError:
+            return depth
+        depth *= 2
+    msg = (
+        f"json.loads parsed a {_MAX_NESTING_PROBE_DEPTH}-deep document without "
+        "overflowing, so the transport's RecursionError guard cannot be exercised "
+        "under a body this interpreter would accept. Raise "
+        "_MAX_NESTING_PROBE_DEPTH only if the resulting body still fits the 1 MiB "
+        "request-body cap."
+    )
+    raise RuntimeError(msg)
+
+
+def _deepcopy_overflow_depth() -> int:
+    """The shallowest probed depth whose copy overflows ``copy.deepcopy``."""
+    depth = 64
+    while depth <= _MAX_NESTING_PROBE_DEPTH:
+        nested: list = []
+        for _ in range(depth):
+            nested = [nested]
+        try:
+            copy.deepcopy(nested)
+        except RecursionError:
+            return depth
+        depth *= 2
+    msg = (
+        f"copy.deepcopy walked a {_MAX_NESTING_PROBE_DEPTH}-deep value without "
+        "overflowing, so the upload utility's RecursionError guard cannot be "
+        "exercised."
+    )
+    raise RuntimeError(msg)
+
+
+@pytest.fixture(scope="session")
+def pathological_json_text() -> str:
+    """A JSON array this interpreter's ``json.loads`` answers with ``RecursionError``.
+
+    The input for the ``parse_json`` / ``parse_query_params`` depth guards: the
+    document is syntactically valid, so nothing short of the parser's own stack
+    budget rejects it.
+    """
+    return _nested_array_text(_json_loads_overflow_depth())
+
+
+@pytest.fixture(scope="session")
+def pathological_json_body(pathological_json_text: str) -> bytes:
+    """``pathological_json_text`` as request-body bytes for the live tiers."""
+    return pathological_json_text.encode()
+
+
+@pytest.fixture(scope="session")
+def deepcopy_overflow_operations_text() -> str:
+    """An ``operations`` document ``json.loads`` accepts but ``copy.deepcopy`` cannot walk.
+
+    The multipart guard needs the WINDOW between the two bounds: the envelope
+    check must pass the document as a well-typed object, and the upload
+    utility's unconditional ``copy.deepcopy`` must then overflow inside its own
+    frame. The text is emitted directly rather than through ``json.dumps``
+    because the ENCODER recurses too, and on the 3.10 floor - where both it and
+    ``copy.deepcopy`` answer to the same ``sys.getrecursionlimit()`` - building
+    the fixture overflowed before the test could run.
+    """
+    depth = _deepcopy_overflow_depth()
+    loads_limit = _json_loads_overflow_depth()
+    if depth >= loads_limit:
+        msg = (
+            f"copy.deepcopy overflows at depth {depth} but json.loads already "
+            f"overflows at {loads_limit}, so no document can reach the upload "
+            "utility intact. The multipart depth guard has no exercisable input "
+            "on this interpreter."
+        )
+        raise RuntimeError(msg)
+    text = '{"0": ' + _nested_array_text(depth) + "}"
+    # Prove the precondition rather than assume it: the guard under test only
+    # matters for a document the envelope check has already accepted.
+    json.loads(text)
+    return text

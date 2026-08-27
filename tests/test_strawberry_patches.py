@@ -774,18 +774,7 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     assert patches._captured_upstream_method(None, "parse_json") is None
 
 
-#: A document nested past ``json.loads``' C-stack budget on every supported
-#: interpreter - ~150 KB clears CPython 3.14's ~74k-depth limit and stays far
-#: under the package's own 1 MiB request-body cap; earlier interpreters break
-#: on a couple of kilobytes.
-_DEEP_ARRAY_TEXT = "[" * 120_000 + "]" * 120_000
-
-#: A depth ``json.loads`` survives everywhere (its C budget dwarfs Python's
-#: recursion limit) while ``copy.deepcopy``'s pure-Python recursion does not.
-_DEEP_COPY_WINDOW_DEPTH = 1500
-
-
-def test_patched_parse_json_translates_a_pathologically_nested_body():
+def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text):
     """A body nested past the parser's C stack -> controlled 400, not a raw escape.
 
     The second half of gap 1: ``json.loads`` answers a pathologically nested
@@ -797,7 +786,7 @@ def test_patched_parse_json_translates_a_pathologically_nested_body():
     ``__cause__``.
     """
     with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), _DEEP_ARRAY_TEXT)
+        patches._patched_parse_json(BaseView(), pathological_json_text)
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
@@ -805,7 +794,7 @@ def test_patched_parse_json_translates_a_pathologically_nested_body():
 
 
 @pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_patched_parse_query_params_translates_a_deep_param(param):
+def test_patched_parse_query_params_translates_a_deep_param(param, pathological_json_text):
     """The GET shield owns gap 1's error channel without owning its guard.
 
     The shield routes the two query-param parses around the envelope guard
@@ -817,7 +806,7 @@ def test_patched_parse_query_params_translates_a_deep_param(param):
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_parse_query_params(
             BaseView(),
-            {"query": "{ __typename }", param: _DEEP_ARRAY_TEXT},
+            {"query": "{ __typename }", param: pathological_json_text},
         )
 
     assert excinfo.value.status_code == 400
@@ -825,7 +814,9 @@ def test_patched_parse_query_params_translates_a_deep_param(param):
     assert type(excinfo.value.__cause__) is RecursionError
 
 
-def test_patched_sync_parse_multipart_translates_a_deep_operations_document():
+def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
+    deepcopy_overflow_operations_text,
+):
     """The upload utility's ``copy.deepcopy`` recursion becomes its own 400.
 
     A valid-JSON ``operations`` document whose value nesting exceeds Python's
@@ -834,10 +825,7 @@ def test_patched_sync_parse_multipart_translates_a_deep_operations_document():
     frame the provenance check scopes by, hence a client-input translation to
     the multipart-parse ``400``, not a server-bug ``500``.
     """
-    nested = []
-    for _ in range(_DEEP_COPY_WINDOW_DEPTH):
-        nested = [nested]
-    request = _SyncMultipartRequest(json.dumps({"0": nested}), "{}", {})
+    request = _SyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_sync_parse_multipart(_MultipartView(), request)
@@ -846,12 +834,11 @@ def test_patched_sync_parse_multipart_translates_a_deep_operations_document():
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
-async def test_patched_async_parse_multipart_translates_a_deep_operations_document():
+async def test_patched_async_parse_multipart_translates_a_deep_operations_document(
+    deepcopy_overflow_operations_text,
+):
     """The async delegate scopes the deepcopy recursion identically."""
-    nested = []
-    for _ in range(_DEEP_COPY_WINDOW_DEPTH):
-        nested = [nested]
-    request = _AsyncMultipartRequest(json.dumps({"0": nested}), "{}", {})
+    request = _AsyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
         await patches._patched_async_parse_multipart(_MultipartView(), request)

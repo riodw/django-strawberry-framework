@@ -8,7 +8,7 @@ Read this when checking a finished implementation against the reasoning that pro
 
 ## Provenance of this record
 
-Created by pre-flight step 7 of the `032` residual-reconciliation cycle (recorded in [`docs/builder/bld-032-slice-0-rationale_extraction.md`][bld-032-slice-0]). `spec-032` shipped in `0.0.9` with a [`-terms.csv`][spec-032-terms] companion and no `-rationale.md` sibling — it was the last spec in the shipped [`docs/SPECS/`][spec-032] run carrying none; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file.
+Created by pre-flight step 7 of the `032` residual-reconciliation cycle (Slice 0, recorded in [`docs/builder/DONE/build-032-full_relay-0_0_9.md`][build-032]). `spec-032` shipped in `0.0.9` with a [`-terms.csv`][spec-032-terms] companion and no `-rationale.md` sibling — it was the last spec in the shipped [`docs/SPECS/`][spec-032] run carrying none; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file.
 
 Measured against the spec on disk before the move (188,525 bytes, 794 lines), four routes carried text out:
 
@@ -445,7 +445,7 @@ Findings and provenance that belong to no single Decision.
 [spec-033]: ../spec-033-connection_optimizer-0_0_9.md
 
 <!-- docs/builder/ -->
-[bld-032-slice-0]: ../../builder/bld-032-slice-0-rationale_extraction.md
+[build-032]: ../../builder/DONE/build-032-full_relay-0_0_9.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

@@ -68,13 +68,42 @@ Performed before any dispatch, per `BUILD.md` `### Worker 0 verifies every findi
 
 ## Artifact list
 
-- `docs/builder/bld-032-slice-0-rationale_extraction.md`
-- `docs/builder/bld-032-slice-1-root_field_surface.md`
-- `docs/builder/bld-032-slice-2-relation_shapes.md`
-- `docs/builder/bld-032-slice-3-cross_spec_residue.md`
-- `docs/builder/bld-032-review-1-spec_diff.md`
-- `docs/builder/bld-032-integration.md`
-- `docs/builder/bld-032-final.md`
+The cycle ran seven artifacts, all `final-accepted`; each is summarized in the
+`## Checklist` below. They were deleted after the cycle's commit (`7d2c15dc`) and are
+recoverable from it; anything in them that a later pass must not re-open was folded into
+this file first, under `## Settled, do not re-open`.
+
+- `docs/builder/bld-032-slice-0-rationale_extraction.md` (deleted)
+- `docs/builder/bld-032-slice-1-root_field_surface.md` (deleted)
+- `docs/builder/bld-032-slice-2-relation_shapes.md` (deleted)
+- `docs/builder/bld-032-slice-3-cross_spec_residue.md` (deleted)
+- `docs/builder/bld-032-review-1-spec_diff.md` (deleted)
+- `docs/builder/bld-032-integration.md` (deleted)
+- `docs/builder/bld-032-final.md` (deleted)
+
+## Settled, do not re-open
+
+Two review-round findings were rejected with reasons rather than routed. Both look like
+ordinary defects to a reader who has not seen the reasoning, and acting on either would
+damage something load-bearing, so they are recorded here rather than left to be
+rediscovered.
+
+- **The six `### Justification (moved from the spec)` bodies in
+  `docs/SPECS/appx/spec-032-full_relay-0_0_9-rationale.md` open with a lowercase fragment.
+  Leave them.** They open mid-sentence because the move was byte-verbatim, and
+  byte-verbatim is the property that makes the move auditable: a future reader can diff any
+  moved body against the spec's own git history and confirm nothing was reworded.
+  `worker-1.md` `### Performing the rationale move` additionally makes the companion
+  append-only during a build. Capitalising six openers buys nothing and destroys that, and
+  it costs the same later as now — which is exactly why leaving the finding open would
+  invite a future pass to "fix" it.
+- **`## Current state`'s "as of this writing" in
+  `docs/SPECS/spec-032-full_relay-0_0_9.md` is section scoping, not a stale timestamp.
+  Leave it.** It declares the date the section describes rather than the date the file was
+  edited, and three of this cycle's case-(c) gradings rest on that declaration: Slice 1's
+  five struck-through foundation items, Slice 2's `GenreType` description, and Slice 3's
+  products sentence. The spec's line 3 disclosure and this one are designed redundancy, not
+  rot.
 
 ## Dispatch shape
 
@@ -116,3 +145,28 @@ Every reconciliation slice edits the spec and nothing else, so **Worker 2 is not
   - Gate 10 (`build_tree_md.py --check`) fails on committed-at-HEAD staleness that predates this cycle — see the baseline exception above. The failure record and its attribution stay in the artifact unsoftened, and the owed `build_tree_md.py` run is catalog entry 6 with a named owner: the exception licenses `final-accepted`, it does not discharge the run.
   - Zero executable bytes re-proved a **third** time here by an AST-normalized comparison against HEAD, shown failable on three executable mutations and silent on three cosmetic controls.
   - `### Deferred work catalog`: seven items in six entries, every one with a named owner and, where a prior pass supplied it, replacement text.
+
+## Post-cycle closure
+
+The cycle closed with a deferred-work catalog of seven items in six entries. All were
+discharged in a follow-on sweep on 2026-08-27, so the two statements above that name open
+obligations — gate 10's owed `build_tree_md.py` run, and the catalog itself — are history
+rather than current state. The gate records are left unsoftened on purpose; this note is
+the correction, not an edit to them.
+
+- `docs/GLOSSARY.md`'s two falsified claims (`DjangoNodesField` "deliberately uncapped";
+  `Meta.relation_shapes` defaulting to `"both"`) corrected in the glossary DB and re-rendered.
+- `spec-033`'s five dead `### Decision 9` anchors re-pointed at the doubled-hyphen form.
+- The stale pre-archive `docs/spec-<NNN>` paths closed in both homes: three remaining `.py`
+  docstrings, and thirteen kanban card-body paths rewritten in the DB and re-rendered. The
+  six deliberate `.py` non-edits and the four in-flight kanban paths were left alone, and the
+  reasons are carded on `TODO-ALPHA-051` so a later sweep cannot undo them.
+- `tests/test_relay_connection.py`'s seven degenerate `"both"` parametrize arms renamed
+  `"default"`, which is what they actually exercise; the genuine eighth `[both]` id was not
+  touched.
+- `TODAY.md`'s relation-as-Connection paragraph now leads with the current default.
+- `docs/TREE.md` regenerated; `build_tree_md.py --check` passes.
+- `CardItem` pk 1409 deleted — the spec-032 remediation-tail defect it described is fixed.
+
+Committed as `7d2c15dc`.
+

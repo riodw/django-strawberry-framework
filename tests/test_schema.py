@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import strawberry
+from graphql import ExecutionContext
 
 from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -286,8 +287,9 @@ def test_execute_mutation_field_sync_exception_rolls_back():
 
     with (
         patch.object(ctx, "_marked_mutation_class", return_value=DummyMutationCls),
-        patch(
-            "graphql.execution.execute.ExecutionContext.execute_field",
+        patch.object(
+            ExecutionContext,
+            "execute_field",
             side_effect=RuntimeError("sync field crash"),
         ),
         pytest.raises(RuntimeError, match="sync field crash"),
@@ -311,8 +313,9 @@ async def test_execute_mutation_field_async_exception_rolls_back():
 
     with (
         patch.object(ctx, "_marked_mutation_class", return_value=DummyMutationCls),
-        patch(
-            "graphql.execution.execute.ExecutionContext.execute_field",
+        patch.object(
+            ExecutionContext,
+            "execute_field",
             return_value=async_failing_resolve(),
         ),
         pytest.raises(RuntimeError, match="async field crash"),

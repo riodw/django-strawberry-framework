@@ -575,7 +575,10 @@ def _register_relation_connection_teardown(
             definition.relation_connections.pop(generated, None)
             if not definition.relation_connections:
                 definition.relation_connections = None
-        current_annotations = type_cls.__dict__.get("__annotations__")
+        # Raw ``__dict__`` on purpose: the three branches below key off the entry
+        # being ABSENT (3.14+) and off dict IDENTITY (<= 3.13). ``inspect.get_annotations``
+        # never returns ``None`` and hands back a fresh dict, collapsing both.
+        current_annotations = type_cls.__dict__.get("__annotations__")  # noqa: RUF063, RUF100
         if current_annotations is None:
             # Python 3.14+ (PEP 649): the class ``__dict__`` never carries a
             # plain ``"__annotations__"`` entry, so restore the full

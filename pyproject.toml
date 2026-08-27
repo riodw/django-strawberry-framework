@@ -140,6 +140,13 @@ exclude = [
     "htmlcov",
 ]
 
+[tool.ruff.format]
+# ruff 0.16 formats Python blocks inside Markdown. Fenced blocks in this repo are
+# verbatim example content (see START.md "Markdown link convention"), and the
+# archived specs under docs/SPECS/ are a historical record, so the formatter owns
+# .py only.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = [
     "E",      # pycodestyle errors

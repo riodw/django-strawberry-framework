@@ -700,7 +700,9 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
 
     registry.unregister(CategoryType)
 
-    assert CategoryType.__dict__["__annotations__"] is replaced
+    # Raw ``__dict__`` on purpose: this asserts IDENTITY of the stored dict, and
+    # ``inspect.get_annotations`` returns a copy.
+    assert CategoryType.__dict__["__annotations__"] is replaced  # noqa: RUF063, RUF100
     assert replaced == {"name": str, "items": list[Item]}
 
 

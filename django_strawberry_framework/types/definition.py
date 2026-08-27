@@ -124,8 +124,15 @@ class DjangoTypeDefinition:
           re-entrancy guard (a non-``None`` value means "already processed in a
           prior partial finalize - skip"). ``None`` means "not a
           framework-decodable Relay-Node type" (the install step runs for Relay
-          types only): decode rejects such a candidate (spec-031 Decision 8) and
-          the filter falls back to node-id-only validation (spec-031 Decision 13).
+          types only): decode rejects such a candidate (spec-031 Decision 8),
+          and the strategy-aware ``GlobalID`` filter fails closed on it too - a
+          known ``None`` on a resolved definition raises the coded
+          ``GLOBALID_UNVALIDATABLE`` error at request time
+          (``filters/base.py::_decode_and_validate_global_id``, the runtime
+          backstop behind the build-time audit). The only surviving
+          node-id-only path is the unbound-owner / unresolvable-target case,
+          where no definition - and therefore no strategy - exists at all
+          (spec-031 Decision 13).
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks

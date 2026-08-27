@@ -484,10 +484,13 @@ def encode_typename(
     - ``model`` / ``type+model`` -> ``definition.model._meta.label_lower``
       (Django's canonical ``"app_label.modelname"``, e.g. ``products.item``).
     - ``type`` -> ``definition.graphql_type_name`` (matches Strawberry's
-      ``info.path.typename`` default; the framework installs a ``type`` closure
+      ``info.path.typename`` default). The framework installs a ``type`` closure
       only when shadowing a framework closure inherited from a concrete Relay
-      parent - see ``install_globalid_typename_resolver`` step 2 - so this
-      branch is the live implementation for exactly that shape).
+      parent - see ``install_globalid_typename_resolver`` step 2 - so the
+      shadow-install is the only route into this branch during ``id``
+      resolution. ``testing/relay.py::global_id_for`` calls this helper directly
+      with a type's recorded strategy and reaches the branch with no installed
+      closure.
     - callable -> the consumer callable's ``(type_cls, model, root) -> str``
       return, validated non-empty ``str``. A non-``str`` or empty return raises
       ``ConfigurationError`` naming the type and the contract, rather than
@@ -675,12 +678,19 @@ def _install_typename_closure(
 def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
     """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
 
-    The decode half of the GlobalID-encoding feature (spec-031 Decision 8). It is
-    the forward-looking piece root ``node(id:)`` / ``nodes(ids:)``
-    (``WIP-ALPHA-032-0.0.9``) will consume - no shipped ``0.0.9`` path calls it
-    yet - so it is validated directly by package tests.
+    The decode half of the GlobalID-encoding feature (spec-031 Decision 8), and the
+    one decode primitive three call paths share:
 
-    Because its eventual caller feeds it arbitrary client-controlled input, every
+    - the root ``node(id:)`` / ``nodes(ids:)`` fields, through
+      ``django_strawberry_framework/relay.py::_decode_or_graphql_error``, which
+      converts the uniform ``ConfigurationError`` below into a ``GraphQLError``
+      carrying the ``GLOBALID_INVALID`` extensions code;
+    - the write-side typed-id primitive
+      ``django_strawberry_framework/relay.py::decode_model_global_id``, shared by
+      the mutation flavors and the relation ``<field>_id`` decode;
+    - the public re-export ``testing/relay.py::decode_global_id``.
+
+    Because those callers feed it arbitrary client-controlled input, every
     failure mode surfaces ONE uniform ``ConfigurationError`` (the
     ``RelatedFilter``-style fail-loud message naming the resolution attempt)
     rather than leaking Strawberry's ``GlobalIDValueError`` or Python's

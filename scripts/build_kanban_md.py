@@ -10,17 +10,15 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from _kanban_lib import cli_exit
+    from _kanban_lib import CARD_REF_RE, PLACEHOLDER_RE, cli_exit, placeholder_defects
     from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
 except ModuleNotFoundError:  # imported as ``scripts.build_kanban_md`` (repo root on path)
-    from scripts._kanban_lib import cli_exit
+    from scripts._kanban_lib import CARD_REF_RE, PLACEHOLDER_RE, cli_exit, placeholder_defects
     from scripts.build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_HTML_PATH = "KANBAN.html"
-CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
-UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 LINK_DEFINITIONS_KEY = "link-definitions"
 COLUMN_DOC_KIND_KEY = "column"
 
@@ -554,13 +552,23 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
 
     text = finalize_markdown(rendered)
 
-    # No placeholder should survive resolution: a leftover ``{{card_ref:N}}`` points
-    # at a missing reference row, and a leftover ``{{token}}`` is a typo in board-doc
-    # prose with no matching computed value. Either would ship a raw brace into the doc.
-    leftovers = sorted(set(UNRESOLVED_PLACEHOLDER_RE.findall(text)))
+    # No placeholder may survive resolution: a leftover ``{{card_ref:N}}`` points at a
+    # missing reference row, and a leftover ``{{token}}`` is a typo in board-doc prose
+    # with no matching computed value. Either would ship a raw brace into the doc. The
+    # token alone does not locate the row that stores it, so report the sites too --
+    # ``placeholder_defects`` grades the same prose the HTML build embeds verbatim, so a
+    # string rejected here can never be one that export publishes unresolved.
+    leftovers = sorted(set(PLACEHOLDER_RE.findall(text)))
     if leftovers:
+        sites = placeholder_defects(dashboard_data["cards"], dashboard_data["boardDocs"])
+        detail = "".join(f"\n  - {site}" for site in sites)
         raise RuntimeError(
-            f"KANBAN.md still contains unresolved placeholders: {leftovers}.",
+            f"KANBAN.md still contains unresolved placeholders: {leftovers}."
+            + (
+                f" Stored at:{detail}"
+                if sites
+                else " No stored row carries them; the defect is in a renderer."
+            ),
         )
     return text
 

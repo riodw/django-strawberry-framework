@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,102 @@ FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
 # Parallel claude sessions write ``db.sqlite3``; a render must queue behind them,
 # not crash with ``database is locked``.
 SQLITE_BUSY_TIMEOUT_MS = 5000
+
+# Stored board prose keeps a placeholder rather than a literal, because a card id is
+# a recomputed ordinal that drifts on every renumber. The two exports resolve the
+# same placeholders by different routes, so both must agree on what is resolvable.
+CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
+PLACEHOLDER_RE = re.compile(r"\{\{[^{}]*\}\}")
+
+# The tokens the board-wide computed set fills. Only ``BoardDoc`` bodies carry them:
+# neither export resolves a computed token inside card text, so one there is a defect.
+COMPUTED_TOKEN_NAMES = frozenset(
+    {
+        "active_version",
+        "last_refreshed",
+        "in_progress_intro",
+        "relative_size_scale",
+    },
+)
+
+
+def unresolvable_placeholders(
+    text: str,
+    *,
+    reference_orders: Container[int],
+    computed_tokens: Container[str] = frozenset(),
+) -> list[str]:
+    r"""Return every ``{{...}}`` in ``text`` that no renderer can resolve, in order.
+
+    ``KANBAN.md`` substitutes placeholders at build time and must end with none
+    left; ``KANBAN.html`` embeds them verbatim for the Vue shell to resolve
+    client-side against the same FK-backed references. That asymmetry is by
+    design, and it is why the HTML build cannot simply assert the absence of
+    placeholders the way the markdown build does - it ships 371 of them on
+    purpose. What neither export can survive is a placeholder that resolves
+    NOWHERE: the shell matches ``{{card_ref:(\d+)}}``, so a non-numeric index
+    never matches and an out-of-range one resolves to nothing, and both paths
+    return the token itself - printing ``{{card_ref:N}}`` to the reader instead
+    of failing. Checking both exports through this one function is what keeps
+    the markdown build from rejecting prose the HTML build silently publishes.
+    """
+    unresolvable: list[str] = []
+    for token in PLACEHOLDER_RE.findall(text or ""):
+        card_ref = CARD_REF_RE.fullmatch(token)
+        if card_ref is not None:
+            if int(card_ref.group(1)) not in reference_orders:
+                unresolvable.append(token)
+        elif token[2:-2] not in computed_tokens:
+            unresolvable.append(token)
+    return unresolvable
+
+
+def placeholder_defects(
+    cards: Sequence[dict[str, Any]],
+    board_docs: Sequence[dict[str, Any]],
+) -> list[str]:
+    """Return one ``site: token`` message per unresolvable placeholder in the board.
+
+    Names the row it found, because the token alone does not locate it: the same
+    ``{{card_ref:N}}`` can be stored on any of ~1,300 card items.
+    """
+    defects: list[str] = []
+    for card in cards:
+        orders = {reference["order"] for reference in card.get("outgoingReferences", [])}
+        sites: list[tuple[str, str]] = [
+            (f"card {card['cardId']} planningNote", card.get("planningNote", "")),
+        ]
+        sites += [
+            (
+                f"card {card['cardId']} item order={item['order']} section={item['section']['key']}",
+                item["text"],
+            )
+            for item in card.get("items", [])
+        ]
+        sites += [
+            (
+                f"card {card['cardId']} reference order={reference['order']} rawText",
+                reference.get("rawText", ""),
+            )
+            for reference in card.get("outgoingReferences", [])
+        ]
+        for label, text in sites:
+            defects += [
+                f"{label}: {token}"
+                for token in unresolvable_placeholders(text, reference_orders=orders)
+            ]
+
+    for doc in board_docs:
+        orders = {reference["order"] for reference in doc.get("cardReferences", [])}
+        defects += [
+            f"board doc {doc['key']!r} body: {token}"
+            for token in unresolvable_placeholders(
+                doc.get("body", ""),
+                reference_orders=orders,
+                computed_tokens=COMPUTED_TOKEN_NAMES,
+            )
+        ]
+    return defects
 
 
 class GitCommandError(RuntimeError):

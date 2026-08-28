@@ -21,6 +21,7 @@ try:
         cli_exit,
         configure_django,
         fetch_graphql_data,
+        placeholder_defects,
         version_tuple,
     )
 except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo root on path)
@@ -28,6 +29,7 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo r
         cli_exit,
         configure_django,
         fetch_graphql_data,
+        placeholder_defects,
         version_tuple,
     )
 
@@ -780,11 +782,34 @@ def _html_is_fresh(html_path: Path, data_block: str) -> bool:
     return match is not None and match.group(0) == data_block
 
 
+def assert_placeholders_resolve(snapshot: dict[str, Any]) -> None:
+    r"""Fail the build when the embedded prose carries a placeholder nothing resolves.
+
+    Unlike ``KANBAN.md``, this export ships placeholders on purpose -- the Vue shell
+    resolves them client-side from the same FK-backed references, so the tokens must
+    survive into the data block. That is why this check grades resolvability rather
+    than absence. Without it the two exports disagree: the markdown build refuses to
+    write prose whose placeholder resolves nowhere, while this build embeds it happily
+    and the shell's ``{{card_ref:(\d+)}}`` pattern -- which matches neither a
+    non-numeric index nor an out-of-range one -- returns the token, printing a raw
+    ``{{card_ref:N}}`` to the reader. A silently divergent pair of boards is the
+    failure this exists to prevent.
+    """
+    defects = placeholder_defects(snapshot["cards"], snapshot["boardDocs"])
+    if defects:
+        detail = "".join(f"\n  - {defect}" for defect in defects)
+        raise RuntimeError(
+            f"{len(defects)} placeholder(s) resolve nowhere and would render "
+            f"literally in KANBAN.html:{detail}",
+        )
+
+
 def main() -> int:
     """Build the HTML dashboard (or check its freshness)."""
     args = parse_args()
     configure_django()
     snapshot = build_dashboard_snapshot(fetch_dashboard_data())
+    assert_placeholders_resolve(snapshot)
     data_block = render_data_block(snapshot)
 
     if args.check:

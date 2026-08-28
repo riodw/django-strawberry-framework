@@ -4284,7 +4284,11 @@ def test_genre_books_connection_probe_childless_and_populated_parents():
     childless parent (empty page -> no next page) in ONE request, in both the
     ``edges`` + ``pageInfo`` shape and the no-``edges`` (``pageInfo``-only) shape,
     still count-free (the n+1 probe: no ``_dst_total_count`` / ``COUNT`` window)
-    and in the fixed two-query cost regardless of parent count.
+    and at an ABSOLUTE two-query cost - one root query + one windowed prefetch -
+    at the seeded 2 parent genres. One cardinality, so the count is what
+    distinguishes the window from a per-parent fallback here, not a comparison
+    across cardinalities; the two-cardinality form of that property lives at
+    ``::test_nested_books_connection_fixed_query_count``.
     """
     shelf = _seed_shelf()
     populated = models.Genre.objects.create(name="Populated")
@@ -4448,8 +4452,11 @@ def test_genre_books_connection_divergent_aliases_batched_per_key():
     ``b: booksConnection(first: 9)`` was the historical whole-relation
     per-parent fallback; now each response key gets its own windowed prefetch
     (``_dst_books$a_connection`` / ``_dst_books$b_connection``) and the
-    resolver routes by ``info.path.key``. Pinned: the fixed 3-query cost (root
-    genres + one window per alias - independent of parent count), each alias's
+    resolver routes by ``info.path.key``. Pinned: the ABSOLUTE 3-query cost at
+    the seeded 2 parent genres (root genres + one window per alias, never one
+    per parent) - one cardinality, so the absolute count is the distinguishing
+    measurement and the two-cardinality form of the parent-count property lives
+    at ``::test_nested_books_connection_fixed_query_count``; each alias's
     OWN page bound and ``hasNextPage`` (both served count-free by the n+1
     probe - no alias observes ``totalCount``), and byte parity for both
     aliases with the per-parent pipeline (the ``orderBy`` sidecar reference,
@@ -5345,8 +5352,11 @@ def test_nested_books_connection_has_next_page_without_edges():
     ``edges`` selected still reports ``hasNextPage`` True - this is the plain
     first-page probe shape (``hasNextPage`` selected, ``totalCount`` not), so it
     is served count-free by the n+1 overfetch sentinel, NOT a ``_dst_total_count``
-    annotation, in the same fixed two-query window (root genres-connection + one
-    ``booksConnection`` prefetch), independent of parent count.
+    annotation, in the same ABSOLUTE two-query window (root genres-connection +
+    one ``booksConnection`` prefetch) at the seeded 3 parent genres. One
+    cardinality, so the count is the distinguishing measurement here; the
+    two-cardinality form of the parent-count property lives at
+    ``::test_nested_books_connection_fixed_query_count``.
     """
     query = """
     query {
@@ -5524,8 +5534,12 @@ def test_nested_window_respects_book_visibility():
     the window. The plain selection IS window-planned, so this test pins the
     windowed-visibility branch. Two assertions enforce that:
 
-    1. the captured query count is FLAT (parent-count-independent) - it would
-       scale ~1-per-parent if the selection silently fell back per-parent; and
+    1. the captured query count is an ABSOLUTE 2 (one root genres-connection
+       query + one windowed prefetch) at the seeded 2 genres - a per-parent
+       fallback pays ~1 query per genre and cannot land at 2. One cardinality,
+       so the count is what distinguishes the paths here, not a comparison
+       across cardinalities; the two-cardinality form of the property lives at
+       ``::test_nested_books_connection_fixed_query_count``. And
     2. the visible / hidden split is correct (post-``get_queryset`` row set).
 
     The window appends a deterministic pk-terminal order (Decision 4), so the
@@ -5589,9 +5603,9 @@ def test_nested_window_respects_book_visibility():
 
     # Anonymous: the window is planned and runs ``BookType.get_queryset`` inside
     # it, so every parent genre's nested page excludes its repair book. The
-    # captured query count is FLAT - one root genres-connection query plus one
-    # windowed ``booksConnection`` prefetch - and would scale per-parent under a
-    # silent fallback (the active window-vs-fallback pin).
+    # captured query count is an absolute 2 - one root genres-connection query
+    # plus one windowed ``booksConnection`` prefetch - which a silent per-parent
+    # fallback cannot reach (the active window-vs-fallback pin).
     with CaptureQueriesContext(connection) as captured:
         anonymous = _post_graphql(query)
     assert anonymous.status_code == 200
@@ -5602,9 +5616,9 @@ def test_nested_window_respects_book_visibility():
         ["Aurora-0", "Binti-0", "Circe-0"],
         ["Aurora-1", "Binti-1", "Circe-1"],
     ]
-    # The flat count proves the visibility filter rides the WINDOW (Decision 5
-    # fast path), not the per-parent fallback: 1 root query + 1 window prefetch,
-    # independent of the 2 parent genres. A per-parent fallback would emit
+    # The absolute count proves the visibility filter rides the WINDOW
+    # (Decision 5 fast path), not the per-parent fallback: 1 root query + 1
+    # window prefetch over the 2 seeded genres. A per-parent fallback would emit
     # ~1 query per genre, failing this pin.
     assert len(captured) == 2
 
@@ -5759,13 +5773,16 @@ def test_nested_connection_pagination_from_graphql_variable_live():
 
 @pytest.mark.django_db
 def test_nested_connection_first_zero_empty_page_live():
-    """Nested ``first: 0`` returns an empty page live (the ambiguous-empty fallback).
+    """Nested ``first: 0`` returns an empty page live, served from the marker row.
 
     The ROOT ``first: 0`` is pinned at ``test_genre_connection_first_zero_empty_edges``;
-    this rounds out the live matrix with the NESTED ambiguous-empty window
-    (fast-path -> per-parent fallback, spec-033 Decision 5): empty edges, but
-    ``hasNextPage`` True because the genre genuinely has books beyond the zero
-    window.
+    this rounds out the live matrix with the NESTED ambiguous-empty window: the
+    window keeps each partition's row 1 as a marker, so ``first: 0`` is served
+    from that same window query rather than by a per-parent fallback - empty
+    edges, but ``hasNextPage`` True because the marker proves the genre has
+    books beyond the zero window. The marker-row shape itself is pinned at
+    ``::test_nested_ambiguous_empty_served_from_marker_in_fixed_queries``; this
+    test is wire-only.
     """
     shelf = _seed_shelf()
     _seed_genre_with_books("Empty", shelf, ("a", "b", "c"))
@@ -5807,9 +5824,11 @@ def test_nested_empty_parent_serves_zero_total_count_no_fallback_live():
     """A genuinely-empty parent is fast-path-served zero live - NOT per-parent fallback.
 
     The contrast with ``test_nested_connection_first_zero_empty_page_live``: that
-    is the AMBIGUOUS empty window (``first: 0``, ``limit == 0``) which falls back
-    per parent; this is the UNAMBIGUOUS empty window (``offset == 0``,
-    ``limit > 0``, no related rows) the fast path serves directly -
+    is the AMBIGUOUS empty window (``first: 0``, ``limit == 0``), served from the
+    partition's retained marker row; this is the UNAMBIGUOUS empty window
+    (``offset == 0``, ``limit > 0``, no related rows) where the parent has no
+    marker row to retain, so an empty ``to_attr`` list is itself conclusive and
+    the fast path serves zero directly -
     ``totalCount = 0``, no cursors, both ``pageInfo`` flags ``False`` - WITHOUT a
     per-parent fallback query (spec-033 Decision 5 / the ``Parents with no
     related rows`` edge case). Rides ``genresConnection`` (target ``GenreType``,

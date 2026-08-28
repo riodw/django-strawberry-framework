@@ -2423,7 +2423,7 @@ def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
 
     The pk-only variant cannot catch a refactor that special-cases pk ordering;
     this pins that a real ``Meta.ordering`` column propagates to the queryset's
-    own ``ORDER BY`` (spec-033 Decision 11, cursor-parity).
+    own ``ORDER BY`` (spec-033 Decision 4, cursor-parity).
     """
     registry.clear()
     try:
@@ -3232,9 +3232,24 @@ def test_window_respects_relay_max_results():
         registry.clear()
 
 
-def test_m2m_shared_child_partitions_per_parent():
-    """A forward/reverse M2M window partitions by the parent key, not the child pk."""
-    from apps.library.models import Book, Genre
+@pytest.mark.django_db
+@pytest.mark.parametrize("direction", ["reverse_m2m", "forward_m2m"])
+def test_m2m_shared_child_partitions_per_parent(direction):
+    """Two parents sharing one child each receive that child in their OWN page.
+
+    The M2M window partitions by the PARENT key, not the child pk. Under an
+    accidental child-pk partition the shared child's two join rows land in ONE
+    partition and take row numbers 1 and 2, so the ``first: 1`` upper bound
+    drops the second and one of the two parents silently loses the shared child
+    - while each parent's own unshared child keeps row number 1 and survives.
+    Both M2M directions are exercised, because they derive the partition from
+    different sides of the relation: the reverse ``Genre.books`` through the
+    child's forward M2M field name, and the forward ``Book.genres`` through the
+    target's reverse query name. The executed prefetch is what catches a wrong
+    partition; the two ``window_partition_for_prefetch`` equalities record the
+    derivation itself.
+    """
+    from apps.library.models import Book, Branch, Genre, Shelf
 
     from django_strawberry_framework.optimizer.plans import window_partition_for_prefetch
 
@@ -3242,6 +3257,65 @@ def test_m2m_shared_child_partitions_per_parent():
     assert window_partition_for_prefetch(Genre._meta.get_field("books")) == "genres"
     # Forward M2M (Book.genres) partitions by the reverse query name.
     assert window_partition_for_prefetch(Book._meta.get_field("genres")) == "books"
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        shelf = Shelf.objects.create(
+            code="shared-child",
+            branch=Branch.objects.create(name="shared-child-branch"),
+        )
+        if direction == "reverse_m2m":
+            # Two GENRES share one BOOK. The shared child is created FIRST so
+            # the window's deterministic pk-terminal order puts it at row 1 of
+            # each partition.
+            parent_model, parent_type = types["Genre"]
+            shared = Book.objects.create(title="shared", shelf=shelf)
+            parents = [
+                Genre.objects.create(name=f"shared-child-{side}") for side in ("left", "right")
+            ]
+            for index, parent in enumerate(parents):
+                parent.books.add(shared, Book.objects.create(title=f"own-{index}", shelf=shelf))
+            connection_field, to_attr, label = "booksConnection", "_dst_books_connection", "title"
+        else:
+            # Two BOOKS share one GENRE - the same scenario read from the
+            # forward side of the same M2M.
+            parent_model, parent_type = types["Book"]
+            shared = Genre.objects.create(name="shared")
+            parents = [
+                Book.objects.create(title=f"shared-child-{side}", shelf=shelf)
+                for side in ("left", "right")
+            ]
+            for index, parent in enumerate(parents):
+                parent.genres.add(shared, Genre.objects.create(name=f"own-{index}"))
+            connection_field, to_attr, label = "genresConnection", "_dst_genres_connection", "name"
+
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    connection_field,
+                    node_selections=[_sel(label)],
+                    arguments={"first": 1},
+                ),
+            ],
+            parent_model,
+            info=_fake_info(),
+            source_type=parent_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == to_attr
+
+        rows = list(
+            parent_model._default_manager.filter(pk__in=[parent.pk for parent in parents])
+            .order_by("pk")
+            .prefetch_related(prefetch),
+        )
+        pages = [[getattr(child, label) for child in getattr(row, to_attr)] for row in rows]
+        # Independent per-parent pages: BOTH parents get row 1 of their OWN
+        # partition, which is the shared child for each.
+        assert pages == [["shared"], ["shared"]]
+    finally:
+        registry.clear()
 
 
 def test_nested_connection_two_level_recursion():
@@ -3383,7 +3457,7 @@ def test_windowed_prefetch_queryset_carries_deterministic_order():
     Regression for the windowed-ordering bug: the window expression alone orders
     only the row-number VALUES, so the queryset's own ``ORDER BY`` must carry the
     same deterministic tuple or the prefetched rows arrive in DB-natural order and
-    the fast path diverges from the pipeline (spec-033 Decision 11, cursor-parity).
+    the fast path diverges from the pipeline (spec-033 Decision 4, cursor-parity).
     ``Book`` has no ``Meta.ordering``, so the deterministic order is the pk alone.
     """
     registry.clear()
@@ -3677,8 +3751,8 @@ def test_divergent_mixed_sidecar_plans_only_the_plain_key(caplog):
 
     ``a`` carries ``filter:`` (per-parent, strictness-VISIBLE - no resolver
     identity), ``b`` is a plain page (planned under its per-key attr). The
-    per-key scheme must not let one alias's fallback shape drag its siblings
-    per-parent. The debug diagnostic names only the dropped response key.
+    per-key scheme must not let one alias's refusal drag its siblings per-parent.
+    The debug diagnostic names only the dropped response key.
     """
     from django_strawberry_framework.optimizer import logger
 
@@ -4062,7 +4136,7 @@ def test_divergence_ignores_pagination_vocabulary():
 
 
 def test_divergent_all_keys_fallback_stays_unplanned():
-    """When EVERY divergent alias is a fallback shape, the relation stays unplanned."""
+    """When EVERY divergent alias is a refusal arm, the relation stays unplanned."""
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -5060,7 +5134,7 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
     The seam's spec-033 Decision 6 discipline (``optimizer/nested_fetch.py``): the
     nested planner gives the strategy an isolated candidate and discards it
     after refusal, so even a callback that mutates every plan field behaves
-    exactly like the other fallback shapes.
+    exactly like the other refusal arms.
     """
     from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
 

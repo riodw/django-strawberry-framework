@@ -22,7 +22,7 @@ per parent id::
 which Postgres (>= 15, via the monotonic-window-function run condition)
 stops after ``offset + limit`` rows per parent - O(parents x page). The row
 numbers, the range predicate (including the ambiguous-shape marker rows of
-spec-033 Decision 4), and the forward return order are byte-mirrors of
+spec-033 Decision 5), and the forward return order are byte-mirrors of
 ``plans.py::apply_window_pagination``, so the rows satisfy the ``to_attr``
 contract and inherit the entire connection fast path
 (``connection.py::_resolve_from_window``) untouched.
@@ -53,9 +53,11 @@ common anonymous-traffic case, which otherwise silently rode the windowed
 body). A multi-table / ``Exists`` / ``Subquery`` / expression qual, an
 ``is_empty()`` (``qs.none()``) hook, an M2M through filter, or a keyset shape's
 filter still downgrades.
-The walker-owned fallback shapes (sidecar, SKIP, DISTINCT, malformed slice,
-unwindowable join) never reach any strategy; divergent aliases arrive as one
-request per response key, each self-contained.
+The refusal arms decided before any strategy runs - among them sidecar input,
+``OptimizerHint.SKIP``, an unwindowable child queryset, a window the slice
+arithmetic cannot express, and an unwindowable relation kind - never reach any
+strategy; divergent aliases arrive as one request per response key, each
+self-contained.
 
 SQL-injection surface: every identifier in ``build_lateral_sql`` passes
 through ``connection.ops.quote_name`` and every VALUE (parent ids, offsets,
@@ -395,8 +397,9 @@ def build_lateral_sql(
             params.append(range_plan.fetch_upper_bound)
         where_sql = " AND ".join(range_parts)
         if range_plan.add_marker_rows:
-            # Workstream C's ambiguous-shape marker: keep each parent's row 1
-            # so an empty page and a childless parent stay distinguishable.
+            # The ambiguous-shape marker row (spec-033 Decision 5): keep each
+            # parent's row 1 so an empty page and a childless parent stay
+            # distinguishable.
             where_sql = f"({where_sql}) OR {rn} = 1"
 
     outer_select = [pid]

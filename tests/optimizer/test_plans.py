@@ -828,7 +828,7 @@ class TestApplyWindowPagination:
     def test_ambiguous_shapes_keep_partition_marker_row(self):
         """``offset > 0`` / ``limit == 0`` windows keep each partition's row 1.
 
-        The marker-row disambiguation (spec-033 Decision 4):
+        The marker-row disambiguation (spec-033 Decision 5):
         the historically-ambiguous empty shapes OR the range filter with
         ``row_number == 1`` so an empty prefetch list proves zero children and
         a marker-only list carries the real count. The SQL shape pin: the
@@ -966,8 +966,9 @@ class TestApplyWindowPagination:
         instances to ``to_attr`` in the queryset's own return order; the fast path
         consumes ``rows`` as forward-ordered. So the same ``order_by`` tuple must
         drive ``queryset.order_by`` too, or the fast path can diverge from the
-        fallback pipeline when DB return order != connection order (spec-033
-        Decision 11, cursor-parity). Forward order applies in BOTH branches.
+        fallback pipeline when DB return order != connection order
+        (spec-033 Decision 4, cursor-parity). Forward order applies in BOTH
+        branches.
         """
         forward = self._windowed(offset=0, limit=3)
         assert tuple(forward.query.order_by) == ("name", "pk")
@@ -1215,7 +1216,7 @@ class TestEffectiveConnectionOrder:
     connection paginate under by default" consumed by the plan-time window
     (``nested_planner.py::plan_connection_relation``) and the resolve-time
     pipeline (``connection.py::_finalize_queryset``) - the cursor-parity
-    invariant's order leg (spec-033 Decision 11).
+    invariant's order leg (spec-033 Decision 4).
     """
 
     def test_keyset_cursor_field_is_the_default_order_when_no_explicit_won(self):

@@ -182,8 +182,8 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
     ``offset > 0`` (an overshot ``after:``) and ``limit == 0`` (``first: 0``)
     both yield an empty page for a parent whose children all sit outside the
     range AND for a parent with no children at all - historically forcing a
-    per-parent fallback. Workstream C disambiguates these shapes with marker
-    rows; reversed (``last``-only) windows never plan markers.
+    per-parent fallback. spec-033 Decision 5 disambiguates these shapes with
+    marker rows; reversed (``last``-only) windows never plan markers.
 
     The plan-time/resolve-time contract shared - like the sidecar-kwarg family
     above - by everything that must agree on "ambiguous": the window builders

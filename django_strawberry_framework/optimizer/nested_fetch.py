@@ -4,14 +4,21 @@ How a recognized nested Relay connection is FETCHED is a strategy, not the
 optimizer's identity (the lesson from Prisma's ``JoinSelectBuilder`` trait:
 one stable plan interface, swappable SQL shapes behind it). The private
 planner (``optimizer/nested_planner.py::plan_connection_relation``) owns
-everything strategy-independent - recognition, the Decision-6 fallback shapes
-(sidecar, ``OptimizerHint.SKIP``, DISTINCT, malformed slice, unwindowable
-partition), the divergent-alias per-response-key scheme (one request per key
+everything strategy-independent - recognition, the refusal arms decided in its
+own module (among them sidecar input, ``OptimizerHint.SKIP``, conflicting
+per-key argument payloads, an unwindowable relation kind, and an unresolvable
+field map), the divergent-alias per-response-key scheme (one request per key
 under a per-key ``to_attr``), child-queryset construction, the deterministic
 order, and the slice window - then hands each ``NestedConnectionRequest`` to
 the active strategy, which attaches its fetch directives to an isolated
-candidate plan. The candidate is merged only when the strategy returns
-``True``; refusal and exceptions cannot mutate the planner result.
+candidate plan. Not every refusal is the planner's own: a window the slice
+arithmetic cannot express is raised by
+``utils/connections.py::derive_connection_window_bounds``, the relation kind is
+classified by ``optimizer/join_taxonomy.py::classify_relation_join``, and an
+unwindowable child queryset is classified by
+``unwindowable_child_queryset_reason`` in THIS module. The candidate is merged
+only when the strategy returns ``True``; refusal and exceptions cannot mutate
+the planner result.
 
 The default strategy is ``WindowedPrefetchStrategy`` - the verbatim spec-033
 windowed prefetch: ``apply_window_pagination`` over the child queryset,
@@ -90,15 +97,19 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
       scan is never what the consumer meant).
     - ``combined``: union/intersection/difference querysets cannot take
       window annotations or per-partition filters.
-    - ``distinct``: the window ``Count(1) OVER`` would over-count
-      pre-DISTINCT rows (the historical spec-033 Decision 6 shape 4 guard, now
-      centralized here).
+    - ``distinct``: SQL evaluates window functions BEFORE ``DISTINCT``, so the
+      ``_dst_total_count`` ``Count(1) OVER`` annotation would over-count a
+      de-duplicated child queryset. The correctness-critical reason of the five
+      (spec-033 Decision 6, the unwindowable-child-queryset refusal arm): a
+      silently wrong ``totalCount`` is worse than a per-parent count that is
+      right.
     - ``values``: a ``values()``/``values_list()`` iterable has no model
       instances to carry the window attributes.
 
     Returns a short reason string (stable, test/telemetry-friendly) or
-    ``None`` for a plain windowable queryset. The walker treats any reason
-    as a fully-unplanned spec-033 Decision 6 fallback: no prefetch, no resolver keys,
+    ``None`` for a plain windowable queryset. The walker treats any reason as a
+    WHOLE-RELATION refusal (spec-033 Decision 6): the relation is left unplanned
+    for every response key - no prefetch, no resolver keys,
     so the per-parent resolution stays strictness-visible and any truly
     invalid consumer shape raises ITS OWN error at the field with normal
     error locality.
@@ -200,8 +211,8 @@ class RecognizedFetchQuerySet(QuerySet):
 class NestedConnectionRequest:
     """Everything the walker resolved about one plannable nested connection.
 
-    Built only AFTER every strategy-independent fallback shape has been ruled
-    out: ``django_field`` is the RAW Django relation field/rel (the planner's
+    Built only AFTER every strategy-independent refusal arm has been ruled out:
+    ``django_field`` is the RAW Django relation field/rel (the planner's
     ``_raw_relation_field``, not a ``FieldMeta`` - strategies may need
     ``remote_field`` / through metadata only the raw descriptor carries),
     ``child_queryset`` already carries the child plan (``only`` /
@@ -254,8 +265,10 @@ class NestedConnectionStrategy(Protocol):
     ``plan`` attaches fetch directives for ``request`` to ``plan`` and
     returns ``True``; returning ``False`` leaves the selection UNPLANNED
     (the walker then records no resolver identities, so the per-parent
-    access stays visible to strictness - the spec-033 Decision 6 fallback
-    discipline). Implementations must satisfy the ``to_attr`` row contract
+    access stays visible to strictness). A strategy that refuses every
+    response key is a whole-relation refusal that leaks no resolver key,
+    fk-id elision or ``cacheable`` flip into the parent plan (spec-033
+    Decision 6). Implementations must satisfy the ``to_attr`` row contract
     described in the module docstring.
     """
 

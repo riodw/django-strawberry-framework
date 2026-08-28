@@ -811,10 +811,11 @@ def order_entry_has_explicit_nulls(entry: Any) -> bool:
 def ends_in_unique_column(effective: tuple, model: type) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total order.
 
-    Hoisted from ``connection.py`` (spec-033 Decision 11) so the plan-time
-    window order and the resolve-time pipeline order share ONE implementation -
-    the cursor-parity invariant: window row numbers must agree with the
-    fallback path's offset cursors. ``connection.py`` imports this back.
+    Hoisted from ``connection.py`` (spec-033 Decision 11 sites the hoist) so the
+    plan-time window order and the resolve-time pipeline order share ONE
+    implementation - Decision 4's cursor-parity invariant: window row numbers
+    must agree with the fallback path's offset cursors. ``connection.py``
+    imports this back.
 
     A connection's positional offset cursors are only stable across separate
     requests when the SQL ``ORDER BY`` is a deterministic TOTAL order. An
@@ -866,8 +867,8 @@ def effective_connection_order(cursor_field: tuple | None, explicit: tuple, mode
     (``nested_planner.py::plan_connection_relation``) and the resolve-time
     pipeline (``connection.py::_finalize_queryset``), so a planned window's row
     order can never drift from the per-parent pipeline's (the cursor-parity
-    invariant, spec-033 Decision 11 - this completes the hoist that gave
-    ``deterministic_order`` its one source):
+    invariant, spec-033 Decision 4 - this completes the Decision 11 hoist that
+    gave ``deterministic_order`` its one source):
 
     - a keyset target's declared ``Meta.cursor_field`` IS the connection
       default order when no explicit ``orderBy:`` won (finalization validates
@@ -892,7 +893,7 @@ def deterministic_order(effective: tuple, model: type) -> tuple:
     source for both the plan-time window ``order_by``
     (``nested_planner.py::plan_connection_relation``) and the resolve-time pipeline
     (``connection.py::_finalize_queryset``) so window row numbers can never drift
-    from fallback-path cursors (spec-033 Decision 11, the cursor-parity
+    from fallback-path cursors (spec-033 Decision 4, the cursor-parity
     invariant).
     """
     if ends_in_unique_column(effective, model):
@@ -996,7 +997,7 @@ def apply_window_pagination(
     cursors and ``pageInfo``). Sourcing the window order and the return order from
     one tuple by construction keeps the fast path from diverging from the
     fallback pipeline when the DB's natural return order is not the connection
-    order (spec-033 Decision 11, the cursor-parity invariant). The forward order
+    order (spec-033 Decision 4, the cursor-parity invariant). The forward order
     is applied in BOTH branches: the ``reverse`` (last-only) window keeps
     ``_dst_row_number`` forward, so its rows are forward-ordered too.
 
@@ -1124,7 +1125,7 @@ def apply_window_pagination(
         range_q = upper if range_q is None else (range_q & upper)
     if range_q is not None:
         if range_plan.add_marker_rows:
-            # Marker rows (spec-033 Decision 4 - the graph-node lesson "keep
+            # Marker rows (spec-033 Decision 5 - the graph-node lesson "keep
             # the parent's group identifiable in the result", adapted to
             # windowed prefetch): ``offset > 0`` (overshot
             # ``after:``) and ``limit == 0`` (``first: 0``) produce an empty

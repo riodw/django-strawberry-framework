@@ -940,8 +940,7 @@ def _divergent_key_windows(
     Iterate the map and run the ARGUMENTS-DERIVED fallback gates per payload
     - each entry is its own windowed fetch (the graph-node model: one batched
     children query per response key, or one shared fetch when the key is
-    ``None``), so one alias's fallback shape must not drag its siblings
-    per-parent:
+    ``None``), so one alias's refusal must not drag its siblings per-parent:
 
     - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
       (per-parent, strictness-visible), siblings unaffected;
@@ -1076,7 +1075,7 @@ def plan_connection_relation(
 
     Orchestrates the windowed-prefetch plan (spec-033 Decision 4); leaves the
     selection UNPLANNED (no ``Prefetch``, no ``planned_resolver_keys`` entry) for
-    each Decision-6 fallback shape so the strictness contract still sees
+    each spec-033 Decision 6 refusal arm so the strictness contract still sees
     the per-parent access. Delegates child-queryset construction to the same
     helpers the list path uses (``_build_prefetch_child_queryset`` /
     ``_build_child_queryset``); the only addition is the window applied after
@@ -1086,7 +1085,7 @@ def plan_connection_relation(
     django_field = field_map.get(relation_field_name)
     if django_field is None:
         return NestedConnectionPlanResult(plan=plan)
-    # (b) Fallback shapes detectable before any queryset is built -> UNPLANNED.
+    # (b) Refusal arms detectable before any queryset is built -> UNPLANNED.
     if response_key_arguments_conflict(sel):
         _log_connection_fallback(
             relation_field_name,
@@ -1413,7 +1412,7 @@ def plan_connection_relation(
         return NestedConnectionPlanResult(plan=plan)
     # Success path: absorb the child metadata the sub-plan collected into the
     # parent only now - a strategy that refused every window (like each earlier
-    # fallback shape) must leak no child resolver keys / fk-id elisions /
+    # refusal arm) must leak no child resolver keys / fk-id elisions /
     # cacheable flip into the parent plan (the spec-033 Decision 6 no-leakage contract).
     # The child queryset / node selections / order were built ONCE from the
     # merged UNION children and are shared by every per-key window, so one

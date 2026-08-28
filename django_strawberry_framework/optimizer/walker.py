@@ -47,10 +47,15 @@ from .selections import (
 
 # The selection-traversal primitives live in ``optimizer/selections.py`` so the
 # walker and the AST seam in ``extension.py`` share ONE
-# fragment/directive/response-key implementation. The underscore aliases keep
-# this module's bodies - and the tests that import these names from
-# ``optimizer.walker`` - working unchanged; the walker-specific merge /
-# runtime-prefix / argument helpers below consume them.
+# fragment/directive/response-key implementation. Readers of the underscore
+# aliases below: ``_is_fragment``, ``_response_key``, ``_response_keys`` and
+# ``_included_field_selections`` are consumed by this module's own bodies;
+# ``_should_include`` and ``_is_fragment`` are imported from
+# ``optimizer.walker`` by ``tests/optimizer/test_walker.py``.
+# ``_named_children``, ``_node_children_with_runtime_prefix`` and
+# ``_with_runtime_prefix`` have NO reader through this module - the look-alike
+# importers take the first two from ``optimizer.extension``, which carries its
+# own aliases.
 _should_include = should_include
 _is_fragment = is_fragment
 _response_key = response_key
@@ -59,8 +64,15 @@ _included_field_selections = included_field_selections
 _named_children = named_children
 _node_children_with_runtime_prefix = node_children_with_runtime_prefix
 _with_runtime_prefix = with_runtime_prefix
-# Compatibility aliases for private imports that predate the connection
-# planner extraction. The implementations now live with their owner.
+# Aliases for private names that predate the connection-planner extraction; the
+# implementations live in ``optimizer/nested_planner.py``. Only
+# ``_concrete_order_columns`` and ``_relay_max_results_from_info`` are read
+# through this module, both imported from ``optimizer.walker`` by
+# ``tests/optimizer/test_walker.py``. The other seven have NO reader here:
+# ``connection.py`` and ``tests/test_keyset_connection.py`` import
+# ``_extend_only_projection`` / ``_keyset_window_slice_from_arguments`` /
+# ``_relation_connection_to_attr`` / ``_relation_connection_to_attr_for_key``
+# from ``optimizer/nested_planner.py`` directly.
 _concrete_order_columns = _nested_planner._concrete_order_columns
 _connection_window_slice_from_arguments = _nested_planner._connection_window_slice_from_arguments
 _extend_only_projection = _nested_planner._extend_only_projection

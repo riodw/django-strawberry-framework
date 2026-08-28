@@ -124,8 +124,9 @@ from .utils.typing import is_async_callable, unwrap_container_type
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
 # ``_ends_in_unique_column`` from here unchanged. The canonical implementation
-# now lives in ``optimizer/plans.py`` (spec-033 Decision 11, the cursor-parity
-# invariant - one source for plan-time and resolve-time order).
+# now lives in ``optimizer/plans.py`` (spec-033 Decision 11 sites the hoist;
+# Decision 4 states the cursor-parity invariant it serves - one source for
+# plan-time and resolve-time order).
 _ends_in_unique_column = ends_in_unique_column
 
 NodeType = TypeVar("NodeType")
@@ -415,7 +416,7 @@ def _resolve_from_window(
             # which is the WHOLE list - only the per-parent pipeline reproduces
             # that quirk, so the (always-empty) reversed window falls back.
             return None
-        # With marker rows planned for the ambiguous shapes (spec-033 Decision 4)
+        # With marker rows planned for the ambiguous shapes (spec-033 Decision 5)
         # and the n+1 sentinel for the count-free probe, an empty forward window
         # now PROVES the parent has no related rows for EVERY shape - a parent with
         # children would have kept its row 1 or its probe sentinel.
@@ -1572,13 +1573,13 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
         by ``optimizer/plans.py::effective_connection_order``, the SAME
         implementation the plan-time window order uses, so this resolve-time
         order cannot drift from the planned window's (the cursor-parity
-        invariant, spec-033 Decision 11). This covers all three cases - fully
+        invariant, spec-033 Decision 4). This covers all three cases - fully
         unordered, a supplied ``orderBy``, and a model ``Meta.ordering``.
      6. Optimizer plan - ``apply_connection_optimization`` applies
         ``select_related`` / ``prefetch_related`` / ``only()`` using the node
-        type / model explicitly (the connection field's own cooperation point,
-        Decision 11), because the schema middleware never sees the pre-slice
-        queryset behind ``ConnectionExtension``.
+        type / model explicitly (the connection field's own cooperation
+        point, spec-030 Decision 11), because the schema middleware never
+        sees the pre-slice queryset behind ``ConnectionExtension``.
     """
     target_model = model_for(target_type)
     cursor_field = getattr(
@@ -2038,9 +2039,9 @@ def _build_relation_connection_resolver(
         # sentinels via the parameterized ``_check_n1`` BEFORE the per-parent
         # pipeline. The reason names WHY the fallback fired so a flagged
         # connection reads as actionable: a sidecar (``filter:`` / ``orderBy:``)
-        # selection is the explicitly-unwindowed shape (Decision 6), so it
-        # carries the spec's filter/orderBy wording; any other fallback gets the
-        # generic per-parent reason.
+        # selection is the explicitly-unwindowed shape (spec-033 Decision 6),
+        # so it carries the spec's filter/orderBy wording; any other fallback
+        # gets the generic per-parent reason.
         reason = (
             "not window-planned: selection carries filter/orderBy; resolving per-parent"
             if not no_sidecar

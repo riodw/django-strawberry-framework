@@ -1136,8 +1136,13 @@ def test_fast_path_single_query(django_assert_num_queries):
     """Parent page + one window query, zero per-parent queries (the cost contract).
 
     The optimizer-on mirror of ``test_synthesized_connection_per_parent_query_cost``:
-    a nested connection under an N-row parent list pays a FIXED count (parent
-    list + one batched window query) independent of parent count.
+    a nested connection under a parent list pays parent list + one batched
+    window query. Pinned at ONE cardinality, with the ABSOLUTE count that makes
+    it distinguishing: 4 parent genres and exactly 2 queries, where a per-parent
+    pipeline would pay 1 + 4. The two-cardinality form of the same property is
+    earned live by
+    ``examples/fakeshop/test_query/test_library_api.py::test_nested_books_connection_fixed_query_count``,
+    which runs the identical shape at 3 and 10 genres.
     """
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="A1", branch=branch)
@@ -1187,8 +1192,13 @@ def test_divergent_aliases_one_window_query_per_alias(django_assert_num_queries)
     historical whole-relation fallback (O(parents x aliases) per-parent
     queries); the per-response-key scheme plans one window per key and the
     resolver routes each alias to its ``_dst_books$<key>_connection`` attr via
-    ``info.path.key`` - so the count is FIXED (1 parent + 2 windows)
-    independent of parent count, and each alias serves ITS OWN page bound.
+    ``info.path.key`` - so the cost is ONE window PER ALIAS on top of the parent
+    list, and each alias serves ITS OWN page bound. Pinned at ONE cardinality,
+    with the ABSOLUTE count that makes it distinguishing: 4 parent genres, two
+    aliases, and exactly 3 queries (1 parent list + 2 windows), where a
+    per-parent pipeline would pay 1 + 4 x 2. The two-cardinality form of the
+    parent-count property is earned live by
+    ``examples/fakeshop/test_query/test_library_api.py::test_nested_books_connection_fixed_query_count``.
     """
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="A1", branch=branch)
@@ -1312,8 +1322,8 @@ def test_divergent_mixed_sidecar_serves_each_alias_correctly():
     """A sidecar alias resolves per-parent while its divergent sibling is windowed.
 
     ``a`` (filtered) takes the per-parent pipeline and narrows correctly; ``b``
-    (plain page) is served from its per-key window - one alias's fallback shape
-    must not corrupt the other's rows.
+    (plain page) is served from its per-key window - one alias's refusal must
+    not corrupt the other's rows.
     """
     _seed_library_books(["apple", "banana", "avocado"])
     schema = _genres_filterable_book_schema(strictness="off")
@@ -2027,8 +2037,8 @@ def test_fast_path_ambiguous_empty_served_from_marker_row(args, django_assert_nu
 async def test_async_fast_path_last_zero_falls_back_for_total_count_and_pageinfo(monkeypatch):
     """The async fallback mirror rides the ``last: 0`` quirk UNDER ASYNC execution.
 
-    ``last: 0`` is the one remaining always-fallback shape after the
-    marker-row disambiguation (spec-033 Decision 5): upstream ``ListConnection``
+    ``last: 0`` is the one shape that always degrades after the marker-row
+    disambiguation (spec-033 Decision 5): upstream ``ListConnection``
     slices ``edges[-0:]`` - the WHOLE list - so only the per-parent pipeline
     reproduces it (the walker plans nothing for it). Driven
     by ``await schema.execute(...)``, the per-parent queryset resolves
@@ -2128,7 +2138,8 @@ def test_fast_path_zero_children_parent_serves_under_ambiguous_shapes(
 ):
     """A zero-children parent is served (not fallen back) under the marker shapes.
 
-    Workstream C's other half: with markers planned, an EMPTY window under
+    The marker contract's serve side (spec-033 Decision 5): with markers
+    planned, an EMPTY window under
     ``first: 0`` / overshot ``after:`` now PROVES the parent has no children
     (a parent with children would have kept its row 1), so the fast path
     serves ``totalCount 0`` in the fixed two-query cost. Byte parity with the
@@ -2207,8 +2218,11 @@ def test_fallback_when_annotations_missing():
     """A ``to_attr`` list whose rows lack the window annotations is not consumed.
 
     A consumer's own prefetch (or any non-window attribute) at the package-reserved
-    name without ``_dst_row_number`` / ``_dst_total_count`` must fall through to
-    the pipeline - the annotation-presence probe is upstream's integrity check.
+    name without ``_dst_row_number`` must fall through to the pipeline - the
+    annotation-presence probe is upstream's integrity check. The probe is
+    row-number-only by design (``connection.py::_window_rows_are_annotated``:
+    ``_dst_total_count`` is annotated conditionally, so its absence does not
+    disqualify a window); the planted list here carries neither annotation.
     """
     _seed_library_books(["a", "b", "c"])
     _make_type("BookType", Book, ("id", "title"))
@@ -2322,8 +2336,8 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
 # runs strictness-off), so they live here, not in the live suite (Test plan).
 #
 # The sidecar-filtered ``booksConnection(filter: ...)`` is the clearest
-# live-reachable fallback shape: the walker leaves it unplanned (Decision 6),
-# so the resolver runs per-parent and is visible to strictness.
+# live-reachable refusal arm (spec-033 Decision 6): the walker leaves it
+# unplanned, so the resolver runs per-parent and is visible to strictness.
 # =============================================================================
 
 
@@ -2569,9 +2583,11 @@ def test_strictness_silent_when_window_served():
 def test_strictness_silent_when_off():
     """``"off"`` (optimizer installed) -> neither raise nor warn on a fallback.
 
-    ``DST_OPTIMIZER_STRICTNESS == "off"`` is the resolver's no-op: no sentinel is
-    stashed (the publish gates on ``strictness != "off"``), so ``_check_n1``'s
-    prelude returns immediately even on the unplanned sidecar fallback.
+    ``strictness == "off"`` is the resolver's no-op: the extension arms that
+    value on the per-execution strictness ``ContextVar`` at ``on_execute``
+    entry, so ``types/resolvers.py::_strictness_for`` answers ``"off"`` and
+    ``_check_n1``'s prelude returns immediately - before any sentinel or
+    ``to_attr`` probe - even on the unplanned sidecar fallback.
     """
     _seed_library_books(["apple", "banana", "avocado"])
     schema = _genres_filterable_book_schema(strictness="off")
@@ -2587,15 +2603,17 @@ def test_strictness_silent_when_off():
 
 @pytest.mark.django_db
 def test_strictness_silent_no_optimizer():
-    """No optimizer installed -> no sentinel stashed -> ``_check_n1`` is a no-op.
+    """No optimizer installed -> strictness reads ``"off"`` -> ``_check_n1`` is a no-op.
 
-    The root-shaped no-op: with no extension, ``DST_OPTIMIZER_PLANNED`` is never
-    stashed, so the prelude returns before any probe - the per-parent pipeline
+    The root-shaped no-op: with no extension nothing arms the per-execution
+    strictness ``ContextVar`` and nothing stashes ``DST_OPTIMIZER_STRICTNESS``,
+    so ``types/resolvers.py::_strictness_for`` falls back to its ``"off"``
+    default and the prelude returns before any probe - the per-parent pipeline
     runs byte-identically to a tree with no optimizer installed, no flag.
     """
     _seed_library_books(["apple", "banana", "avocado"])
     # No-optimizer variant: the plain list schema installs no extension at all,
-    # so no sentinel is ever stashed (``strictness="raise"`` is inert here).
+    # so nothing ever arms strictness (``strictness="raise"`` is inert here).
     schema = _genres_list_schema(optimizer=False, strictness="raise")
     result = schema.execute_sync(
         "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",

@@ -1,7 +1,7 @@
 """Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 
-The seam contract: the walker rules out every strategy-independent fallback
-shape, then hands one ``NestedConnectionRequest`` to the active strategy;
+The seam contract: the walker rules out every strategy-independent refusal arm,
+then hands one ``NestedConnectionRequest`` to the active strategy;
 ``WindowedPrefetchStrategy`` (the default) must reproduce the spec-033
 windowed prefetch byte-for-byte (the existing walker/plans/connection pins
 run unchanged - the seam's Definition of Done); strategy selection is fixed

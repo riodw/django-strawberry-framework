@@ -2479,7 +2479,9 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
     unified collector (``_collect_cache_relevant_var_names`` -- which now folds
     both the directive and nested-pagination families into one traversal) with a
     call counter and assert repeated ``_build_cache_key`` calls on the SAME
-    operation walk it only once.
+    operation walk it only once - including one call made after the
+    cross-request document LRU has been emptied, so the per-execution memo is
+    pinned on its own rather than through the document cache standing in for it.
     """
     from graphql import parse
 
@@ -2493,6 +2495,14 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
         return real(operation, fragments)
 
     monkeypatch.setattr(extension_module, "_collect_cache_relevant_var_names", _counting)
+    # Isolate the cross-request document LRU. This document's text is byte-
+    # identical to ``test_nested_pagination_variable_keys_cache``'s, which
+    # inserts the same key, and ``--dist loadscope`` keeps the whole module on
+    # one worker - so a populated cache would serve the first call from a HIT
+    # and the counter would read 0 whenever that sibling ran first. A fresh
+    # mapping makes the first call a guaranteed MISS, which is what makes the
+    # count below a measurement rather than an artifact of collection order.
+    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
 
     operation = parse(
         "query Q($n: Int!) { parents { booksConnection(first: $n) "
@@ -2511,6 +2521,13 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
     try:
         DjangoOptimizerExtension._build_cache_key(info, Category)
         DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+        assert calls["count"] == 1
+        # Empty the cross-request LRU mid-lifecycle so only the per-execution
+        # ``id(operation)`` memo can answer the next call. The counter staying
+        # at 1 pins THAT tier specifically - without it this fourth call is a
+        # document-cache miss and the collector runs again.
+        extension_module._doc_key_cache.clear()
         DjangoOptimizerExtension._build_cache_key(info, Category)
     finally:
         with contextlib.suppress(StopIteration):
@@ -4908,7 +4925,7 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
 def test_optimizer_helper_extraction_no_regression():
     """Extracting ``apply_to`` from ``_optimize`` leaves the middleware path identical.
 
-    Per Decision 11 the plan-build-and-apply tail was extracted into
+    Per spec-030 Decision 11 the plan-build-and-apply tail was extracted into
     ``DjangoOptimizerExtension.apply_to`` (shared with the connection field's
     ``apply_connection_optimization``). The existing B1-B8 suite in this module
     is the broad regression guard; this focused test pins that a non-connection
@@ -4966,10 +4983,10 @@ def test_optimizer_helper_extraction_no_regression():
 def test_apply_connection_optimization_uses_active_optimizer_cache():
     """``apply_connection_optimization`` shares the active extension's plan cache.
 
-    Decision 11 plan-cache-reuse route: ``on_execute`` publishes the active
-    extension on the ``_active_optimizer`` ``ContextVar``; the connection helper
-    discovers it so connection-field plans hit the SAME instance-bound cache the
-    middleware uses (rather than a throwaway cache-less extension).
+    spec-030 Decision 11 plan-cache-reuse route: ``on_execute`` publishes the
+    active extension on the ``_active_optimizer`` ``ContextVar``; the connection
+    helper discovers it so connection-field plans hit the SAME instance-bound
+    cache the middleware uses (rather than a throwaway cache-less extension).
     """
     from django_strawberry_framework.optimizer.extension import (
         _active_optimizer,

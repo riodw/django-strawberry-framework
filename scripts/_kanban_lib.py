@@ -147,37 +147,51 @@ def placeholder_defects(
     return defects
 
 
+# Every nested to-many list ``STATIC_KANBAN_QUERY`` selects on a card, as
+# ``payload key -> ORM accessor``. The bound is a NESTED-collection bound: probed
+# 2026-08-28 at ``max_list_rows = 10``, a card's ``items`` and ``glossaryLinks``
+# came back with 10 while ``allCards`` (71), ``allKanbanBoardDocs`` (14) and
+# ``allKanbanTrackedPaths`` (347) came back whole. So a top-level field is never
+# truncated and every entry below is - which is why this maps all of them rather
+# than only the one that broke. ``items`` was merely the first over the line;
+# ``glossaryLinks`` was at 53 of the old 100 and would have been next.
+CARD_NESTED_LISTS = {
+    "items": "items",
+    "glossaryLinks": "glossary_links",
+    "outgoingReferences": "outgoing_references",
+    "incomingReferences": "incoming_references",
+    "pathLinks": "path_links",
+    "parityClaims": "parity_claims",
+    "labels": "labels",
+    "changedFiles": "changed_files",
+}
+
+
 def board_row_counts() -> dict[str, Any]:
-    """Read the board's true row counts straight from the ORM.
+    """Read the board's true per-card row counts straight from the ORM.
 
     Separated from :func:`truncation_defects` so the comparison is a pure function
     with no database of its own to stand up, and so the one part that can be wrong
     in a way tests cannot see - *which* rows are the right ground truth - is stated
-    in one place. The board-doc count is scoped to the namespace the GraphQL field
-    itself selects: ``allKanbanBoardDocs`` returns the ``kanban`` docs only, while
-    the table also holds ``glossary`` ones this export is right not to carry.
-    Counting the whole table reports a permanent 5-row shortfall, which is what the
-    first draft of this guard did - failing on its own wrong ground truth rather
-    than on a defect.
+    in one place. Counting the whole ``BoardDoc`` table is exactly that mistake and
+    was the first draft of this guard: ``allKanbanBoardDocs`` returns the ``kanban``
+    namespace only, so a table-wide count reports a permanent 5-row shortfall and
+    the check fails on its own wrong ground truth rather than on a defect. The doc
+    list is top-level and therefore unbounded, so it is not counted here at all.
     """
     from apps.kanban import models
     from django.db.models import Count
 
-    return {
-        "cards": models.Card.objects.count(),
-        "board_docs": models.BoardDoc.objects.filter(namespace=KANBAN_DOC_NAMESPACE).count(),
-        "items": dict(
-            models.CardItem.objects.values_list("card__number").annotate(total=Count("pk")),
-        ),
-    }
+    counts: dict[str, dict[Any, int]] = {}
+    for payload_key, accessor in CARD_NESTED_LISTS.items():
+        counts[payload_key] = dict(
+            models.Card.objects.values_list("number").annotate(total=Count(accessor)),
+        )
+    return counts
 
 
-def truncation_defects(
-    cards: Sequence[dict[str, Any]],
-    board_docs: Sequence[dict[str, Any]],
-    expected: dict[str, Any],
-) -> list[str]:
-    """Return one message per payload list ``expected`` says is short.
+def truncation_defects(cards: Sequence[dict[str, Any]], expected: dict[str, Any]) -> list[str]:
+    """Return one message per nested card list that came back short of ``expected``.
 
     The export is GraphQL-driven on purpose, so it inherits the package's row
     bounds - including the silent one. ``max_list_rows`` slices an over-large
@@ -187,28 +201,21 @@ def truncation_defects(
     just read is the only available ground truth, so a mismatch against it is
     truncation rather than a race.
 
-    Checks the two lists that grow without bound - a card's items and the whole
-    card set - plus the board docs. Reference lists are bounded by hand-authored
-    prose and have never approached a page.
+    Scoped to the nested lists (:data:`CARD_NESTED_LISTS`) because those are the
+    only ones the bound reaches. Checking a top-level list here would read as
+    coverage while being unable to fail - the shape that makes a guard worse than
+    none, since it certifies the surface it never inspected.
     """
     defects: list[str] = []
-    if len(cards) != expected["cards"]:
-        defects.append(f"allCards: payload has {len(cards)}, database has {expected['cards']}")
-
-    # The exports inject synthetic docs the database does not store, so a payload
-    # SHORTER than the namespace is the only defect shape here.
-    if len(board_docs) < expected["board_docs"]:
-        defects.append(
-            f"allKanbanBoardDocs: payload has {len(board_docs)}, "
-            f"database has {expected['board_docs']}",
-        )
-
     for card in cards:
         number = card.get("number")
-        found = len(card.get("items", []))
-        owed = expected["items"].get(number, 0)
-        if found != owed:
-            defects.append(f"card {number} items: payload has {found}, database has {owed}")
+        for payload_key in CARD_NESTED_LISTS:
+            found = len(card.get(payload_key) or [])
+            owed = expected.get(payload_key, {}).get(number, 0)
+            if found != owed:
+                defects.append(
+                    f"card {number} {payload_key}: payload has {found}, database has {owed}",
+                )
     return defects
 
 

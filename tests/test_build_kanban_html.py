@@ -3,6 +3,7 @@
 import pytest
 
 from scripts._kanban_lib import (
+    CARD_NESTED_LISTS,
     placeholder_defects,
     truncation_defects,
     unresolvable_placeholders,
@@ -82,22 +83,25 @@ def test_the_html_build_refuses_a_placeholder_that_resolves_nowhere() -> None:
     assert assert_placeholders_resolve(resolvable) is None
 
 
-def _payload_card(number: int, item_count: int) -> dict:
-    """A card as the GraphQL payload carries it, with ``item_count`` items."""
-    return {"number": number, "items": [{"order": index} for index in range(item_count)]}
+def _payload_card(number: int, **lists: int) -> dict:
+    """A card as the GraphQL payload carries it, with the named lists' lengths."""
+    return {
+        "number": number,
+        **{key: [{"order": index} for index in range(count)] for key, count in lists.items()},
+    }
 
 
-def _expected(cards: int, board_docs: int, items: dict) -> dict:
-    return {"cards": cards, "board_docs": board_docs, "items": items}
+def _expected(number: int, **lists: int) -> dict:
+    """Ground truth for one card: every guarded list, defaulting to zero."""
+    return {key: {number: lists.get(key, 0)} for key in CARD_NESTED_LISTS}
 
 
 def test_a_board_matching_the_database_reports_no_truncation() -> None:
     """The control: without it, an assertion that never fires reads as a passing proof."""
     assert (
         truncation_defects(
-            [_payload_card(52, 101)],
-            [{"key": "snapshot"}],
-            _expected(cards=1, board_docs=1, items={52: 101}),
+            [_payload_card(52, items=101, glossaryLinks=53)],
+            _expected(52, items=101, glossaryLinks=53),
         )
         == []
     )
@@ -106,33 +110,38 @@ def test_a_board_matching_the_database_reports_no_truncation() -> None:
 def test_a_card_whose_items_were_capped_is_reported() -> None:
     """The live defect: card 52 crossed ``max_list_rows`` and one item silently vanished."""
     assert truncation_defects(
-        [_payload_card(52, 100)],
-        [],
-        _expected(cards=1, board_docs=0, items={52: 101}),
+        [_payload_card(52, items=100)],
+        _expected(52, items=101),
     ) == ["card 52 items: payload has 100, database has 101"]
 
 
-def test_a_short_card_set_or_doc_set_is_reported() -> None:
-    """The bound applies to the top-level lists too, and they are capped the same way."""
-    defects = truncation_defects([], [], _expected(cards=71, board_docs=14, items={}))
-    assert defects == [
-        "allCards: payload has 0, database has 71",
-        "allKanbanBoardDocs: payload has 0, database has 14",
-    ]
+@pytest.mark.parametrize("payload_key", sorted(CARD_NESTED_LISTS))
+def test_every_guarded_list_can_actually_fail(payload_key: str) -> None:
+    """A list in the map that no case exercises is coverage on paper only.
+
+    ``items`` was the list that broke, but it was not the only one the bound
+    reaches - ``glossaryLinks`` sat at 53 of the old 100 - so each entry is
+    proven to report its own shortfall rather than inheriting the proof.
+    """
+    defects = truncation_defects(
+        [_payload_card(52, **{payload_key: 4})],
+        _expected(52, **{payload_key: 5}),
+    )
+    assert defects == [f"card 52 {payload_key}: payload has 4, database has 5"]
 
 
-def test_a_board_doc_surplus_is_not_a_defect() -> None:
-    """Both exports inject synthetic docs, so only a SHORT doc list is truncation."""
-    assert truncation_defects([], [{}, {}], _expected(cards=0, board_docs=1, items={})) == []
+def test_a_top_level_list_is_not_checked() -> None:
+    """The bound is nested-only, so a top-level count here could never fail."""
+    assert truncation_defects([], {}) == []
 
 
 def test_the_build_refuses_a_board_that_came_back_short(monkeypatch: pytest.MonkeyPatch) -> None:
     """A silent cap must stop the build; the freshness checks cannot see one."""
     monkeypatch.setattr(
         "scripts.build_kanban_html.board_row_counts",
-        lambda: _expected(cards=1, board_docs=0, items={52: 101}),
+        lambda: _expected(52, items=101),
     )
     with pytest.raises(RuntimeError, match=r"came back short of the database"):
-        assert_nothing_truncated([_payload_card(52, 100)], [])
+        assert_nothing_truncated([_payload_card(52, items=100)])
 
-    assert assert_nothing_truncated([_payload_card(52, 101)], []) is None
+    assert assert_nothing_truncated([_payload_card(52, items=101)]) is None

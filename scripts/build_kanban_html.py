@@ -683,7 +683,7 @@ def fetch_dashboard_data() -> dict[str, Any]:
         STATIC_KANBAN_QUERY,
         required_lists=("allCards", "allKanbanBoardDocs", *LOOKUP_FIELDS),
     )
-    assert_nothing_truncated(data["allCards"], data["allKanbanBoardDocs"])
+    assert_nothing_truncated(data["allCards"])
 
     lookups = {}
     for graphql_name, payload_name in LOOKUP_FIELDS.items():
@@ -787,10 +787,7 @@ def _html_is_fresh(html_path: Path, data_block: str) -> bool:
     return match is not None and match.group(0) == data_block
 
 
-def assert_nothing_truncated(
-    cards: list[dict[str, Any]],
-    board_docs: list[dict[str, Any]],
-) -> None:
+def assert_nothing_truncated(cards: list[dict[str, Any]]) -> None:
     """Fail the build when a row bound silenced part of the board.
 
     Sits at the shared fetch rather than in either ``main``, because both exports
@@ -801,7 +798,7 @@ def assert_nothing_truncated(
     crosses - and crossing it is silent, so the freshness checks keep passing
     against a board that is quietly missing rows.
     """
-    defects = truncation_defects(cards, board_docs, board_row_counts())
+    defects = truncation_defects(cards, board_row_counts())
     if defects:
         detail = "".join(f"\n  - {defect}" for defect in defects)
         raise RuntimeError(

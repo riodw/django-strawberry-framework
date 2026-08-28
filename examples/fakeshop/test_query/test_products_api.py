@@ -2292,6 +2292,13 @@ def _cascade_page_gids(model) -> list[str]:
     ``_RELAY_MAX_RESULTS``. ``order_by("pk")`` is that same order by
     construction. Knows nothing about actors: it takes no client and issues no
     request, so it states the page BEFORE any cascade narrows it.
+
+    That premise is load-bearing, so read it as a precondition and not as
+    background: give any products model a ``Meta.ordering`` and the connection
+    stops issuing ``ORDER BY id``, every staff row below fails on element order
+    rather than on visibility, and the red suite says nothing about permissions.
+    Repair it here -- this expression and this docstring are the only place the
+    coupling lives -- rather than in the callers.
     """
     return [
         _global_id(model._meta.label_lower, pk)

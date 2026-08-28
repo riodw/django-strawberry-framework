@@ -62,6 +62,8 @@ Performed by Worker 1 as a procedural-closure pass before this plan existed. Rec
 
 ## Artifact list
 
+**All nine per-round artifacts were deleted when the cycle closed**, per `BUILD.md`'s convention that only the build plan archives. They are listed here as the record of what ran, not as live paths; every finding of theirs that outlived the cycle is folded into `## Final gate outcome` and `## Deferred-work disposition` below, and the rest is gone deliberately. A `bld-034-...` citation anywhere in this file resolves to nothing on disk and is provenance, not a pointer.
+
 - `docs/builder/bld-034-slice-0-rationale_extraction.md` (created, `final-accepted`)
 - `docs/builder/bld-034-review-1a-cascade_module.md`
 - `docs/builder/bld-034-review-1b-composition_pins.md`
@@ -127,6 +129,78 @@ Closed the cycle's single SKIPPED contract. `examples/fakeshop/test_query/test_p
 One revision loop: Worker 3 escalated a two-site duplicated ORM page-expectation rather than holding it; Worker 1 ran the existence challenge, found no deletion available (T1's `expected` **is** the assertion; T2's window guard stops a pagination failure reading as a permission failure), and ruled consolidate. Worker 3's pass-2 grep confirms removal rather than relocation: `_RELAY_MAX_RESULTS]` returns exactly one line tree-wide. Floor run discharged by the builder pass and **re-run** at pass 2: `/tmp/dsf-floor-034`, Python 3.10.19, django 5.2.16, strawberry-graphql 0.316.0, `-k cascade` -> 13 passed; shared `.venv` untouched.
 
 Three Lows, all prose-only corrections recorded rather than open work: a false stated reason for dropping a `Category`-hardcoded trailer (the drop itself is right), a falsified plan prediction that repeated literals would fall (`pytest.param("x", …, id="x")` writes each name twice), and a false stated obstacle to annotating the helper's parameter.
+
+## Final gate outcome (`final-accepted`)
+
+Folded in from `docs/builder/bld-034-final.md` when that artifact was deleted; it is the only
+record of these measurements.
+
+**Gate commands, in `BUILD.md` `## Final test-run gate` order, all exit 0.** `uv run pytest
+--no-cov` -> **6913 passed, 42 skipped**; `manage.py check` no issues; `makemigrations --check
+--dry-run` no changes; `ruff format --check .` 434 files already formatted; `ruff check .` all
+passed; `git diff --check` no output. Re-run at the same figures after the post-gate edits below.
+
+**Floor verification.** One scope was declared for the cycle -- `examples/fakeshop/test_query/
+test_products_api.py -k cascade`, owned by R3's builder pass; R1, R2, R4 and the gate each declared
+`none` because they land no framework seam. R3's record carried every field `BUILD.md` `## Floor
+verification` requires, and the gate corroborated it read-only rather than re-running it:
+
+- Scratch venv **outside the repo**, `/tmp/dsf-floor-034`; every install carried an explicit
+  `--python /tmp/dsf-floor-034/bin/python`, and the shared `.venv` was never written to.
+- Resolved versions per `uv pip list --python /tmp/dsf-floor-034/bin/python`: `django 5.2.16`,
+  `strawberry-graphql 0.316.0`, `django-strawberry-framework 0.0.14` (editable), `channels 4.3.2`,
+  `pytest 9.1.1`, `pytest-django 4.14.0`; interpreter `Python 3.10.19`.
+- Scope as run: `/tmp/dsf-floor-034/bin/python -m pytest examples/fakeshop/test_query/
+  test_products_api.py -k cascade --no-cov` -> **13 passed**, exit 0, with all four
+  `[allCategories]` / `[allItems]` / `[allProperties]` / `[allEntries]` node ids of both staff tests
+  among the PASSED lines.
+
+**Round-status chain.** Every artifact's own `Status:` line was read on disk before deletion; all
+nine read `final-accepted`, with no round left `built`, `review-accepted` or `revision-needed`.
+
+**The one decision the integration pass routed to Worker 0 is closed.** It offered either routing
+finding I1 (the rationale companion calling a per-model edge memo *deferred* when
+`permissions.py::_edge_plan` ships it `@lru_cache`d) to the deferred catalog, or dispatching one
+Worker-1 micro-pass. **The micro-pass was dispatched and accepted**, so I1 is discharged rather than
+deferred. Its attribution was itself corrected in that pass: `git log -S'_edge_plan'` returns only
+`c68aecab`, but `git log -S'lru_cache'` returns `bc1a6aaf` (2026-06-15), which shipped the memo on
+`_cascadable_edges` a month earlier -- the same day the card's final review revision landed, so the
+"deferred" fallback was already false when the spec closed. **`git log -S<symbol>` is fail-open for
+"when did this behaviour ship".** The shipped record carries the corrected attribution.
+
+**Post-ship bullet census, re-measured rather than inherited.** 20 indent-0 `- **Post-ship` bullets
+under 10 Decisions, plus 7 under `## Non-Decision deliberation` = 27, by enumerating each against
+its enclosing `##` heading.
+
+## Deferred-work disposition
+
+The gate assembled a 19-bullet catalog by walking every per-round artifact. Nothing was left in that
+artifact to rot: each item was either fixed outright or given a **named owner on the board**, since
+an item routed forward without one does not survive. Recorded here because this file is what
+archives.
+
+| Item | Disposition |
+|---|---|
+| Card-id rot in `examples/fakeshop/apps/products/schema.py` (18 rotted occurrences beside one *correct* `TODO-BETA-062-0.1.5` that must not be swept) | Folded into `TODO-ALPHA-052-0.0.16`'s existing archived-spec card-id sweep item, which already owned the spec-side half. The two halves cannot be split: that item's leave-verbatim rulings hold *because* the source still reads the old id. |
+| The spec's own 10 card-id occurrences in 4 spellings | Already owned by the same `TODO-ALPHA-052-0.0.16` item; left byte-identical through the cycle, as the escalation required. |
+| Three `KANBAN.md` citations into `spec-034` that Slice 0's rationale move broke | Repointed on the board at the rationale companion. **This cycle caused them**, and no gate can see the class -- `scripts/check_citations.py` resolves `path::Symbol` in `.py` and `KANBAN.md` only, so a `path #"substring"` citation into a `docs/` file is invisible to it. |
+| `permissions.py::_is_unsupported_forward_edge`'s `getattr(field, "is_relation", False)` fail-open | `TODO-ALPHA-051-0.0.15`, with both resolution paths recorded. Unreachable at `HEAD` (closed input population), so hardening rather than a bug. |
+| `permissions.py::_cascadable_edges` / `::_cascadable_edge_names` are dead production code | `TODO-ALPHA-051-0.0.15`, carrying the reader counts, so a DRY pass deletes them instead of extracting them. |
+| The redundant `view_<model>` branch in the four fakeshop hooks | `TODO-BETA-063-0.1.5` as an open question, naming `TODO-BETA-060-0.1.4` as the home for the behaviour-changing option. It is spec-conformant, so collapsing it is a contract change. |
+| No `FAKESHOP_SHARDED` row asserts a `Prefetch` child's `.db` under an active cascade | `TODO-BETA-069-0.1.8`. The documentation half of the same seam was already owned by `TODO-ALPHA-051-0.0.15`. |
+| `services.py::seed_cascade_split` has no per-app test | `TODO-BETA-063-0.1.5`, whose DoD already owns that test directory. |
+| The M2M / reverse-relation cascade follow-up the spec's Slice 5 obligated surfacing | `TODO-BETA-054-0.1.1` as an open question -- the graph substrate's `EdgeScope` is where hide-the-parent vs narrow-the-list actually gets decided -- carrying both answers and why they are not interchangeable. No new card, so no renumber. |
+| `utils/querysets.py::_seal_or_defect` named only the hook-return slice rejection | **Fixed.** The cascade makes one per queryset it receives; the root's lives in `permissions.py::_validate_root_queryset`. |
+| A link definition out of alphabetical order in the spec | **Fixed.** The other half of that note did not survive re-derivation and was never true. |
+| The staff rows' page expectation is coupled to the connection's default `ORDER BY` | **Fixed at the coupling site.** `test_products_api.py::_cascade_page_gids`'s docstring now states the consequence, not just the premise: give any products model a `Meta.ordering` and the staff rows fail on element order rather than on visibility. |
+| `docs/README.md`'s "Coming next `0.0.10`" line | No action -- graded SUPERSEDED by four later cuts, **not** a `034` gap. Recorded so a later reader does not re-open it as a missed doc obligation. |
+| The companion's 15 card-id occurrences | No action -- closed by measurement. Every one sits inside a history bullet and is true as history at the date it records. |
+| Four corrections to the cycle's own artifacts | Died with those artifacts, deliberately: three described defects in files that no longer exist, and the fourth is the `bc1a6aaf` attribution, which the shipped record already carries. |
+
+**Board edits are not in this cycle's commit.** `KANBAN.md`, `KANBAN.html` and
+`examples/fakeshop/db.sqlite3` carry the homing above but were left dirty: a concurrent session held
+26 pending board deltas in the same rows -- including the very row the card-id item was folded into,
+which that session created -- and the three files cannot be split hunk-wise.
 
 ## Grading rule every R1 cohort applies (so the three partition findings the same way)
 

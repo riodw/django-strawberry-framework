@@ -8,7 +8,7 @@ Read this when checking a finished implementation against the reasoning that pro
 
 ## Provenance of this record
 
-Created by pre-flight step 7 of the `034` residual-reconciliation cycle (Slice 0, recorded in [`docs/builder/bld-034-slice-0-rationale_extraction.md`][bld-034]; the cycle's plan is `docs/builder/build-034-permissions-0_0_10.md`, which this move gates and which therefore did not exist when the move ran). `spec-034` shipped in `0.0.10` with a [`-terms.csv`][spec-034-terms] companion and no `-rationale.md` sibling; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file. The `033` companion is the immediately-preceding execution of the same move and this file matches its shape.
+Created by pre-flight step 7 of the `034` residual-reconciliation cycle, whose plan is [`docs/builder/build-034-permissions-0_0_10.md`][build-034] (this move gates that plan, so it did not exist when the move ran). The plan and the cycle's final gate are the surviving record: the per-round artifacts they cite were deleted when the cycle closed, which is `BUILD.md`'s convention rather than a loss. `spec-034` shipped in `0.0.10` with a [`-terms.csv`][spec-034-terms] companion and no `-rationale.md` sibling; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file. The `033` companion is the immediately-preceding execution of the same move and this file matches its shape.
 
 Measured against the spec on disk before the move (145,643 bytes, 674 lines), four routes carried text out:
 
@@ -30,7 +30,7 @@ Decision 5's `column`-value carve-out likewise needed no action: the reason the 
 
 **Not byte-verbatim in one respect.** Text carrying the in-page anchors `#edge-cases-and-constraints`, `#error-shapes`, `#slice-checklist`, and `#non-goals` names spec sections this file does not have; those 7 uses across 4 anchors are re-pointed at the spec through reference-style links rather than left to dangle. The `#decision-N--...` anchors were left as they were: this file carries headings with exactly those slugs, so they resolve locally, which is where a reader of a moved sentence wants to land. `#risks-and-open-questions` likewise resolves locally.
 
-**Not yet reconciled.** This move did not check the spec against `HEAD`; that is the rest of the `034` cycle's job. Suspected spec-vs-source divergences noticed while reading are recorded in [`docs/builder/bld-034-slice-0-rationale_extraction.md`][bld-034] under `### Notes for Worker 1 (spec reconciliation)`, deliberately unverified. When the conformance cohorts land their findings, each correction goes in the spec, stated directly and without chronology, and what changed and why is appended here as a `**Post-ship:**` bullet under the owning Decision.
+**Reconciled by the rest of the cycle.** This move did not itself check the spec against `HEAD`. The conformance cohorts did, grading 185 contract rows across the cascade module, the optimizer composition pins, and the fakeshop surface, and returning exactly one skipped contract; the divergences this move suspected while reading were carried into that grading and settled there. Every correction went into the spec stated directly and without chronology, and what changed and why is appended here as a `**Post-ship:**` bullet under the owning Decision - 20 of them under 10 Decisions, plus 7 under `## Non-Decision deliberation`.
 
 ## Revision history
 
@@ -413,7 +413,7 @@ Findings and provenance that belong to no single Decision.
 [spec-045]: ../spec-045-visibility_boundary-0_0_14.md
 
 <!-- docs/builder/ -->
-[bld-034]: ../../builder/bld-034-slice-0-rationale_extraction.md
+[build-034]: ../../builder/DONE/build-034-permissions-0_0_10.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

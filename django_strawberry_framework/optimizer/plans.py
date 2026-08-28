@@ -972,9 +972,9 @@ def apply_window_pagination(
     row-number range. The annotations compose with ``.only()`` (they are
     annotations, not deferred columns).
 
-    ``with_total_count`` is the conditional-count contract (connection window
-    rigor, workstream B; the MrThearMan-optimizer lesson): the per-partition
-    count costs on every row, so the nested planner passes ``False`` when nothing in the
+    ``with_total_count`` is the conditional-count contract (spec-033 Decision 4;
+    the MrThearMan-optimizer lesson): the per-partition count costs on every
+    row, so the nested planner passes ``False`` when nothing in the
     selection can observe the count - and, via the count-free ``hasNextPage``
     probe, ALSO when a plain ``first: N`` page selects only ``hasNextPage`` (not
     ``totalCount``), which overfetches an n+1 sentinel instead (``next_page_probe``
@@ -1124,9 +1124,9 @@ def apply_window_pagination(
         range_q = upper if range_q is None else (range_q & upper)
     if range_q is not None:
         if range_plan.add_marker_rows:
-            # Marker rows (connection window rigor, workstream C - the
-            # graph-node lesson "keep the parent's group identifiable in the
-            # result", adapted to windowed prefetch): ``offset > 0`` (overshot
+            # Marker rows (spec-033 Decision 4 - the graph-node lesson "keep
+            # the parent's group identifiable in the result", adapted to
+            # windowed prefetch): ``offset > 0`` (overshot
             # ``after:``) and ``limit == 0`` (``first: 0``) produce an empty
             # page for BOTH a parent whose children all sit before the offset
             # and a parent with no children at all - historically ambiguous,

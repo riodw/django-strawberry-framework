@@ -828,7 +828,7 @@ class TestApplyWindowPagination:
     def test_ambiguous_shapes_keep_partition_marker_row(self):
         """``offset > 0`` / ``limit == 0`` windows keep each partition's row 1.
 
-        The marker-row disambiguation (connection window rigor, workstream C):
+        The marker-row disambiguation (spec-033 Decision 4):
         the historically-ambiguous empty shapes OR the range filter with
         ``row_number == 1`` so an empty prefetch list proves zero children and
         a marker-only list carries the real count. The SQL shape pin: the
@@ -869,7 +869,7 @@ class TestApplyWindowPagination:
     def test_with_total_count_false_omits_count_annotation(self):
         """``with_total_count=False`` drops the count window, keeping the row filters.
 
-        The conditional-count contract (connection window rigor, workstream B):
+        The conditional-count contract (spec-033 Decision 4):
         the walker passes ``False`` when nothing in the selection observes the
         count; the row-number annotation and its range filters are untouched.
         """

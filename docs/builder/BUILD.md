@@ -542,6 +542,10 @@ The spec is **input** to the build, not output. But implementation routinely rev
 
 **Only Worker 1** may mutate `docs/spec-<NNN>-<topic>-<0_0_X>.md`, and records each edit in the active artifact under `### Spec changes made (Worker 1 only)` with cited spec line(s), a one-line reason, and the slice that triggered it. Workers 0, 2, and 3 surface spec issues under `### Notes for Worker 1 (spec reconciliation)` instead; they never edit the spec. If an edit fundamentally changes the contract Worker 2 already implemented against, Worker 1 re-spawns Worker 2 for an adjustment pass before final verification.
 
+### `## Current state`: observations stand, predictions do not
+
+Its vintage framing licenses dated **observations** of the pre-build repo, not **predictions** about the build. A falsified observation stays — the header dates it; a falsified prediction is rewritten, since nothing dates a claim about the outcome. One bullet can carry both, so grade clause by clause. A slice-checklist box or Definition-of-done item gets none: a stale figure there is a false completion claim.
+
 ### Slice splitting
 
 Worker 1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals it cannot land as one coherent diff — the diff is too large for sensible review, the two halves have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit, recorded like any other. Worker 1 then returns control to Worker 0 to regenerate the plan's checklist and dispatch each sub-slice in sequence. A split costs an extra artifact and an extra full worker cycle, so reserve it for cases where the unsplit slice would harm review quality.

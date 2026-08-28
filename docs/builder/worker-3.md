@@ -174,7 +174,7 @@ Append 3-5 lines per pass, accepted or rejected: what kind of implementation pas
 - Carry forward: when a slice injects at __init_subclass__, check whether a later slice plans another injection there.
 ```
 
-Entries are append-only. Past ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note (`docs/builder/BUILD.md` `### Worker memory`).
+Append-only, under the consolidation cap in `docs/builder/BUILD.md` `### Worker memory`.
 
 ## Stop conditions
 

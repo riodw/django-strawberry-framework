@@ -638,8 +638,8 @@ def test_library_relation_override_shapes_http_response_data():
             ],
         },
     }
-    # The consumer override OWNS the relation (workstream D - the
-    # strawberry-django #697 bug class): the walker leaves ``shelves``
+    # The consumer override OWNS the relation (the strawberry-django #697
+    # bug class): the walker leaves ``shelves``
     # fully unplanned, so the historical speculative prefetch (a query the
     # override's ``order_by("-code")`` re-query never consumed) is GONE.
     # The observable baseline is root query + one override manager query
@@ -664,7 +664,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
         default resolver returns ``Branch._default_manager.all()``).
       * 0 SELECTs for a ``shelves`` prefetch: the consumer override on
         ``BranchType.shelves`` OWNS the relation, so the walker leaves it
-        fully unplanned (workstream D) - the historical speculative
+        fully unplanned (strawberry-django #697) - the historical speculative
         ``prefetch_related("shelves")`` query (which the override's
         ``order_by("-code")`` re-query never consumed) no longer runs.
       * 2 SELECTs (one per seeded ``Branch``) for the consumer-override
@@ -710,7 +710,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     assert len(captured) == 3
     assert "library_branch" in captured[0]["sql"]
     # The two per-branch consumer-override queries; no prefetch query precedes
-    # them (workstream D - the relation is consumer-owned, so unplanned).
+    # them (the relation is consumer-owned, so unplanned).
     assert "library_shelf" in captured[1]["sql"]
     assert "library_shelf" in captured[2]["sql"]
 
@@ -8083,7 +8083,7 @@ def test_golden_sdl_products_serializer_input():
 
 
 # ---------------------------------------------------------------------------
-# M2M duplicate-through-join tripwires (connection window rigor, workstream A).
+# M2M duplicate-through-join tripwires (spec-033 Decision 4).
 #
 # The windowed nested-connection prefetch partitions by an M2M relation name
 # (plans.py::window_partition_for_prefetch), which joins the through table at
@@ -8252,7 +8252,7 @@ def test_nested_genres_connection_overlap_single_through_join():
 def test_nested_cheap_page_window_omits_total_count_annotation():
     """The common cheap-page shape compiles NO ``_dst_total_count`` window.
 
-    Conditional total count (connection window rigor, workstream B - the
+    Conditional total count (spec-033 Decision 4 - the
     MrThearMan-optimizer lesson): ``edges`` + cursors + ``hasPreviousPage``
     derive from ``_dst_row_number`` alone, so the per-partition ``Count(1)
     OVER`` is dropped from the window SQL for this shape. The page itself
@@ -8312,7 +8312,7 @@ def test_nested_cheap_page_window_omits_total_count_annotation():
 def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args):
     """``first: 0`` / overshot ``after:`` serve true counts in TWO queries live.
 
-    The marker-row disambiguation (connection window rigor, workstream C)
+    The marker-row disambiguation (spec-033 Decision 5)
     live over /graphql/: these shapes historically fell back per-parent
     (2 + N queries for N parents); the window now keeps each partition's
     row 1, so every parent's empty page serves the TRUE ``totalCount`` and

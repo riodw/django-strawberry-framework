@@ -1310,7 +1310,7 @@ def plan_connection_relation(
             tuple(column.field.attname for column in keyset_context.columns),
         )
 
-    # Conditional total count (workstream B) + count-free ``hasNextPage``
+    # Conditional total count (spec-033 Decision 4) + count-free ``hasNextPage``
     # (the n+1 overfetch probe): annotate the per-partition ``Count(1) OVER``
     # only when something needs it. The two selection observers come from the
     # shared per-selection walks (``selections.py``), computed ONCE here and

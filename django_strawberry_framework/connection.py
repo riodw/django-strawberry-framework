@@ -293,8 +293,8 @@ def _resolve_from_window(
     by both ``resolve_connection`` paths (spec-033 Decision 5).
 
     The historically-ambiguous empty shapes (``offset > 0`` overshot ``after:``,
-    ``limit == 0`` ``first: 0``) are served from MARKER rows (connection window
-    rigor, workstream C): ``apply_window_pagination`` keeps each partition's
+    ``limit == 0`` ``first: 0``) are served from MARKER rows
+    (spec-033 Decision 5): ``apply_window_pagination`` keeps each partition's
     row 1 for these shapes, so an empty rows list now PROVES the parent has no
     children (serve the zero page), and a marker-only list carries the real
     ``_dst_total_count`` (serve the empty page with true count/flags). Markers
@@ -332,7 +332,7 @@ def _resolve_from_window(
     fall back to the per-parent pipeline: a reversed ``last: 0`` window
     (upstream's ``edges[-0:]`` quirk serves ALL edges - only the pipeline
     reproduces it), or a count-less window whose selection requests a
-    count-derived field (the workstream-B defensive tail - see the ``total``
+    count-derived field (the conditional-count drift guard - see the ``total``
     read below).
 
     Cursor math is the positional offset cursor ``_dst_row_number - 1`` for
@@ -415,9 +415,9 @@ def _resolve_from_window(
             # which is the WHOLE list - only the per-parent pipeline reproduces
             # that quirk, so the (always-empty) reversed window falls back.
             return None
-        # With marker rows planned for the ambiguous shapes (workstream C) and
-        # the n+1 sentinel for the count-free probe, an empty forward window now
-        # PROVES the parent has no related rows for EVERY shape - a parent with
+        # With marker rows planned for the ambiguous shapes (spec-033 Decision 4)
+        # and the n+1 sentinel for the count-free probe, an empty forward window
+        # now PROVES the parent has no related rows for EVERY shape - a parent with
         # children would have kept its row 1 or its probe sentinel.
         # ``has_next_page`` False: no row survived the overfetch. A keyset seek
         # page has no offset domain, so its "a cursor was supplied" previous-page
@@ -487,8 +487,8 @@ def _resolve_from_window(
             total=total,
             has_previous_page=True if keyset_seek_supplied else None,
         )
-    # The count is annotated CONDITIONALLY (workstream B) - and NOT AT ALL for
-    # the count-free ``hasNextPage`` probe. A count-less row with a count
+    # The count is annotated CONDITIONALLY (spec-033 Decision 4) - and NOT AT
+    # ALL for the count-free ``hasNextPage`` probe. A count-less row with a count
     # observer requested that the probe does NOT serve means the plan-time
     # predicate and this resolve-time read have DRIFTED (they share the
     # selection walk in ``optimizer/selections.py``, so by construction this is
@@ -578,9 +578,9 @@ def _resolve_from_window(
         has_next_page = probe_row_seen
     elif keyset_seek_supplied:
         # Count-free with no probe means nothing observes the flag (the
-        # workstream-B drift guard above already sent an OBSERVED count-less
-        # page per-parent), so a missing seek count here is the inert
-        # placeholder case, never a served falsehood.
+        # conditional-count drift guard above already sent an OBSERVED
+        # count-less page per-parent), so a missing seek count here is the
+        # inert placeholder case, never a served falsehood.
         seek_total = getattr(last_row, WINDOW_KEYSET_SEEK_COUNT, None)
         has_next_page = (
             False if seek_total is None else getattr(last_row, WINDOW_ROW_NUMBER) < seek_total
@@ -689,9 +689,9 @@ def _consume_window(
             )
         if built is not None:
             return built
-        # Unservable window (reversed ``last: 0`` quirk, or the workstream-B
-        # drift guard): recover the per-parent queryset and run the shipped
-        # pipeline so the results stay byte-identical.
+        # Unservable window (reversed ``last: 0`` quirk, or the
+        # conditional-count drift guard): recover the per-parent queryset and
+        # run the shipped pipeline so the results stay byte-identical.
         nodes = nodes.fallback()
     return _consume_fallback(
         cls,
@@ -1908,10 +1908,10 @@ def _window_rows_are_annotated(rows: list) -> bool:
     falls back on a missing annotation): a ``to_attr`` list whose rows lack
     ``_dst_row_number`` is a consumer's own prefetch write, not the walker's
     window, and must NOT be consumed as one. ``_dst_total_count`` is NOT
-    probed: the walker annotates it conditionally (connection window rigor,
-    workstream B - only when ``totalCount`` / ``hasNextPage`` / the window
-    shape needs it), so a count-less page is still the walker's window. The
-    collision probe stays sound on the row number alone because the ``_dst_``
+    probed: the walker annotates it conditionally (spec-033 Decision 4 - only
+    when ``totalCount`` / ``hasNextPage`` / the window shape needs it), so a
+    count-less page is still the walker's window. The collision probe stays
+    sound on the row number alone because the ``_dst_``
     namespace is package-reserved (spec-033 Decision 4). An empty list has no
     rows to probe and is still a conclusive planned window candidate: marker
     shapes retain row 1 whenever the parent has children, so an empty list means

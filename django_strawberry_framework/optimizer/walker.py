@@ -563,16 +563,16 @@ def _walk_selections(
             continue
 
         # Consumer-assigned relation fields are FULLY unplanned without an
-        # explicit hint (connection window rigor, workstream D - the
-        # strawberry-django #697 bug class). The consumer replaced the
-        # generated relation resolver (``finalizer.py::finalize_django_types``
-        # skips attaching one via this same frozenset), so the walker cannot
-        # know what their resolver fetches: a speculative model-shaped
-        # ``Prefetch`` may pay a query nobody consumes, and - worse -
-        # recording ``planned_resolver_keys`` for the walked subtree would
-        # short-circuit ``types/resolvers.py::_check_n1`` for every generated
-        # resolver under the consumer's OWN returned instances, silencing a
-        # real N+1 under strictness. Leaving the selection unplanned (no
+        # explicit hint (the strawberry-django #697 bug class). The consumer
+        # replaced the generated relation resolver
+        # (``finalizer.py::finalize_django_types`` skips attaching one via this
+        # same frozenset), so the walker cannot know what their resolver
+        # fetches: a speculative model-shaped ``Prefetch`` may pay a query
+        # nobody consumes, and - worse - recording ``planned_resolver_keys``
+        # for the walked subtree would short-circuit
+        # ``types/resolvers.py::_check_n1`` for every generated resolver under
+        # the consumer's OWN returned instances, silencing a real N+1 under
+        # strictness. Leaving the selection unplanned (no
         # ``Prefetch``, no resolver keys, no connector column) is the
         # spec-033 Decision 6 fallback discipline: strictness SEES the per-parent
         # accesses, and a delegating resolver opts back in with an explicit

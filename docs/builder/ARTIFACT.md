@@ -9,7 +9,7 @@ The artifact's `Status:` line is set by exactly one worker per transition:
 - `planned` — Worker 1 sets this when the artifact is first created. New artifacts always start with `Status: planned`.
 - `built` — Worker 2 sets this at the end of every build pass (including re-passes after a Worker 3 rejection).
 - `revision-needed` — set by Worker 3 (review surfaces unresolved findings) or Worker 1 (final verification rejects); either triggers Worker 0 to spawn Worker 2 again. **Worker 2 may also set it, for one case only:** the structural-drift pause (`worker-2.md` "Plan-vs-implementation drift"), where the right answer changes a plan-level architectural call. That one routes to Worker **1** for a plan revision, not back to Worker 2 — the setter is what distinguishes the three, so the build report must name which pause it is.
-- `review-accepted` — set by Worker 3 when accepting the diff; signals Worker 0 to spawn Worker 1 for final verification. May be set with Medium-or-higher findings transparently escalated to Worker 1 (recorded under `### Notes for Worker 1 (spec reconciliation)` with an `Escalated:` prefix and the resolution paths) when resolution needs spec context Worker 2 cannot provide. Worker 1's final verification owns the decision.
+- `review-accepted` — set by Worker 3 when accepting the diff; signals Worker 0 to spawn Worker 1 for final verification. May carry Medium-or-higher findings escalated to Worker 1 (`worker-3.md` `### Acceptance gate`); Worker 1's final verification owns the decision.
 - `final-accepted` — set by Worker 1 at the end of final verification; signals Worker 0 to mark the checklist box.
 
 Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch.

@@ -2702,8 +2702,8 @@ def test_nested_connection_planned_as_windowed_prefetch():
 
     ``edges { node { title } }`` with ``first: 3`` selects neither ``totalCount``
     nor ``pageInfo { hasNextPage }``, so the conditional-count contract
-    (workstream B) plans the row-number window WITHOUT ``_dst_total_count`` -
-    the common cheap-page shape.
+    (spec-033 Decision 4) plans the row-number window WITHOUT
+    ``_dst_total_count`` - the common cheap-page shape.
     """
     from django_strawberry_framework.optimizer.plans import (
         WINDOW_ROW_NUMBER,
@@ -2869,7 +2869,7 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
     ],
 )
 def test_nested_connection_total_count_planned_only_when_observable(count_observer, expected):
-    """The count window follows workstream B + the count-free ``hasNextPage`` probe.
+    """The count window follows spec-033 Decision 4 and the count-free probe.
 
     Only ``totalCount`` keeps the ``_dst_total_count`` annotation on this plain
     ``first: N`` shape. ``pageInfo { hasNextPage }`` is served count-free by the
@@ -4899,8 +4899,7 @@ def test_mutation_id_only_relation_still_records_elision():
 
 
 # ---------------------------------------------------------------------------
-# Consumer-assigned relation gate (connection window rigor, workstream D -
-# the strawberry-django #697 bug class).
+# Consumer-assigned relation gate (the strawberry-django #697 bug class).
 # ---------------------------------------------------------------------------
 
 

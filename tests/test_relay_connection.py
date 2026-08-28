@@ -1999,7 +1999,7 @@ def test_fast_path_total_count_marker_bypasses_non_queryset_guard():
 def test_fast_path_ambiguous_empty_served_from_marker_row(args, django_assert_num_queries):
     """``first: 0`` (``limit == 0``) and overshot ``after:`` (``offset > 0``) serve from markers.
 
-    The marker-row disambiguation (connection window rigor, workstream C):
+    The marker-row disambiguation (spec-033 Decision 5):
     these shapes historically fell back per-parent (the empty window was
     ambiguous); the window now keeps each partition's row 1, so the empty page
     is served with the TRUE ``totalCount`` / ``pageInfo`` - byte-identical to
@@ -2028,7 +2028,7 @@ async def test_async_fast_path_last_zero_falls_back_for_total_count_and_pageinfo
     """The async fallback mirror rides the ``last: 0`` quirk UNDER ASYNC execution.
 
     ``last: 0`` is the one remaining always-fallback shape after the
-    marker-row disambiguation (workstream C): upstream ``ListConnection``
+    marker-row disambiguation (spec-033 Decision 5): upstream ``ListConnection``
     slices ``edges[-0:]`` - the WHOLE list - so only the per-parent pipeline
     reproduces it (the walker plans nothing for it). Driven
     by ``await schema.execute(...)``, the per-parent queryset resolves
@@ -2670,7 +2670,7 @@ def test_strictness_silent_when_planned():
 
 
 # ---------------------------------------------------------------------------
-# Conditional ``_dst_total_count`` (connection window rigor, workstream B).
+# Conditional ``_dst_total_count`` (spec-033 Decision 4).
 # ---------------------------------------------------------------------------
 
 
@@ -2679,7 +2679,7 @@ def test_fast_path_count_less_window_serves_cheap_page(django_assert_num_queries
     """A window planned WITHOUT the count still fast-paths the cheap page shape.
 
     ``edges`` + ``hasPreviousPage`` + cursors derive from ``_dst_row_number``
-    alone, so the walker drops ``_dst_total_count`` (workstream B) and the
+    alone, so the walker drops ``_dst_total_count`` (spec-033 Decision 4) and the
     relaxed row probe (``_window_rows_are_annotated``) still hands the rows to
     the fast path - fixed two-query cost, correct page, no per-parent
     fallback. The window SQL carries no count aggregate.
@@ -2707,7 +2707,7 @@ def test_fast_path_count_less_window_serves_cheap_page(django_assert_num_queries
 def test_count_less_window_with_count_observer_falls_back_defensively():
     """A count-less window whose selection OBSERVES the count returns ``None``.
 
-    The workstream-B defensive tail in ``_resolve_from_window``, narrowed by
+    The conditional-count drift guard in ``_resolve_from_window``, narrowed by
     The count-policy overhaul leaves only a ``totalCount``
     observer (``want_count=True``) on a window that carries no count annotation.
     Plan-time (``connection_count_required``) and resolve-time (``want_count``)
@@ -2769,7 +2769,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
 
 
 # ---------------------------------------------------------------------------
-# Consumer-assigned relation gate under strictness (workstream D).
+# Consumer-assigned relation gate under strictness (strawberry-django #697).
 # ---------------------------------------------------------------------------
 
 
@@ -2778,9 +2778,10 @@ def _shelves_with_consumer_books_schema(*, strictness="raise", books_hint=None):
 
     The consumer resolver re-queries the relation (``order_by(...)[:2]``), so
     nested generated resolvers under its returned instances run against FRESH
-    rows - the N+1 shape the workstream-D gate makes strictness-visible. The
-    nested probe is the many-side ``loans`` (a reverse FK): Django's related
-    manager seeds each child's FORWARD FK cache with the parent
+    rows - the N+1 shape the consumer-assigned relation gate makes
+    strictness-visible. The nested probe is the many-side ``loans`` (a reverse
+    FK): Django's related manager seeds each child's FORWARD FK cache with the
+    parent
     (known-related-objects), so a ``books { shelf }`` access never lazy-loads
     - the many side has no such seeding and is the real N+1.
     ``books_hint`` opts back in via ``Meta.optimizer_hints``.
@@ -2831,7 +2832,7 @@ def _shelves_with_consumer_books_schema(*, strictness="raise", books_hint=None):
 def test_consumer_assigned_relation_subtree_n1_visible_under_strictness():
     """The N+1 under a consumer-owned relation FIRES under strictness ``"raise"``.
 
-    The workstream-D fix (strawberry-django #697 bug class): the walker used
+    The consumer-assigned relation fix (strawberry-django #697): the walker used
     to record ``planned_resolver_keys`` for the consumer-owned relation's
     walked subtree, so the nested ``shelf`` accesses on the consumer
     resolver's FRESH instances short-circuited ``_check_n1`` and the real

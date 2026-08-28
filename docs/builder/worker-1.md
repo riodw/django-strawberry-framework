@@ -240,7 +240,7 @@ Append 3-5 lines per pass — which slice/pass, DRY patterns or spec corrections
 - Carry forward: every slice adding a method to DjangoType should check whether sibling slices already inject one.
 ```
 
-Append-only. Beyond ~50 lines, **consolidate before appending the next entry** — merge similar observations into one pattern note (`docs/builder/BUILD.md` `### Worker memory`).
+Append-only, under the consolidation cap in `docs/builder/BUILD.md` `### Worker memory`.
 
 ## Stop conditions
 

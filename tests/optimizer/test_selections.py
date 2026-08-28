@@ -407,10 +407,10 @@ def test_connection_count_required_matrix():
     """``connection_count_required`` fires on ``totalCount`` / ``pageInfo.hasNextPage`` only.
 
     The plan-time half of the conditional ``_dst_total_count`` contract
-    (workstream B): cursors and ``hasPreviousPage`` derive from the row number
-    alone, so neither keeps the count; fragment wrappers are descended at both
-    levels; directive-excluded observers do not fire (live ``@skip`` args are
-    already evaluated on converted selections).
+    (spec-033 Decision 4): cursors and ``hasPreviousPage`` derive from the row
+    number alone, so neither keeps the count; fragment wrappers are descended
+    at both levels; directive-excluded observers do not fire (live ``@skip``
+    args are already evaluated on converted selections).
     """
     edges_only = _field("conn", selections=[_field("edges", selections=[_field("node")])])
     assert connection_count_required(edges_only) is False

@@ -676,7 +676,7 @@ def connection_count_required(
 ) -> bool:
     """Return whether a connection selection can OBSERVE the partition total count.
 
-    The count-OBSERVABILITY predicate (connection window rigor, workstream B):
+    The count-OBSERVABILITY predicate (spec-033 Decision 4):
     ``True`` when the selection carries ``totalCount`` as a direct child of the
     connection, or ``hasNextPage`` under a direct ``pageInfo`` child - the two
     fields a per-partition ``Count(1) OVER (PARTITION BY ...)`` can serve

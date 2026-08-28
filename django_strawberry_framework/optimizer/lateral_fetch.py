@@ -21,8 +21,8 @@ per parent id::
 
 which Postgres (>= 15, via the monotonic-window-function run condition)
 stops after ``offset + limit`` rows per parent - O(parents x page). The row
-numbers, the range predicate (including workstream C's ambiguous-shape
-markers), and the forward return order are byte-mirrors of
+numbers, the range predicate (including the ambiguous-shape marker rows of
+spec-033 Decision 4), and the forward return order are byte-mirrors of
 ``plans.py::apply_window_pagination``, so the rows satisfy the ``to_attr``
 contract and inherit the entire connection fast path
 (``connection.py::_resolve_from_window``) untouched.
@@ -252,8 +252,8 @@ def build_lateral_sql(
     unfiltered beyond the parent-link predicate.
 
     The row-number range predicate reproduces ``apply_window_pagination``
-    branch for branch (forward bounds, workstream C's ``OR rn = 1`` marker
-    for the ambiguous shapes, the reversed row number for ``last``-only
+    branch for branch (forward bounds, the ``OR rn = 1`` marker row for the
+    ambiguous shapes, the reversed row number for ``last``-only
     windows, ``None``/``sys.maxsize`` as "no upper bound") so a lateral page
     is row-for-row the windowed page.
 
@@ -578,7 +578,7 @@ def _recognize_lateral_fetch(
     window names, ``extra(select=...)`` limited to the M2M
     ``_prefetch_related_val_*`` aliases the spec predicted, and a WHERE tree
     whose children are window-range quals (their ``lhs`` is the cloned
-    ``Window`` expression - including workstream C's nested marker OR node)
+    ``Window`` expression - including the nested marker-row OR node)
     plus ONE ``__in`` lookup on the spec's parent link column with an
     already-normalized value list (``RelatedIn`` resolves model instances to
     pk values at construction). The window quals are proven to be EXACTLY the

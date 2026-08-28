@@ -120,7 +120,7 @@ Append 3-5 lines per completed pass: the implementation pattern used, any reusab
 - Worker 3 pushback: no-op when `relay` is missing; promoted a temp test into tests/types/test_relay.py.
 ```
 
-Entries are append-only. Past ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note (`docs/builder/BUILD.md` `### Worker memory`).
+Append-only, under the consolidation cap in `docs/builder/BUILD.md` `### Worker memory`.
 
 ## Stop conditions
 

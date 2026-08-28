@@ -1300,7 +1300,7 @@ def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppres
     # subclass's dict.
     # Raw ``__dict__`` on purpose: the subclass's OWN dict is the subject here.
     assert "id" not in dict(
-        ChildRelayType.__dict__.get("__annotations__", {}),  # noqa: RUF063, RUF100
+        ChildRelayType.__dict__.get("__annotations__", {}),  # noqa: RUF063
     )
 
     finalize_django_types()

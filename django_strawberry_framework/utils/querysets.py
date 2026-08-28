@@ -2517,7 +2517,10 @@ def _seal_or_defect(
       reordering or refiltering a sliced query, so the next framework transform
       (a Relay ``.filter(pk=...)``, a connection ordering) would raise a raw
       ``TypeError`` outside the typed defect contract. The cascade
-      (``require_model_rows=False``) keeps its own slice rejection in
+      (``require_model_rows=False``) keeps its own slice rejections, one per
+      queryset it receives: the root it is handed, in
+      ``permissions.py::_validate_root_queryset``, and the hook return it
+      composes as a subquery, in
       ``permissions.py::_validated_target_subquery``. ``allow_sliced`` (private,
       default ``False``) suppresses ONLY this slice rejection while leaving
       ``require_model_rows`` in force: it is set solely for a ``Prefetch`` child

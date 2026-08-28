@@ -2266,21 +2266,100 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     assert chain["public_cat"].name in category_names
 
 
+#: The four products root connection fields, one row per field, shared by both
+#: staff cascade tests so the matrix is named once. Each row carries the model
+#: (the ORM side of the expectation, and the source of the GraphQL type name via
+#: ``_meta.label_lower``) and the ``view_<model>`` username: the spec-034 matrix
+#: is three actors, and the ``view_<model>`` holder is the one that takes the
+#: hook's ``elif user.has_perm(...)`` branch instead of the anonymous
+#: fall-through. Rows are in the schema's declaration order.
+_CASCADE_ROOT_FIELDS = (
+    pytest.param("allCategories", models.Category, "view_category_1", id="allCategories"),
+    pytest.param("allItems", models.Item, "view_item_1", id="allItems"),
+    pytest.param("allProperties", models.Property, "view_property_1", id="allProperties"),
+    pytest.param("allEntries", models.Entry, "view_entry_1", id="allEntries"),
+)
+
+
+def _cascade_page_gids(model) -> list[str]:
+    """The unfiltered page a root connection returns for ``model``, as wire GlobalIDs.
+
+    The ordering and the cap are the CONNECTION's, and they are coupled here so
+    the two staff rows below cannot drift apart on what "the page" is. No
+    products model declares ``Meta.ordering`` and none is a keyset target, so
+    the connection's deterministic order resolves to ``("id",)`` and it issues
+    ``ORDER BY id``; an un-paginated page is then truncated at
+    ``_RELAY_MAX_RESULTS``. ``order_by("pk")`` is that same order by
+    construction. Knows nothing about actors: it takes no client and issues no
+    request, so it states the page BEFORE any cascade narrows it.
+    """
+    return [
+        _global_id(model._meta.label_lower, pk)
+        for pk in model.objects.order_by("pk").values_list("pk", flat=True)[:_RELAY_MAX_RESULTS]
+    ]
+
+
 @pytest.mark.django_db
-def test_cascade_staff_sees_everything():
+@pytest.mark.parametrize("field, model, _view_username", _CASCADE_ROOT_FIELDS)
+def test_cascade_staff_sees_everything(field, model, _view_username):
     """A staff user (``create_users`` makes ``staff_<n>`` is_staff, NOT is_superuser) bypasses the cascade.
 
-    Staff hits the ``user.is_staff`` short-circuit in every hook, so the visible
-    counts equal the full ORM counts (capped at ``_RELAY_MAX_RESULTS`` for the
-    connection page). Asserts against the seeded full set, including the private
-    rows the cascade would hide for anyone else.
+    Staff hits the ``user.is_staff`` short-circuit in every hook, so the page IS
+    the unfiltered page: the returned node ids equal the model's own rows in pk
+    order, truncated to ``_RELAY_MAX_RESULTS``, private rows included. Pinned as
+    an id LIST and not as a count because ``Property`` and ``Entry`` sit AT the
+    page cap at this fixture volume, where a count comparison collapses to the
+    constant and stops distinguishing the staff page from a narrowed one. The
+    sibling row below pins the complementary property - a specific private row
+    that the other two actors of the matrix provably cannot see.
     """
     create_users(1)
     seed_data(1)
     seed_cascade_split()
     client = _login("staff_1")
 
-    for field, model in (("allCategories", models.Category), ("allItems", models.Item)):
+    response = _post_graphql(
+        f"query {{ {field} {{ edges {{ node {{ id }} }} }} }}",
+        client=client,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    # There must BE rows the cascade would hide, or the equality below is
+    # satisfied by a queryset the cascade never had anything to narrow.
+    assert model.objects.filter(is_private=True).exists(), field
+    returned = [edge["node"]["id"] for edge in payload["data"][field]["edges"]]
+    expected = _cascade_page_gids(model)
+    assert returned == expected, (field, len(returned), len(expected))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field, model, view_username", _CASCADE_ROOT_FIELDS)
+def test_cascade_staff_sees_private_rows_hidden_from_non_staff(field, model, view_username):
+    """Staff sees a specific private row that BOTH non-staff actors provably cannot.
+
+    The differential half of the spec-034 anonymous / ``view_<model>`` / staff
+    matrix: the row above pins staff's page against the ORM, this one pins it
+    against the other two actors. The subject is one row's MEMBERSHIP, not a
+    subset relation - with 180 seeded ``Property`` / ``Entry`` rows over a
+    ``_RELAY_MAX_RESULTS`` page the three actors' pages are windows over
+    different row sets, so ``set(anonymous) < set(staff)`` is not a sound
+    invariant here. Both non-staff pages are asserted non-empty, since "the
+    hidden row is absent" is otherwise satisfied by a page that returned nothing.
+    """
+    create_users(1)
+    seed_data(1)
+    seed_cascade_split()
+
+    hidden = model.objects.filter(is_private=True).order_by("pk").first()
+    assert hidden is not None, field
+    hidden_gid = _global_id(model._meta.label_lower, hidden.pk)
+    # The hidden row has to fall inside the page the query returns, or staff's
+    # half of the assertion would fail for pagination reasons, not permission ones.
+    assert hidden_gid in _cascade_page_gids(model), (field, hidden.pk)
+
+    def node_ids(client):
         response = _post_graphql(
             f"query {{ {field} {{ edges {{ node {{ id }} }} }} }}",
             client=client,
@@ -2288,13 +2367,17 @@ def test_cascade_staff_sees_everything():
         assert response.status_code == 200
         payload = response.json()
         assert "errors" not in payload, payload
-        returned = len(payload["data"][field]["edges"])
-        expected = min(model.objects.count(), _RELAY_MAX_RESULTS)
-        assert returned == expected, (field, returned, expected)
+        return [edge["node"]["id"] for edge in payload["data"][field]["edges"]]
 
-    # Sanity: staff sees the private-chain rows that the cascade hides for others.
-    assert models.Category.objects.filter(is_private=True).exists()
-    assert models.Category.objects.count() <= _RELAY_MAX_RESULTS
+    staff_ids = node_ids(_login("staff_1"))
+    anonymous_ids = node_ids(None)
+    view_ids = node_ids(_login(view_username))
+
+    assert anonymous_ids, (field, "anonymous page is empty; the absence below pins nothing")
+    assert view_ids, (field, view_username, "page is empty; the absence below pins nothing")
+    assert hidden_gid in staff_ids, (field, hidden.pk)
+    assert hidden_gid not in anonymous_ids, (field, hidden.pk)
+    assert hidden_gid not in view_ids, (field, view_username, hidden.pk)
 
 
 @pytest.mark.django_db

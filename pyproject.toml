@@ -39,7 +39,6 @@ dependencies = [
     # factories per operation on both execution colors.
     "strawberry-graphql>=0.316.0",
     "django-filter>=25.2",
-    "wrapt>=2.0.1",
 ]
 
 [project.urls]

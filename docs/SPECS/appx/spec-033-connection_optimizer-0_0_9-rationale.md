@@ -8,7 +8,7 @@ Read this when checking a finished implementation against the reasoning that pro
 
 ## Provenance of this record
 
-Created by pre-flight step 7 of the `033` residual-reconciliation cycle (Slice 0, recorded in [`docs/builder/build-033-connection_optimizer-0_0_9.md`][build-033] and [`docs/builder/bld-033-slice-0-rationale_extraction.md`][bld-033-slice-0]). `spec-033` shipped in `0.0.9` with a [`-terms.csv`][spec-033-terms] companion and no `-rationale.md` sibling — the last spec in the archived [`docs/SPECS/`][spec-033] run carrying none; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file.
+Created by pre-flight step 7 of the `033` residual-reconciliation cycle (Slice 0, recorded in [`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`][build-033], which carries the cycle's deferred-work catalog). `spec-033` shipped in `0.0.9` with a [`-terms.csv`][spec-033-terms] companion and no `-rationale.md` sibling — the last spec in the archived [`docs/SPECS/`][spec-033] run carrying none; this file closes that gap. Nothing in it is new reasoning: every passage below was cut from the spec in the same pass that created this file.
 
 Measured against the spec on disk before the move (174,055 bytes, 733 lines), four routes carried text out:
 
@@ -390,8 +390,7 @@ Findings and provenance that belong to no single Decision.
 [spec-033]: ../spec-033-connection_optimizer-0_0_9.md
 
 <!-- docs/builder/ -->
-[bld-033-slice-0]: ../../builder/bld-033-slice-0-rationale_extraction.md
-[build-033]: ../../builder/build-033-connection_optimizer-0_0_9.md
+[build-033]: ../../builder/DONE/build-033-connection_optimizer-0_0_9.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

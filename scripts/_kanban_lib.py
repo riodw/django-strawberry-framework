@@ -34,6 +34,22 @@ FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
 # not crash with ``database is locked``.
 SQLITE_BUSY_TIMEOUT_MS = 5000
 
+# The render's own row bound, published for this process only (see
+# :func:`configure_django`). The package default is ``max_list_rows = 100`` and a
+# collection over it is truncated SILENTLY - the bound slices the result and
+# returns a short page with no error, which is correct for a served API and wrong
+# for an export that must reproduce the whole board. Card 52 crossed 100 items and
+# one row vanished from both KANBAN.md and KANBAN.html while every freshness check
+# still reported "up to date", because a ``--check`` compares the renderer against
+# itself. This value only buys headroom; what makes it safe is
+# :func:`truncation_defects`, which fails the build if any list is short of the
+# database regardless of where the bound sits.
+KANBAN_RENDER_MAX_LIST_ROWS = 5000
+
+# The ``BoardDoc`` namespace the board exports carry. The table is shared with the
+# glossary build, so a count over the whole table is not this export's ground truth.
+KANBAN_DOC_NAMESPACE = "kanban"
+
 # Stored board prose keeps a placeholder rather than a literal, because a card id is
 # a recomputed ordinal that drifts on every renumber. The two exports resolve the
 # same placeholders by different routes, so both must agree on what is resolvable.
@@ -131,6 +147,71 @@ def placeholder_defects(
     return defects
 
 
+def board_row_counts() -> dict[str, Any]:
+    """Read the board's true row counts straight from the ORM.
+
+    Separated from :func:`truncation_defects` so the comparison is a pure function
+    with no database of its own to stand up, and so the one part that can be wrong
+    in a way tests cannot see - *which* rows are the right ground truth - is stated
+    in one place. The board-doc count is scoped to the namespace the GraphQL field
+    itself selects: ``allKanbanBoardDocs`` returns the ``kanban`` docs only, while
+    the table also holds ``glossary`` ones this export is right not to carry.
+    Counting the whole table reports a permanent 5-row shortfall, which is what the
+    first draft of this guard did - failing on its own wrong ground truth rather
+    than on a defect.
+    """
+    from apps.kanban import models
+    from django.db.models import Count
+
+    return {
+        "cards": models.Card.objects.count(),
+        "board_docs": models.BoardDoc.objects.filter(namespace=KANBAN_DOC_NAMESPACE).count(),
+        "items": dict(
+            models.CardItem.objects.values_list("card__number").annotate(total=Count("pk")),
+        ),
+    }
+
+
+def truncation_defects(
+    cards: Sequence[dict[str, Any]],
+    board_docs: Sequence[dict[str, Any]],
+    expected: dict[str, Any],
+) -> list[str]:
+    """Return one message per payload list ``expected`` says is short.
+
+    The export is GraphQL-driven on purpose, so it inherits the package's row
+    bounds - including the silent one. ``max_list_rows`` slices an over-large
+    collection and returns it without an error or a flag, so a truncated board
+    renders as a well-formed board that is simply missing rows, and the renderer
+    cannot tell the difference from the payload alone. The database the request
+    just read is the only available ground truth, so a mismatch against it is
+    truncation rather than a race.
+
+    Checks the two lists that grow without bound - a card's items and the whole
+    card set - plus the board docs. Reference lists are bounded by hand-authored
+    prose and have never approached a page.
+    """
+    defects: list[str] = []
+    if len(cards) != expected["cards"]:
+        defects.append(f"allCards: payload has {len(cards)}, database has {expected['cards']}")
+
+    # The exports inject synthetic docs the database does not store, so a payload
+    # SHORTER than the namespace is the only defect shape here.
+    if len(board_docs) < expected["board_docs"]:
+        defects.append(
+            f"allKanbanBoardDocs: payload has {len(board_docs)}, "
+            f"database has {expected['board_docs']}",
+        )
+
+    for card in cards:
+        number = card.get("number")
+        found = len(card.get("items", []))
+        owed = expected["items"].get(number, 0)
+        if found != owed:
+            defects.append(f"card {number} items: payload has {found}, database has {owed}")
+    return defects
+
+
 class GitCommandError(RuntimeError):
     """A ``git`` invocation failed (caller-correctable)."""
 
@@ -155,6 +236,25 @@ def _install_sqlite_busy_timeout() -> None:
             _apply(connection)
 
 
+def _widen_render_row_bound() -> None:
+    """Raise this process's ``max_list_rows`` before the schema is constructed.
+
+    The bound is normalized ONCE, at ``DjangoSchema`` construction, and the
+    fakeshop schema is built when the URLconf loads on the first request - so the
+    setting has to be in place before then, which is why this runs inside
+    ``configure_django`` rather than at the fetch. Scoped to the render process:
+    the shipped ``config/settings.py`` keeps the package default, so the example
+    app's served behavior and the tests that pin the 100-row cap are untouched.
+    """
+    from django.conf import settings as django_settings
+
+    configured = dict(getattr(django_settings, "DJANGO_STRAWBERRY_FRAMEWORK", {}) or {})
+    resource_policy = dict(configured.get("RESOURCE_POLICY", {}) or {})
+    resource_policy["max_list_rows"] = KANBAN_RENDER_MAX_LIST_ROWS
+    configured["RESOURCE_POLICY"] = resource_policy
+    django_settings.DJANGO_STRAWBERRY_FRAMEWORK = configured
+
+
 def configure_django() -> None:
     """Load the fakeshop Django settings for the in-process GraphQL request.
 
@@ -164,7 +264,9 @@ def configure_django() -> None:
     is ever imported into a longer-lived process, isolate or restore these instead.
 
     Also installs a SQLite ``busy_timeout`` so a render tolerates a concurrent
-    writer holding the DB lock (see :data:`SQLITE_BUSY_TIMEOUT_MS`).
+    writer holding the DB lock (see :data:`SQLITE_BUSY_TIMEOUT_MS`), and widens
+    the row bound for this process only (see
+    :data:`KANBAN_RENDER_MAX_LIST_ROWS`).
     """
     sys.path.insert(0, str(FAKESHOP_ROOT))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
@@ -172,6 +274,7 @@ def configure_django() -> None:
     import django
 
     django.setup()
+    _widen_render_row_bound()
     _install_sqlite_busy_timeout()
 
 

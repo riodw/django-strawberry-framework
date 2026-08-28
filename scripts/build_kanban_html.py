@@ -18,18 +18,22 @@ from typing import Any
 # check_alpha_parity import these names from this module.
 try:
     from _kanban_lib import (
+        board_row_counts,
         cli_exit,
         configure_django,
         fetch_graphql_data,
         placeholder_defects,
+        truncation_defects,
         version_tuple,
     )
 except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo root on path)
     from scripts._kanban_lib import (
+        board_row_counts,
         cli_exit,
         configure_django,
         fetch_graphql_data,
         placeholder_defects,
+        truncation_defects,
         version_tuple,
     )
 
@@ -679,6 +683,7 @@ def fetch_dashboard_data() -> dict[str, Any]:
         STATIC_KANBAN_QUERY,
         required_lists=("allCards", "allKanbanBoardDocs", *LOOKUP_FIELDS),
     )
+    assert_nothing_truncated(data["allCards"], data["allKanbanBoardDocs"])
 
     lookups = {}
     for graphql_name, payload_name in LOOKUP_FIELDS.items():
@@ -780,6 +785,30 @@ def _html_is_fresh(html_path: Path, data_block: str) -> bool:
         return False
     match = DATA_BLOCK_RE.search(html_path.read_text(encoding="utf-8"))
     return match is not None and match.group(0) == data_block
+
+
+def assert_nothing_truncated(
+    cards: list[dict[str, Any]],
+    board_docs: list[dict[str, Any]],
+) -> None:
+    """Fail the build when a row bound silenced part of the board.
+
+    Sits at the shared fetch rather than in either ``main``, because both exports
+    read this one payload: a guard on the markdown side alone would let the HTML
+    board publish the truncation, which is the same divergence
+    ``assert_placeholders_resolve`` exists to prevent. It has to be an assertion
+    rather than a wider bound, because a bound is a number someone eventually
+    crosses - and crossing it is silent, so the freshness checks keep passing
+    against a board that is quietly missing rows.
+    """
+    defects = truncation_defects(cards, board_docs, board_row_counts())
+    if defects:
+        detail = "".join(f"\n  - {defect}" for defect in defects)
+        raise RuntimeError(
+            f"{len(defects)} board list(s) came back short of the database, so the "
+            f"export would silently drop rows:{detail}\n"
+            f"Raise KANBAN_RENDER_MAX_LIST_ROWS in scripts/_kanban_lib.py.",
+        )
 
 
 def assert_placeholders_resolve(snapshot: dict[str, Any]) -> None:

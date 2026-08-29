@@ -1,9 +1,10 @@
 # Spec: Extract `DjangoDebugExtension` into the standalone `django-strawberry-debug` package — the framework keeps a `[debug]` extra and a guarded re-export
 
-Planned for `0.0.15` (card `TODO-ALPHA-050-0.0.15`); **this card shares the
-`0.0.15` line with the boundary+DRY card `051`, which lands last and owns
-the version bump**
-([Decision 7](#decision-7--joint-0015-cut--card-051-owns-the-version-bump)).
+Planned for `0.0.15` (card `TODO-ALPHA-052-0.0.15`); **this card shares the
+`0.0.15` line with three others (`050` list-field arguments, `051`
+parity-gap closure, and the boundary+DRY card `053`, which lands last and
+owns the version bump)**
+([Decision 7](#decision-7--joint-0015-cut--card-053-owns-the-version-bump)).
 This card moves the
 [`DjangoDebugExtension`][glossary-djangodebugextension] — the
 [response-extensions debug middleware][glossary-response-extensions-debug-middleware]
@@ -17,31 +18,35 @@ re-export in `extensions/__init__.py` so the shipped import path
 keeps working byte-for-byte.
 
 Why extraction is right **here** when the package-split investigation
-(card `051`, the boundary+DRY card) rejected splitting the optimizer: the
+(card `053`, the boundary+DRY card) rejected splitting the optimizer: the
 verdicts flow from the same evidence standard, applied to opposite facts.
 The optimizer is bidirectionally fused to the type system; the debug
 extension's entire import surface is stdlib + Django + graphql-core +
-Strawberry **plus exactly one package symbol (the root `logger`)**, nothing
+Strawberry **plus three package symbols (the root `logger` and
+`exceptions.ConfigurationError` / `exceptions.describe_value`)**, nothing
 in the package imports it back, and it works against ANY
 `strawberry-graphql` + Django schema — no
 `DjangoType`, no registry, no optimizer required. It is the one part of the
 codebase with a genuine standalone audience, and the maintainer's sequencing
 decision places this card **before** the DRY card so the extraction shrinks
-that card's surface (`extensions/` becomes a soft-dep leaf like
-`rest_framework/` before the import-linter contracts are written).
+that card's surface (`extensions/debug` becomes the directory's first
+soft-dependency member before the import-linter contracts are written;
+`error_policy` and `resource_policy` stay hard root dependencies).
 
 Status: **PLANNED — no slice built yet.**
 Three slices: Slice 1 (**the new package**: repo scaffold, verbatim code
-move with the logger swap, self-contained test harness, CI, publish
+move with the logger swap and the exceptions decoupling, self-contained
+test harness, CI, publish
 `0.1.0`), Slice 2 (**the framework seam**: delete `extensions/debug.py` and
-its package-tier suite, rewrite `extensions/__init__.py` as the guarded
-lazy re-export, add the `[debug]` extra, re-shape the live tier), Slice 3
+its package-tier suite, add the guarded lazy re-export beside
+`extensions/__init__.py`'s eager hard-dep re-exports, add the `[debug]`
+extra, re-shape the live tier), Slice 3
 (**docs fold-in + card wrap** — the version cut is not this card's).
 
 Permission caveat: `AGENTS.md` prohibits `CHANGELOG.md` edits without
 explicit permission; this spec grants no such permission at any slice. The
-`0.0.15` release entry belongs to card `051`'s joint cut
-([Decision 7](#decision-7--joint-0015-cut--card-051-owns-the-version-bump)).
+`0.0.15` release entry belongs to card `053`'s joint cut
+([Decision 7](#decision-7--joint-0015-cut--card-053-owns-the-version-bump)).
 
 ---
 
@@ -89,15 +94,16 @@ new repository; Slices 2–3 land here).
 - [ ] **Slice 1 — `django-strawberry-debug` exists and is published**
   - [ ] New repository (`riodw/django-strawberry-debug`): `pyproject.toml`
         (name `django-strawberry-debug`, version `0.1.0`, deps
-        `Django>=5.2` + `strawberry-graphql>=0.316.0` with the
+        `Django>=5.2.16` + `strawberry-graphql>=0.316.0` with the
         per-operation-isolation floor comment carried over verbatim; **no
         dependency on `django-strawberry-framework`**), MIT license, `src/`
         layout (`django_strawberry_debug/__init__.py` re-exporting
         `DjangoDebugExtension`), README ported from spec-044's user-facing
         API: opt-in shape, wire contract tables, security caveats, the
         graphene wire-name narrowing table, the async boundary.
-  - [ ] `debug.py` moved **verbatim** except the single logger swap
-        ([Decision 3](#decision-3--the-logger-swap-is-the-only-code-change)).
+  - [ ] `debug.py` moved **verbatim** except the logger swap and the
+        exceptions decoupling
+        ([Decision 3](#decision-3--the-logger-swap-and-the-exceptions-decoupling-are-the-only-code-changes)).
   - [ ] `tests/test_debug.py` moved with a self-contained harness (minimal
         `settings` + models; no fakeshop) — same assertions, new fixtures
         ([Decision 5](#decision-5--test-relocation-package-tier-moves-live-tier-shrinks-to-the-seam)).
@@ -106,8 +112,14 @@ new repository; Slices 2–3 land here).
 - [ ] **Slice 2 — the framework seam**
   - [ ] Delete `django_strawberry_framework/extensions/debug.py` and
         `tests/extensions/test_debug.py`; sweep all three test trees for
-        orphan imports.
-  - [ ] Rewrite `extensions/__init__.py` as the
+        orphan imports. Known consumers beyond the deleted suite:
+        `tests/test_error_policy.py` (deep-submodule import a PEP 562
+        `__getattr__` does not satisfy — rewrite to the package path),
+        `examples/fakeshop/test_query/test_multi_db.py` (the per-alias
+        SQL-capture proof — stays, see Decision 5), and
+        `tests/test_ci_governance.py` (classifier fixture snippets).
+  - [ ] Add to `extensions/__init__.py` — beside its eager re-exports of
+        the two hard-dependency extensions — the
         [`require_optional_module`][glossary-require_optional_module]-guarded
         [PEP 562 lazy export][glossary-pep-562-lazy-export] of
         `DjangoDebugExtension` from `django_strawberry_debug`
@@ -125,12 +137,12 @@ new repository; Slices 2–3 land here).
   - [ ] GLOSSARY updates via the glossary DB + re-render (never hand-edit):
         `DjangoDebugExtension`-family entries point at the new package +
         extra; `README.md` feature list and install section likewise;
-        `docs/TREE.md` regen; `docs/dry/dry-file-extensions__debug.md`
-        retired. `docs/SPECS/spec-044-debug_extension-0_0_14.md` (by then
+        `docs/TREE.md` regen.
+        `docs/SPECS/spec-044-debug_extension-0_0_14.md` (by then
         archived) is history — untouched.
-  - [ ] The version quintet and the `CHANGELOG.md` entry are **not** touched
-        here: both ride card `051`'s joint `0.0.15` cut
-        ([Decision 7](#decision-7--joint-0015-cut--card-051-owns-the-version-bump)).
+  - [ ] The version triplet and the `CHANGELOG.md` entry are **not** touched
+        here: both ride card `053`'s joint `0.0.15` cut
+        ([Decision 7](#decision-7--joint-0015-cut--card-053-owns-the-version-bump)).
         Glossary status flips for this card's surface, and the release-status
         doc moves, stay deferred to that cut; the `README.md` edits above are
         the extraction's own install/feature wording, not release status.
@@ -140,35 +152,47 @@ new repository; Slices 2–3 land here).
 ## Problem statement
 
 Card `044` built the package's in-response debug surface as
-`extensions/debug.py` — 472 lines of implementation held to the
+`extensions/debug.py` — now 676 lines of implementation (grown from 472 by
+the `0.0.14` security cards, spec-047/048) held to the
 [developer-only debug posture][glossary-developer-only-debug-posture], plus
-a 1,019-line package-tier suite and a live tier riding a dedicated
+a 1,343-line package-tier suite and a live tier riding a dedicated
 [probe URLconf][glossary-probe-urlconf]. A dead-weight review then
-established three facts about it: **nothing in the package imports it**
+established three facts about it: **no runtime module imports it back**
 (it is deliberately absent from the root `__all__`); **fakeshop deliberately
 does not enable it**; and — unlike every other subsystem — **it imports
-nothing from the package** except the root `logger`. It is a zero-coupling
+almost nothing from the package**: the root `logger` plus
+`exceptions.ConfigurationError` / `exceptions.describe_value`. It is a
+near-zero-coupling
 leaf with a genuine standalone audience: any `strawberry-graphql` + Django
 project can use it, framework or not. Carrying it inside this distribution
 buys the framework's users nothing they wouldn't get from an extra, while
-costing this package ~1,900 lines of weight the maintainer is actively
+costing this package ~2,540 lines of weight the maintainer is actively
 trying to shed. Extraction — rejected for the optimizer on coupling
 evidence — is exactly right for this module, on the same evidence standard.
 
 ## Current state
 
-- `django_strawberry_framework/extensions/` contains exactly two files:
-  `debug.py` (the extension) and `__init__.py` (a 20-line eager re-export
-  whose docstring already pins the "not part of the default recipe"
-  posture).
+- `django_strawberry_framework/extensions/` contains four files: `debug.py`
+  (the extension, 676 lines), `error_policy.py` and `resource_policy.py`
+  (the two `0.0.14` security extensions — **hard dependencies**, imported
+  eagerly by the package root and `schema.py`), and `__init__.py` (a 35-line
+  eager re-export of all three whose docstring already pins the "not part of
+  the default recipe" posture for `debug` and the hard-dependency posture
+  for the other two).
 - `debug.py`'s imports: `threading`, `traceback`, `contextlib`,
-  `dataclasses`, `typing`, `django.db.connections`, `graphql`,
-  `strawberry.extensions.SchemaExtension`, and `from .. import logger`.
+  `collections.abc`, `dataclasses`, `typing`, `django.conf.settings` (the
+  fail-closed `DEBUG` gate), `django.db.connections`, `graphql`,
+  `strawberry.extensions.SchemaExtension`, `from .. import logger`, and
+  `from ..exceptions import ConfigurationError, describe_value`.
   Verified: no registry, no `DjangoType`, no optimizer, no `utils`.
-- Tests: `tests/extensions/test_debug.py` (1,019 lines, package tier) and
-  `examples/fakeshop/test_query/test_debug_extension_api.py` (356 lines,
+- Tests: `tests/extensions/test_debug.py` (1,343 lines, package tier) and
+  `examples/fakeshop/test_query/test_debug_extension_api.py` (524 lines,
   live tier over the probe URLconf, driven by
-  [`TestClient`][glossary-testclient]).
+  [`TestClient`][glossary-testclient]). Further consumers outside those two:
+  `tests/test_error_policy.py` (deep-submodule import, one composability
+  test), `examples/fakeshop/test_query/test_multi_db.py` (the per-alias
+  SQL-capture proof), and `tests/test_ci_governance.py` (classifier
+  fixtures).
 - The `strawberry-graphql>=0.316.0` floor lives in `[project].dependencies`
   with spec-044 Decision 6's
   [per-operation extension isolation][glossary-per-operation-extension-isolation]
@@ -176,10 +200,10 @@ evidence — is exactly right for this module, on the same evidence standard.
 - Card `DONE-044-0.0.14` shipped the extension in the `0.0.14`
   [joint version cut][glossary-joint-version-cut], so the sequencing this card
   was written behind is already satisfied ([Risks](#risks-and-open-questions)).
-- The boundary+DRY card (`TODO-ALPHA-051-0.0.15`) is sequenced behind THIS
-  card and writes its import-linter `extensions/`-leaf contract against the
-  post-extraction tree. Both cards target `0.0.15`, so the two ship as one
-  release ([Decision 7](#decision-7--joint-0015-cut--card-051-owns-the-version-bump)).
+- The boundary+DRY card (`TODO-ALPHA-053-0.0.15`) is sequenced behind THIS
+  card and writes its import-linter contract for `extensions/debug` against
+  the post-extraction tree. All four `0.0.15` cards ship as one
+  release ([Decision 7](#decision-7--joint-0015-cut--card-053-owns-the-version-bump)).
 
 ## Goals
 
@@ -190,20 +214,22 @@ evidence — is exactly right for this module, on the same evidence standard.
   documented [async boundary][glossary-async-sql-capture-boundary] — usable
   by any Strawberry+Django project with no framework involvement.
 - This package sheds `extensions/debug.py` and its package-tier suite
-  (~1,500 lines) while `pip install django-strawberry-framework[debug]`
+  (~2,000 lines) while `pip install django-strawberry-framework[debug]`
   and the shipped import path both keep working — **zero breakage** for
   anything `0.0.14` shipped.
 - The [graphene debug migration][glossary-graphene-debug-migration] story
   survives intact: migrants install the extra instead of getting the module
   bundled.
-- The DRY card inherits a smaller surface: `extensions/` is a soft-dep leaf
-  before its boundary contracts are authored.
+- The DRY card inherits a smaller surface: `extensions/` gains its first
+  soft-dependency member before its boundary contracts are authored (the
+  two security extensions remain hard root dependencies).
 
 ## Non-goals
 
 - **No behavior changes to the extension.** The wire contract, capture
-  mechanics, posture, and error shapes move verbatim; the logger swap is
-  the only code change ([Decision 3](#decision-3--the-logger-swap-is-the-only-code-change)).
+  mechanics, posture, and error shapes move verbatim; the logger swap and
+  the exceptions decoupling are the only code changes
+  ([Decision 3](#decision-3--the-logger-swap-and-the-exceptions-decoupling-are-the-only-code-changes)).
 - **No new capability.** No async SQL-capture work, no knobs, no redaction
   hooks — the spec-044 follow-on list transfers to the new repo's issue
   tracker, not this card.
@@ -267,9 +293,13 @@ other soft-dependency seam ships.
 standalone package.
 
 **Evidence** (the same standard that rejected the optimizer split): (a) the
-import surface is stdlib + Django + graphql-core + Strawberry + one root
-`logger` symbol — no type-system contract, no registry, no optimizer; (b)
-reverse coupling is zero — no package module imports `extensions/`; (c) the
+import surface is stdlib + Django + graphql-core + Strawberry + three
+package symbols (the root `logger`, `exceptions.ConfigurationError`,
+`exceptions.describe_value`) — no type-system contract, no registry, no
+optimizer; (b)
+reverse coupling is zero for the module — no package module imports
+`extensions/debug.py` at runtime (the directory as a whole is NOT a leaf:
+the root and `schema.py` import the two security extensions); (c) the
 standalone audience is real: the feature answers "what SQL did this
 operation run" for ANY Strawberry+Django schema, and neither
 graphene-parity nor framework machinery is needed to use it; (d) the
@@ -293,22 +323,35 @@ framework-independent, so the generic name is earned. The name deliberately
 mirrors this package's family prefix (it is the maintainer's package, not a
 `strawberry-graphql-django` ecosystem artifact).
 
-### Decision 3 — The logger swap is the only code change
+### Decision 3 — The logger swap and the exceptions decoupling are the only code changes
 
-**Decision**: `debug.py` moves verbatim except its single package import:
+**Decision**: `debug.py` moves verbatim except its two package imports:
 `from .. import logger` becomes a module-level
-`logger = logging.getLogger("django_strawberry_debug")`.
+`logger = logging.getLogger("django_strawberry_debug")`, and
+`from ..exceptions import ConfigurationError, describe_value` (the
+non-bool `allow_unsafe_production` refusal path) is replaced by a
+package-local equivalent — the new package cannot depend on the framework,
+so it vendors a minimal configuration-error class and value describer of
+its own. The moved suite's `pytest.raises(ConfigurationError, ...)`
+assertion retargets to the vendored class, and its four logger-identity
+assertions (`record.name == "django_strawberry_framework"` — two
+package-tier, two live-tier) retarget to the new namespace.
 
-**Rationale**: byte-level continuity is the cheapest correctness argument —
-the 1,019-line suite moves with the code, and every assertion that passes
+**Rationale**: near-byte-level continuity is the cheapest correctness
+argument —
+the 1,343-line suite moves with the code, and every assertion that passes
 over the moved pair proves the move changed nothing. Any refactor beyond
-the logger line would forfeit that proof and belongs (if ever) to the new
-repo's own lifecycle.
+the logger line and the exceptions seam would forfeit that proof and
+belongs (if ever) to the new
+repo's own lifecycle. The exceptions seam is a real, named behavior delta:
+the refusal on a non-bool `allow_unsafe_production` raises the vendored
+class in the new package, not the framework's `ConfigurationError`.
 
 ### Decision 4 — The framework seam: `[debug]` extra + guarded re-export
 
-**Decision**: `extensions/__init__.py` is rewritten from an eager
-re-export into the soft-dependency shape: a
+**Decision**: `extensions/__init__.py` keeps its eager re-exports of the
+two hard-dependency security extensions and replaces only the eager
+`DjangoDebugExtension` re-export with the soft-dependency shape: a
 [PEP 562 lazy export][glossary-pep-562-lazy-export] `__getattr__` that
 resolves `DjangoDebugExtension` through
 [`require_optional_module`][glossary-require_optional_module]`("django_strawberry_debug", ...)`
@@ -330,8 +373,9 @@ one-liner and the discoverability of the extra).
 **Note on the DRY card**: this card adds only the `debug` extra. The DRY
 card's WP-A extras (`drf`, `channels`, `keyset-encryption`,
 `debug-toolbar`) land later and inherit the established pattern; its
-import-linter contract treats `extensions/` as a soft-dep leaf exactly
-like `rest_framework/`.
+import-linter contract treats `extensions/debug` as a soft-dep member —
+the directory itself stays a hard root dependency through the two
+security extensions.
 
 ### Decision 5 — Test relocation: package tier moves, live tier shrinks to the seam
 
@@ -347,7 +391,13 @@ schema carrying `DjangoDebugExtension` (imported through
 `django_strawberry_framework.extensions`) alongside
 [`DjangoOptimizerExtension`][glossary-djangooptimizerextension], asserting
 the `debug` key arrives and the composability contract holds. The remaining
-355 lines of `test_debug_extension_api.py` retire with the moved suite.
+523 lines of `test_debug_extension_api.py` retire with the moved suite.
+Two consumers outside that file are dispositioned separately:
+`examples/fakeshop/test_query/test_multi_db.py`'s per-alias SQL-capture
+proof **stays** (it proves the framework's multi-database aliasing, not the
+extension — its fixture imports through the guarded seam), and
+`tests/test_error_policy.py`'s composability test rewrites its
+deep-submodule import to the package path.
 
 **Rationale**: the behavior is now the new package's contract to test; this
 package's contract is the seam. Keeping behavior stand-ins here would
@@ -372,42 +422,47 @@ floor shared extension instances and engine-owned execution contexts across
 concurrent sync requests). It was never debug-only; it does not travel with
 the feature.
 
-### Decision 7 — Joint `0.0.15` cut — card `051` owns the version bump
+### Decision 7 — Joint `0.0.15` cut — card `053` owns the version bump
 
-This card and the boundary+DRY card `TODO-ALPHA-051-0.0.15`
-([`spec-051`][spec-051]) both target `0.0.15`, so the line is a
+This card shares `0.0.15` with cards `050` (list-field arguments), `051`
+(parity-gap closure), and the boundary+DRY card `TODO-ALPHA-053-0.0.15`
+([`spec-051`][spec-051]), so the line is a
 [joint version cut][glossary-joint-version-cut] and **no slice of this spec
 moves version state**. Under that rule the last card to land owns the bump,
-and the ordering is fixed rather than incidental: card `051` declares a
+and the ordering is fixed rather than incidental: card `053` declares a
 dependency on this card and writes its import-linter contracts against the
-post-extraction tree, so `051` is necessarily last. Its Slice 5 therefore
-carries the version quintet (`pyproject.toml` `[project].version`,
-`django_strawberry_framework/__init__.py::__version__`,
-`tests/base/test_init.py`, the GLOSSARY package-version row, the root
-package entry in `uv.lock`), the release-status doc moves, the glossary
-status flips, and the `CHANGELOG.md` entry — for both cards' surface.
+post-extraction tree, so `053` is necessarily last. Its Slice 5 therefore
+carries the version triplet
+(`django_strawberry_framework/__init__.py::__version__`,
+`tests/base/test_init.py`, the GLOSSARY package-version row), the
+release-status doc moves, the glossary
+status flips, and the `CHANGELOG.md` entry — for every card on the line.
 
 **Rejected:** a separate patch cut per card, so each ships alone. It buys
-nothing: the two land back-to-back, the extraction is invisible to consumers
+nothing: the cards land back-to-back, the extraction is invisible to
+consumers
 who never installed the extension, and a maintainability card is not a
-release event. One cut for both is fewer release-status passes over the same
-docs.
+release event. One cut for the line is fewer release-status passes over the
+same docs.
 
 ### Decision 8 — TODO anchors stage the unbuilt slices
 
-Per the repo's staging discipline, staged-but-unbuilt slices carry
-`TODO(spec-050 Slice N)` source anchors at the sites they will change
-(`extensions/__init__.py`, `extensions/debug.py`, `pyproject.toml`'s
-optional-dependencies block), removed in the change that ships the slice.
-This card places **no** anchor on a version-quintet site — those belong to
-card `051`'s joint cut (Decision 7).
+Per the repo's staging discipline, when a slice is staged before it is
+built, the staging change will place
+`TODO(spec-050 Slice N)` source anchors at the sites it will change
+(`extensions/__init__.py`, `extensions/debug.py`, and `pyproject.toml`,
+which as yet has no `[project.optional-dependencies]` block — the `[debug]`
+extra is its first member), removed in the change that ships the slice.
+None are placed yet (Status: PLANNED). This card places **no** anchor on a
+version-triplet site — those belong to
+card `053`'s joint cut (Decision 7).
 
 ## Implementation plan
 
 | Slice | Where | Work | Est. delta (this repo) | Risk profile |
 |---|---|---|---|---|
 | 1 | new repo | scaffold + verbatim move + logger swap + harness + CI + publish `0.1.0` | 0 (additive elsewhere) | LOW — verbatim move, proven suite |
-| 2 | this repo | delete `debug.py` + package suite; guarded re-export; `[debug]` extra; absence + seam tests; probe slim | ~−1,850 lines | LOW-MED — coverage re-verify, orphan-import sweep |
+| 2 | this repo | delete `debug.py` + package suite; guarded re-export; `[debug]` extra; absence + seam tests; probe slim | ~−2,000 lines | LOW-MED — coverage re-verify, orphan-import sweep |
 | 3 | this repo | docs fold-in + card wrap (no version state) | docs only | mechanical breadth |
 
 Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
@@ -432,27 +487,34 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
   `import django_strawberry_framework.extensions` must succeed with the
   soft dependency absent; only attribute access raises. The absence test
   pins this.
-- **`__all__` and introspection**: the rewritten `__init__.py` keeps
-  `__all__ = ["DjangoDebugExtension"]` and a module `__dir__` so tooling
-  sees the name without importing the soft dependency (the established
-  PEP 562 shape).
+- **`__all__` and introspection**: the amended `__init__.py` keeps all
+  three names in `__all__` (`DjangoDebugExtension`,
+  `DjangoErrorPolicyExtension`, `DjangoResourcePolicyExtension`) and a
+  module `__dir__` so tooling
+  sees the lazy name without importing the soft dependency (the established
+  PEP 562 shape). Dropping either security extension from `__all__` would
+  delete a shipped root export.
 - **Logger continuity**: the moved module logs under
   `"django_strawberry_debug"`, not the framework's logger namespace — the
-  new README documents the logger name; nothing in this repo asserted on
-  the old namespace (verified: the suite does not pin logger identity).
-- **Concurrent sessions**: card `044` is mid-flight ON this feature.
-  Slice 1's verbatim move copies the file **as `0.0.14` ships it** — if
-  `044` amends `debug.py` before this card executes, the move re-snapshots;
-  this spec's line counts are descriptive, not contractual.
+  new README documents the logger name. The moved suite pins the OLD
+  namespace at four sites (`record.name == "django_strawberry_framework"`
+  twice in `tests/extensions/test_debug.py`, twice in the live tier, plus
+  the `caplog.at_level` fixtures); every one retargets with the move
+  (Decision 3).
+- **Post-`044` growth**: the module was written at `0.0.14` but grew after
+  card `044` shipped — the `0.0.14` security cards (spec-047/048) added the
+  resource-bound and masking paths. Slice 1's verbatim move copies the file
+  **as it stands at execution**, and re-derives this spec's line counts;
+  they are descriptive, not contractual.
 - **ASCII-only in `.py`**; trailing-comma layout; ruff format+check after
   every edit; `::QualifiedName` doc references swept when
   `extensions/debug.py` disappears (GLOSSARY/TREE/dry-file docs, Slice 3).
 
 ## Test plan
 
-- **New repo (Slice 1)**: the moved 1,019-line suite green on the
+- **New repo (Slice 1)**: the moved 1,343-line suite green on the
   self-contained harness across the CI matrix; the suite IS the proof the
-  move preserved behavior ([Decision 3](#decision-3--the-logger-swap-is-the-only-code-change)).
+  move preserved behavior ([Decision 3](#decision-3--the-logger-swap-and-the-exceptions-decoupling-are-the-only-code-changes)).
 - **This repo (Slice 2)**:
   - absence: sentinel-shape test — attribute access raises the
     install-hint error; module import stays innocent.
@@ -476,8 +538,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
   glossary DB + re-render (the `DjangoDebugExtension` family entries point
   at the new package + extra; package-version row), `README.md` (feature
   list + install), `docs/README.md`, `docs/TREE.md` regen
-  (`extensions/` subtree shrinks to the seam), `TODAY.md`,
-  `docs/dry/dry-file-extensions__debug.md` retired,
+  (`extensions/` subtree shrinks by the moved module), `TODAY.md`,
   `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md` (permission
   granted by this slice). `docs/SPECS/spec-044-debug_extension-0_0_14.md` stays
   untouched as history.
@@ -502,9 +563,9 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- The boundary+DRY card (`TODO-ALPHA-051-0.0.15`) — depends on this card;
+- The boundary+DRY card (`TODO-ALPHA-053-0.0.15`) — depends on this card;
   its contracts are written against the post-extraction tree, and it owns the
-  joint `0.0.15` cut for both cards (Decision 7).
+  joint `0.0.15` cut for the whole line (Decision 7).
 - The spec-044 follow-on list (async SQL capture, knobs, redaction) — moves
   to the new repository's tracker.
 - Extraction of any other module — `inspect_django_type` was evaluated in
@@ -515,12 +576,16 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 ## Definition of done
 
 - [ ] `django-strawberry-debug 0.1.0` on PyPI: verbatim-moved `debug.py`
-      (logger swap only), moved suite green on its own harness, CI matrix
+      (logger swap + exceptions decoupling only), moved suite green on its
+      own harness, CI matrix
       green, README carrying the posture + wire contract + async boundary.
 - [ ] This repo: `extensions/debug.py` and `tests/extensions/test_debug.py`
-      deleted; `extensions/__init__.py` is the guarded lazy re-export;
+      deleted; `extensions/__init__.py` carries the guarded lazy re-export
+      beside its eager hard-dep re-exports;
       `[debug]` extra + dev-group pin added; absence sentinel test + one
-      live seam/composability test in place; probe scaffold slimmed.
+      live seam/composability test in place; probe scaffold slimmed; the
+      multi-db SQL-capture proof and the error-policy composability test
+      rewired through the seam.
 - [ ] `pip install django-strawberry-framework[debug]` resolves in an
       isolated venv and
       `from django_strawberry_framework.extensions import DjangoDebugExtension`
@@ -529,8 +594,8 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 - [ ] Full suite green under `fail_under = 100` after the deletion.
 - [ ] Slice 3 shipped: GLOSSARY/README/TREE fold-in, card flipped Done,
       `KANBAN.md`/`KANBAN.html` regenerated from the DB, `import_spec_terms`
-      green — with no version quintet, status flip, or `CHANGELOG.md` edit,
-      all of which ride card `051`'s joint `0.0.15` cut (Decision 7).
+      green — with no version triplet, status flip, or `CHANGELOG.md` edit,
+      all of which ride card `053`'s joint `0.0.15` cut (Decision 7).
 
 <!-- LINK DEFINITIONS -->
 

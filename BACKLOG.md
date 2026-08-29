@@ -1754,34 +1754,7 @@ class OrderMatrix(DjangoMatrix):
 
 ### `apollo_federation_meta_surface`
 
-**Realistic**: 5/10 — Federation 2 is well-spec'd and the sub-graph surface is bounded, but the gateway is operationally external.
-
-**Impact**: 6/10 — Narrow audience with an 'of course this works' expectation; invisible otherwise.
-
-**Difficulty**: 8/10 — Federated type generation + entity resolution + directive support through the Meta surface.
-
-**Source**: item 34.
-
-**What we'd do**: a `federation/` subpackage mirroring `strawberry-django`'s federation contract, driven by Meta declarations instead of decorators.
-
-**Spec**:
-
-```python path=null start=null
-class ItemType(DjangoType):
-    class Meta:
-        model = Item
-        federation = {
-            "keys": ["id", "sku"],                # @key fields (entity identifiers)
-            "shareable": ["name", "category"],    # @shareable fields
-            "tag": "internal",                    # @tag for access control
-        }
-```
-
-- Federation 2 directives (`@key`, `@shareable`, `@tag`) emitted from the Meta dict; entity-resolution endpoint generated per keyed type.
-- **Entity resolution runs through the type's `get_queryset`** — federated lookups respect the same row visibility as every other read path; no permission bypass via the gateway.
-- The Apollo Gateway itself is out of scope (operational, external); the card ships the sub-graph side plus composition docs.
-
-**Composes with**: `declarative_row_and_field_permissions`, `typed_error_envelope_and_code_registry` (federated error semantics), `dos_policy_stack_framework` (entity-resolution endpoints carry their own rate/cost policies).
+**Retired 2026-08-29** — carded as `TODO-ALPHA-054-0.0.16 - Apollo Federation as the standalone django-strawberry-federation package`. The filing was self-contradictory against this file's own charter: federation is a whole shipped `strawberry-graphql-django` subpackage, so it is a parity delta, not a capability neither inspiration ships. The row's Meta sketch (`federation = {"keys": [...], "shareable": [...], "tag": ...}`) carries forward as the satellite's declaration shape; the card is the source of truth.
 
 ---
 

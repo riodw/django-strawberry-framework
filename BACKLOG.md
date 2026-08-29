@@ -1754,7 +1754,7 @@ class OrderMatrix(DjangoMatrix):
 
 ### `apollo_federation_meta_surface`
 
-**Retired 2026-08-29** — carded as `TODO-ALPHA-054-0.0.16 - Apollo Federation as the standalone django-strawberry-federation package`. The filing was self-contradictory against this file's own charter: federation is a whole shipped `strawberry-graphql-django` subpackage, so it is a parity delta, not a capability neither inspiration ships. The row's Meta sketch (`federation = {"keys": [...], "shareable": [...], "tag": ...}`) carries forward as the satellite's declaration shape; the card is the source of truth.
+**Retired 2026-08-29** — carded as `TODO-ALPHA-055-0.0.16 - Apollo Federation as the standalone django-strawberry-federation package`. The filing was self-contradictory against this file's own charter: federation is a whole shipped `strawberry-graphql-django` subpackage, so it is a parity delta, not a capability neither inspiration ships. The row's Meta sketch (`federation = {"keys": [...], "shareable": [...], "tag": ...}`) carries forward as the satellite's declaration shape; the card is the source of truth.
 
 ---
 

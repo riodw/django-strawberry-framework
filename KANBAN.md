@@ -205,7 +205,7 @@ Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/li
 #### Card references
 
 - Related: Shares the `0.0.15` line; both are pre-beta parity work, this card lands first. -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
-- Related: Its archived-spec deferral sweep names spec-028's orphaned orderBy integration; adjudicated: carded here. -> `TODO-ALPHA-056-0.0.16` - Alpha documentation-debt discharge
+- Related: Its archived-spec deferral sweep names spec-028's orphaned orderBy integration; adjudicated: carded here. -> `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
 - Related: Owes the offset-mapping migration note: upstream offset surfaces map to this card's `DjangoListField` arguments; nested offset pagination maps to nested connections. -> `TODO-BETA-071-0.1.8` - Migration and adoption guides
 - Related: The parity claim's offset/limit cut blocker is closed by this card. -> `TODO-ALPHA-057-0.1.0` - Beta release (cleanup, verification, alpha → beta)
 
@@ -458,7 +458,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 ## To Do - Alpha (0.1.0)
 
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Cards target `0.0.x` patches on the road to **0.1.0**; cards 050 and 051 share the `0.0.15` line as a joint cut. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Cards target `0.0.x` patches on the road to **0.1.0**; the remaining alpha work spans three joint-cut lines - `0.0.15` (050-053, DRY squeeze owns the cut), `0.0.16` (054-055, federation owns the cut), and `0.0.17` (056 solo). The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="pluggable_field_conversion_registry"></a>
 ### [TODO-ALPHA-054-0.0.16 - Pluggable field-conversion registry](KANBAN.html#pluggable_field_conversion_registry)
@@ -514,7 +514,7 @@ Created 2026-08-29 from the DIV-033 discussion: turn the field-conversion escape
 #### Card references
 
 - Related: This registry decides how much of the GIS card a consumer-side recipe can cover. -> `BACKLOG-STABLE-076-1.1.0` - GIS / GeoDjango field-type support (geo scalars)
-- Related: The doc-debt card owns the 0.0.16 cut and documents the new registry surface. -> `TODO-ALPHA-056-0.0.16` - Alpha documentation-debt discharge
+- Related: The doc-debt card documents the new registry surface from its own solo `0.0.17` line; the `0.0.16` release state is owned by the federation card's cut. -> `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
 - Dependency: The parity-gap card's `GeneratedField` entry lands in the converter table this card migrates onto the registry; sequenced behind it. -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
 
 <a id="apollo_federation_as_the_standalone_django_strawberry_federation_package"></a>
@@ -547,7 +547,7 @@ Maintainer decision 2026-08-29 on the parity register's federation cut blocker: 
 - [ ] django-strawberry-federation 0.1.0 on PyPI: `DjangoFederationSchema`, Meta-driven `@key` / `@shareable` / `@tag`, entity resolution through `get_queryset` (a hidden row is as unreachable via `_entities` as via a root field, proven by test), supergraph-composition + `_entities` round-trip integration coverage.
 - [ ] `pip install django-strawberry-framework[federation]` resolves in an isolated venv; with the extra absent, nothing in core imports or references the satellite.
 - [ ] Guides note and GLOSSARY entry land; the beta release card's parity claim cites the package for the federation carve-out.
-- [ ] Full suite green under `fail_under = 100` for the in-repo slice. No version quintet or CHANGELOG entry - the `0.0.16` release state is owned by the doc-debt card's cut, which lands last on the line.
+- [ ] Full suite green under `fail_under = 100` for the in-repo slice. Version quintet at `0.0.16`, GLOSSARY status flips for the line, CHANGELOG entry - this card lands last on the `0.0.16` line (after the registry) and owns the joint cut.
 
 #### Files likely touched
 
@@ -577,7 +577,7 @@ Maintainer decision 2026-08-29 on the parity register's federation cut blocker: 
 - Related: The parity claim's federation carve-out cites this card's satellite package. -> `TODO-ALPHA-057-0.1.0` - Beta release (cleanup, verification, alpha → beta)
 
 <a id="alpha_documentation_debt_discharge"></a>
-### [TODO-ALPHA-056-0.0.16 - Alpha documentation-debt discharge](KANBAN.html#alpha_documentation_debt_discharge)
+### [TODO-ALPHA-056-0.0.17 - Alpha documentation-debt discharge](KANBAN.html#alpha_documentation_debt_discharge)
 
 - Priority: Medium
 - Status: To Do
@@ -712,11 +712,12 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - Examined and deliberately NOT repaired by the spec-009 residual cycle, recorded so a later pass does not re-open them as new. `docs/SPECS/spec-028-orders-0_0_8.md`'s `## Doc updates` blockquotes of a card body and of a `CHANGELOG.md` bullet the shipped changelog never carried are left verbatim: editing a quote so it no longer matches its target is a worse defect than the staleness. That spec's `## Risks and open questions` `Ordering`-enum fallback offering `ASC_DISTINCT` / `DESC_DISTINCT` is a NON-FINDING, not a defect - the section's own preamble declares every item carries a fallback if implementation reveals the preferred answer is wrong, so a demand-contingent revisit of a rejection is the section's declared shape and asserts nothing false about shipped code; **it was graded identically four times, please do not open it a fifth**. That spec's `### Decision 3` heading still reading "Five-layer port plus a deferred Layer 6" is KEPT: the heading slug carries 6 in-file uses that a retitle would dangle, and the word names no version and no owner, so heading-vs-body agreement here is a preference not a defect. In `docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md`, the registry-state sentence satisfied across two objects (registry-global `is_finalized` vs per-type `DjangoTypeDefinition.finalized`) is NOT false - a future tightening should say which object holds which half - and three absolutes were examined and not raised: "Phase 2 is the only window" (true under its resolver scope), the three-applier enumeration (correct as scoped), and "across every cardinality". Finally, five items closed IN that cycle must not be re-deferred: the async `SyncMisuseError` coverage gap (promoted to a permanent test, not deferred), spec-028 Decision 12's DISTINCT ON / Layer 6 deferral (fixed - discharged by the row-preserving `Min`/`Max` ordering, not postponed), card 055's two stale `DjangoModelField` / BACKLOG-38 references (fixed in the DB), the two clauses those fixes falsified (fixed), and `scripts/check_trailing_commas.py` on `tests/test_connection.py` (re-measured at final state and RESOLVED).
 - Card numerals rot in three distinct grammars and a sweep that knows only one leaves the other two silently wrong. Measured 2026-08-25 across the insert-at-052 renumber: (a) full card ids (`TODO-BETA-058-0.1.1`) - 136 occurrences; (b) spec filename stems, slugged and bare (`spec-055-fieldset-0_1_1`, `spec-055`) - 81 occurrences; together 34 files. (c) BARE three-digit numerals in prose (`card 055`, `card-055/056/058/065/069`, `055 / 056 / 058 / 065 / 069`) - 173 occurrences across 11 files, the LARGEST population and the only one invisible to any grep for `spec-` or `TODO-`. Thirteen of (c)'s sites were themselves invisible to the first numeral pattern because a `-` prefix looks like a card-id tail; nine sit in heading-anchor pairs (three headings and the six links into them), where heading and links must move together or the anchor breaks. Two forms must NOT be shifted: a sentence describing a PAST renumber is true only in the numbering of its own time (de-number it), and a heading that carries its own seat number re-breaks on every future insert (de-number that too). A rename map derived from the files ON DISK is systematically incomplete: a card with no spec written yet still names the file it will get, and that name carries the card number. Three such planned names sat in board-DB card text (`spec-057-pg_full_text_search-0_1_2`, `spec-058-aggregates-0_1_3`, `spec-060-node_sentinel-0_1_4`, all shown here post-shift), correct before the renumber and wrong after it, and no disk-file map could see them - they surfaced only from an independent postcondition that resolved every spec-filename reference in the tree against `docs/SPECS/`. Two blind spots in the sweep itself, both fail-open: the numeral pattern's trailing lookahead `(?![-.\w])` rejects a match followed by `.` as well as by `-`, so every SENTENCE-FINAL card number (`- **Adversarial graph suite** - card 068.`) survived every pass - 15 file sites across five files, found only by re-scanning for the shape the pattern could not see. And the board-DB pass and the file pass ran DIFFERENT rule sets: the DB pass carried card-id and spec-stem rules but no bare-numeral rule at all, and read only `CardItem.text` and `BoardDoc.body`, leaving 10 bare numerals in card text and 5 `CardReference.raw_text` rows (the graph-substrate amendment note, one per consumer card) citing the substrate spec by its pre-renumber stem. Enumerate the text-bearing COLUMNS before sweeping the DB, and run one rule set over both surfaces.
 - **Builder-corpus rule, from the spec-033 residual cycle's own process record:** `BUILD.md`'s dispatch loop keys off a `Status:` line that a worker writes BEFORE it finishes appending its report, so the line is not a completion signal. It cost that cycle a full review round - a pass-2 re-review was dispatched off `Status: built` while the builder was still writing, so the reviewer graded a 424-line artifact that had already reached 897 lines, and raised a confident `Medium` that was false against the finished file. **The durable fix is a dispatch rule, not a worker fault: wait for the agent's own completion signal, never for the file to change.** `docs/builder/ARTIFACT.md` `## Status field ownership` defines who SETS the line but not when it may be READ, and that gap is where the defect lives. Governed by the corpus ratchet. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
+- Sole card on the `0.0.17` line: owns the `0.0.17` cut - version quintet, GLOSSARY status flip, and CHANGELOG entry.
 
 #### Card references
 
-- Dependency: This card lands last on the `0.0.16` line, owns the joint cut, and documents the registry surface. -> `TODO-ALPHA-054-0.0.16` - Pluggable field-conversion registry
-- Dependency: This card lands last on the `0.0.16` line and owns the joint cut; the federation `[federation]` extra and carve-out citation land before it. -> `TODO-ALPHA-055-0.0.16` - Apollo Federation as the standalone django-strawberry-federation package
+- Dependency: This card lands on its own `0.0.17` line after the `0.0.16` cut, owns the solo `0.0.17` cut, and documents the registry surface. -> `TODO-ALPHA-054-0.0.16` - Pluggable field-conversion registry
+- Dependency: This card lands on its own `0.0.17` line after the `0.0.16` cut; the federation `[federation]` extra and carve-out citation land before it. -> `TODO-ALPHA-055-0.0.16` - Apollo Federation as the standalone django-strawberry-federation package
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
 ### [TODO-ALPHA-057-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
@@ -734,7 +735,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 
 #### Dependencies
 
-- `TODO-ALPHA-056-0.0.16` - Alpha documentation-debt discharge
+- `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
 
 #### Scope
 
@@ -746,7 +747,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. The alpha documentation-debt card (`TODO-ALPHA-056-0.0.16`) is `DONE` as well: its own gate is that every bullet it carries is discharged or explicitly deferred onto a named card.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. The alpha documentation-debt card (`TODO-ALPHA-056-0.0.17`) is `DONE` as well: its own gate is that every bullet it carries is discharged or explicitly deferred onto a named card.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -791,7 +792,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
 - Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-045-0.0.14`) is in `DONE`. -> `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts
-- Dependency: The alpha documentation-debt card discharges before the 0.1.0 cut. -> `TODO-ALPHA-056-0.0.16` - Alpha documentation-debt discharge
+- Dependency: The alpha documentation-debt card discharges before the 0.1.0 cut. -> `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
 
 ## To Do - Beta (1.0.0)
 
@@ -1791,7 +1792,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - **Consume-the-substrate amendment** (TODO-BETA-058-0.1.1, TODO-BETA-068-0.1.6): add graph-substrate and structural-template attack targets — five-root operations; related-row existence leaks; selected-child leakage past a visible parent; same-related-row authorization false positives; custom-visibility outer fan-out; duplicate child rows under windows; whole-operation cache fragmentation; operation-memo scope isolation (viewer, tenant, database alias, cancellation); async plan-map ordering; structural-template under-keying (a referenced directive or pagination slot missing from the fingerprint must fail closed to a walk, never to a wrong reuse); the structural/bound binding boundary (no request value constructible into a structural object); proof-gate refusal paths; and snapshot consistency in the PostgreSQL tier.
 - `tests/types/test_definition_order.py::test_filterset_class_resolves_across_module_boundary`'s module eviction is weaker than its comment claims. The row pops two fixture modules from `sys.modules` and re-imports them with `from tests.types.fixtures import branch_module, shelf_module`, under a comment asserting the pop makes the next import re-execute the module. Measured by the spec-010 residual cycle (2026-08-15): it does not - the parent package's still-set attribute satisfies the `from ... import`, so the stale module object comes back and `sys.modules` is never repopulated. The row passes today only because nothing imports those fixture modules first, a latent order dependence of exactly the class invisible below a full parallel run. The fix is one `importlib.import_module` per module plus a corrected comment - the same substitution that cycle's builder was forced into for its own rows, which is how the weakness was found.
 - `tests/types/test_definition_order.py::test_annotation_only_relation_override_keeps_generated_resolver` does NOT pin the collection-phase consumer-authored short-circuit - never cite it as though it does. Measured twice in the spec-010 residual cycle, by the builder's and the reviewer's failability runs independently: with the relation branch of the short-circuit in `types/base.py::_build_annotations` deleted, every assertion in that row still passes, because the synthesized placeholder resolves back to the same class and the row's `consumer_*` set assertions read state computed in `__init_subclass__` rather than in `_build_annotations`. The short-circuit is pinned instead by the four override-shape rows that cycle landed in the same file. If a discriminating assertion is ever wanted, it must observe `_build_annotations`' own effect (pending-relation suppression), not the resolved schema, which is identical either way.
-- Add a `FAKESHOP_SHARDED`-gated row asserting the `.db` alias of a `Prefetch` child built under an active cascade. `tests/optimizer/test_multi_db.py` has **zero** `cascad` occurrences and no sharded file exercises the cascade inside a prefetch child, so the alias-late routing the package performs there is asserted nowhere. **Not a skipped contract** - `spec-034` pins nothing for that bullet - which is exactly why it belongs in an adversarial pass rather than in a conformance repair. The documentation half of the same seam is already owned by `TODO-ALPHA-056-0.0.16`'s `Multi-database cooperation` glossary item; this is the executable half. Recorded 2026-08-28 by the spec-034 residual cycle (R1b finding L2).
+- Add a `FAKESHOP_SHARDED`-gated row asserting the `.db` alias of a `Prefetch` child built under an active cascade. `tests/optimizer/test_multi_db.py` has **zero** `cascad` occurrences and no sharded file exercises the cascade inside a prefetch child, so the alias-late routing the package performs there is asserted nowhere. **Not a skipped contract** - `spec-034` pins nothing for that bullet - which is exactly why it belongs in an adversarial pass rather than in a conformance repair. The documentation half of the same seam is already owned by `TODO-ALPHA-056-0.0.17`'s `Multi-database cooperation` glossary item; this is the executable half. Recorded 2026-08-28 by the spec-034 residual cycle (R1b finding L2).
 
 #### Definition of done
 

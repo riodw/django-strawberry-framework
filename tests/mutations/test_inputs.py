@@ -1362,7 +1362,7 @@ def test_payload_slot_defaults_from_object_type():
 
 
 # ---------------------------------------------------------------------------
-# mutation_input_field_specs - bind-time reverse map (spec-051 D3)
+# mutation_input_field_specs - bind-time reverse map (spec-053 D3)
 # ---------------------------------------------------------------------------
 
 

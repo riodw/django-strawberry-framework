@@ -276,7 +276,7 @@ duplication that makes every cross-cutting change cost more than it should.
 - Card `DONE-044-0.0.14`
   ([`DjangoDebugExtension`][glossary-djangodebugextension]) shipped in the
   `0.0.14` joint cut; card `TODO-ALPHA-052-0.0.15`
-  ([`docs/SPECS/spec-050-debug_extraction-0_0_15.md`][spec-050]) then **extracts
+  ([`docs/SPECS/spec-052-debug_extraction-0_0_15.md`][spec-052]) then **extracts
   that extension into the standalone `django-strawberry-debug` package**.
   This card is sequenced behind BOTH: by the time its slices run,
   `extensions/debug.py` is gone, `extensions.debug` is the directory's
@@ -607,7 +607,7 @@ consumer-`overrides` merge can empty the generated remainder).
 
 This card shares `0.0.15` with cards `050` (list-field arguments), `051`
 (parity-gap closure), and the debug-extraction card
-`TODO-ALPHA-052-0.0.15` ([`spec-050`][spec-050]), so the line is a
+`TODO-ALPHA-052-0.0.15` ([`spec-052`][spec-052]), so the line is a
 [joint version cut][glossary-joint-version-cut] and the **last** card to land
 owns the bump. That is this card, and not by accident: it declares
 dependencies on all three (the `052` edge because it writes its
@@ -622,12 +622,12 @@ release-status doc moves, the glossary
 status flips **for every card on the line**, and the `CHANGELOG.md` entry.
 No
 earlier slice moves any of the triplet, and no other card on the line moves
-any of it either (`spec-050` Decision 7).
+any of it either (`spec-052` Decision 7).
 
 ### Decision 12 — TODO anchors stage the unbuilt slices
 
 Per the repo's staging discipline, staged-but-unbuilt slices carry
-`TODO(spec-051 Slice N)` source anchors at the sites they will change,
+`TODO(spec-053 Slice N)` source anchors at the sites they will change,
 removed in the change that ships the slice. The version-triplet sites are
 clear: spec-044's `0.0.14` cut landed and took its own
 `TODO(spec-044 Slice 3)` anchors with it, so this card's Slice 5 anchors have
@@ -825,7 +825,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   renumbers — it ushers in the beta and closes the Alpha column) — this
   card's squeeze does not absorb its verification scope.
 - The `DjangoDebugExtension` extraction — card `052`
-  ([`docs/SPECS/spec-050-debug_extraction-0_0_15.md`][spec-050]), which this card
+  ([`docs/SPECS/spec-052-debug_extraction-0_0_15.md`][spec-052]), which this card
   depends on and shares the `0.0.15` line with.
 
 ## Definition of done
@@ -898,7 +898,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 [spec-038]: spec-038-form_mutations-0_0_12.md
 [spec-039]: spec-039-serializer_mutations-0_0_13.md
 [spec-043]: spec-043-test_client-0_0_14.md
-[spec-050]: spec-050-debug_extraction-0_0_15.md
+[spec-052]: spec-052-debug_extraction-0_0_15.md
 
 <!-- docs/builder/ -->
 

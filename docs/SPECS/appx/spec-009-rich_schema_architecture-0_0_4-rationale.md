@@ -200,7 +200,7 @@ Layer 9 specifies, and would synthesize one permission class per managed field. 
 lost for the same reason, one level up: it is machinery whose only job is to host a wrapper that a
 wrapper can host directly, and it charges every generated field for a feature most fields do not use.
 Resolver wrapping costs nothing on an unmanaged field, keeps the cascade in one readable body, and is
-upstream-parity. `spec-055-fieldset-0_1_1.md` pinned it, and pinning it is what removed the last surface
+upstream-parity. `spec-059-fieldset-0_1_1.md` pinned it, and pinning it is what removed the last surface
 `DjangoModelField` was being reserved for.
 
 ### ``### Borrow `StrawberryDjangoDefinition` `` — the sketch declared five things the dataclass never grew
@@ -277,7 +277,7 @@ carried its dataclass sketch and a five-behavior borrow list. `### Decision 3`, 
 `types/fields.py` were the same claim's other five sites.
 
 It was never built, is absent from `docs/TREE.md`'s target layout, and has now been declined three
-times, the last decisively (`spec-055-fieldset-0_1_1.md` #"field class is unnecessary machinery").
+times, the last decisively (`spec-059-fieldset-0_1_1.md` #"field class is unnecessary machinery").
 The parity test it fails is **consumer-visible capability, not symbol
 presence**: `StrawberryDjangoField` is upstream *internal plumbing*, graphene-django has no analogue
 class at all, and every capability the class was to carry already ships through this package's own

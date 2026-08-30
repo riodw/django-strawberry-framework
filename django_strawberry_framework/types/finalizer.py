@@ -1483,7 +1483,7 @@ def _format_owner_set_model_mismatch_error(
     "or a base" clause, lookup purpose) are the ONLY divergence, so the
     sentence is spelled once and each ``_format_owner_*_model_mismatch_error``
     wrapper passes its words. Messages stay byte-identical to the family
-    originals (spec-051 Decision 7).
+    originals (spec-053 Decision 7).
     """
     set_model_name = _safe_class_name(set_model) if set_model is not None else "<unset>"
     noun = family.lower()

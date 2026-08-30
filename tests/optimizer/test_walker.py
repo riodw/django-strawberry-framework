@@ -4214,7 +4214,7 @@ def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog):
     Relation-level SKIP runs before the arguments-derived sidecar gate, so
     this shape returns unplanned at SKIP with no ``sidecar arguments`` debug
     log. Plan output is identical to the pre-fold outer sidecar gate; only
-    the diagnostic differs (spec-051 D1).
+    the diagnostic differs (spec-053 D1).
     """
     from apps.library.models import Book, Genre
     from strawberry import relay

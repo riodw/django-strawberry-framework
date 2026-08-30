@@ -9,8 +9,8 @@ worker enacting the acceptance steps today pins the current exact floor, `Django
 ## Identity and completion ownership
 
 This document is the working plan for the **pre-card groundwork slice of
-[spec 056][spec-056]** (its "Slice 0"): the shipped-defect fixes and
-search-independent machinery land ahead of card `TODO-BETA-056-0.1.2`, and
+[spec 060][spec-060]** (its "Slice 0"): the shipped-defect fixes and
+search-independent machinery land ahead of card `TODO-BETA-060-0.1.2`, and
 that card owns the completion bookkeeping for everything this plan ships —
 `docs/GLOSSARY.md`, `docs/TREE.md`, `KANBAN.md`, and the
 `django_strawberry_framework/exceptions.py::OptimizerError` raise-site
@@ -26,8 +26,8 @@ is added unless separately requested.
 This plan enacts the "now" half of the to-many fan-out investigation
 (the since-removed `to-many-search-optimizer-reproduction.md`): everything that fixes
 shipped behavior or builds search-independent machinery lands ahead of card
-`TODO-BETA-056-0.1.2`, so that card later wires the `search:` surface onto a
-finished engine ([spec-056][spec-056], Decision 7). The postponed half — the
+`TODO-BETA-060-0.1.2`, so that card later wires the `search:` surface onto a
+finished engine ([spec-060][spec-060], Decision 7). The postponed half — the
 `search:` argument, `Meta.search_fields` validation, the pipeline step, live
 search fixtures, benchmarking — stays with the respecced card.
 
@@ -1272,7 +1272,7 @@ the previous commit added tracked files.
 
 <!-- docs/SPECS/ -->
 [spec-027-filters]: SPECS/spec-027-filters-0_0_8.md
-[spec-056]: SPECS/spec-056-search_fields-0_1_2.md
+[spec-060]: SPECS/spec-060-search_fields-0_1_2.md
 
 <!-- docs/builder/ -->
 

@@ -1,7 +1,7 @@
 # Spec: Structural optimization templates and nested sidecar batching
 
-Planned for `0.1.6` (card `TODO-BETA-064-0.1.6`, created 2026-08-08 seated
-immediately ahead of the optimizer-explain card `TODO-BETA-065-0.1.6`; every
+Planned for `0.1.6` (card `TODO-BETA-068-0.1.6`, created 2026-08-08 seated
+immediately ahead of the optimizer-explain card `TODO-BETA-069-0.1.6`; every
 card from that seat onward shifted up by one, and so did the post-`0.1.5`
 patch versions). **The explain card shares this patch version, lands
 last, and owns the `0.1.6` version cut, so this spec defers every
@@ -9,7 +9,7 @@ release-state artifact to it**
 ([Decision 1](#decision-1--seat-this-card-before-explain-joint-cut-at-016)).
 
 The second of two graph foundation cards, sibling to the graph substrate
-([`spec-054`][spec-054]). Where card `054` ships the shared planning
+([`spec-058`][spec-058]). Where card `058` ships the shared planning
 *vocabulary* (`GraphPathPlan`, `PredicatePlan`, `EdgeScope`,
 `FieldDependencyPlan`, `RowIdentityProof`, the operation-scoped dependency
 memo), this card ships the optimizer *architecture* that consumes it — four
@@ -45,7 +45,7 @@ fakeshop recreation: [`docs/multi-root-graph-recreation.md`][recreation]):
    by construction
    ([Decision 8](#decision-8--row-identity-proof-enforcement-never-an-automatic-distinct)).
 
-Status: **PLANNED — no slice built yet; card created (`TODO-BETA-064-0.1.6`).**
+Status: **PLANNED — no slice built yet; card created (`TODO-BETA-068-0.1.6`).**
 Five slices: Slice 1 (**template/bound core** — the frozen dataclasses, the
 subtree fingerprint builder, the binding pipeline, package tests proving
 bind-equivalence with today's plans), Slice 2 (**cache rekey + rebasing +
@@ -59,13 +59,13 @@ R1/R7/R8/R10 matrix and the R3 filtered-arm equalities), Slice 5 (**card-local
 docs + card wrap — version and release marketing deferred to the explain
 card's joint cut**).
 
-This card consumes — and is gated on — card `054` landing first: `EdgeScope`
+This card consumes — and is gated on — card `058` landing first: `EdgeScope`
 supplies the visibility-scoped child base queryset the sidecar pipeline
 normalizes, `RowIdentityProof` is the vocabulary the window gate enforces,
 `FieldDependencyPlan` feeds the template's dependency graph, and the
 operation memo is the request-local tier the template binding reuses.
-Card `054`'s spec explicitly "prepares the structural/bound split the
-sibling card ships" ([`spec-054`][spec-054] Decision 8 posture); this card
+Card `058`'s spec explicitly "prepares the structural/bound split the
+sibling card ships" ([`spec-058`][spec-058] Decision 8 posture); this card
 is that sibling.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
@@ -78,7 +78,7 @@ explain card's joint-cut slice must carry the maintainer's explicit grant.
 
 Every project-specific symbol below is anchored in
 [`docs/GLOSSARY.md`][glossary]; the companion
-[`spec-064-structural_templates-0_1_6-terms.csv`][templates-terms]
+[`spec-068-structural_templates-0_1_6-terms.csv`][templates-terms]
 is the audit ledger. Load-bearing entries:
 
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — the
@@ -104,7 +104,7 @@ is the audit ledger. Load-bearing entries:
   bump the version.
 
 Substrate vocabulary (`EdgeScope`, `RowIdentityProof`, `FieldDependencyPlan`,
-`GraphPathPlan`, the operation memo) is defined by [`spec-054`][spec-054];
+`GraphPathPlan`, the operation memo) is defined by [`spec-058`][spec-058];
 its glossary entries fold in with that card's shipping slice.
 
 ## Slice checklist
@@ -201,7 +201,7 @@ stable audit are allowed to build on today's internals:
   unplanned; `connection.py::_build_relation_connection_resolver` then runs
   the ordinary connection pipeline against each parent's relation manager
   (`parents × page` queries, plus `parents × count` when `totalCount` is
-  selected). [`spec-054`][spec-054] deliberately pinned this arm as
+  selected). [`spec-058`][spec-058] deliberately pinned this arm as
   *characterized, not required equal* and assigned closing it here.
 - `optimizer/extension.py::DjangoOptimizerExtension._publish_plan_to_context`
   unions correctness sentinel sets so nested plans coexist, but stores
@@ -211,7 +211,7 @@ stable audit are allowed to build on today's internals:
   fixed shape list (sliced, `select_for_update`, combined, `distinct`,
   values querysets) but passes a custom queryset carrying an unexplained
   to-many join — e.g. `Issue.objects.filter(periodical__issues__embargoed=False)`
-  emits one row per qualifying sibling and still windows. [`spec-054`][spec-054]
+  emits one row per qualifying sibling and still windows. [`spec-058`][spec-058]
   Slice 2 lands this *characterization baseline*; enforcement is this card.
 
 ## Goals
@@ -238,7 +238,7 @@ stable audit are allowed to build on today's internals:
   vocabulary; the consumer-visible effect is query counts, cache behavior,
   and explain completeness.
 - **No explain rendering.** The operation plan map is the *data*; rendering
-  it is the explain card (`TODO-BETA-065-0.1.6`), which is
+  it is the explain card (`TODO-BETA-069-0.1.6`), which is
   amended to consume the map and retire the legacy context key.
 - **No document-level parse/validation cache.** The BACKLOG
   operation-document cache is complementary (byte-identical repeats), not a
@@ -251,10 +251,10 @@ stable audit are allowed to build on today's internals:
 
 ### Decision 1 — Seat this card before explain; joint cut at `0.1.6`
 
-The hard constraints are a floor and a ceiling: after card `054` (this card
+The hard constraints are a floor and a ceiling: after card `058` (this card
 consumes its vocabulary) and before the explain card (whose design assumes
 the single context plan this card deletes and which must render the plan
-map). Within that window the card seats at `064`, immediately ahead of
+map). Within that window the card seats at `068`, immediately ahead of
 explain — the tightest satisfying seat, matching the audit's proposed order,
 and the smallest renumber (every card from that seat onward shifted up by
 one).
@@ -263,7 +263,7 @@ product HTTP) neither feed nor consume this work and ship ahead of it
 unchanged.
 
 Two non-Done cards then share `0.1.6`: this card and explain
-(`TODO-BETA-065-0.1.6`). Explain renders what this card publishes — natural
+(`TODO-BETA-069-0.1.6`). Explain renders what this card publishes — natural
 joint-cut partners. Explain lands last, so per the
 [joint version cut][glossary-joint-version-cut] rule the explain card's
 final slice owns the version quintet, `CHANGELOG.md`, and all release-state
@@ -293,7 +293,7 @@ BoundOptimizationPlan               request-local
 `OptimizationPlan` remains the final ORM directive bag consumed by the
 execution layer, but it is *produced by binding* a template rather than
 walked fresh. Both new objects are frozen dataclasses, extending
-[`spec-054`][spec-054]'s posture verbatim: **no request value — user,
+[`spec-058`][spec-058]'s posture verbatim: **no request value — user,
 tenant, queryset, database alias, or argument value — is storable in any
 structural object.** The invariant is enforced structurally (the template's
 slots hold factories and slot descriptors, not values) and tested
@@ -310,7 +310,7 @@ shared template.
 A template is keyed by exactly:
 
 - exact owning GraphQL type identity (object identity, not name —
-  [`spec-054`][spec-054]'s exact-owner rule);
+  [`spec-058`][spec-058]'s exact-owner rule);
 - root field / return type identity;
 - normalized root-subtree selection fingerprint;
 - only the directive and nested-pagination slots referenced *inside* that
@@ -331,7 +331,7 @@ time. The structural relation template records the relation lookup, exact
 target type, child structural template, projection, and subtree-relative
 strictness identities; the binding stage calls the target's `get_queryset`
 factory with the live `info`, applies the contextual edge scope
-(`EdgeScope`, from card `054`), and materializes the concrete `Prefetch`.
+(`EdgeScope`, from card `058`), and materializes the concrete `Prefetch`.
 A visibility-bearing relation template is therefore cross-request cacheable.
 One request-bound child recipe is reused across identical
 relation/argument/scope keys within the request (the operation memo is the
@@ -385,11 +385,11 @@ different arguments cost two batched child queries — never `parents × 2`.
 Target statement counts: one batched page/count query, or a constant three
 total where the backend/strategy requires separate count and page
 statements — in all cases independent of parent count. This closes the R3
-filtered-connection arm [`spec-054`][spec-054] pinned as characterized-only.
+filtered-connection arm [`spec-058`][spec-058] pinned as characterized-only.
 
 ### Decision 8 — Row-identity proof enforcement; never an automatic `DISTINCT`
 
-`RowIdentityProof` (vocabulary from card `054`, baseline from its Slice 2)
+`RowIdentityProof` (vocabulary from card `058`, baseline from its Slice 2)
 becomes the window gate. Proof is **by construction**, composed from
 framework-generated query-shape operations:
 
@@ -428,7 +428,7 @@ mode.
 ### Decision 10 — Internal vocabulary only; the consumer surface is unchanged
 
 Nothing here is shipped API. The consumer-facing declaration surface remains
-Meta keys and sidecar `Set` classes as card `054` pins it; this card adds no
+Meta keys and sidecar `Set` classes as card `058` pins it; this card adds no
 key, no argument, and no decorator. The observable contract is behavioral:
 query counts, cache hit rates, explain completeness, and strict-mode errors.
 
@@ -437,7 +437,7 @@ query counts, cache hit rates, explain completeness, and strict-mode errors.
 Slices as checklisted above. New modules: `optimizer/templates.py`
 (structural/bound objects, fingerprint builder, binding pipeline) and
 `optimizer/sidecar.py` (normalization + batching); both consume
-`django_strawberry_framework/graph/` (card `054`) and neither is imported by
+`django_strawberry_framework/graph/` (card `058`) and neither is imported by
 it. Changed seams: `optimizer/extension.py` (`_build_cache_key`,
 `_publish_plan_to_context`), `optimizer/walker.py`
 (`_plan_prefetch_relation`), `optimizer/nested_planner.py`
@@ -448,7 +448,7 @@ design so the equivalence corpus can gate everything after it.
 
 ## Test plan
 
-This card owns the four reproductions [`spec-054`][spec-054]'s R-index
+This card owns the four reproductions [`spec-058`][spec-058]'s R-index
 assigns to the sibling, plus the R3 arm it defers here. Per the live-first
 mandate everything reachable from a real GraphQL query is covered live under
 `examples/fakeshop/test_query/`; package tests under `tests/` keep pure
@@ -458,7 +458,7 @@ interleavings a real query cannot produce.
 | # | Reproduction | Core assertion |
 | --- | --- | --- |
 | R1 | Five-root structural cache isolation | Each root produces one plan-map entry; a selection or argument change invalidates only its own subtree; aliasing a root needs no new template; a repeat request hits every template; rebased paths are correct under aliases |
-| R3 (filtered arm) | Filtered nested connection batching | The per-parent fallback counts pinned as *characterized* by card `054` become asserted equalities: query count identical for 1 and 100 parents with a `filter:` argument |
+| R3 (filtered arm) | Filtered nested connection batching | The per-parent fallback counts pinned as *characterized* by card `058` become asserted equalities: query count identical for 1 and 100 parents with a `filter:` argument |
 | R7 | Ordered nested connection batching | Parent count does not change child query count; per-parent windows and `totalCount`; cursors replay; argument-divergent aliases batch separately; strictness reports no planned edge on fallback; the plan map reports the sidecar normalization and strategy |
 | R8 | Row-identity window gate | Strict targets raise a targeted unproven-row-identity error on the multiplying-join shape; non-strict targets fall back visibly; no automatic `DISTINCT`; correlated `EXISTS` restores a proven window plan; duplicate child identities never enter row numbering or partition counts |
 | R10 | Operation plan-map completeness | Every root appears exactly once regardless of async completion order; shared dependencies appear once with one compute and N-1 hits; fallback reasons attach to the right response key; scope values are redacted |
@@ -485,7 +485,7 @@ unchanged.
 - The explain card's amendment (consume the plan map; retire
   `DST_OPTIMIZER_PLAN`) and the adversarial card's amendment (attack the
   template store, the binding boundary, and the proof gate) are recorded on
-  those cards at this card's creation, mirroring card `054`'s
+  those cards at this card's creation, mirroring card `058`'s
   amendment-at-creation rule.
 
 ## Risks and open questions
@@ -500,13 +500,13 @@ unchanged.
 - **Fingerprint normalization completeness.** A slot the fingerprint misses
   (a directive or pagination variable that *is* referenced in the subtree
   but not keyed) is a correctness bug, not a performance bug. Slice 1's
-  equivalence corpus plus an adversarial arm in the `069` suite guard it;
+  equivalence corpus plus an adversarial arm in the `072` suite guard it;
   under-keying fails closed to a walk, never to a wrong
   reuse — the bind stage revalidates referenced slots against the template.
 - **`FieldDependencyPlan` vocabulary breadth.** The template's dependency
-  graph consumes whatever vocabulary has shipped by then (`054` ships the
-  narrow form; `055` expands it). Binding treats unknown dependency kinds
-  as bind-time walks, so the template layer does not gate on `055`'s
+  graph consumes whatever vocabulary has shipped by then (`058` ships the
+  narrow form; `059` expands it). Binding treats unknown dependency kinds
+  as bind-time walks, so the template layer does not gate on `059`'s
   expansion.
 - **Legacy-key window.** Between this card and the explain card, the plan
   map and `DST_OPTIMIZER_PLAN` coexist; the legacy key stays last-wins and
@@ -515,9 +515,9 @@ unchanged.
 ## Out of scope (explicitly tracked elsewhere)
 
 - **Explain rendering over the plan map** — the explain card
-  (`TODO-BETA-065-0.1.6`) owns the surface and the legacy-key
+  (`TODO-BETA-069-0.1.6`) owns the surface and the legacy-key
   retirement.
-- **Adversarial attack suite** — the adversarial card (`TODO-BETA-069-0.1.8`),
+- **Adversarial attack suite** — the adversarial card (`TODO-BETA-072-0.1.8`),
   amended to attack the template store, binding boundary, and proof gate.
 - **Document-level parse/validation/plan cache** — BACKLOG
   (`operation_document_and_plan_cache`); complementary layer, shared
@@ -526,7 +526,7 @@ unchanged.
   MTI-aware lateral) — BACKLOG; each must consume this card's pipeline
   (Decision 9).
 - **Optional PostgreSQL repeatable-read snapshot policy** — non-gating,
-  unscheduled (card `054`'s R11 disposition).
+  unscheduled (card `058`'s R11 disposition).
 - **All originating-consumer work** — owned and tracked by that repository.
 
 ## Definition of done
@@ -570,8 +570,8 @@ unchanged.
 [recreation]: ../multi-root-graph-recreation.md
 
 <!-- docs/SPECS/ -->
-[spec-054]: spec-054-graph_substrate-0_1_1.md
-[templates-terms]: spec-064-structural_templates-0_1_6-terms.csv
+[spec-058]: spec-058-graph_substrate-0_1_1.md
+[templates-terms]: spec-068-structural_templates-0_1_6-terms.csv
 
 <!-- docs/builder/ -->
 

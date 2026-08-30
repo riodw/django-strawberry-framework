@@ -994,7 +994,7 @@ def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
 def test_filter_convert_and_normalize_ride_shared_kind_table():
     """Convert and normalize walk one most-specific-first filter-class table.
 
-    The two ladders used to be independent ``isinstance`` chains (spec-051 C3
+    The two ladders used to be independent ``isinstance`` chains (spec-053 C3
     drift hazard). Both now zip ``_FILTER_INPUT_KIND_TYPES`` into
     ``convert_with_mro`` prechecks; ``object`` is last (the original ``else``).
     """

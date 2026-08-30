@@ -6,8 +6,8 @@ card at `0.1.0` and owns the version bump**
 Number conventions in this spec: bare three-digit numbers (`050` … `057`)
 are **kanban card numbers**, dotted numbers (`0.0.15` /
 `0.1.0` / `1.0.0`) are **package versions** — card `057` is the card that
-cuts version `0.1.0`. (This spec's file stem still reads `spec-053` from
-before the renumbers; the stem moves with the carded renumber sweep.)
+cuts version `0.1.0`. (The file stem was moved from `spec-053` to
+`spec-057` by the carded renumber sweep, so stem and card now agree.)
 This card is a **release / verification card**: it ships no new subsystem and
 no new consumer-facing symbol
 ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
@@ -22,8 +22,8 @@ sequence:
    body's stale `DONE-013`–`DONE-044` range predates
    ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)):
    the `0.0.15` line (`050` list-field arguments, `051` parity-gap closure,
-   `052` debug extraction [`spec-050`][spec-050], `053` boundary+DRY
-   squeeze [`spec-051`][spec-051]), the `0.0.16` line (`054` conversion
+   `052` debug extraction [`spec-052`][spec-052], `053` boundary+DRY
+   squeeze [`spec-053`][spec-053]), the `0.0.16` line (`054` conversion
    registry, `055` federation), and `056` doc-debt discharge solo at
    `0.0.17`.
 2. **Run the parity audit.** Build a source-complete inventory against pinned
@@ -245,8 +245,8 @@ to happen once, in order, with evidence.
   `WIP-ALPHA-050` (`DjangoListField` argument surface), `051` (parity-gap
   closure), `052` (the
   [`DjangoDebugExtension`][glossary-djangodebugextension] extraction,
-  [`spec-050`][spec-050]), and `053` (boundary hardening +
-  DRY squeeze, [`spec-051`][spec-051]), with `053` landing last and owning
+  [`spec-052`][spec-052]), and `053` (boundary hardening +
+  DRY squeeze, [`spec-053`][spec-053]), with `053` landing last and owning
   the cut; `0.0.16` — `054` (conversion registry) and `055` (federation,
   owns the cut); `0.0.17` — `056` (doc-debt discharge) solo. All are
   sequenced before this card — three alpha patches stand between `0.0.14`
@@ -401,7 +401,7 @@ written — all verified as already satisfied.
 
 **Rationale**: the card's Definition-of-done range was written before cards
 050–056 entered the queue (the card predates the renumbers
-[`spec-051`][spec-051]'s Out-of-scope section records). The board
+[`spec-053`][spec-053]'s Out-of-scope section records). The board
 column's own framing — "The final card in this column is the `0.1.0` release
 itself" — is the intent; a literal reading of the stale range would let this
 card cut `0.1.0` while `0.0.15`–`0.0.17` sit unshipped, which would strand
@@ -425,7 +425,7 @@ Per the Step 3 scan, this card is the **only** non-Done card at `0.1.0`: its
 nearest alpha-queue neighbor is `0.0.17` (card 056 solo, owning that cut,
 behind the `0.0.16` and `0.0.15` lines), and the next column starts
 the `0.1.x` beta line. So this spec mirrors the lone-card
-shape ([`spec-051`][spec-051] Decision 11, [`spec-038`][spec-038]
+shape ([`spec-053`][spec-053] Decision 11, [`spec-038`][spec-038]
 Decision 14): Slice 5
 carries the version triplet —
 `django_strawberry_framework/__init__.py::__version__` (the single version
@@ -687,7 +687,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   board-column intent (Decisions 2 and 7) — the conflict is recorded here
   per the authoring flow's prefer-the-card rule, because in this instance
   the card conflicts with the board's own column framing and with
-  [`spec-051`][spec-051]'s sequencing decisions rather than with repo docs.
+  [`spec-053`][spec-053]'s sequencing decisions rather than with repo docs.
   Preferred answer: gate on cards 050–056 and cover the CHANGELOG through
   the
   last shipped alpha patch. Fallback: if the maintainer re-orders the queue
@@ -729,8 +729,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 ## Out of scope (explicitly tracked elsewhere)
 
 - The remaining alpha work — list-field arguments (050), parity-gap
-  closure (051), the debug extraction (052, [`spec-050`][spec-050]), the
-  boundary/DRY squeeze (053, [`spec-051`][spec-051]), the conversion
+  closure (051), the debug extraction (052, [`spec-052`][spec-052]), the
+  boundary/DRY squeeze (053, [`spec-053`][spec-053]), the conversion
   registry (054), federation (055), and the doc-debt discharge (056); this
   card gates
   on them and absorbs none of their scope.
@@ -852,8 +852,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 
 <!-- docs/SPECS/ -->
 [spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-050]: spec-050-debug_extraction-0_0_15.md
-[spec-051]: spec-051-boundary_dry_squeeze-0_0_15.md
+[spec-052]: spec-052-debug_extraction-0_0_15.md
+[spec-053]: spec-053-boundary_dry_squeeze-0_0_15.md
 
 <!-- docs/builder/ -->
 

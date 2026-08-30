@@ -254,7 +254,7 @@ Take the semantics. Implement the output type generation in Strawberry-native te
 - computed field declarations
 - wrapper order: check, custom resolve, default resolve
 
-Take the behavior, but implement it by wrapping the generated resolver rather than by mutating Graphene fields. Wrapping is what keeps the gate/override cascade ordering expressible and costs nothing on unmanaged fields; `spec-055-fieldset-0_1_1.md` #"resolver wrapping" owns that mechanism.
+Take the behavior, but implement it by wrapping the generated resolver rather than by mutating Graphene fields. Wrapping is what keeps the gate/override cascade ordering expressible and costs nothing on unmanaged fields; `spec-059-fieldset-0_1_1.md` #"resolver wrapping" owns that mechanism.
 
 ### What to scrap from django-graphene-filters
 Do not port Graphene-specific internals.
@@ -649,7 +649,7 @@ Generated relation fields are produced by the finalizer, and their responsibilit
 - **visibility** — `utils/querysets.py::apply_type_visibility_sync` composes the target type's row-level `get_queryset` onto the relation queryset. It runs on the connection pipeline, on `list_field.py::DjangoListField`, and on the optimizer's prefetch child (`optimizer/walker.py::_build_child_queryset`) — not inside the generated resolver, which returns the row-bound accessor
 - **arguments** — `connection.py::DjangoConnectionField` synthesizes a resolver `__signature__` carrying the sidecar arguments, which is how `filter:` and `orderBy:` appear on a field nobody hand-wrote a signature for
 
-`types/definition.py::DjangoTypeDefinition` is what keeps this coherent: it holds the Django field name, the origin type, the relation metadata, and the sidecar bindings, and every seam above reads it. Field-level `fields_class` behavior wraps the generated resolver rather than replacing it (`spec-055-fieldset-0_1_1.md` owns that mechanism).
+`types/definition.py::DjangoTypeDefinition` is what keeps this coherent: it holds the Django field name, the origin type, the relation metadata, and the sidecar bindings, and every seam above reads it. Field-level `fields_class` behavior wraps the generated resolver rather than replacing it (`spec-059-fieldset-0_1_1.md` owns that mechanism).
 
 The load-bearing constraint on this layer: **generation happens at finalization and nowhere else.** A relation field cannot be generated at class creation, because its target may not exist yet, and it cannot be generated after `strawberry.type`, because the type is frozen by then. Phase 2 is the only window, which is why it is a permanent mechanism rather than a transitional one.
 
@@ -768,7 +768,7 @@ Borrow from Strawberry-Django:
 ### Layer 9: FieldSet and field-level permissions
 Use `AdvancedFieldSet` semantics.
 
-Implementation should wrap the generated field resolver, not mutate the field object after the fact. Wrapping keeps the cascade below expressible in one place and costs nothing on a field no [`FieldSet`][glossary-fieldset] manages; `spec-055-fieldset-0_1_1.md` owns the mechanism and `TODO-BETA-055-0.1.1` owns the work.
+Implementation should wrap the generated field resolver, not mutate the field object after the fact. Wrapping keeps the cascade below expressible in one place and costs nothing on a field no [`FieldSet`][glossary-fieldset] manages; `spec-059-fieldset-0_1_1.md` owns the mechanism and `TODO-BETA-055-0.1.1` owns the work.
 
 Resolver order:
 

@@ -426,7 +426,7 @@ the feature.
 
 This card shares `0.0.15` with cards `050` (list-field arguments), `051`
 (parity-gap closure), and the boundary+DRY card `TODO-ALPHA-053-0.0.15`
-([`spec-051`][spec-051]), so the line is a
+([`spec-053`][spec-053]), so the line is a
 [joint version cut][glossary-joint-version-cut] and **no slice of this spec
 moves version state**. Under that rule the last card to land owns the bump,
 and the ordering is fixed rather than incidental: card `053` declares a
@@ -449,7 +449,7 @@ same docs.
 
 Per the repo's staging discipline, when a slice is staged before it is
 built, the staging change will place
-`TODO(spec-050 Slice N)` source anchors at the sites it will change
+`TODO(spec-052 Slice N)` source anchors at the sites it will change
 (`extensions/__init__.py`, `extensions/debug.py`, and `pyproject.toml`,
 which as yet has no `[project.optional-dependencies]` block — the `[debug]`
 extra is its first member), removed in the change that ships the slice.
@@ -629,7 +629,7 @@ Sequencing inside the card is strict: Slice 2 must not land until Slice 1's
 <!-- docs/SPECS/ -->
 [spec-038]: spec-038-form_mutations-0_0_12.md
 [spec-044]: spec-044-debug_extension-0_0_14.md
-[spec-051]: spec-051-boundary_dry_squeeze-0_0_15.md
+[spec-053]: spec-053-boundary_dry_squeeze-0_0_15.md
 
 <!-- docs/builder/ -->
 

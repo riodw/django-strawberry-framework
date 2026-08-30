@@ -408,7 +408,7 @@ def _element_annotation(
 
 # Most-specific-first filter-class order. Convert and normalize both walk this
 # via ``convert_with_mro`` so a new primitive cannot be typed on one ladder and
-# coerced on the other (spec-051 C3). ``TypedFilter`` is convert-only: List /
+# coerced on the other (spec-053 C3). ``TypedFilter`` is convert-only: List /
 # Array / Range already matched, so normalize returns ``MRO_CONTINUE`` and
 # falls through to ChoiceFilter / the catch-all. Last entry is ``object`` (the
 # original ``else``): convert's method-filter / ``isnull`` / scalar arm,

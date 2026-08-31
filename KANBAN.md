@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-29
+Last refreshed: 2026-08-31
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -115,7 +115,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
-| `DONE-030-0.0.9` - `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
+| `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field) | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
 | `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `DONE-028-0.0.8` - Ordering subsystem | [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` - Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
@@ -869,15 +869,15 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 #### Card references
 
 - Dependency: The boundary/DRY squeeze freezes optimizer subsystem boundaries; the `graph/` package must sit below them, and Slice 3's predicate relocation composes with the post-squeeze tree. -> `TODO-ALPHA-053-0.0.15` - Boundary hardening and system-wide DRY squeeze
-- Related: Amendment obligation: `FieldSet` normalizes `Meta.depends_on` into `FieldDependencyPlan` and consumes the substrate's field-dependency vocabulary instead of a private map shape. -> `TODO-BETA-059-0.1.1` - `FieldSet`
+- Related: Amendment obligation: `FieldSet` normalizes `Meta.depends_on` into `FieldDependencyPlan` and consumes the substrate's field-dependency vocabulary instead of a private map shape. -> `TODO-BETA-059-0.1.1` - `FieldSet` declarative field-level behavior (`Meta.fields_class`)
 - Related: Amendment obligation: search path planning moves onto `GraphPathPlan` / `GraphPathPlanSet` (path classification + arm grouping); `LOOKUP_PREFIXES` rejection and permission dispatch stay card-local. -> `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
 - Related: Amendment obligation: related / permissioned aggregation consumes `EdgeScope` for child visibility instead of a private child-visibility hook. -> `TODO-BETA-062-0.1.3` - Aggregation subsystem
 - Related: Amendment obligation: explain reads the substrate's plan objects (and the sibling card's operation plan map) rather than reconstructing plan state. -> `TODO-BETA-069-0.1.6` - Optimizer explain mode
-- Related: Amendment obligation: the adversarial suite gains graph-substrate targets (memo isolation, predicate compilation, edge-scope fail-closed paths). -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Amendment obligation: the adversarial suite gains graph-substrate targets (memo isolation, predicate compilation, edge-scope fail-closed paths). -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite
 - Related: The sibling foundation card: owns reproductions R1, R7, R8, and R10, the row-identity enforcement gate, and the structural/bound split this card's plan objects prepare. -> `TODO-BETA-068-0.1.6` - Structural optimization templates and nested sidecar batching
 
-<a id="fieldset"></a>
-### [TODO-BETA-059-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
+<a id="fieldset_declarative_field_level_behavior_metafields_class"></a>
+### [TODO-BETA-059-0.1.1 - `FieldSet` declarative field-level behavior (`Meta.fields_class`)](KANBAN.html#fieldset_declarative_field_level_behavior_metafields_class)
 
 - Priority: High
 - Status: To Do
@@ -895,7 +895,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Dependencies
 
-- `DONE-030-0.0.9` - `DjangoConnectionField`
+- `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - `TODO-BETA-058-0.1.1` - Graph substrate: shared graph policy and dependency planning
 
 #### Scope
@@ -952,7 +952,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Card references
 
-- Dependency: `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Dependency: `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: `DONE-034-0.0.10` - Permissions subsystem
 - Related: The table-driven Meta-key binder generalization this card's `_bind_fieldsets` would otherwise hard-code a third helper for is owned by the aggregation card (absorbed from the retired promotion card). -> `TODO-BETA-062-0.1.3` - Aggregation subsystem
 - Related: `TODO-BETA-064-0.1.4` - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)
@@ -998,7 +998,7 @@ Coverage-gap audit (2026-07-31): a cross-check of the spec against the to-many s
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem
-- `DONE-030-0.0.9` - `DjangoConnectionField`
+- `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - `TODO-BETA-058-0.1.1` - Graph substrate: shared graph policy and dependency planning
 
 #### Scope
@@ -1055,7 +1055,7 @@ Coverage-gap audit (2026-07-31): a cross-check of the spec against the to-many s
 
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end; this card owns the promotion, and the table-driven binder generalization is owned by `TODO-BETA-062-0.1.3`. -> `TODO-BETA-062-0.1.3` - Aggregation subsystem
-- Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-066-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them. -> `TODO-BETA-066-0.1.5` - Fakeshop GraphQL schema activation
 - Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` - Filtering subsystem
 - Dependency: Amendment source: the graph substrate ships the shared planning vocabulary this card must consume instead of reimplementing (spec-058 Decision 1 — the amendment lands at the substrate card's creation, not at its Slice 5). -> `TODO-BETA-058-0.1.1` - Graph substrate: shared graph policy and dependency planning
@@ -1352,7 +1352,7 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 - Dependency: `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing. -> `DONE-034-0.0.10` - Permissions subsystem
 - Dependency: `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-059-0.1.1`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-059-0.1.1` - `FieldSet`
+- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-059-0.1.1`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-059-0.1.1` - `FieldSet` declarative field-level behavior (`Meta.fields_class`)
 
 <a id="stable_choice_enum_naming_override"></a>
 ### [TODO-BETA-065-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
@@ -1572,7 +1572,7 @@ The second of two graph foundation cards, sibling to the graph substrate (TODO-B
 
 - Dependency: Gated on the substrate landing first: `EdgeScope` supplies the visibility-scoped child base the sidecar pipeline normalizes, `RowIdentityProof` is the vocabulary the window gate enforces, `FieldDependencyPlan` feeds the template's dependency graph, and the operation memo is the request-local tier the binding reuses. -> `TODO-BETA-058-0.1.1` - Graph substrate: shared graph policy and dependency planning
 - Related: Amendment obligation: explain renders the operation plan map (every root exactly once, shared dependencies with hit counts, redacted scope values) and retires the legacy last-wins `DST_OPTIMIZER_PLAN` context key. -> `TODO-BETA-069-0.1.6` - Optimizer explain mode
-- Related: Amendment obligation: the adversarial suite gains structural-template targets (template-store keying/under-keying, the structural/bound binding boundary, proof-gate refusal paths, sidecar cache isolation). -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Amendment obligation: the adversarial suite gains structural-template targets (template-store keying/under-keying, the structural/bound binding boundary, proof-gate refusal paths, sidecar cache isolation). -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite
 
 <a id="optimizer_explain_mode"></a>
 ### [TODO-BETA-069-0.1.6 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
@@ -1664,7 +1664,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem
-- `DONE-030-0.0.9` - `DjangoConnectionField`
+- `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 
 #### Scope
 
@@ -1707,7 +1707,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Card references
 
 - Dependency: `DONE-027-0.0.8` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable. -> `DONE-027-0.0.8` - Filtering subsystem
-- Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 
 <a id="migration_and_adoption_guides"></a>
 ### [TODO-BETA-071-0.1.8 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
@@ -1764,8 +1764,8 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 - Dependency: The final configurable filter/logic key namespace (`TODO-BETA-070-0.1.7`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-070-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
-<a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-072-0.1.8 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+<a id="adversarial_non_live_test_suite"></a>
+### [TODO-BETA-072-0.1.8 - Adversarial non-live test suite](KANBAN.html#adversarial_non_live_test_suite)
 
 - Priority: Medium-high
 - Status: To Do
@@ -1846,7 +1846,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Dependencies
 
-- `TODO-BETA-072-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+- `TODO-BETA-072-0.1.8` - Adversarial non-live test suite
 
 #### Definition of done
 
@@ -1882,8 +1882,8 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 #### Card references
 
 - Related: Every other Beta card (`TODO-BETA-058-0.1.1` through `TODO-BETA-072-0.1.8`) is in `DONE`. -> `TODO-BETA-058-0.1.1` - Graph substrate: shared graph policy and dependency planning
-- Related: Every other Beta card (`TODO-BETA-058-0.1.1` through `TODO-BETA-072-0.1.8`) is in `DONE`. -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
-- Dependency: The final Beta card discharges before the `1.0.0` cut - the dependency edge replaces prose, mirroring the beta release card's edge on the doc-debt card. -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Every other Beta card (`TODO-BETA-058-0.1.1` through `TODO-BETA-072-0.1.8`) is in `DONE`. -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite
+- Dependency: The final Beta card discharges before the `1.0.0` cut - the dependency edge replaces prose, mirroring the beta release card's edge on the doc-debt card. -> `TODO-BETA-072-0.1.8` - Adversarial non-live test suite
 
 <a id="dynamic_schemas_from_datatype_specs_synthetic_unmanaged_models"></a>
 ### [TODO-STABLE-074-1.1.0 - Dynamic schemas from dataType specs (synthetic unmanaged models)](KANBAN.html#dynamic_schemas_from_datatype_specs_synthetic_unmanaged_models)
@@ -3400,7 +3400,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Dependencies
 
-- `DONE-030-0.0.9` - `DjangoConnectionField`
+- `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 
 #### Scope
 
@@ -3464,8 +3464,8 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Card references
 
-- Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: `TODO-BETA-059-0.1.1` - `FieldSet`
+- Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
+- Related: `TODO-BETA-059-0.1.1` - `FieldSet` declarative field-level behavior (`Meta.fields_class`)
 
 <a id="connection_aware_optimizer_planning"></a>
 ### [DONE-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
@@ -3567,7 +3567,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Card references
 
-- Related: gated on `DONE-030-0.0.9` / Relay decisions. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: gated on `DONE-030-0.0.9` / Relay decisions. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 
 <a id="full_relay_story_node_connection_root_validation"></a>
 ### [DONE-032-0.0.9 - Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
@@ -3642,7 +3642,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 #### Dependencies
 
-- `DONE-030-0.0.9` - `DjangoConnectionField`
+- `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 
 #### Scope
 
@@ -3735,11 +3735,11 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 #### Card references
 
-- Dependency: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Dependency: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-060-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
-- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands. -> `DONE-034-0.0.10` - Permissions subsystem
 - Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-066-0.1.5`. -> `TODO-BETA-066-0.1.5` - Fakeshop GraphQL schema activation
@@ -3856,11 +3856,11 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 #### Card references
 
 - Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: `DONE-015-0.0.5` - 0.0.5 Relay interfaces and Node foundation
 
-<a id="djangoconnectionfield"></a>
-### [DONE-030-0.0.9 - `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
+<a id="djangoconnectionfield_relay_connection_field"></a>
+### [DONE-030-0.0.9 - `DjangoConnectionField` (Relay connection field)](KANBAN.html#djangoconnectionfield_relay_connection_field)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -4001,7 +4001,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Dependency: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: Connection-aware optimizer planning is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Dependency: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-059-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-059-0.1.1` - `FieldSet`
+- Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-059-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-059-0.1.1` - `FieldSet` declarative field-level behavior (`Meta.fields_class`)
 - Dependency: `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern. -> `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass
 - Related: `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
 

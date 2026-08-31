@@ -50,6 +50,19 @@ repos:
         types: [python]
         require_serial: true
 
+      - id: check-kanban-anchors
+        name: kanban anchors collision-free (card vs card, card vs glossary, render ids)
+        entry: uv run python scripts/check_kanban_anchors.py
+        language: system
+        # `always_run` + `pass_filenames: false` because the collision source is
+        # the board DB (a card retitle in db.sqlite3) or the glossary DB, and a
+        # colliding pair spans rows no staged-file list can name. The gate reads
+        # the same DB the exporters render from, so it catches the collision even
+        # when the stale render was not regenerated in the same commit.
+        always_run: true
+        pass_filenames: false
+        require_serial: true
+
       - id: check-citations
         name: citations resolve (AGENTS.md rule 27 path::Symbol refs)
         entry: uv run python scripts/check_citations.py

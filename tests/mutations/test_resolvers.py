@@ -120,8 +120,15 @@ def _build_item_schema(
     category_get_queryset=None,
     input_cls=None,
     partial_input_cls=None,
+    with_entries_connection=False,
 ):
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
+
+    ``with_entries_connection`` adds an ``Entry`` primary type and selects the
+    reverse-FK ``entries`` relation on the ``Item`` primary, so phase 2.5
+    synthesizes an ``entriesConnection`` sibling (the default
+    ``"connection"`` relation shape) - the connection-child half of the
+    delete-snapshot guarantee needs a connection on the payload's node type.
 
     ``item_get_queryset`` injects a visibility hook on the ``Item`` primary type;
     ``category_get_queryset`` does the same on the ``Category`` primary type so the FK
@@ -143,11 +150,27 @@ def _build_item_schema(
         category_body["get_queryset"] = category_get_queryset
     CategoryT = type("CategoryT", (DjangoType, relay.Node), category_body)
 
-    item_meta_attrs = {
-        "model": product_models.Item,
-        "fields": ("id", "name", "category"),
-        "primary": True,
-    }
+    item_fields = ("id", "name", "category")
+    if with_entries_connection:
+        type(
+            "EntryT",
+            (DjangoType, relay.Node),
+            {
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {"model": product_models.Entry, "fields": ("id", "value"), "primary": True},
+                ),
+            },
+        )
+        item_fields = (
+            "id",
+            "name",
+            "category",
+            "entries",
+        )
+
+    item_meta_attrs = {"model": product_models.Item, "fields": item_fields, "primary": True}
     item_body: dict = {"Meta": type("Meta", (), item_meta_attrs)}
     if item_get_queryset is not None:
         item_body["get_queryset"] = item_get_queryset
@@ -213,6 +236,14 @@ _UPDATE = (
 _DELETE = (
     "mutation($id: ID!){ deleteItem(id:$id){ "
     "node{ id name category{ name } } errors{ field messages } } }"
+)
+# The connection-child delete selection (Decision 8 step 6 / the delete-snapshot
+# edge case): the payload's node selects a synthesized relation CONNECTION, not a
+# plain forward relation, so the snapshot must materialize the prefetch too.
+_DELETE_WITH_CONNECTION = (
+    "mutation($id: ID!){ deleteItem(id:$id){ "
+    "node{ id name entriesConnection{ edges{ node{ value } } } } "
+    "errors{ field messages } } }"
 )
 
 
@@ -282,6 +313,50 @@ def test_delete_snapshot_materializes_relation_before_delete():
     # The related ``category`` is accessible on the detached snapshot after the row
     # (and its FK source) is deleted - it was loaded before delete().
     assert res.data["deleteItem"]["node"]["category"]["name"] == cat.name
+
+
+@pytest.mark.django_db
+def test_delete_snapshot_materializes_connection_child_before_delete():
+    """The delete snapshot carries a selected relation CONNECTION's children, loaded before delete.
+
+    The connection-child half of Decision 8 step 6 (the nested-relation half is
+    the row above). ``entriesConnection`` is a synthesized reverse-FK connection
+    on the payload's node type, so materializing it means populating
+    ``_prefetched_objects_cache`` on the located instance BEFORE ``delete()``.
+
+    Distinguishing by construction: ``Entry.item`` is ``on_delete=CASCADE``, so
+    the children are gone from the DB by the time Strawberry resolves the
+    connection. A snapshot that had not force-loaded the prefetch would resolve
+    the connection lazily against the manager and return ZERO edges - so the
+    non-empty edge set can only come from the cache populated pre-delete, and the
+    row fails if the connection-child branch stops materializing.
+    """
+    schema, (_CategoryT, ItemT) = _build_item_schema(with_entries_connection=True)
+    cat = product_models.Category.objects.create(name=_category_name())
+    prop = product_models.Property.objects.create(name="Prop-A", category=cat)
+    other_prop = product_models.Property.objects.create(name="Prop-B", category=cat)
+    item = product_models.Item.objects.create(name="Doomed", category=cat)
+    entry_pks = [
+        product_models.Entry.objects.create(value="first", item=item, property=prop).pk,
+        product_models.Entry.objects.create(value="second", item=item, property=other_prop).pk,
+    ]
+
+    res = schema.execute_sync(
+        _DELETE_WITH_CONNECTION,
+        variable_values={"id": _item_gid(ItemT, item.pk)},
+    )
+
+    assert res.errors is None, res.errors
+    node = res.data["deleteItem"]["node"]
+    assert node["name"] == "Doomed"
+    assert [edge["node"]["value"] for edge in node["entriesConnection"]["edges"]] == [
+        "first",
+        "second",
+    ]
+    # Both the row and its cascaded children are gone: the edges above came from
+    # the pre-delete snapshot, not from a post-delete read.
+    assert not product_models.Item.objects.filter(pk=item.pk).exists()
+    assert not product_models.Entry.objects.filter(pk__in=entry_pks).exists()
 
 
 # ---------------------------------------------------------------------------

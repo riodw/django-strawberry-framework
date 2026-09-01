@@ -248,6 +248,59 @@ def test_delete_item_happy_path():
     assert not models.Item.objects.filter(pk=item.pk).exists()
 
 
+_DELETE_ITEM_WITH_CONNECTION = (
+    "mutation($id: ID!) { deleteItem(id: $id) { "
+    "node { id name entriesConnection { edges { node { value } } } } "
+    "errors { field messages } } }"
+)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_item_snapshot_carries_connection_child_edges():
+    """``deleteItem`` selecting ``entriesConnection`` returns its edges after the row is gone.
+
+    The connection-child half of the delete snapshot (spec-036 Decision 8 step 6):
+    the response selection must be fully materialized inside the write transaction
+    BEFORE ``delete()``, connection children included, not only plain nested
+    relations (``test_delete_item_happy_path`` covers the ``category { name }``
+    half).
+
+    Distinguishing by construction: ``Entry.item`` is ``on_delete=CASCADE``, so by
+    the time the connection is resolved the children no longer exist in the DB. A
+    snapshot that had not materialized the prefetch would resolve the connection
+    against the manager and return ZERO edges, so a non-empty edge set can only
+    come from the pre-delete materialization.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    properties = list(models.Property.objects.filter(category=category)[:2])
+    item = models.Item.objects.create(name="DoomedWithEntries", category=category)
+    entry_pks = [
+        models.Entry.objects.create(value=f"live-entry-{index}", item=item, property=prop).pk
+        for index, prop in enumerate(properties)
+    ]
+    assert len(entry_pks) == 2, "seed_data(1) must give the first category >=2 properties"
+    client = _login_with_perm("staff_1", "delete_item")
+
+    data = _graphql_data(
+        _DELETE_ITEM_WITH_CONNECTION,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk)},
+    )
+    result = data["deleteItem"]
+    assert result["errors"] == []
+    assert result["node"]["name"] == "DoomedWithEntries"
+    assert [edge["node"]["value"] for edge in result["node"]["entriesConnection"]["edges"]] == [
+        "live-entry-0",
+        "live-entry-1",
+    ]
+    # The row and its cascaded children are both gone: the edges above are the
+    # pre-delete snapshot, not a post-delete read.
+    assert not models.Item.objects.filter(pk=item.pk).exists()
+    assert not models.Entry.objects.filter(pk__in=entry_pks).exists()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_create_category_happy_path():
     """``createCategory`` (the >=1 Category write) creates a fresh-named row end to end.
@@ -503,6 +556,71 @@ def test_create_item_missing_model_perm_is_denied_no_write():
     assert "Not authorized" in payload["errors"][0]["message"]
     assert models.Item.objects.count() == before
     assert not models.Item.objects.filter(name="NoPermWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_missing_change_perm_is_denied_no_write():
+    """A caller holding ``add_item`` but lacking ``change_item`` is denied ``updateItem``, no write.
+
+    The live half of the per-operation codename matrix (spec-036 Decision 15 /
+    AR-H3): the actor is granted the explicit ``add_item`` and NOTHING else, so
+    the row can only pass if ``DjangoModelPermission`` mapped ``update`` to
+    ``change_item`` rather than to "any products write perm". Driven as
+    ``staff_1`` (full visibility, NOT a superuser) against a row the happy-path
+    ``change_item`` caller updates successfully, so the only difference from
+    ``test_update_item_non_colliding_partial_update`` is the codename held. The
+    denial RAISES a top-level ``GraphQLError`` and nulls ``data``; the row is
+    unchanged in the DB.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="KeepMyName", description="keep me", category=category)
+    client = _login_with_perm("staff_1", "add_item")  # holds add, LACKS change
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "Renamed"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    item.refresh_from_db()
+    assert item.name == "KeepMyName"
+    assert item.description == "keep me"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_item_missing_delete_perm_is_denied_no_write():
+    """A caller holding ``add_item`` but lacking ``delete_item`` is denied ``deleteItem``, no write.
+
+    The ``delete`` cell of the same per-operation matrix, distinguishing for the
+    same reason: ``add_item`` is held, so a row passing would prove the codename
+    mapping collapsed rather than that the caller is unprivileged in general. The
+    denial is a top-level ``GraphQLError`` with ``data: null`` and the row
+    survives - contrast ``test_delete_item_happy_path``, identical but for the
+    ``delete_item`` grant.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Undoomed", category=category)
+    client = _login_with_perm("staff_1", "add_item")  # holds add, LACKS delete
+
+    response = _post_graphql(
+        _DELETE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk)},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert models.Item.objects.filter(pk=item.pk, name="Undoomed").exists()
 
 
 @pytest.mark.django_db(transaction=True)

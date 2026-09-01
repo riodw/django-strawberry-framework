@@ -25,6 +25,7 @@ from graphql import OperationType
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.optimizer.extension import mutation_payload_child_selections
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.nested_planner import _connector_only_field
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -4771,30 +4772,80 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
     assert plan.prefetch_related != ()
 
 
+def _mutation_payload_selection(slot="node"):
+    """Build the PAYLOAD-level selection a mutation field returns.
+
+    ``<field> { <slot> { name category { name } entries { name } } errors { ... } }``
+    - i.e. the shape ``createItem { node { ... } errors { ... } }`` renders. The
+    ``errors`` sibling is present on purpose: the extractor must drop it, since it
+    is not a selection on the node type.
+    """
+    return _sel(
+        "createItem",
+        selections=[
+            _sel(
+                slot,
+                selections=[
+                    _sel("name"),
+                    _sel("category", selections=[_sel("name")]),
+                    _sel("entries", selections=[_sel("name")]),
+                ],
+            ),
+            _sel("errors", selections=[_sel("field"), _sel("messages")]),
+        ],
+    )
+
+
+def _mutation_refetch_selections(info, slot="node"):
+    """Derive the re-fetch child selections through the PRODUCTION extractor.
+
+    Runs ``optimizer/extension.py::mutation_payload_child_selections`` - the same
+    closure ``mutations/resolvers.py`` hands ``apply_connection_optimization`` - over
+    the payload selection, so the mirror below plans the list production computes
+    rather than a hand-restated copy of it. If the flattening changes shape, the
+    derived list changes and the plan assertions move with it.
+    """
+    return mutation_payload_child_selections(slot)([_mutation_payload_selection(slot)], info)
+
+
+@pytest.mark.parametrize("slot", ["node", "result"])
+def test_mutation_payload_child_selections_flattens_slot_children_only(slot):
+    """The production extractor flattens ``<slot>``'s children and drops ``errors``.
+
+    The coupling pin for the mirror below (spec-036 Decision 9): a mutation payload
+    is ``<field> { <slot> { ... } errors { ... } }`` with ``<slot>`` ``node`` for a
+    Relay-Node target and ``result`` otherwise, and the re-fetch must plan exactly
+    the node-type selection - so the ``<slot>`` level is navigated away and the
+    ``errors`` envelope sibling never reaches the walker.
+    """
+    derived = _mutation_refetch_selections(_op_info(OperationType.MUTATION), slot)
+    assert [selection.name for selection in derived] == ["name", "category", "entries"]
+    assert [child.name for child in derived[1].selections] == ["name"]
+
+
 def test_mutation_refetch_plan_drops_only_keeps_relations():
     """The DjangoMutation post-write re-fetch plan-state mirror (spec-036 Decision 9).
 
     The package-tier exact-state counterpart to the live behavioral
-    ``CaptureQueriesContext`` assertion. A mutation re-fetch hands the optimizer the
-    payload's node-type selection (the children of ``CreateItemPayload.node``,
-    flattened to the node-type selection - here a to-one ``category`` and a to-many
-    ``entries`` plus a scalar). Under ``OperationType.MUTATION`` (spec-035 G2) the
-    plan must carry empty ``only_fields`` while ``select_related`` /
-    ``prefetch_related`` survive, AND the APPLIED queryset must carry Django's
-    default empty defer-set ``(frozenset(), True)`` - i.e. no ``.only(...)`` - so a
-    post-write consumer touching an unprojected column never deferred-refetches.
-    The exact selection mirrors what ``mutation_payload_child_selections`` hands
-    ``plan_optimizations`` from a ``createItem { node { name category { name }
-    entries { name } } }`` response.
+    ``CaptureQueriesContext`` assertion. The selection is not restated here: it is
+    derived by running the production extractor
+    ``optimizer/extension.py::mutation_payload_child_selections`` over a
+    ``createItem { node { name category { name } entries { name } } errors { ... } }``
+    payload selection, which is what ``mutations/resolvers.py`` does at run time - so
+    a change to the flattening cannot leave this mirror passing while it claims to
+    mirror something it no longer mirrors.
+
+    Under ``OperationType.MUTATION`` (spec-035 G2) the plan must carry empty
+    ``only_fields`` while ``select_related`` / ``prefetch_related`` survive, AND the
+    APPLIED queryset must carry Django's default empty defer-set
+    ``(frozenset(), True)`` - i.e. no ``.only(...)`` - so a post-write consumer
+    touching an unprojected column never deferred-refetches.
     """
+    info = _op_info(OperationType.MUTATION)
     plan = plan_optimizations(
-        [
-            _sel("name"),
-            _sel("category", selections=[_sel("name")]),
-            _sel("entries", selections=[_sel("name")]),
-        ],
+        _mutation_refetch_selections(info),
         Item,
-        info=_op_info(OperationType.MUTATION),
+        info=info,
     )
     assert plan.only_fields == ()
     assert plan.select_related == ("category",)

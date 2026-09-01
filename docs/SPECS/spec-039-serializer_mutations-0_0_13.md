@@ -264,7 +264,7 @@ earned live** — `rest_framework/resolvers.py` lands together with the products
 `ModelSerializer` mutation and its live `/graphql/` tests, which are the **primary**
 coverage harness; the package-internal `tests/rest_framework/test_resolvers.py` holds
 only genuinely-unreachable internals;
-[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
 /
 [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)
 /
@@ -328,7 +328,7 @@ Revision history (kept inline so the spec is self-contained):
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth));
   the `serializer.errors` → [`FieldError`][glossary-fielderror-envelope] pipeline with
   DRF-native `partial=True` update
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload));
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
   the optimizer composition reusing the `036` re-fetch path
   ([Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path));
   the operation set (`create` / `update`, no serializer `delete`)
@@ -357,7 +357,7 @@ Revision history (kept inline so the spec is self-contained):
   invariant the `038` form pipeline pins
   ([`forms/resolvers.py`][forms-resolvers] #"Authorize runs BEFORE the relation decode"),
   closing a relation-visibility-probe-by-id regression
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload));
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
   (2) schema-time field discovery goes through an overridable
   `get_serializer_for_schema()` hook (not a bare no-arg `serializer_class()`), with
   request-dependent schema shape rejected loudly
@@ -369,7 +369,7 @@ Revision history (kept inline so the spec is self-contained):
   (4) a **dedicated recursive `serializer.errors` flattener** with a dotted path
   convention (`items.0.name`, `NON_FIELD_ERRORS_KEY` → `"__all__"` at every level)
   replaces the implicit reuse of the one-level `036` mapper
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
   Plus: the serializer-input ledger clears in the
   [`finalize_django_types`][glossary-finalize_django_types] **pre-bind reset block**
   (not only `TypeRegistry.clear()`) for retry-idempotence
@@ -385,7 +385,7 @@ Revision history (kept inline so the spec is self-contained):
   `permission_classes` kept explicitly in the serializer allowed-key set, and the
   runtime serializer `context` resolved via the shared `request_from_info` helper
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)
-  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 - **Revision 3** — applied a second code-review pass (again verified against the package
   source first; the form `guard_create_required_fields` /
   `_cached_build_form_input` per-declaration precedent and the
@@ -408,7 +408,7 @@ Revision history (kept inline so the spec is self-contained):
   a **value-preserving save** — the resolver captures `serializer.save()`'s returned
   object in the `save_or_field_errors` closure (called once) and re-fetches by its pk,
   rather than re-deriving from a return the wrapper discards
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload));
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
   and the root `__getattr__` is pinned to **not memoize** `SerializerMutation`, with the
   absent-DRF test also evicting the root attribute
   ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
@@ -460,7 +460,7 @@ Revision history (kept inline so the spec is self-contained):
   custom `create()` / `update()` / model `full_clean()`) is routed through the recursive
   flattener into the envelope — split by exception type from `IntegrityError`, never a
   top-level `GraphQLError`
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 6); the `get_serializer_for_schema()` loud-rejection guard wraps **`.fields`
   materialization**, not `serializer_class()` (DRF builds `.fields` lazily, so a
   context-requiring serializer fails at `.fields` access, not construction)
@@ -530,7 +530,7 @@ Revision history (kept inline so the spec is self-contained):
   ([4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms) /
   [6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) /
   [7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) /
-  [8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) /
+  [8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload) /
   [10](#decision-10--operations-create--update-no-serializer-delete)) and its Slice DoD
   line, and the [Implementation plan](#implementation-plan) (the per-slice file lists +
   the "no regression" item) is reconciled to show the promotions touch `mutations/` /
@@ -548,7 +548,7 @@ Revision history (kept inline so the spec is self-contained):
   recursive flattener, Django's `error_dict` / `messages` → the flat `036`
   `validation_error_to_field_errors` (verified: the `036` mapper reads Django's shape, not
   `.detail`), two separate tests
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
   **(F3)** the generated relation input carries **one** strategy-dependent annotation
   (Relay → `GlobalID`, else raw-pk scalar; verified via products'
   malformed-`GlobalID`-is-top-level-coercion test); "accepts both" is the shared decode
@@ -557,7 +557,7 @@ Revision history (kept inline so the spec is self-contained):
   previously-undefined write-only-`PrimaryKeyRelatedField` case (Decision 7). **(F5)** the
   error flattener keys `FieldError.field` to the **GraphQL input name** via the reverse map
   (serializer name only when no input field exists), with a live renamed-field test
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
   **(F6)** `run_write_pipeline_sync` is **scoped to model-backed create/update only** (delete +
   plain form excluded) with a precise `decode_step` / `write_step` callback contract and a
   byte-equivalence requirement on the existing model/form suites
@@ -585,7 +585,7 @@ Revision history (kept inline so the spec is self-contained):
   from `request_from_info(...)`, an override supplying a *different* `request` is a
   `ConfigurationError` (actor cannot drift from the permission seam); the prior "escape
   hatch" wording is removed
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 4). **(M1)** the Slice 3 + DoD relation-id summaries now state the **one
   strategy-dependent generated shape** (shared decoder accepts both only for package-only
   branches) and include the **serializer-only `field.queryset.model`** target source.
@@ -652,14 +652,14 @@ vocabulary used throughout the spec:
   `038` learned — the relation-id visibility decode, the `IntegrityError` envelope
   mapper, the soft-construction hook — port directly
   ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) /
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 - [`FieldError` envelope][glossary-fielderror-envelope] — the shared error contract
   [`spec-036`][spec-036] **defined and froze** for this card. A serializer mutation
   maps `serializer.errors` (a `field → [messages]` dict, with DRF's
   `non_field_errors` / `api_settings.NON_FIELD_ERRORS_KEY` bucket) onto the
   byte-identical envelope, keying serializer-level errors to the same `"__all__"`
   sentinel `036` pinned
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 - [`DjangoModelPermission`][glossary-djangomodelpermission] — the default
   write-authorization class the `ModelSerializer` flavor inherits unchanged (the
   serializer's model resolves the `add` / `change` perm through the
@@ -671,7 +671,7 @@ vocabulary used throughout the spec:
   serializer to a row located through the target type's
   [`get_queryset`][glossary-get_queryset-visibility-hook], so a hidden row is
   not-found, never an existence leak — the same contract `036` / `038` `update` use
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] /
   [`only()` projection][glossary-only-projection] — the post-save re-fetch
   cooperation. The payload's object is re-fetched and optimizer-planned for the
@@ -717,7 +717,7 @@ vocabulary used throughout the spec:
   model, reusing the same server-side [`DjangoNodeField`][glossary-djangonodefield] decode
   the `id:` `update` locate rides, across the FK / OneToOne / M2M shapes
   [Relation handling][glossary-relation-handling] spans
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 - [RELAY_GLOBALID_STRATEGY][glossary-relay_globalid_strategy] /
   [`Meta.globalid_strategy`][glossary-metaglobalid_strategy] — the registry-wide / per-type
   strategy fixing whether a relation id is a Relay `GlobalID` or a raw pk, so the decoder
@@ -1075,7 +1075,7 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     normalization.
 - [ ] Slice 3: the serializer resolver pipeline **+ the products live serializer
   surface, landed in one commit** (per
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   /
   [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)
   /
@@ -1388,12 +1388,12 @@ A true description of the repo as this spec is authored:
 3. **Reuse the frozen `FieldError` envelope.** Map `serializer.errors` (and DRF's
    `non_field_errors` bucket) onto the byte-identical
    [`FieldError`][glossary-fielderror-envelope] envelope `036` defined
-   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
 4. **Run the write through the serializer.** `serializer.is_valid()` →
    `serializer.save()`, sync and async, inside the one-`transaction.atomic()` boundary
    `036` / `038` set; the payload's object is re-fetched and optimizer-planned for the
    response selection
-   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
    / [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)).
 5. **Compose with the shipped permission + visibility seams.** The flavor inherits
    [`DjangoModelPermission`][glossary-djangomodelpermission] write-auth and the
@@ -1481,13 +1481,13 @@ one.
 | [`graphene_django.rest_framework.mutation.SerializerMutation`][upstream-serializer-mutation] (`ClientIDMutation`, `SerializerMutationOptions`) | [`SerializerMutation`][glossary-serializermutation] base subclassing [`DjangoMutation`][glossary-djangomutation] + nested `Meta.serializer_class` ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions) / [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)) | this card — borrow the capability, reject the `MutationOptions` surface |
 | [`fields_for_serializer` + `convert_serializer_field`][upstream-serializer-converter] (DRF field → GraphQL type, `is_input` flag) | [`rest_framework/serializer_converter.py`][rf-converter] `convert_serializer_field` MRO-walk registry, reusing the read-side [scalar][glossary-scalar-field-conversion] / [choice-enum][glossary-choice-enum-generation] / [`Upload`][glossary-upload-scalar] converters where overlapping ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) | this card — required parity, fail-loud (no `Field → String` catch-all) |
 | graphene `convert_serializer_field` `serializers.Field → String` catch-all | a **raising** fallthrough — an unmapped field raises [`ConfigurationError`][glossary-configurationerror] ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) | deliberate divergence — matches [`forms/converter.py`][forms-converter]'s fail-loud discipline |
-| [`ErrorType.from_errors(serializer.errors)`][upstream-serializer-mutation] on the payload | `serializer.errors` → the frozen [`FieldError` envelope][glossary-fielderror-envelope], `non_field_errors` → the `"__all__"` sentinel ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | this card — reuse the `036`-frozen envelope, byte-identical |
+| [`ErrorType.from_errors(serializer.errors)`][upstream-serializer-mutation] on the payload | `serializer.errors` → the frozen [`FieldError` envelope][glossary-fielderror-envelope], `non_field_errors` → the `"__all__"` sentinel ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)) | this card — reuse the `036`-frozen envelope, byte-identical |
 | graphene `SerializerMutation` output fields built from the serializer (`is_input=False`) | the primary [`DjangoType`][glossary-djangotype] in the uniform `node` / `result` slot — **not** a serializer-derived output type ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)) | deliberate non-adoption (card-body "dual-purpose" tension, [Risks](#risks-and-open-questions)) |
 | graphene `Meta.model_operations = ["create", "update"]` (runtime-dispatched per mutation) | per-operation `Meta.operation ∈ {"create", "update"}` (one mutation per op, the package convention) ([Decision 10](#decision-10--operations-create--update-no-serializer-delete)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
-| graphene `Meta.lookup_field` (non-pk update locate) + `get_object_or_404` | the `id:` `GlobalID` server-side decode → target `get_queryset` locate ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
+| graphene `Meta.lookup_field` (non-pk update locate) + `get_object_or_404` | the `id:` `GlobalID` server-side decode → target `get_queryset` locate ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
 | graphene `Meta.optional_fields` (force specific fields optional) | `Meta.optional_fields` adopted as a force-optional override on the serializer-derived input ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) | this card — adopted (clean semantics) |
-| graphene relation visibility (none — serializer's own queryset only) | every relation id (Relay + raw pk) visibility-checked through the related primary `get_queryset` before the serializer ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | package security invariant beyond graphene parity (mirrors the per-branch visibility check `036`'s model path and `038`'s form path already enforce, raw pk included) |
-| graphene [`get_serializer_kwargs(cls, root, info, **input)`][upstream-serializer-mutation] (classmethod constructor-kwarg seam) | `get_serializer_kwargs(info, *, data, instance=None)` hook (defaults the package kwargs + `context={"request": …}` + `partial=True` on update) ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | this card — **name-borrowed** seam, not signature-compatible (the graphene signature differs; an existing graphene override can't carry over verbatim — a crit-7 "Meta mental model carries over" wrinkle, not a drop-in) |
+| graphene relation visibility (none — serializer's own queryset only) | every relation id (Relay + raw pk) visibility-checked through the related primary `get_queryset` before the serializer ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)) | package security invariant beyond graphene parity (mirrors the per-branch visibility check `036`'s model path and `038`'s form path already enforce, raw pk included) |
+| graphene [`get_serializer_kwargs(cls, root, info, **input)`][upstream-serializer-mutation] (classmethod constructor-kwarg seam) | `get_serializer_kwargs(info, *, data, instance=None)` hook (defaults the package kwargs + `context={"request": …}` + `partial=True` on update) ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)) | this card — **name-borrowed** seam, not signature-compatible (the graphene signature differs; an existing graphene override can't carry over verbatim — a crit-7 "Meta mental model carries over" wrinkle, not a drop-in) |
 | graphene optional `rest_framework` dependency | DRF a **soft runtime dependency** (out of `[project].dependencies`, in the dev group, guarded import) ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)) | this card — required parity |
 | graphene `MutationOptions` / `ClientIDMutation` / `__init_subclass_with_meta__` / `clientMutationId` | rejected for a nested `class Meta` base ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions)) | deliberately not borrowed |
 
@@ -1637,7 +1637,7 @@ update — a DRF behavior pinned to the verified floor, [Risks](#risks-and-open-
   sentinel. A `ValidationError` raised at **`serializer.save()`** time (a custom
   `create()` / `update()`, or a model-level `full_clean()`) maps the **same** way —
   its `.detail` runs through the same recursive flattener into the envelope, never a
-  top-level error ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  top-level error ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 6).
 - A write the caller is not authorized to perform
   ([`DjangoModelPermission`][glossary-djangomodelpermission] / `check_permission`
@@ -2003,7 +2003,7 @@ encode a request-dependent input. This
 is the deliberate split the `038` form flavor relies on (class-level form metadata,
 never a request-shaped object at schema time); the **runtime**
 `get_serializer_kwargs(...)` hook
-([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload))
+([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload))
 is a **distinct** seam — it shapes the *runtime* serializer (`data` / `instance` /
 `context`) and cannot substitute for schema-time discovery, because finalization
 precedes the first request.
@@ -2059,7 +2059,7 @@ the relation / file rows below are package extensions graphene lacks, not parity
   [`DjangoType`][glossary-djangotype]'s `GlobalID` when it is Relay-Node-shaped, else the
   target's **raw-pk scalar** — decided at the build site (a live request can only submit
   the one shape that annotation admits; "accepts both `GlobalID` and raw pk" is the shared
-  decode *helper*'s contract, not a single generated field's, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) step 3 / F3).
+  decode *helper*'s contract, not a single generated field's, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload) step 3 / F3).
 - `FileField` / `ImageField` → [`Upload`][glossary-upload-scalar] (`file`).
 - A nested `ModelSerializer` / `ListSerializer` field → **fail-loud by default**, surfaced
   as a `ConfigurationError` — UNLESS the mutation EXPLICITLY opts it in via
@@ -2990,11 +2990,11 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
 
 | # | Duplicated today (`mutations/` ↔ `forms/`) | Promote to | Serializer obligation | Pin |
 | --- | --- | --- | --- | --- |
-| **P1.1** | The relation-decode core: `mutations/resolvers.py::_decode_relation_id_set` (+ `_relation_membership_error` / `_relation_visibility_error` / `_raw_pk_relation_error` / `_relation_existence_error`) returns *errors*; [`forms/resolvers.py`][forms-resolvers] rolled its own object-returning, field-keyed `_visible_related_object` / `_decode_form_relation_single` / `_decode_form_relation_multi` because the `036` helper *"does not return"* the object | `_visible_related_object(related_model, pk, info) -> obj \| None` to [`utils/querysets.py`][utils-querysets] (beside `visibility_scoped_related_queryset`, whose composition it already uses); better, the whole one-id *decode-or-coerce → visible-object → no-leak `FieldError`* shape into a shared core taking a small per-flavor descriptor | Re-key the serializer relation decoder over the promoted `_visible_related_object`; do **not** re-implement the visibility / membership check (third copy avoided). The serializer is **stricter on the no-primary-type case (M3)** — it guards at class creation (a relation target with no registered primary `DjangoType` is a `ConfigurationError`), so it never reaches the helper's default-manager fallback; that fallback stays the **form flavor's** behavior, **byte-unchanged** (the stricter path is a class-creation guard, not a change to the shared helper) | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) + Slice 3 resolver checklist |
+| **P1.1** | The relation-decode core: `mutations/resolvers.py::_decode_relation_id_set` (+ `_relation_membership_error` / `_relation_visibility_error` / `_raw_pk_relation_error` / `_relation_existence_error`) returns *errors*; [`forms/resolvers.py`][forms-resolvers] rolled its own object-returning, field-keyed `_visible_related_object` / `_decode_form_relation_single` / `_decode_form_relation_multi` because the `036` helper *"does not return"* the object | `_visible_related_object(related_model, pk, info) -> obj \| None` to [`utils/querysets.py`][utils-querysets] (beside `visibility_scoped_related_queryset`, whose composition it already uses); better, the whole one-id *decode-or-coerce → visible-object → no-leak `FieldError`* shape into a shared core taking a small per-flavor descriptor | Re-key the serializer relation decoder over the promoted `_visible_related_object`; do **not** re-implement the visibility / membership check (third copy avoided). The serializer is **stricter on the no-primary-type case (M3)** — it guards at class creation (a relation target with no registered primary `DjangoType` is a `ConfigurationError`), so it never reaches the helper's default-manager fallback; that fallback stays the **form flavor's** behavior, **byte-unchanged** (the stricter path is a class-creation guard, not a change to the shared helper) | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload) + Slice 3 resolver checklist |
 | **P1.2** | `forms/sets.py::_VALID_FORM_OPERATIONS = {"create", "update"}` is byte-identical to the serializer need; `mutations/sets.py::_VALID_OPERATIONS` is the `{create, update, delete}` superset | A single `NON_DELETE_WRITE_OPERATIONS` constant (to [`mutations/sets.py`][mutations-sets]) both the form and serializer `_validate_meta` import | Import `NON_DELETE_WRITE_OPERATIONS`; do **not** define a `_VALID_SERIALIZER_OPERATIONS`; the "no serializer/form delete" message single-sites too | [Decision 10](#decision-10--operations-create--update-no-serializer-delete) + Slice 2 `_validate_meta` |
 | **P1.3** | The per-declaration shape-build cache: `mutations/sets.py::_shape_build_cache` and `forms/sets.py::_form_shape_build_cache` (commented *"twin of"*) + `clear_form_shape_build_cache` | A `make_shape_build_cache()` helper returning the module-level dict + a registered `clear()` wired into the finalizer's pre-bind reset | The `SerializerInputShape` descriptor identity stays legitimately new; only the cache **+ clear plumbing** is shared — do not hand-mirror a third dict + clear | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 finalizer-reset checklist |
 | **P1.4** | The fail-loud converter dispatch skeleton: [`forms/converter.py`][forms-converter]'s `convert_form_field` (isinstance pre-checks → `type(field).__mro__` walk over `_SCALAR_FORM_FIELDS` → exact-base-`Field` case → raising `ConfigurationError` fallthrough) imports **nothing** from `utils/` — a free-standing skeleton | A shared dispatch skeleton — `(field, isinstance_prechecks, scalar_registry, fallthrough_error_factory) → conversion` — to a new `utils/converters.py`; the unified conversion / field-spec dataclass (**P2.1**) rides with it | `convert_serializer_field` supplies only its precheck table + scalar registry; the **GOAL-mandated fail-loud contract** (no silent `String` catch-all) is single-sited and cannot drift between the two converters | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) (converter) + [Decision 4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms) (skeleton home) + Slice 1 |
-| **P1.5** | The **sync write-pipeline orchestration**: `mutations/resolvers.py::_run_pipeline_sync` → `_run_create` / `_run_update` (one `transaction.atomic()`; tail partly factored as `_validate_save_assign_refetch_payload`) is re-spelled by `forms/resolvers.py::_run_modelform_pipeline_sync` (model-backed) — each re-writing the atomic block + the `coerce_lookup_id → locate_instance → not_found_error` preamble + the **authorize-before-decode** ordering | `run_write_pipeline_sync(...)` to [`mutations/resolvers.py`][mutations-resolvers], **scoped to model-backed create/update only** — owning atomicity, the create-vs-update branch, the locate→authorize preamble, **authorization before `decode_step`**, and the `refetch_optimized → build_payload` tail; extend `_validate_save_assign_refetch_payload` into the full preamble+tail. **Exclude `delete`** (no data / no decode / snapshot payload) **and the model-less plain form** (no instance / no primary type / no re-fetch) — not a universal skeleton (**F6**) | The serializer supplies only `decode_step(ctx) -> decoded \| list[FieldError]` and `write_step(ctx, decoded) -> saved \| list[FieldError]` (construct / `is_valid()` / `save()`); it does **not** re-spell the atomic block or the **authorize-before-decode security ordering** — the audit's single highest-value promotion (a security invariant, not just a shape). The existing model + model-form behavior must stay **byte-equivalent under their current tests** before serializer code lands | [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) + Slice 3 resolver checklist |
+| **P1.5** | The **sync write-pipeline orchestration**: `mutations/resolvers.py::_run_pipeline_sync` → `_run_create` / `_run_update` (one `transaction.atomic()`; tail partly factored as `_validate_save_assign_refetch_payload`) is re-spelled by `forms/resolvers.py::_run_modelform_pipeline_sync` (model-backed) — each re-writing the atomic block + the `coerce_lookup_id → locate_instance → not_found_error` preamble + the **authorize-before-decode** ordering | `run_write_pipeline_sync(...)` to [`mutations/resolvers.py`][mutations-resolvers], **scoped to model-backed create/update only** — owning atomicity, the create-vs-update branch, the locate→authorize preamble, **authorization before `decode_step`**, and the `refetch_optimized → build_payload` tail; extend `_validate_save_assign_refetch_payload` into the full preamble+tail. **Exclude `delete`** (no data / no decode / snapshot payload) **and the model-less plain form** (no instance / no primary type / no re-fetch) — not a universal skeleton (**F6**) | The serializer supplies only `decode_step(ctx) -> decoded \| list[FieldError]` and `write_step(ctx, decoded) -> saved \| list[FieldError]` (construct / `is_valid()` / `save()`); it does **not** re-spell the atomic block or the **authorize-before-decode security ordering** — the audit's single highest-value promotion (a security invariant, not just a shape). The existing model + model-form behavior must stay **byte-equivalent under their current tests** before serializer code lands | [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload) + Slice 3 resolver checklist |
 | **P1.6** | Two hand-maintained ledger-clear lists with no registration seam: the [`finalize_django_types`][types-finalizer] pre-bind reset (direct, unconditional `clear_mutation_input_namespace()` + `clear_form_input_namespace()` before `bind_mutations()`) **and** `registry.py::TypeRegistry.clear()`'s `_clear_if_importable` co-clear rows (incl. the form shape cache; the block's own comment notes a *"same two-block shape"* mirrored per flavor) | A `register_subsystem_clear(module_path, attr)` seam feeding **one** canonical list that **both** the finalizer pre-bind reset and `registry.clear()` iterate via `_clear_if_importable` (import-guarded by construction) | The serializer's `clear_serializer_input_namespace` is registered as a **static `(module_path, attr)` row** (resolved lazily by `_clear_if_importable` — no DRF import at registration, so the import-timing edge is a non-issue, **F10**) instead of being hand-added to both lists — and because every entry routes through `_clear_if_importable`, the soft-dep import-guarded **asymmetry vanishes**, collapsing the spec's whole Decision-6 / Slice-2 "import-guarded clear" caveat to a one-line registration. Invariant: a subsystem with clearable state has by definition been imported + registered | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) + Slice 2 finalizer-reset checklist |
 | **P1.7** | The `build_input` build/stash/name seam **implementation cluster**: the model does it inline (`DjangoMutation.build_input` → `_materialize_input_for`; `input_type_name`); [`forms/sets.py`][forms-sets] grew a private mirror — `_cached_build_form_input` (per-shape dedupe + the load-bearing **guard-before-cache-lookup** ordering), `_build_and_stash_form_input` (materialize-then-stash `_input_field_specs`), `_form_input_type_name_for`, `_modelform_operation_kind` | `cached_build_input(shape_key, *, guard, build_fn) -> (input_cls, field_specs)` (owns the per-pass lookup + the **guard-before-lookup** ordering) + `build_and_stash_input(cls, *, build, materialize)` to [`mutations/sets.py`][mutations-sets] (or a new `mutations/bind_helpers.py`) | The serializer supplies only its generator, materialize fn, and shape descriptor, and rides `build_and_stash_input` (materialize-then-stash) — NOT a byte-parallel `_build_and_stash_serializer_input`. It does **not** ride `cached_build_input`: that helper looks its key up BEFORE building, but the serializer's key is the `SerializerInputShape` descriptor, only knowable AFTER the build, so forcing it through the helper would build the shape twice (the waste P1.7 names). The descriptor-keyed dedupe therefore stays an inline lookup-or-store keyed on the post-build descriptor, while the per-declaration guard-before-dedupe ordering is preserved directly. (Layering: **P1.3** is the cache *dict*, **P2.1** the spec *shape*, **P1.7** the build *procedure* — promoting the stash core + the shape/cache plumbing is what stops `rest_framework/sets.py` being a line-for-line `forms/sets.py`) | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 `sets.py` checklist |
 
@@ -3035,7 +3035,7 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
   `"__all__"`); the optional promotion is a small `field_error(path, messages)` leaf ctor
   (no such ctor exists yet — `FieldError` is built directly) that **both** the flat and
   recursive flatteners call so the sentinel convention cannot drift.
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) step 5.)
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload) step 5.)
 - **P2.5 — `_validate_meta` reuses the base sub-validators.** Call
   `mutations/sets.py::_validate_permission_classes`, the non-delete ops check against the
   shared **P1.2** set, and the field-sequence normalize, then return a
@@ -3057,7 +3057,7 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
   so the default body sets **neither** `partial` **nor** `context`
   (spec-039 Medium-7 — the dead-hook removal). Required-field injection is instead
   explicit through `Meta.injected_fields` + `get_serializer_injected_data`.
-  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload).)
 - **P2.7 — promote the `Meta` typo-guard, do not add a third normalize wrapper.** Every
   `_validate_meta` computes `unknown = sorted(declared - _ALLOWED_<FLAVOR>_META_KEYS)` and
   raises (`mutations/sets.py::_ALLOWED_MUTATION_META_KEYS`, and both form bases). Promote
@@ -3224,7 +3224,7 @@ file being `utils/converters.py`. The above per-slice deltas fold these in; trea
   **different** `context["request"]` is a [`ConfigurationError`][glossary-configurationerror]
   (it would let permission and validation disagree about the actor); the same object is
   tolerated. Consumer context belongs under other keys
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 4).
 - **`read_only` / `HiddenField` fields.** Dropped from the input (graphene's
   `fields_for_serializer` `is_input` rule); a `HiddenField(default=CurrentUserDefault())`
@@ -3279,7 +3279,7 @@ file being `utils/converters.py`. The above per-slice deltas fold these in; trea
   `serializer.save()` whose custom `create()` / `update()` raises a validation error returns
   the null-object + `FieldError` envelope, **not** a top-level `GraphQLError` — but the two
   `ValidationError` classes are **routed by exception class**, exactly the split
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 6 pins, **never one branch**: a **DRF**
   `rest_framework.exceptions.ValidationError` (== `serializers.ValidationError`) routes its
   `.detail` (the same nested shape as `serializer.errors`) through the **recursive**
@@ -3627,7 +3627,7 @@ implementation reveals it is wrong.
   `Meta.lookup_field` (graphene's non-pk update locate via `get_object_or_404`); the
   package locates an `update` row by decoding the `id:` `GlobalID` server-side and
   running it through the target `get_queryset`
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)).
   Preferred reading: keep the `id:`-decode locate (the package's no-existence-leak
   contract, uniform with `036` / `038`); the fallback is a future `Meta.lookup_field`
   for a non-pk locate (a contained resolver change). Recorded, not silently reconciled.
@@ -3681,7 +3681,7 @@ implementation reveals it is wrong.
   [`pyproject.toml`][pyproject] is place 1 (landed) and the `require_drf()` install hint
   (Slice 2) is place 2 and must name this same floor.
 - **`serializer.save()` create-vs-update + M2M.** Preferred answer
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)):
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)):
   `serializer.save()` runs `create()` (no instance) / `update()` (with instance)
   internally and assigns M2M within that call, all inside the one
   `transaction.atomic()` — no separate M2M step (the DRF idiom). Fallback: an explicit
@@ -3842,7 +3842,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    [`DjangoMutationField`][glossary-djangomutationfield] exposes the serializer flavor,
    verified by a [`tests/mutations/test_fields.py`][test-mutations] extension
    ([Decision 5](#decision-5--public-surface-serializermutation-exported-from-the-root-the-038-generalized-factory-reused)
-   / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
+   / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
    / [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)).
 
 5. **In the same commit**, products exposes the `SerializerMutation`(s) (create + update

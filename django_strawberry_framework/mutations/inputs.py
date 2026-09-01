@@ -102,9 +102,12 @@ class FieldError:
     ``errors: list[FieldError]`` on its generated payload; a ``FieldError``
     carries a ``field`` path (a model field name, or the ``"__all__"`` sentinel
     for a model-wide / multi-field-constraint error) and the list of human
-    messages for that field. Defined and frozen here (spec-036 Decision 7) so
-    the form-based (0.0.12) and DRF-serializer / auth (0.0.13) flavor cards
-    reuse the byte-identical type. Mirrors graphene-django's ``ErrorType``.
+    messages for that field. Defined here (spec-036 Decision 7) as the ONE
+    envelope member type: the form-based (0.0.12) and DRF-serializer / auth
+    (0.0.13) flavors return this same class rather than a per-flavor mirror,
+    so a client's error branch is written once. The type is ADDITIVE, not
+    frozen - a member may be added (``codes`` / ``path`` below were), never
+    removed or retyped. Mirrors graphene-django's ``ErrorType``.
 
     **Additive client-ergonomics fields.** Two optional,
     default-empty lists sit alongside the legacy ``field`` / ``messages`` (both kept
@@ -146,7 +149,17 @@ _materialized_names, _materialize_input, _clear_input_namespace = make_input_nam
 
 
 def _audit_mutation_input_surface(name: str, input_cls: type) -> None:
-    """Reject a duplicate effective GraphQL name on generated or merged inputs."""
+    """Reject a duplicate effective GraphQL name on generated or merged inputs.
+
+    The fallback is Strawberry's ``to_camel_case`` and NOT the package's
+    ``graphql_camel_name`` - deliberately, and the two disagree. This audit
+    predicts the name the SCHEMA will publish for a field carrying no explicit
+    ``name=``, which is whatever ``NameConverter.apply_naming_config`` emits;
+    substituting the package caser would let a consumer-authored ``field_2``
+    sit beside a generated ``field2``, report no collision, and collapse to a
+    single ``field2`` in the SDL. Generated fields pin their wire name
+    explicitly, so the fallback is reached only for consumer-authored ones.
+    """
     seen: dict[str, str] = {}
     for field in input_cls.__strawberry_definition__.fields:
         graphql_name = field.graphql_name or to_camel_case(field.python_name)

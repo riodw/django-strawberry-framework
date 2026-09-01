@@ -38,14 +38,13 @@ Coverage homes for the cascade contract (spec-034):
     ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
     ``test_list_field.py``.
   * live HTTP coverage - ``examples/fakeshop/test_query/test_products_api.py``.
-"""
 
-# TODO(spec-036 Slice 3): add the package-level permission pin for mutation
-# update/delete lookups.
-# Pseudocode: declare a mutation target type whose get_queryset hides a real
-# row through apply_cascade_permissions, run the mutation lookup helper against
-# that row, and assert the resolver receives the same not-found FieldError shape
-# as a genuinely missing id with no existence-leak branch.
+The mutation update/delete lookup-scoping pin (spec-036) is NOT homed here; a
+hidden row must read as not-found with no existence leak, and that is pinned at
+``tests/mutations/test_resolvers.py::test_hidden_row_update_is_not_found_no_existence_leak``
+and
+``tests/mutations/test_permissions.py::test_hidden_row_is_not_found_before_auth_signal_no_existence_leak``.
+"""
 
 import contextlib
 import os

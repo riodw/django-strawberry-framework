@@ -301,9 +301,15 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
 
     Naming: ``<permission>_<n>`` (e.g. ``view_item_1``,
     ``view_property_2``).  All users share the password
-    ``TEST_USER_PASSWORD`` and are **not** staff.
+    ``TEST_USER_PASSWORD``.  The permission users and ``regular_<n>``
+    are **not** staff.
 
-    Also creates one ``staff_<n>`` superuser per unit for convenience.
+    Also creates one ``staff_<n>`` (``is_staff=True``) and one
+    unprivileged ``regular_<n>`` per unit.  ``staff_<n>`` is
+    deliberately NOT a superuser: the live write-authorization tier
+    needs it to run the real permission checks rather than
+    short-circuit on ``is_superuser``, and ``delete_users`` - which
+    never deletes superusers - must be able to remove it.
 
     The function is idempotent - existing usernames are skipped.
 

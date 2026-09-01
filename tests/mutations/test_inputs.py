@@ -558,6 +558,103 @@ def test_fk_to_relay_target_uses_globalid_id():
     assert fields["rel_id"].graphql_name == "relId"
 
 
+# ---------------------------------------------------------------------------
+# ``Meta.interfaces``-declared Relay targets: the phase-2.5 ordering dependency
+#
+# ``Meta.interfaces = (relay.Node,)`` is the documented consumer surface and the
+# route every fakeshop type uses, but ``relay.Node`` reaches the declaring type's
+# MRO only when ``finalize_django_types`` runs ``apply_interfaces``. Both the
+# relation-id scalar (``relation_id_scalar``) and the payload object slot
+# (``payload_object_slot``) gate on ``implements_relay_node``, which READS that MRO,
+# and the mutation bind that consumes both is a LATER phase-2.5 step. Hoist the bind
+# above ``apply_interfaces`` and every ``Meta.interfaces``-declared type silently
+# degrades - a relation input to a raw pk (defeating the ``GlobalID``-shaped
+# visibility check in ``decode_visible_relation_ids``) and a payload to the
+# ``result`` slot. The other Relay rows in this module inherit ``relay.Node``
+# directly, for which the predicate is true from class creation, so the ordering is
+# unobservable there; these two rows are the only package-tier witnesses.
+# ---------------------------------------------------------------------------
+
+
+def _declare_meta_interfaces_mutation():
+    """Declare an FK-to-``Meta.interfaces``-target create mutation and finalize.
+
+    Returns ``(CreateOwner, InterfacesTargetType, OwnerType)`` after
+    ``finalize_django_types()``, asserting on the way through that the declared
+    interface was NOT in the MRO beforehand - the injection is what phase 2.5
+    performs and what the bind must see.
+    """
+    from django_strawberry_framework import DjangoMutation, finalize_django_types
+
+    class InterfacesTarget(models.Model):
+        name = models.TextField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class InterfacesTargetType(DjangoType):
+        class Meta:
+            model = InterfacesTarget
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class Owner(models.Model):
+        rel = models.ForeignKey(InterfacesTarget, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class OwnerType(DjangoType):
+        class Meta:
+            model = Owner
+            fields = ("id",)
+            interfaces = (relay.Node,)
+
+    class CreateOwner(DjangoMutation):
+        class Meta:
+            model = Owner
+            operation = "create"
+
+    assert not issubclass(InterfacesTargetType, relay.Node)
+    assert not issubclass(OwnerType, relay.Node)
+
+    finalize_django_types()
+
+    return CreateOwner, InterfacesTargetType, OwnerType
+
+
+def test_fk_to_meta_interfaces_relay_target_uses_globalid_id():
+    """A target declaring Relay through ``Meta.interfaces`` gets a ``GlobalID`` relation id."""
+    create_owner, target_type, owner_type = _declare_meta_interfaces_mutation()
+
+    assert issubclass(target_type, relay.Node)
+    assert issubclass(owner_type, relay.Node)
+    fields = _field_map(create_owner._input_class)
+    assert "rel_id" in fields
+    assert _inner_type(fields["rel_id"]) is relay.GlobalID
+
+
+def test_meta_interfaces_primary_binds_a_node_slot_payload():
+    """A primary declaring Relay through ``Meta.interfaces`` binds a ``node``-slot payload.
+
+    The second, independent consequence of the same injection reaching the bind:
+    ``payload_object_slot`` returns ``"node"`` only for a Relay-Node target, so a
+    payload materialized before ``apply_interfaces`` carries ``result`` instead -
+    a breaking wire change on every ``Meta.interfaces``-declared mutation target.
+    Pinned separately from the relation-id row above because the two read the
+    predicate at different call sites.
+    """
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    create_owner, _target_type, owner_type = _declare_meta_interfaces_mutation()
+
+    assert payload_object_slot(owner_type) == "node"
+    payload = _materialized_names[create_owner._payload_type_name]
+    payload_fields = {f.python_name for f in payload.__strawberry_definition__.fields}
+    assert "node" in payload_fields
+    assert "result" not in payload_fields
+
+
 def test_fk_to_non_relay_target_uses_raw_pk_scalar():
     """A forward FK to a non-Relay primary becomes ``<field>_id`` of the raw pk scalar."""
     plain_target, _ = _make_non_relay_target()
@@ -1289,6 +1386,57 @@ def test_field_error_envelope_shape():
     assert fields["field"].type is str
     assert isinstance(fields["messages"].type, StrawberryList)
     assert fields["messages"].type.of_type is str
+
+
+def test_field_error_field_set_is_frozen():
+    """``FieldError``'s field SET is pinned, so widening the shared envelope is deliberate.
+
+    Every write flavor returns ``errors: list[FieldError]`` off the SAME class
+    (spec-036 Decision 7; the form and serializer/auth flavor cards reuse it rather
+    than declaring their own), so a field added or removed here changes the wire
+    contract for all of them and for every consumer client at once. The shape-by-
+    shape row above asserts the two legacy members individually and therefore
+    cannot see a third or fourth member arriving - which is how ``codes`` and
+    ``path`` landed with nothing failing. Set equality is the gate: a flavor that
+    wants a fifth field has to change this row on purpose.
+    """
+    definition = FieldError.__strawberry_definition__
+    assert {f.python_name for f in definition.fields} == {
+        "field",
+        "messages",
+        "codes",
+        "path",
+    }
+
+
+def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
+    """The WIRE name set a payload's ``errors`` exposes is pinned, not only the Python set.
+
+    The row above pins the Python attribute set; a consumer selects wire names, so
+    a ``strawberry.field(name=...)`` rename or a dropped member is a breaking
+    envelope change even when the Python set is untouched. Reached through
+    ``build_payload_type`` (the generator every flavor's payload comes from) so the
+    assertion covers the type as it actually reaches a client, and the two rows
+    fail independently.
+    """
+    _, relay_type = _make_relay_target()
+    payload = build_payload_type("CreateThing", object_type=relay_type, object_slot="node")
+    errors_field = {f.python_name: f for f in payload.__strawberry_definition__.fields}["errors"]
+    error_type = errors_field.type.of_type
+    assert error_type is FieldError
+    # No member name carries an underscore, so the auto-camel-case of an
+    # un-overridden ``python_name`` is the name itself; an explicit
+    # ``strawberry.field(name=...)`` rename surfaces as ``graphql_name`` and fails.
+    graphql_names = {
+        field.graphql_name or field.python_name
+        for field in error_type.__strawberry_definition__.fields
+    }
+    assert graphql_names == {
+        "field",
+        "messages",
+        "codes",
+        "path",
+    }
 
 
 def test_payload_node_slot_for_relay_target():

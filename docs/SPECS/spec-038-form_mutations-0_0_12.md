@@ -58,7 +58,7 @@ validation + the phase-2.5 bind** — `forms/sets.py`;
 [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)),
 Slice 3 (**the form resolver pipeline + `DjangoMutationField` exposure** —
 `forms/resolvers.py`;
-[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
 /
 [Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)),
 Slice 4 (**the products live form surface** — a `ModelForm` and a plain `Form`
@@ -118,7 +118,7 @@ Revision history (kept inline so the spec is self-contained):
   the form-derived input mapping
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth));
   the `form.errors` → [`FieldError`][glossary-fielderror-envelope] pipeline
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload));
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload));
   the optimizer composition reusing the `036` re-fetch path
   ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path));
   the operation set (`create` / `update`, no form `delete`)
@@ -175,7 +175,7 @@ vocabulary used throughout the spec:
   `form.errors` (a `field → [messages]` dict, with the form's `NON_FIELD_ERRORS`
   bucket) onto the byte-identical envelope, keying form-level errors to the same
   `"__all__"` sentinel `036` pinned
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - [`DjangoModelPermission`][glossary-djangomodelpermission] — the default
   write-authorization class the `ModelForm` flavor inherits unchanged (the form's
   model resolves the `add` / `change` perm); the plain-`Form` flavor's permission
@@ -188,7 +188,7 @@ vocabulary used throughout the spec:
   [`get_queryset`][glossary-get_queryset-visibility-hook], so a hidden row is
   not-found, never an existence leak — the same contract `036`'s model-driven
   `update` uses
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] /
   [`only()` projection][glossary-only-projection] — the post-save re-fetch
   cooperation. The `ModelForm` payload's object is re-fetched and optimizer-planned
@@ -391,7 +391,7 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     model-flavor seam defaults unchanged (a `DjangoMutation` still validates +
     materializes its model-column input exactly as before).
 - [ ] Slice 3: the form resolver pipeline + `DjangoMutationField` exposure (per
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
   /
   [Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path))
   - [ ] [`forms/resolvers.py`][forms-resolvers]: the sync + async pipeline —
@@ -403,7 +403,7 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     the raw-pk visibility gap, P1#1), and converted by `to_field_name`
     (`obj.serializable_value(field.to_field_name)` else `obj.pk`, P2#6) before landing
     under the form field name; a hidden target → field-keyed `FieldError`
-    ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload));
+    ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload));
     (`update`) **locate** the row through the target type's
     [`get_queryset`][glossary-get_queryset-visibility-hook] (not-found → a `FieldError`
     on `id`, no existence leak); **authorize** via the inherited `check_permission` /
@@ -596,11 +596,11 @@ A true description of the repo as this spec is authored:
 3. **Reuse the frozen `FieldError` envelope.** Map `form.errors` (and the form's
    `NON_FIELD_ERRORS` bucket) onto the byte-identical
    [`FieldError`][glossary-fielderror-envelope] envelope `036` defined
-   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 4. **Run the write through the form.** `form.is_valid()` → `form.save()`, sync and
    async, inside the one-`transaction.atomic()` boundary `036` set; the `ModelForm`
    payload's object is re-fetched and optimizer-planned for the response selection
-   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
    /
    [Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)).
 5. **Compose with the shipped permission + visibility seams.** The `ModelForm`
@@ -628,7 +628,7 @@ A true description of the repo as this spec is authored:
   **owns the runtime correctness** of `forms.FileField` / `forms.ImageField`: the
   `Upload` input typing, the `data=` / `files=` decode split, and `form_class(data=,
   files=, instance=)` construction
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)),
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)),
   proven by **at least one raw `django.test.Client` multipart live test** for a
   form-backed `Upload` field (Slice 4). The raw multipart HTTP path already exists
   from the `0.0.11` upload work, so correctness does **not** wait on a helper; only
@@ -667,11 +667,11 @@ metaclass-options surface the package replaces with a nested `class Meta`.
 | [`graphene_django.forms.mutation.DjangoFormMutation`][upstream-forms-mutation] (plain `Form`, `MutationOptions`) | [`DjangoFormMutation`][glossary-djangoformmutation] base + nested `Meta.form_class` ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions) / [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)) | this card — borrow the capability, reject the `MutationOptions` surface |
 | [`graphene_django.forms.mutation.DjangoModelFormMutation`][upstream-forms-mutation] (`ModelForm`, `model` from `form_class._meta.model`) | [`DjangoModelFormMutation`][glossary-djangomodelformmutation] subclassing [`DjangoMutation`][glossary-djangomutation] via the [`_resolve_model`][spec-036] seam ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)) | this card — required parity |
 | [`fields_for_form` + `convert_form_field`][upstream-forms-converter] (Django form field → GraphQL type) | [`forms/converter.py`][forms-converter] `convert_form_field` registry, reusing the read-side [scalar][glossary-scalar-field-conversion] / [choice-enum][glossary-choice-enum-generation] / [`Upload`][glossary-upload-scalar] converters where overlapping ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)) | this card — required parity |
-| [`ErrorType.from_errors(form.errors)`][upstream-forms-types] on the payload | `form.errors` → the frozen [`FieldError` envelope][glossary-fielderror-envelope], `NON_FIELD_ERRORS` → the `"__all__"` sentinel ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | this card — reuse the `036`-frozen envelope, byte-identical |
+| [`ErrorType.from_errors(form.errors)`][upstream-forms-types] on the payload | `form.errors` → the frozen [`FieldError` envelope][glossary-fielderror-envelope], `NON_FIELD_ERRORS` → the `"__all__"` sentinel ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)) | this card — reuse the `036`-frozen envelope, byte-identical |
 | graphene-django `Meta.return_field_name` (per-mutation output field name) | not adopted — the `036` uniform `node` / `result` slot supersedes it ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
-| graphene-django `DjangoModelFormMutation` **full** update (a bound form over the raw input) | **partial** update via full-payload reconstruction from the located instance ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | deliberate divergence — matches the package's own `036` `PartialInput` contract |
-| graphene-django form file fields (multipart `request.FILES` → form `files=`) | `Upload` input typing + the `data=` / `files=` decode split + `form_class(data=, files=, instance=)` ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | this card — runtime correctness owned here (raw multipart live test) |
-| graphene-django [`get_form` / `get_form_kwargs`][upstream-forms-mutation] (constructor-kwarg seam) | `get_form_kwargs(info, *, data, files, instance=None)` / `get_form(...)` hooks (default the package kwargs) + schema-time discovery via `form_class.base_fields` / `get_form_fields()` ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth) / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | this card — parity seam for migrated forms needing `user` / request / tenant |
+| graphene-django `DjangoModelFormMutation` **full** update (a bound form over the raw input) | **partial** update via full-payload reconstruction from the located instance ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)) | deliberate divergence — matches the package's own `036` `PartialInput` contract |
+| graphene-django form file fields (multipart `request.FILES` → form `files=`) | `Upload` input typing + the `data=` / `files=` decode split + `form_class(data=, files=, instance=)` ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)) | this card — runtime correctness owned here (raw multipart live test) |
+| graphene-django [`get_form` / `get_form_kwargs`][upstream-forms-mutation] (constructor-kwarg seam) | `get_form_kwargs(info, *, data, files, instance=None)` / `get_form(...)` hooks (default the package kwargs) + schema-time discovery via `form_class.base_fields` / `get_form_fields()` ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth) / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)) | this card — parity seam for migrated forms needing `user` / request / tenant |
 | graphene-django relation visibility (none — form's own queryset only) | every relation id (Relay + raw pk) visibility-checked through the related primary `get_queryset` before the form, then `to_field_name`-converted ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)) | package security invariant beyond graphene parity (the `036` contract, raw-pk gap closed) |
 | graphene `MutationOptions` / `ClientIDMutation` / `__init_subclass_with_meta__` | rejected for a nested `class Meta` base ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions)) | deliberately not borrowed |
 
@@ -683,7 +683,7 @@ metaclass-options surface the package replaces with a nested `class Meta`.
   `form.save()`. The form's `clean_<field>` / `clean()` validation and widget
   coercions are honored for free; the one deliberate divergence is **partial** update
   semantics (graphene-django's form update is full), via the
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
   reconstruction, for consistency with the model-driven `036` `PartialInput`.
 - **`form.errors` → field-keyed envelope.** graphene-django's
   `ErrorType.from_errors(form.errors)` is the parity shape; here it maps onto the
@@ -792,13 +792,13 @@ model-constraint) bucket keyed to the `"__all__"` sentinel.
 **`update` is a true partial update.** `updateItemViaForm` takes
 `ItemModelFormPartialInput` — all-optional here because `ItemModelForm` declares only
 model-backed fields (a required *non-model* extra field, were there one, stays
-required, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload));
+required, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload));
 the resolver locates the row through
 `ItemType.get_queryset(...)` (a row the caller cannot see is a not-found `FieldError`
 on `id`, never an existence leak), then reconstructs the **full** bound-form payload
 from the located row's current values overlaid with the provided fields before
 constructing the form
-([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 So changing only `name` preserves `category` / `description` / `isPrivate` (and any
 file field), while `unique_item_per_category` still validates against the unchanged
 `category` — the `036` `PartialInput` contract, not graphene-django's full-update
@@ -1010,7 +1010,7 @@ designed to reuse every one of them):
    [`mutations/resolvers.py`][mutations-resolvers]; the form flavors override to
    [`forms/resolvers.py`][forms-resolvers]), and `_resolve` calls
    `mutation_cls.resolve_sync` / `resolve_async`
-   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 3. **The `data:` input-ref.** `_synthesized_mutation_signature` builds the `data:`
    annotation from `_lazy_ref(_input_type_name(meta))`, and `_input_type_name` derives
    the name from `editable_input_fields(meta.model, …)` (the **model columns**, e.g.
@@ -1092,7 +1092,7 @@ serializer flavor is expected to reuse the same seams once it is specced):
   seam, [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)).
 - **Resolver dispatch** (`form.is_valid()` / `form.save()` vs `model(**attrs)` +
   `full_clean()`, [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)
-  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 
 That [`_resolve_model`][spec-036] is overridable is the seam [`spec-036`][spec-036]
 Decision 5 designed ("the 0.0.12 form flavor derive[s] the model from
@@ -1215,7 +1215,7 @@ such column, so its related model is its **`field.queryset.model`**; the identic
 Relay-`GlobalID`-vs-raw-pk rule and `<name>_id` / `list[<id>]` scheme then apply, so
 the wire contract is uniform across the model-backed and model-less relation paths.
 The [`forms/resolvers.py`][forms-resolvers] decode (the relation visibility check in
-[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload))
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload))
 resolves the same related primary type by the **same basis** — `column.related_model`
 for a model-backed relation, `field.queryset.model` for a model-less one — so the
 input id type and the decode's visibility query agree.
@@ -1277,7 +1277,7 @@ metadata record** that `forms/resolvers.py` consults at decode, where `kind ∈
   visibility-checked, and `to_field_name`-converted the same way, then placed as a
   list under `genres` for `ModelMultipleChoiceField`).
 - `avatar` → form field `avatar`, kind `file` (routed to `files=`, see
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - every plain scalar → identity (`name` → `name`, kind `scalar`).
 
 The reverse map is the single fix for the P1 "`category_id` vs `category`" hazard: the
@@ -1325,11 +1325,11 @@ single and multi relations.
 `Input` / `PartialInput` split, the form flavor generates `<FormClass>Input` (create;
 each field's requiredness from the form field's `field.required`) and
 `<FormClass>PartialInput` (update). In the partial input, **model-backed** form fields
-are forced optional — [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)'s
+are forced optional — [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)'s
 reconstruction supplies them from the located row — but a **non-model** extra form
 field (a `confirm`, a captcha, an action flag, with no model column to reconstruct
 from) keeps its declared `field.required` (P2 — see
-[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)'s
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)'s
 required-extra-field rule), so a required extra field stays required on update and an
 optional one may be omitted.
 
@@ -1389,7 +1389,7 @@ succeed. The form base therefore raises [`ConfigurationError`][glossary-configur
 at class creation, naming the missing required field(s), when `operation = "create"`
 and the narrowing excludes any `field.required` form field (covering **both**
 `Meta.fields` and `Meta.exclude`). The escape hatch is an overridable
-`get_form_kwargs` / `get_form` ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload))
+`get_form_kwargs` / `get_form` ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload))
 that supplies those values before binding: when the consumer has overridden that hook,
 the guard is waived (it cannot know *which* fields the override injects, so it trusts
 the explicit override rather than block a legitimate scoped form). `update` is exempt —
@@ -1915,7 +1915,7 @@ this spec, removed in the slice that ships it).
   bound payload (`data = {**model_to_dict(instance, fields=<non-file form fields>),
   **provided_data}`, `files = provided_files`) before
   `form_class(data=, files=, instance=<row located via get_queryset>)`
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
   So a `name`-only update preserves the unprovided scalar (`description`), the FK
   (`category`, as its current pk), the M2M (`genres`, as the current pk list), and any
   file field (omitted → kept via the bound form's `initial`); a provided **non-file**
@@ -1961,7 +1961,7 @@ this spec, removed in the slice that ships it).
 - **A required extra (non-model) `ModelForm` field on `update` (P2).** It has no
   instance value to reconstruct, so it keeps its `field.required` in the partial
   input (the caller must supply it); an optional extra field may be omitted
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **A relation field with `to_field_name` (P2).** A `ModelChoiceField` /
   `ModelMultipleChoiceField` whose `to_field_name` (or backing `ForeignKey(to_field=…)`)
   looks the object up by a non-pk field: after the visibility query resolves the
@@ -1973,7 +1973,7 @@ this spec, removed in the slice that ships it).
   through `get_form_kwargs(info, *, data, files, instance=None)` — the consumer
   overrides it to inject `user` / `request` / tenant or to scope a
   `ModelChoiceField.queryset` without changing the generated input shape
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **A `create` narrowing that drops a required form field (P2).** Rejected at class
   creation with a [`ConfigurationError`][glossary-configurationerror] naming the
   missing required field(s) — a bound form cannot succeed without it and `initial` is
@@ -1983,7 +1983,7 @@ this spec, removed in the slice that ships it).
   `perform_mutate` save) that loses a concurrent-uniqueness race or hits a residual DB
   constraint returns the null-object + `FieldError` envelope via the `036`
   `_save_or_field_errors` mapper — never a top-level `GraphQLError`
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **Two distinct generated form inputs colliding on one GraphQL name (P1).** Two
   **different** form classes with the same `__name__` both emit `<__name__>Input` and
   **always** raise a finalize-time [`ConfigurationError`][glossary-configurationerror]
@@ -2158,7 +2158,7 @@ implementation reveals it is wrong.
   `DjangoModelFormMutation`). There is no remaining preferred/fallback ambiguity — an
   implementer cannot ship a divergent plain-form shape.
 - **`ModelForm` partial-update semantics — RESOLVED (P1).** Pinned in
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload):
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload):
   `update` reconstructs the full bound payload from the located instance overlaid with
   the provided fields (`data = {**model_to_dict(instance, non-file fields),
   **provided_data}`, `files = provided_files`), so a bound `ModelForm` validates the
@@ -2180,7 +2180,7 @@ implementation reveals it is wrong.
 - **Relation-id visibility in the form decode — RESOLVED (P1, a restored `036`
   invariant).** Pinned in
   [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
-  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload):
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload):
   the `relation_single` / `relation_multi` decode type- and visibility-checks the id
   through the related primary `DjangoType.get_queryset` **before** the form, so the
   form's non-request-scoped default queryset is not the only guard — a hidden target
@@ -2190,7 +2190,7 @@ implementation reveals it is wrong.
   `ModelForm` on the plain `DjangoFormMutation` base is rejected at class creation
   ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)),
   a required non-model extra field stays required on `update`
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)),
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)),
   and `Meta.fields` / `Meta.exclude` are normalized + fail-loud against `form_class.base_fields`
   (bare string / duplicate / unknown name / empty set →
   [`ConfigurationError`][glossary-configurationerror],
@@ -2201,21 +2201,21 @@ implementation reveals it is wrong.
   the Relay-`GlobalID` branch is scoped), so it is **not** reused unchanged; a
   dedicated form relation decoder
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
-  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload))
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload))
   resolves every branch (Relay + raw pk, single + multi) through the related primary
   `get_queryset` before the form, closing the non-Relay hole.
 - **Write-time `IntegrityError` — RESOLVED (P1).** The form write reuses the `036`
   `_save_or_field_errors` mapper, so a post-validation concurrent-race / residual
   constraint at `form.save()` (or the plain-form save) returns the `FieldError`
   envelope, not a top-level error
-  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **Form-construction hooks — RESOLVED (P2).** Schema-time discovery reads
   `form_class.base_fields` (no instantiation; overridable `get_form_fields()`), and
   runtime construction goes through `get_form_kwargs(info, *, data, files,
   instance=None)` / `get_form(...)` (the graphene-django parity seam) so a
   kwarg-requiring or queryset-scoping migrated form works
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
-  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
 - **`to_field_name`, plain-form `operation`, create-narrowing, converter dispatch,
   file-clear — RESOLVED (P2 / P3).** `to_field_name` honored in the relation decoder
   (#6); plain `DjangoFormMutation` rejects any `Meta.operation` and uses the `"form"`
@@ -2260,7 +2260,7 @@ implementation reveals it is wrong.
   ([Decision 1](#decision-1--spec-filename-and-canonical-naming)). Recorded, not
   silently reconciled, per the [`docs/SPECS/NEXT.md`][next] boundary rule.
 - **`form.save(commit=False)` vs `form.save()` for relation timing.** Preferred
-  answer ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)):
+  answer ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)):
   the `ModelForm` flavor calls `form.save()` (commit=True) directly — for a `ModelForm`
   with M2M fields this already runs `save_m2m()` **internally**, so a single
   `form.save()` inside the one `transaction.atomic()` is correct and complete (no
@@ -2283,7 +2283,7 @@ implementation reveals it is wrong.
   `forms.ImageField` → [`Upload`][glossary-upload-scalar] typing **and** the runtime
   `data=` / `files=` decode split + `form_class(data=, files=, instance=)`
   construction, proven by a raw `django.test.Client` multipart live test (Slice 4,
-  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)).
   Only the *ergonomic* multipart test-client wrapper lands with the `0.0.14` helper.
 - **Form `delete`** — not shipped; the model-driven
   [`DjangoMutation`][glossary-djangomutation] (`Meta.operation = "delete"`) covers
@@ -2405,7 +2405,7 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
    `mutation_cls.input_type_name` + `input_module_path`) so it exposes both flavors
    **and** the form pipeline actually fires, with the model-flavor path unchanged
    ([Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)
-   / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+   / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
    / [Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)).
 
 **Slice 4 — products live form surface**

@@ -1142,8 +1142,10 @@ def _full_clean_or_field_errors(
     ``full_clean()`` runs ``validate_constraints()``, so a ``UniqueConstraint``
     duplicate is caught here as a ``ValidationError`` BEFORE ``save()``;
     its field-keyed messages populate the envelope (multi-field constraint ->
-    ``"__all__"`` sentinel). ``exclude=None`` for create (validate all
-    fields); the exclude-aware exclude list for update. Returns the
+    ``"__all__"`` sentinel). ``exclude`` is the exclude-aware unprovided-field
+    list for BOTH create and update - ``_model_decode_step`` computes it either
+    way, so the model path never passes ``None``; the parameter stays optional
+    for a caller that validates every field. Returns the
     ``list[FieldError]`` (the model ``write_step`` short-circuits to a null-object
     payload through the shared skeleton) so the payload build stays single-sited in
     ``run_write_pipeline_sync``.

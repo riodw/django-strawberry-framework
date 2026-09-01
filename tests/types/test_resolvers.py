@@ -889,8 +889,8 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
     monkeypatch.setattr(resolvers_module, "router", mock_router)
 
     # ``SimpleNamespace`` has no ``_state`` attribute, so the
-    # ``hasattr(root, "_state") else None`` branch at
-    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"instance = root if hasattr(root, "_state") else None"``
+    # ``getattr(root, "_state", None) is not None`` branch at
+    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"instance = root if getattr(root, "_state", None) is not None else None"``
     # forwards ``instance=None`` to the router.
     parent_row = SimpleNamespace(pk=1, category_id=42)
     assert not hasattr(parent_row, "_state")
@@ -1032,7 +1032,8 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(operation_arm, ca
     NOT let ``_check_n1`` mistake the planned key for a satisfied relation - the
     fallback forces the lazy-load probe so strictness sees the access. The bug
     bites under both ``QUERY`` and a mutation (the resolver is operation-agnostic,
-    so ``operation_arm`` only documents the two shapes - spec-035 edge case 316).
+    so ``operation_arm`` only documents the two shapes), per spec-035
+    Decision 5 / Edge cases #"can defer the FK column (both".
     """
     from types import SimpleNamespace
 

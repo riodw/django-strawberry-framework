@@ -5356,8 +5356,12 @@ def test_plan_with_cascading_hook_uncacheable():
     assert plain_ext.cache_info().size == 1
 
 
-# TODO(spec-035 Slice 3): add the strictness no-false-fire package pin here if
-# it needs real extension execution rather than pure walker inspection.
+# TODO(BACKLOG polymorphic_interface_connections - the abstract-return
+# optimizer entry card): add the strictness no-false-fire package pin here if
+# it needs real extension execution rather than pure walker inspection. The
+# test is named in spec-035's G3 deferred test plan; the narrowing it
+# exercises is spec-035 Decision 6, unreachable until that card builds the
+# abstract-return production-entry contract (R1).
 # Pseudocode: execute an abstract/interface-shaped query whose sibling fragment
 # is correctly narrowed; assert strictness ``warn`` emits no optimizer warning
 # and strictness ``raise`` returns no "Unplanned N+1" GraphQL error for the

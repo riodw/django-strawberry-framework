@@ -4846,8 +4846,8 @@ def test_mutation_scalar_only_connection_window_no_only():
     Gates ``_project_scalar_only_window`` (the direct ``.only(...)`` writer that
     never touches ``OptimizationPlan.only_fields``): the windowed ``Prefetch``
     child carries Django's default empty defer-set while the window annotations
-    and the prefetch itself are still present (spec-035 Decision 4 / edge case
-    line 315).
+    and the prefetch itself are still present (spec-035 Decision 4 / Edge cases
+    #"every projection writer checks the gate").
     """
     registry.clear()
     try:
@@ -4893,7 +4893,8 @@ def test_subscription_operation_gated():
     """A subscription operation drops ``only_fields`` under the same gate.
 
     ``info.operation.operation is not OperationType.QUERY`` covers SUBSCRIPTION
-    identically to MUTATION (spec-035 Decision 4 / edge case line 317).
+    identically to MUTATION (spec-035 Decision 4 / Edge cases
+    #"subscription operations are gated identically").
     """
     plan = plan_optimizations(
         [_sel("name"), _sel("category", selections=[_sel("name")])],
@@ -4909,8 +4910,8 @@ def test_enable_only_defaults_enabled_without_info():
 
     Covers the no-``info`` -> enabled and partial-``info`` -> enabled arms so the
     ``getattr``-defensive derivation never raises ``AttributeError`` and projects
-    by default (spec-035 Decision 4 / edge case line 320). Also drives the
-    ``_enable_only_for_operation`` three-arm truth table directly.
+    by default (spec-035 Decision 4 / Edge cases #"defaults to enabled"). Also
+    drives the ``_enable_only_for_operation`` three-arm truth table directly.
     """
     from django_strawberry_framework.optimizer.walker import _enable_only_for_operation
 
@@ -4959,7 +4960,11 @@ def test_mutation_id_only_relation_still_records_elision():
     assert plan.only_fields == ()
 
 
-# TODO(spec-035 Slice 3): add G3 walker narrowing pins here.
+# TODO(BACKLOG polymorphic_interface_connections - the abstract-return
+# optimizer entry card): add G3 walker narrowing pins here. The named test
+# roster is spec-035's G3 deferred test plan; the classifier they pin is
+# spec-035 Decision 6, and they are unreachable until that card builds the
+# abstract-return production-entry contract (R1).
 # Pseudocode: synthesize interface/union-like selection trees and registered
 # DjangoType definitions; assert sibling concrete fragments are skipped whole,
 # inherited-interface fragments still inline, same-named sibling relations do

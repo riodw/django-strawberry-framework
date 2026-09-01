@@ -203,11 +203,126 @@ already decided (Worker 2 fixes).
 
 ## Artifact list
 
+> **The four per-slice artifacts below were deleted at the maintainer's instruction once the cycle
+> closed**, and `bld-035-final.md` was deleted after it too, leaving this plan as the cycle's only
+> retained artifact. Every one of them, and every `Sources:` pointer into them elsewhere, is
+> recoverable at commit `8c05f7fc` - `git show 8c05f7fc:docs/builder/<name>.md`. They are listed here
+> as the cycle's real artifact set, not as live paths. **Everything the final gate's deferred-work
+> catalog left open now lives on a card or in `BACKLOG.md`**: `TODO-ALPHA-053-0.0.15` carries the
+> unretargeted fifth anchor, `TODO-ALPHA-056-0.0.17` carries the citation-hygiene items (raw
+> line-number sites with their addresses inlined, the live-source self-citations, the
+> `path::Symbol` qualification register, and the anchor-uniqueness warning case), and `BACKLOG.md`
+> `polymorphic_interface_connections` carries R4 plus the live-coverage note.
+
 - `docs/builder/bld-035-slice-1-rationale_extraction.md`
 - `docs/builder/bld-035-slice-2-carry_forward_anchors.md`
 - `docs/builder/bld-035-slice-3-spec_reconciliation.md`
 - `docs/builder/bld-035-integration.md`
-- `docs/builder/bld-035-final.md`
+- `docs/builder/bld-035-final.md` (deleted after the cycle closed; `git show 8c05f7fc:` recovers it)
+
+## Final report (folded in from `bld-035-final.md`, which was then deleted)
+
+`bld-035-final.md` and the four per-slice artifacts were deleted once the cycle closed, leaving this
+file as the cycle's only retained artifact. What follows is everything from the final gate that is
+still true and still useful; the process narration is not reproduced. Any of the five is recoverable
+verbatim with `git show 8c05f7fc:docs/builder/<name>.md`.
+
+### Outcome
+
+G1, G2 and Decision 5 are verified present and correct in shipped code; **nothing planned in the spec
+was dropped**. G3 correctly ships no runtime code -- it was deferred whole, with its design carried
+forward. The cycle produced the missing `-rationale.md` companion, reconciled the spec over ten
+verified post-ship divergences, retargeted five carry-forward anchors, and changed **zero executable
+lines**: every touched `.py` is docstring-blanked-`ast.dump`-identical to its pre-cycle state.
+
+### Gate report
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `uv run pytest --no-cov` | **PASS** -- `7069 passed, 42 skipped`, exit 0. No `--cov*` flag in any form. |
+| 2 | `manage.py check` | **PASS** -- `System check identified no issues (0 silenced).` |
+| 3 | `manage.py makemigrations --check --dry-run` | **PASS** -- `No changes detected`. |
+| 4 | `ruff format --check .` | **PASS** -- `435 files already formatted`. Read-only, never `--fix`. |
+| 5 | `ruff check .` | **PASS** -- `All checks passed!`. Read-only, never `--fix`. |
+| 6 | `git diff --check` | **FAIL**, exit 2 -- attributed below, not this cycle's, not blocking. |
+| 7 | `check_spec_glossary.py --spec docs/SPECS/spec-035-…md` | **PASS** -- `OK: 23 terms`. Also the spec's own Definition-of-done invocation. |
+| 8 | `check_trailing_commas.py --check` over the 2 spec `.md` + 4 cohort `.py` | **PASS**. |
+| 9 | The five shipped-`.py` `#"substring"` spec anchors | **PASS** -- all five resolve **exactly once**. |
+| 10 | Wrap-aware staged-anchor sweep | **PASS with one expected survivor** -- the baseline-dirty `test_library_api.py` site, carried by `TODO-ALPHA-053-0.0.15`. |
+
+**The one failure, attributed.** `git diff --check` exits 2 on trailing whitespace in added lines of
+`docs/feedback.md` (and, at the 2026-09-01 pass, `docs/feedback2.md` as well -- 18 lines between
+them). Derived rather than assumed: the file is in no writable list in this plan, no `bld-035-*`
+artifact records an edit to it, its added lines are a concurrent session's `spec-050` review dated
+2026-08-31, and `git show HEAD:docs/feedback.md` read into a scratch path outside the repo returns a
+**0-line** file -- so every flagged line is uncommitted concurrent work. Recorded and escalated, not
+fixed and not reverted, per `AGENTS.md` 34. Scoped re-run over the cycle's own surfaces
+(`docs/SPECS/`, `django_strawberry_framework/`, `tests/`, `docs/builder/`) is clean.
+
+### Deferred work: final disposition
+
+Twelve catalogued items. Every one is closed in the tree, carried by a card, carried by `BACKLOG.md`,
+or recorded below -- nothing is left pointing at a deleted file.
+
+| # | Item | Disposition |
+|---|---|---|
+| D1 | The fifth carry-forward anchor at `examples/fakeshop/test_query/test_library_api.py:3680` is still `TODO(spec-035)` | **`TODO-ALPHA-053-0.0.15`** -- the only card whose sweep opens that file |
+| D2 | The two package test-tree anchors are deletable only once this cycle's successor spec records their file placement | **`BACKLOG.md` `polymorphic_interface_connections` R4**, with both measured legs |
+| D3 | `selections.py`'s anchor cited `(R1)` without naming the defining document | **CLOSED** in the tree, 2026-09-01 |
+| D4 | Nine raw-line-number citations owned by *other* specs | **`TODO-ALPHA-056-0.0.17`**, with all nine addresses inlined into that item |
+| D5 | Twelve live-source `(line NNN)` self-citations + 2 `cookbook line(s)` | **`TODO-ALPHA-056-0.0.17`** as its own item; it had no owner before |
+| D6 | The `## Implementation plan` delta-table preamble carries chronology | **Judged, deliberately left** -- see below |
+| D7 | The companion's `## Post-ship divergences` mixes two list forms | **Judged, deliberately left** -- see below |
+| D8 | `#"defaults to enabled"` is the least distinctive of the five anchors | **`TODO-ALPHA-056-0.0.17`**, as the fourth instance on its anchor-uniqueness item |
+| D9 | A companion citation pointed at the `_project_scalar_only_window` alias site | **CLOSED** inside the cycle |
+| D10 | `path::Symbol` under-qualification is a repo-wide convention register | **`TODO-ALPHA-056-0.0.17`**, figures re-derived across three citation grammars |
+| D11 | Derived counts drifted four times in this cycle | **Recorded below** as a standing rule |
+| D12 | A `#"substring"` anchor in `tests/types/test_resolvers.py` did not resolve | **CLOSED** in the tree, 2026-09-01; the class is carried by card 056 |
+
+**D6, kept as a decision rather than a defect.** The spec at `:260` reads "Line deltas were planning
+estimates; G1 and G2 have since shipped (Slice 1's are the realized `d1dea2fd` deltas)." That is
+chronology by the letter of `BUILD.md` `## Spec rationale extraction`, but it is **not false** and it
+does real work: it tells a reader the delta table's last column mixes an estimate with a realized
+figure. Left on purpose so a later custodian judges it rather than inherits it. Note the citation is
+by line number and the line is long -- a `grep … | cut -c1-220` hides the match past the cut and
+makes a present sentence read as absent, which happened once while verifying this very item.
+
+**D7, likewise.** In the rationale companion, `## Post-ship divergences (spec vs. HEAD)` entries 1-7
+are numbered list items while 8 and 9 are `### Divergence 8` / `### Divergence 9` subheadings,
+because those two carry rejected alternatives and needed the structure. The section preamble says so,
+so it is navigable. A tenth entry should either follow the subheading form or normalise all of them.
+
+**D11, the standing rule.** Four derived counts drifted inside this one cycle: a `[nested-planner]`
+citation population reported as seven and measured as six; a deferred inventory reported as six and
+measured as nine; a raw-line-number population that went zero, six/seven, eight, then nine as the
+instrument improved; and a `path::Symbol` figure reported as 17/5 and measured as 15/6. **A count in
+an artifact is a claim. Re-measure it, quote the command that produced it, print the population size
+the command scanned, and prefer an occurrence list whose entries the next reader can re-derive over a
+bare total.** Two instrument shapes caused most of it: a line-oriented grep cannot see a citation
+that wraps, and a positively-spelled census is invisible to a negative-vocabulary sweep.
+
+### Two defect shapes worth carrying forward
+
+- **An anchor that quotes the phrase its own catalogued fix will rewrite defeats itself.** Closing D3
+  broke a `#"contract (R1). Pseudocode:"` citation in a sibling artifact, and the Slice 2 citation
+  fix had already broken `#"spec-035 edge case 316"` in two more places plus a four-row inventory
+  table whose every cell was pre-fix text. Four self-inflicted breaks, none visible to
+  `scripts/check_citations.py` (it is `path::Symbol`-only and excludes `docs/`). When recording a
+  defect for later repair, cite the **stable neighbourhood**, or take the quote out of the `#"..."`
+  grammar entirely and label it pre-fix. New anchors must quote text that sits on a **single** source
+  line -- a phrase that reads correctly flattened can straddle a comment wrap and resolve zero times.
+- **Attribute a failure in a concurrently-dirty tree by AST, not by file list.** `ast.dump` your
+  edited file against `HEAD`: identical proves behaviour-neutral by construction, which pins any test
+  failure on whichever files are AST-changed and not yours. Compare against the **pre-edit** state,
+  not `HEAD`, when the cycle already touched that file, or you mis-attribute your own earlier edit.
+
+### Board state at hand-off
+
+The board DB carries card-053 and card-056 edits that neither `KANBAN.md` nor `KANBAN.html` renders.
+They were deliberately not regenerated: both render files held a concurrent session's uncommitted
+edits, and regenerating would overwrite that session's in-flight work. **The render is owed to
+whoever next wraps the board** -- `scripts/build_kanban_md.py` and `scripts/build_kanban_html.py`,
+never a hand-edit.
 
 ## Checklist
 
@@ -215,4 +330,4 @@ already decided (Worker 2 fixes).
 - [x] Slice 2: Carry-forward anchor retarget (comment-only `.py`) — Workers 1/2/3 -> `docs/builder/bld-035-slice-2-carry_forward_anchors.md`
 - [x] Slice 3: Spec reconciliation against the shipped repo — Worker 1 only -> `docs/builder/bld-035-slice-3-spec_reconciliation.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-035-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-035-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-035-final.md` (deleted; recover with `git show 8c05f7fc:`)

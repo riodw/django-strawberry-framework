@@ -8,7 +8,7 @@ Read this when checking a finished implementation against the reasoning that pro
 
 ## Provenance of this record
 
-Created by pre-flight step 7 of the `035` retrospective reconciliation cycle, whose plan is [`docs/builder/build-035-optimizer_hardening-0_0_10.md`][build-035] and whose Slice 1 artifact is [`docs/builder/bld-035-slice-1-rationale_extraction.md`][bld-035-slice-1]. The move runs late: `DONE-035-0.0.10` shipped in `0.0.10` with a [`-terms.csv`][spec-035-terms] companion and no `-rationale.md` sibling, and the cycle exists to close that gap and to reconcile the spec against the repo the intervening cards left behind. Nothing here is new reasoning: every passage below was cut from the spec in the same pass that created this file, except the framing paragraphs, the `### Changes this Decision underwent` summaries, and the [Post-ship divergences](#post-ship-divergences-spec-vs-head) section, which are this pass's own and say so. The `034` companion is the immediately-preceding execution of the same move and this file matches its shape.
+Created by pre-flight step 7 of the `035` retrospective reconciliation cycle, whose plan is [`docs/builder/DONE/build-035-optimizer_hardening-0_0_10.md`][build-035]. That cycle's per-slice artifacts were deleted once it closed; the Slice 1 record that governed this move is recoverable at `git show 8c05f7fc:docs/builder/bld-035-slice-1-rationale_extraction.md`. The move runs late: `DONE-035-0.0.10` shipped in `0.0.10` with a [`-terms.csv`][spec-035-terms] companion and no `-rationale.md` sibling, and the cycle exists to close that gap and to reconcile the spec against the repo the intervening cards left behind. Nothing here is new reasoning: every passage below was cut from the spec in the same pass that created this file, except the framing paragraphs, the `### Changes this Decision underwent` summaries, and the [Post-ship divergences](#post-ship-divergences-spec-vs-head) section, which are this pass's own and say so. The `034` companion is the immediately-preceding execution of the same move and this file matches its shape.
 
 Measured against the spec on disk before the move (143,045 bytes, 542 lines), four routes carried text out:
 
@@ -303,8 +303,7 @@ Findings and provenance that belong to no single Decision.
 [spec-035-terms]: spec-035-optimizer_hardening-0_0_10-terms.csv
 
 <!-- docs/builder/ -->
-[bld-035-slice-1]: ../../builder/bld-035-slice-1-rationale_extraction.md
-[build-035]: ../../builder/build-035-optimizer_hardening-0_0_10.md
+[build-035]: ../../builder/DONE/build-035-optimizer_hardening-0_0_10.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

@@ -142,6 +142,119 @@ def _validate_relay_djangotype_target(
         raise ConfigurationError(relay_error_message)
 
 
+# TODO(spec-050 slice 1): Add the list-argument record, typed error, wire-name
+# lookup, and synthesized resolver signature before widening the field wrapper.
+# Keep every helper in this module: it owns the arguments, while
+# ``resource_policy.py`` owns only already-validated window coordinates.
+#
+# Pseudocode:
+#
+# - Define a frozen, slotted ``_ListArguments`` record carrying ``offset``,
+#   ``limit``, ``effective_ceiling``, ``order_by``, ``order_by_supplied``, and
+#   ``any_argument_supplied``. ``None`` and ``strawberry.UNSET`` are omission;
+#   zero and an empty order list are supplied values. Keep the questions
+#   SEPARATE and never read one field as a proxy for another:
+#   ``any_argument_supplied`` selects argument mode and nothing else (so it is
+#   what enables reject-combined); the window fields say which rows are
+#   returned, and ``offset=0`` with no limit yields the omission window;
+#   ``order_by_supplied`` -- never material activity -- drives
+#   ``queryset_required``, because ``[]`` is still a supplied argument.
+#   Material order activity is a fourth question answered only after public
+#   apply succeeds.
+# - Define ``ListArgumentError(GraphQLError,
+#   DjangoStrawberryFrameworkError)`` with no N818 suppression. It is PUBLIC:
+#   export it from the package root beside ``ResourceLimitExceeded`` and
+#   ``SyncMisuseError`` and update ``tests/base/test_init.py``'s pinned
+#   ``__all__`` tuple, star-import row, export-identity row, and its stale
+#   comment claiming the 0.0.15 cut leaves the public surface unchanged. The
+#   version literal and its own assertion stay with card 053. Its constructor
+#   alone builds the message and ``LIST_ARGUMENT_INVALID`` extensions. Preserve
+#   field/argument/reason/value/ceiling attributes and implement ``__reduce__``
+#   as ``(self.__class__, complete_constructor_args, self.__dict__)`` so the
+#   dual-base error round-trips without relying on GraphQLError's slots.
+#   Numeric ``negative`` failures carry ``value``; ``over_ceiling`` carries
+#   ``value`` plus ``ceiling``; direct-call ``non_integer`` carries the safe
+#   ``describe_value`` string; ``order_required`` carries the rejected offset;
+#   ``queryset_required`` carries neither optional key. The message names the
+#   active GraphQL field and argument, but never serializes order input.
+# - Resolve a Python parameter's wire name through
+#   ``info.get_argument_definition(parameter)`` plus
+#   ``schema_config_from_info(info).name_converter.from_argument(...)``. Fall
+#   back only for direct helper calls without a real schema: ``offset``,
+#   ``limit``, and default-converted ``orderBy``. Resolve LAZILY, inside the
+#   error constructor only: a successful request must perform ZERO name
+#   conversions. ``from_argument`` is a consumer hook normally run once per
+#   argument at schema-construction time, so calling it per resolver
+#   invocation both wastes work and invokes a shared, possibly stateful
+#   converter concurrently at runtime, where a non-deterministic one could
+#   report a spelling the built schema does not use. Pin the zero-call count on
+#   success and the one-call count on rejection.
+# - Normalize offset before limit. Reject bool/non-int direct calls as
+#   ``non_integer`` with ``describe_value``; reject negatives and values above
+#   their ceilings as ``negative`` / ``over_ceiling``. Compute the return cap
+#   only through ``effective_bound(policy.max_list_rows, max_rows,
+#   trusted=trusted_max_rows)``; offset always uses ``policy.max_list_rows``.
+# - Build one signature from reserved positional-or-keyword ``root=None``
+#   followed by keyword-only ``info``, ``offset: int | None``, and
+#   ``limit: int | None``. If the target definition has ``orderset_class``, add keyword-only
+#   ``order_by: list[order_input_type(orderset_class)] | None``. Keep the
+#   ``order_input_type`` import local, assign both ``__signature__`` and
+#   ``__annotations__``, and do not synthesize a return annotation: the
+#   consumer's class-attribute annotation remains the nullability owner.
+# - The executable wrapper must accept the synthesized keywords itself and
+#   never forward them to ``resolver=``; consumer resolvers remain exactly
+#   ``resolver(root, info)``.
+#
+# TODO(spec-050 slice 2): Replace the current wrapper tails with one colored
+# visibility -> order -> guard -> window pipeline while preserving the exact
+# all-null/omitted fast path.
+#
+# Pseudocode:
+#
+# - Validate scalar/cap arguments before invoking a consumer resolver. Then run
+#   the current await-once/dispose-on-misuse source logic and Manager coercion.
+# - When ``has_active_arguments`` is false, preserve the current colored call
+#   exactly: sync uses ``bounded_rows(...)`` and async uses
+#   ``bounded_rows_async(...)`` after its current visibility path. Do not
+#   rebuild an equivalent ``offset=0`` window on this branch.
+# - On a non-queryset, reject any non-null ``order_by`` first with
+#   ``queryset_required``. Reject ``offset > 0`` second with
+#   ``order_required``. Before either async-only-source rejection escapes,
+#   acquire and close its iterator through resource_policy's shared cleanup
+#   helper without advancing it; attach acquisition/close failures as notes.
+# - On a queryset, apply visibility with the argument-aware reject-combined
+#   policy. If order input was supplied, dispatch through the target
+#   ``OrderSet.apply_sync`` / ``apply_async`` exactly once, enforce the async
+#   method's await-once contract, and pass its result to querysets' shared
+#   post-order seal. Never inspect consumer queryset state in this module.
+# - Ask ``OrderSet._input_has_active_terms`` only after public apply succeeds.
+#   For active input, require ``queryset.ordered`` and reject an exact ``?`` or
+#   recognized ``Random()``/``OrderBy(Random())`` term. For model-default
+#   fallback require non-empty stable ``query.get_meta().ordering``,
+#   ``query.default_ordering is True``, empty ``query.order_by`` and
+#   ``query.extra_order_by``, and falsy ``query.group_by`` exactly as Django's
+#   own rule spells it. A hidden resolver order is not fallback evidence.
+#   Reject everything else with ``order_required``; append neither pk nor
+#   DISTINCT. One private random-term predicate serves both explicit and
+#   model-default checks; do not duplicate expression recognition.
+# - Hand validated ``offset`` / ``limit`` to the one resource-policy bound.
+#   Under async execution, wrap every final queryset in querysets' async-only
+#   completion adapter. This includes a plain ``def`` consumer returning a
+#   Manager/QuerySet: keep its sync visibility color, then adapt the final
+#   queryset based on runtime execution context. Lists, ``None``, and genuine
+#   async-only iterables retain their existing result shapes.
+#
+# TODO(spec-050 slice 5): Replace the complete Ordering contract and Row bound
+# paragraphs in ``DjangoListField``'s docstring when the arguments ship. State
+# conditional Meta-derived ``orderBy``, active schema naming, both ceilings,
+# nonzero-offset ordering, no pk append, and the unique-final-term guidance.
+# Name the contract ORDERED OFFSET, never stable or repeatable pagination: an
+# active order fixes the sort expression, not which of two tied rows falls on
+# either side of the boundary. Say that a published ``offset`` is a RUNTIME
+# PRECONDITION -- usable only where an order source exists, permanently
+# rejecting positive values on a target with neither ``Meta.orderset_class``
+# nor still-effective model ``Meta.ordering`` -- not a claim the field can
+# page. Both ceilings are ACCEPTED COORDINATE ceilings, not scan budgets.
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,

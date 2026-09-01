@@ -1874,3 +1874,83 @@ async def test_djangolistfield_consumer_resolver_returning_none_async() -> None:
     result = await schema.execute("{ categories { id name } }")
     assert result.errors is None, result.errors
     assert result.data == {"categories": None}
+
+
+# TODO(spec-050 slice 3): Add only the package-impossible mechanics for the
+# argument surface here; wire-reachable behavior belongs in the live fakeshop
+# suites. Use library models with inline ``Model.objects.create(...)`` when a
+# real model graph is needed, and keep product-model rows on ``seed_data(N)``.
+#
+# Pseudocode - construction and typed arguments:
+#
+# - Build schemas around real finalized DjangoTypes with and without
+#   ``Meta.orderset_class``. Assert the callable signature has keyword-only
+#   ``info``, ``offset``, ``limit``, and conditional ``order_by``; assert the
+#   Strawberry arguments use the existing lazy order input and orphan ledger.
+# - Import the package root in an isolated module state and prove it does not
+#   import ``django_strawberry_framework.orders``. Constructing an order-capable
+#   list field may import that subpackage locally.
+# - Compare nullable/non-null outer class annotations before and after signature
+#   synthesis; the wrapper must carry no return annotation of its own.
+# - Call the wrapper/normalizer directly with bool, string, float, negative, and
+#   over-cap values. Assert deterministic offset-before-limit precedence, safe
+#   ``non_integer`` rendering, trusted-return-cap asymmetry, and exact extension
+#   maps. Pickle/copy ``ListArgumentError`` and assert constructor attributes,
+#   ``extensions``, and custom instance state all survive ``__reduce__``.
+# - Exercise ``Info.get_argument_definition`` plus default-fallback lookup with
+#   a real default converter, ``auto_camel_case=False``, and a custom converter;
+#   never assert a hard-coded ``orderBy`` outside the explicit fallback case.
+#   Wire-name resolution is ERROR-LAZY: an instrumented converter records ZERO
+#   ``from_argument`` calls across a batch of successful argument-bearing
+#   requests and exactly one on a rejection.
+# - Pin the record's four fields as INDEPENDENT: ``any_argument_supplied``
+#   selects argument mode and only that; ``offset=0`` with no limit produces the
+#   omission window; ``order_by_supplied`` (not material activity) drives
+#   ``queryset_required`` for ``[]``; material activity is consulted only after
+#   apply. No test may read one as a proxy for another.
+# - Pin the root export: ``ListArgumentError`` is importable from
+#   ``django_strawberry_framework`` and is the same object as the module-level
+#   class (the ``__all__`` tuple itself is pinned in tests/base/test_init.py).
+#
+# Pseudocode - pipeline/seal/order mechanics:
+#
+# - Instrument sync and async consumer resolvers, visibility hooks, public
+#   ``OrderSet.apply_*`` overrides, active-term normalization, and the bounding
+#   helper. Assert validation -> resolver -> visibility -> public apply ->
+#   active-order guard -> one bound, with one await and no recursive await.
+# - Dispose and reject sync-path awaitables, residual async awaitables,
+#   sync-apply awaitables, async-apply non-awaitables, and residual async-apply
+#   awaitables. Assert exact invocation/disposal counts and actionable method
+#   names in ``ConfigurationError``.
+# - Return Manager/list/None/wrong-model/projection/evaluated/sliced/combined/
+#   cross-routed/unreadable candidates from custom OrderSet methods. Assert the
+#   post-order seal rejects each before offset handling; specifically assert the
+#   evaluated and combined prose so an unarmed defect-code fallback cannot pass.
+# - Pair simultaneous failures: combined source before hook/permission, hook
+#   combination before OrderSet, malformed post-apply output before offset,
+#   and ``queryset_required`` before ``order_required`` on plain iterables.
+# - For rejected async-only sources, count zero ``__anext__`` calls, one
+#   optional ``aclose``, and diagnostic notes for iterator-acquisition/close
+#   failures while ``ListArgumentError`` remains primary.
+#
+# Pseudocode - order state, SQL shape, optimizer, and regression sweep:
+#
+# - Unit-pin the private model-default predicate states not constructible as
+#   distinct live verdicts: group-by and ``extra_order_by`` suppress; literal
+#   ``?`` and genuine ``Random()`` terms suppress alone or mixed; stable
+#   ``.reverse()`` qualifies; unreadable state fails; explicit stable order may
+#   qualify ``.none()`` while an unordered empty queryset may not. Never add a
+#   ``-?`` branch, a pk tiebreaker, or DISTINCT.
+# - Compare the old all-omitted/all-null branch's ``str(queryset.query)``,
+#   ``low_mark``, ``high_mark``, result bytes, and query count. Then assert a
+#   smaller limit changes only the high mark and offset changes both marks with
+#   one SQL LIMIT/OFFSET pair.
+# - Assert one deadline check on an argument-bearing path in the same pre-fetch
+#   position as omission; do not add a list-field deadline call.
+# - Inspect the async-only queryset adapter directly: ``__aiter__`` exists,
+#   ``__iter__`` does not. Call ``DjangoOptimizerExtension._optimize`` and prove
+#   unwrap/rewrap plus inner slice marks on the optimized tail, evaluated-inner
+#   early return, and unresolved-return-type early return.
+# - Remove every adapter-relevant ``DJANGO_ALLOW_ASYNC_UNSAFE`` override in this
+#   module once the adapter lands. Retain one only if its test docstring names a
+#   separate legacy synchronous-ORM behavior that cannot exercise completion.

@@ -101,6 +101,28 @@ def _graphql_view(request):
 urlpatterns = [path("graphql/", _graphql_view)]
 
 
+# TODO(spec-050 slice 4): Add the sharded-only post-OrderSet routing rejection
+# to this existing holder mount, never to the default single-DB suite.
+#
+# Pseudocode:
+#
+# - Inside a per-test fixture imported after the schema reload, use monkeypatch
+#   to replace the already-bound ``BranchOrder.apply_sync`` public override for
+#   this test only. It receives a queryset explicitly routed to ``shard_b`` and
+#   maliciously returns a same-model queryset routed to ``default``; do not
+#   create a throwaway DjangoType or rewrite its finalized sidecar.
+# - Expose that type through a test-local DjangoListField resolver returning the
+#   real ``.using("shard_b")`` source, finalize only through the established
+#   fixture discipline, and mount it through ``_current``.
+# - Seed distinguishable rows on both aliases with inline ``using(alias).create``
+#   calls. Request non-null orderBy over live HTTP and assert an actionable
+#   post-order ``ConfigurationError`` names ``OrderSet.apply_sync`` and the
+#   routing mismatch before either alias fetches rows for completion.
+# - Keep the module-level ``FAKESHOP_SHARDED=1`` gate and
+#   ``django_db(databases=["default", "shard_b"])`` marker; clear the holder and
+#   URL caches in teardown exactly like the existing fixtures.
+
+
 # ---------------------------------------------------------------------------
 # Per-test schema fixture (runs AFTER the autouse reload)
 # ---------------------------------------------------------------------------

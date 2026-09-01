@@ -6097,6 +6097,58 @@ def test_mixed_relay_and_non_relay_no_interface_bleed_live():
 # ---------------------------------------------------------------------------
 
 
+# TODO(spec-050 slice 4): Extend the three shipped Branch DjangoListField
+# declarations through real ``/graphql/`` requests; add no new field to
+# ``apps.library.schema.Query``. Exceptional sources and naming converters use
+# the existing holder-mounted, teardown-safe test-local schema discipline.
+#
+# Pseudocode - shipped fields:
+#
+# - Introspect all three fields. Assert nullable ``offset``/``limit``, conditional
+#   Branch-order ``orderBy``, and unchanged nullable/non-null return wrappers.
+# - Create Branch rows inline. As staff, request
+#   ``orderBy: [{name: ASC}, {id: ASC}], offset: 1, limit: 2`` and assert the
+#   exact middle page. Separately prove orderBy-only permission/application.
+# - As anonymous, order by unguarded city then id over visible + restricted
+#   branches; assert visibility removes the restricted row before offset counts.
+# - Assert nonzero unordered offset, negative/over-cap offset, and
+#   negative/over-cap limit produce complete ``LIST_ARGUMENT_INVALID`` payloads
+#   and preserve ``original_error`` classification where pass-through exposes it.
+# - Parametrize GraphQL Int coercion failures (string, bool, 32-bit overflow,
+#   float literal, non-integral/non-finite float variable) with zero resolver
+#   SQL; assert an integral float variable is coerced and executes.
+# - Assert limit zero and ordered offset + limit zero fetch no row; trusted
+#   return widening never widens the offset ceiling; to-many aggregate order
+#   returns one Branch per row with one LIMIT/OFFSET pair and no DISTINCT.
+#
+# Pseudocode - holder-mounted exceptional schemas:
+#
+# - Mount materialized, nullable-None, pre-sliced, trusted, combined, and
+#   stable-model-default sources against already-registered app types. Reset the
+#   schema holder and URL caches in ``finally`` and rely on registry/finalizer
+#   cleanup fixtures so no probe type or field leaks into shipped SDL.
+# - On materialized/None sources, limit and zero offset succeed; every non-null
+#   orderBy, including ``[]``, is ``queryset_required``; nonzero offset is
+#   ``order_required``. Nullable None stays None on accepted requests.
+# - Pre-sliced source rejection wins before the hook under omitted and active
+#   arguments. Combined source keeps omitted/all-null legacy behavior, while
+#   offset zero, limit zero, and empty order input all reject before hook/order;
+#   a hook-returned combination rejects at the result seal.
+# - Use conforming and malformed custom OrderSet overrides to prove public
+#   dispatch and serialized ConfigurationErrors for sliced/evaluated/projection/
+#   combined/wrong-model/non-queryset/awaitable shapes. Package tests own exact
+#   mechanics; this tier proves wire classification and cleanup.
+# - Run the explicit error-precedence pairs: two numeric failures choose offset;
+#   order + offset on a list chooses queryset_required; order on a pre-sliced
+#   queryset chooses the visibility error; denied order permission precedes the
+#   offset guard.
+# - Build default, snake-case, and custom-NameConverter schemas and assert SDL,
+#   accepted query spelling, and error ``argument`` for all Python parameters.
+# - Target an existing stable-Meta.ordering app model for the accepting default
+#   branch, then clear it with resolver ``.order_by()`` and assert the same
+#   nonzero-offset request flips to ``order_required`` with no pk injection.
+
+
 @pytest.mark.django_db
 def test_branches_via_list_field_default_resolver_applies_get_queryset_live():
     """``allLibraryBranchesViaListField`` applies ``BranchType.get_queryset`` over HTTP.

@@ -1085,6 +1085,16 @@ class DjangoOptimizerExtension(SchemaExtension):
            node type).
         """
         result, is_queryset = normalize_query_source(result)
+        # TODO(spec-050 slice 2): Recognize querysets' exact async-completion
+        # adapter before step 1. Pseudocode: unwrap its inner final sliced
+        # queryset; create one local ``finish(value)`` that rewraps ``value`` for
+        # adapter input and is identity otherwise; run the existing Manager /
+        # QuerySet, evaluated-cache, return-type, and ``apply_to`` pipeline over
+        # the inner value; route EVERY return through ``finish``. In particular,
+        # preserve the wrapper on the evaluated-queryset and unresolved-return-
+        # type early returns as well as the optimized tail. Package tests must
+        # assert adapter identity plus inner low/high marks on all three exits;
+        # response/SQL-only assertions cannot detect a silent optimizer bypass.
         if not is_queryset:
             return result
         # G1 (spec-035 Decision 3): a consumer-evaluated root queryset passes

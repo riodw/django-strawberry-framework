@@ -14,6 +14,24 @@ Use the sibling [`../tests/`][tests-dir] directory for tests that exercise schem
 
 Sibling live suites now cover the other fakeshop apps and cross-cutting surfaces: `test_products_api.py`, `test_scalars_api.py`, `test_scalars_filter_api.py`, `test_kanban_api.py`, `test_glossary_api.py`, `test_auth_api.py` (the `accounts` auth surface), `test_uploads_api.py` (multipart `Upload`), `test_debug_toolbar_api.py` (the spec-042 `DebugToolbarMiddleware`, now that fakeshop's shipped settings wire the toolbar — it drives the real `/graphql/` request path under a `DEBUG=True` override, since pytest-django forces the suite to `DEBUG=False`), `test_transport_api.py` (the spec-046 transport boundary, described next), and `test_multi_db.py` — exercising the `FilterSet` / `OrderSet` surfaces (`filter:` / `orderBy:`) wired across every app.
 
+<!-- TODO(spec-050 slice 5): Add BOTH new suites to the enumeration when their
+tests replace the planning stubs. test_list_field_api.py is the dedicated SYNC
+DjangoListField argument suite - ordered offset pages, orderBy, visibility before
+order, cap and error matrix, converter naming, and the holder-mounted exceptional
+source shapes - split out of test_library_api.py so a field-factory feature stays
+discoverable in the tier that is otherwise the broad library APPLICATION suite.
+test_list_field_async_api.py is the AsyncClient + AsyncDjangoGraphQLView proof for
+safe queryset completion, optimizer preservation, argument naming, iterable
+cleanup, and visibility/order/window parity without DJANGO_ALLOW_ASYNC_UNSAFE.
+
+Also WIDEN the opening paragraph's governing rule, do not merely append a row to
+it. It currently says the only reason to leave ../graphql_client.py is a raw
+request-envelope subject; the async suite leaves it for EXECUTION COLOR instead.
+The rule becomes: use the shared helper unless the test specifically requires an
+async view/client boundary or a raw transport shape the helper cannot express -
+so future async feature suites inherit a general rule rather than each arguing a
+one-off exception. -->
+
 `test_transport_api.py` is the transport-boundary suite (spec-046) and the tier's largest raw-envelope resident. **The HTTP boundary, now that the Channels router serves no HTTP at all:** a project-middleware sentinel executing on the GraphQL route, `SecurityMiddleware`'s configured headers including HSTS, a hostile `Host` rejected before the schema runs, the three CSRF directions on a cookie-authenticated mutation, `Vary: Cookie` on an authenticated GET, Django's own exact routing policy including the `APPEND_SLASH` redirect, and `graphql_ide=None` / `allow_queries_via_get=False` on a second mount of the package view — plus an `AsyncClient` colour of the middleware and header rows against an `AsyncDjangoGraphQLView` mount. **The cumulative request-body cap:** three further mounts differing only in `max_request_body_bytes` carry the below / at / above boundary trio, what an absent or understated `Content-Length` can and cannot do on each transport, a cumulative multi-fragment body, malformed JSON on both sides of the cap, multipart, the parse-and-execution witnesses, which of the two ceilings produced the response, and the three precedence rungs; the multipart rows additionally prove the refusal lands before Django's `MultiPartParser` and before any upload handler, that a within-cap request still faces Django's complete CSRF check, and that an accepted upload still streams through the configured handlers. **The strict UTF-8 wire contract** has its sync `/graphql/` rows in `test_products_api.py` (UTF-16 with and without a BOM, UTF-32, a leading UTF-8 BOM, and an invalid byte, each a controlled `400`); this file adds the async colour, the rows proving the contract does not ride the `APPLY_UPSTREAM_PATCHES` kill switch in either direction, and the multipart control-document rows — a non-UTF-8 declared form `charset`, a middleware-set `request.encoding` that a declared `charset=utf-8` must not mask, and a control value that lost bytes to Django's replacement decode.
 
 `test_multi_db.py` additionally carries the sharded execution proof for the row-preserving relational predicate, behind `FAKESHOP_SHARDED=1` (these cases skip under the default pytest invocation). It applies the production `LoanFilter` deep leaf `book__loans__patron__email` (spelled `bookLoansPatronEmail`) over a `.using("shard_b")` queryset: because the predicate primitive pins its correlated `EXISTS` subquery to `queryset.db`, the whole filter — the outer root scan and the `EXISTS` re-entry alike — executes on `shard_b`. The rows seeded on the shard return row-preserved (both shared-book loans, each once), the captured `shard_b` SQL carries the correlated `EXISTS` with no framework `DISTINCT`, and no `library_loan` query lands on the `default` alias.

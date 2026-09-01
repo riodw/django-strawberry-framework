@@ -79,6 +79,14 @@ Earlier alpha surfaces, each detailed in [`CHANGELOG.md`][changelog] and [`docs/
 - `0.0.8` — the filtering (`FilterSet` / `RelatedFilter` / `filter_input_type` / `Meta.filterset_class`) and ordering (`OrderSet` / `RelatedOrder` / `Meta.orderset_class`) subsystems, with active-input-only `check_<field>_permission` gates.
 - `0.0.7` — `DjangoListField`, the non-Relay `list[T]` root Query field (default `_default_manager.all()` resolver, `get_queryset` cooperation in sync and async contexts, root-gated optimizer planning, consumer-annotation-driven outer nullability), plus the `DjangoStrawberryFrameworkConfig` app config, the `manage.py export_schema` SDL command, the multi-database cooperation contract, the Django Trac #37064 hardening with its `safe_wrap_connection_method` consumer helper, and warning-free scalar registration through `strawberry_config()`.
 
+<!-- TODO(spec-050 slice 5): Fold the shipped list-argument surface into the
+0.0.7 capability sentence without rewriting its historical introduction.
+Pseudocode: say that every DjangoListField now publishes nullable offset/limit,
+that orderBy is published only from Meta.orderset_class, that nonzero offset
+requires visible stable ordering, and that returned/skip coordinates are
+bounded by ResourcePolicy with no pk or DISTINCT injection. Keep version and
+release-note wording owned by spec-053's joint cut. -->
+
 For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].
 
 ## Get started → [`docs/README.md`][readme]

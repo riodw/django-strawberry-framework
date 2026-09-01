@@ -1,0 +1,44 @@
+term,anchor,notes
+AsyncDjangoGraphQLView,djangographqlview,Live async HTTP mount for safe queryset completion
+Async queryset completion adapter,async-queryset-completion-adapter,Planned async-only wrapper keeping the final sliced queryset lazy through async completion
+Async SQL-capture boundary,async-sql-capture-boundary,Why package-tier adapter pins never trust thread-local async DB capture for worker-thread SQL
+ConfigurationError,configurationerror,Existing declaration-bound failures retain their shipped error class
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Permanent nested pagination boundary
+Cookbook parity,cookbook-parity,The separate north-star target this card advances but does not establish
+DjangoConnection,djangoconnection,Named connection return surface in migration discussion
+DjangoConnectionField,djangoconnectionfield,Connection surface explicitly excluded from offset arguments
+DjangoListField,djangolistfield,Primary public surface extended by this card
+DjangoOptimizerExtension,djangooptimizerextension,Must receive the final sliced root queryset and rewrap the adapter on every return path
+DjangoResourcePolicyExtension,djangoresourcepolicyextension,Generic collection-cost accounting stays conservative at the raw-list ceiling
+DjangoType,djangotype,Meta-first target type for the field
+Execution resource policy,execution-resource-policy,Existing request budget reused for both ceilings
+FieldSet,fieldset,Fieldset behavior stays connection/parity work and is not inferred onto raw lists
+finalize_django_types,finalize_django_types,Finalization binds the orderset sidecar and materializes the shared order input class
+get_queryset visibility hook,get_queryset-visibility-hook,Must run before ordering and slicing
+Joint version cut,joint-version-cut,Card 053 owns the shared 0.0.15 release state
+List offset order precondition,list-offset-order-precondition,Nonzero offset requires a materially active order; no pk tiebreaker or DISTINCT
+ListArgumentError,listargumenterror,Typed runtime rejection carrying the stable LIST_ARGUMENT_INVALID extensions
+Live-first coverage mandate,live-first-coverage-mandate,Determines test placement
+Meta.aggregate_class,metaaggregate_class,Cookbook Meta key named in the TODAY.md non-edit rationale; stays out of this card
+Meta.fields,metafields,Existing declaration key used in the consumer example
+Meta.fields_class,metafields_class,Cookbook Meta key named in the TODAY.md non-edit rationale; stays out of this card
+Meta.filterset_class,metafilterset_class,Explicitly not inferred into this list field
+Meta.model,metamodel,Existing declaration key used in the consumer example
+Meta.orderset_class,metaorderset_class,Source of the conditionally published typed order argument under the active naming converter
+Meta.search_fields,metasearch_fields,Cookbook Meta key named in the TODAY.md non-edit rationale; stays out of this card
+Multi-database cooperation,multi-database-cooperation,Queryset database routing must survive slicing
+Ordering,ordering,Direction enum used by active order terms
+OrderSet,orderset,Existing ordering pipeline reused end to end
+order_input_type,order_input_type,Canonical lazy order input annotation helper
+PEP 562 lazy export,pep-562-lazy-export,Lazy-subpackage contract the signature builder's local orders import must not break
+Probe URLconf,probe-urlconf,Test-local mounts carry the exceptional fields and custom converters
+Production error policy,production-error-policy,Context for the error-policy pass-through fixture in the live tier
+Relation handling,relation-handling,Nested raw lists remain connection-backed for pagination
+ResourcePolicy,resourcepolicy,Owns max_list_rows and request-specific ceilings
+Schema reload discipline,schema-reload-discipline,Holder and URL-cache resets keep test-local mounts order-independent
+Sealed execution queryset,sealed-execution-queryset,Rebuild boundary gaining the reject-combined and require-unevaluated seal options
+seed_data,seed_data,Products-half seeding rule for genuinely mixed acceptance rows
+Structural error classification,structural-error-classification,Why coercion failures and package rejections both reach the client untouched
+strawberry_config,strawberry_config,Supported schema naming config determines active wire argument spelling
+TestClient,testclient,Sync-only shared-helper backing behind the async suite's documented exemption
+Visibility boundary,visibility-boundary,Shared seam running get_queryset before order and window under active and omitted arguments

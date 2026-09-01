@@ -153,6 +153,8 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_kanban_mutations_api.py",
     "examples/fakeshop/test_query/test_keyset_api.py",
     "examples/fakeshop/test_query/test_library_api.py",
+    "examples/fakeshop/test_query/test_list_field_api.py",
+    "examples/fakeshop/test_query/test_list_field_async_api.py",
     "examples/fakeshop/test_query/test_multi_db.py",
     "examples/fakeshop/test_query/test_mutation_atomicity.py",
     "examples/fakeshop/test_query/test_optimizer_auto_api.py",

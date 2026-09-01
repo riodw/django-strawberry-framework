@@ -655,6 +655,8 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface (WS-3B).
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.
 ├── test_library_api.py           # Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
+├── test_list_field_api.py        # Planned live sync-HTTP contract for ``DjangoListField`` arguments (spec-050 Slice 4).
+├── test_list_field_async_api.py  # Planned live async-HTTP contract for ``DjangoListField`` (spec-050 Slice 4).
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
 ├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.

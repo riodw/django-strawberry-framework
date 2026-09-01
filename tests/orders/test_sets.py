@@ -1142,3 +1142,24 @@ def test_orderset_type_name_for_inherits_mixin_naming_convention():
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.
 assert F is not None
 assert Genre is not None
+
+
+# TODO(spec-050 slice 3): Pin ``OrderSet._input_has_active_terms`` against the
+# same normalization/flattening contract public apply uses.
+#
+# Pseudocode:
+#
+# - Feed ``None``, UNSET, ``[]``, empty input objects, all-null leaves, nested
+#   all-null RelatedOrder branches, and mixed active/null list elements; assert
+#   false until one surviving ``Ordering`` leaf exists and true thereafter.
+# - Override ``_normalize_input`` with a pure counter and let public
+#   ``apply_sync`` / ``apply_async`` delegate normally. A list-field-style call
+#   to public apply followed by the active-term helper performs exactly two
+#   normalizations, while each public apply method is still invoked once.
+# - Override public apply without delegating and prove the helper remains an
+#   independent post-success query; never replace either public method with a
+#   state-returning private shortcut merely to avoid the second normalization.
+# - Purity is a contract, so pin its violation too: an impure
+#   ``_normalize_input`` whose second call disagrees with its first must raise
+#   an actionable ``ConfigurationError`` naming the method, not silently decide
+#   the offset guard on whichever verdict came last.

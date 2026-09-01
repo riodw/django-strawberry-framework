@@ -66,7 +66,7 @@ for a rendered doc) before treating churn as revertible. DB-backed slices verify
   **last card of the `0.0.15` line to land**. Card 046 is built first, so **no slice in this
   build moves the version quintet and no slice edits `CHANGELOG.md`**
   (spec Decision 15).
-- **Known stale prose, NOT this build's to fix:** `spec-050` Decision 7 and `spec-051`
+- **Known stale prose, NOT this build's to fix:** `spec-050` Decision 12 and `spec-051`
   Decision 11 each assert they are the "only card" at `0.0.15` / `0.0.16`. Cards 046 / 047
   joined those lines, so that justification is now stale — though the *conclusion* (045 owns
   the `0.0.15` cut, as the last to land) remains correct and is exactly what spec-046 defers

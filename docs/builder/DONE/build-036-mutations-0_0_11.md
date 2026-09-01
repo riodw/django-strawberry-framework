@@ -126,12 +126,12 @@ Performed by Worker 1 as a procedural-closure pass before this plan existed. Rec
 
 | Cohort | Writes | Reads (never writes) |
 |---|---|---|
-| R2 — spec reconciliation (Worker 1) | `docs/SPECS/spec-036-mutations-0_0_11.md`, `docs/SPECS/appx/spec-036-mutations-0_0_11-rationale.md`, `docs/builder/bld-036-review-2-spec_reconciliation.md`, the `Status:` line + appended `## Final verification (Worker 1)` of the four `bld-036-review-1*.md` artifacts, `worker-memory/worker-1-036.md` | all source and tests |
-| R3 — code repair (Worker 2) | `tests/mutations/__init__.py`, `tests/test_permissions.py`, `tests/mutations/test_inputs.py`, `tests/mutations/test_resolvers.py`, `tests/optimizer/test_walker.py`, `examples/fakeshop/test_query/test_products_api.py`, `docs/builder/bld-036-review-3-code_repair.md`, `worker-memory/worker-2-036.md` | the spec (its read-only input contract, being edited beneath it), the four R1 artifacts |
+| R2 — spec reconciliation (Worker 1) | `docs/SPECS/spec-036-mutations-0_0_11.md`, `docs/SPECS/appx/spec-036-mutations-0_0_11-rationale.md`, `docs/builder/bld-036-review-2-spec_reconciliation.md`, the `Status:` line + appended `## Final verification (Worker 1)` of the four `bld-036-review-1*.md` artifacts, `docs/builder/worker-memory/worker-1-036.md` | all source and tests |
+| R3 — code repair (Worker 2) | `tests/mutations/__init__.py`, `tests/test_permissions.py`, `tests/mutations/test_inputs.py`, `tests/mutations/test_resolvers.py`, `tests/optimizer/test_walker.py`, `examples/fakeshop/test_query/test_products_api.py`, `docs/builder/bld-036-review-3-code_repair.md`, `docs/builder/worker-memory/worker-2-036.md` | the spec (its read-only input contract, being edited beneath it), the four R1 artifacts |
 
 No file appears in both columns' write sets. Each cohort was told the other's write list and told not to wait on it. R2 additionally carries the facts about R3's authorized scope it needs in order not to write spec text asserting the absence of pins R3 is landing.
 
-R2 is single-cohort **within** its own round by construction — two custodians on one spec would guarantee the half-reconciled state `worker-1.md` forbids.
+R2 is single-cohort **within** its own round by construction — two custodians on one spec would guarantee the half-reconciled state `docs/builder/worker-1.md` forbids.
 
 **Worker 3's review of R3, integration, final gate:** `none; sequential`, one cohort each.
 
@@ -321,7 +321,8 @@ catalog item carrying neither a card nor a fix.
 ### Process observation — recorded, no agentflow edit this cycle
 
 `docs/builder/BUILD.md`'s fenced failability loop puts the anchor check **before** the pre-mutation copy
-(`BUILD.md` #"must print exactly 1, BEFORE the copy"), and grounds that ordering specifically on `cp`
+(`docs/builder/BUILD.md` #"must print exactly 1, BEFORE the copy"), and grounds that ordering
+specifically on `cp`
 otherwise copying a mutated file. `scripts/prove_failability.py::prove_one` does the reverse: it copies,
 then verifies the anchor, and its own docstring opens "copy, verify the anchor". The **outcome** is
 equivalent — an absent anchor aborts the entry before anything is written, and the copy is a read to a

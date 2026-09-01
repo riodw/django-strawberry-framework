@@ -18,7 +18,7 @@ from django_strawberry_framework.types import converters
 def test_version():
     # This version-only change must not widen the package-root __all__;
     # DjangoDebugExtension is a subpackage export.
-    assert __version__ == "0.0.14"
+    assert __version__ == "0.0.15"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -63,7 +63,8 @@ def test_public_api_surface_is_pinned():
     # ``DjangoImagePathType``, spec-048 Decision 1) and the three
     # production-error-policy symbols (``DEFAULT_ERROR_POLICY`` /
     # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7). All of these
-    # cards target ``0.0.14``, which is what ``test_version`` asserts above.
+    # cards shipped in ``0.0.14``; the ``0.0.15`` version cut leaves this
+    # public surface unchanged.
     assert django_strawberry_framework.__all__ == (
         "DEFAULT_ERROR_POLICY",
         "DEFAULT_RESOURCE_POLICY",

@@ -94,7 +94,7 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-**Shipped today** (`0.0.14`):
+**Current package version** (`0.0.15`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, choice enums; `DurationField` and `BinaryField` are deliberately absent from the default map and raise `ConfigurationError` until a consumer registers a scalar — see [`GLOSSARY.md#scalar-field-conversion`][glossary-scalar-field-conversion]; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects — `name` / `size` / `url`, plus `width` / `height` on images, with the server's absolute filesystem path deliberately absent from the default and available per column through `Meta.filesystem_path_fields` — nullable by default, so an empty stored file resolves to `null` regardless of the column's `null` / `blank` — with the filter / scalar-input value staying `str`)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)

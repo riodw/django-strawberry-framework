@@ -58,7 +58,7 @@ from .types.converters import (  # noqa: E402
 # The single source of the release. Hatchling derives packaging metadata from
 # this literal via ``[tool.hatch.version]`` in pyproject.toml; no second version
 # declaration exists anywhere in the repository.
-__version__ = "0.0.14"
+__version__ = "0.0.15"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared

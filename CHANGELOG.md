@@ -16,6 +16,8 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
 
+## [0.0.15] - Unreleased
+
 ## [0.0.14] - 2026-08-29
 
 The security-and-integration alpha, governed by design cards `DONE-041`–`DONE-049`: first-class Django HTTP and Channels WebSocket transport, production schema policies, stable encrypted keyset cursors, pluggable nested-connection fetching, completion-spanning mutation transactions, a GraphQL test-client family, and two development debug integrations — plus a release-wide hardening pass that turns previously implicit behaviors into fail-closed contracts. Several insecure or ambiguous pre-`1.0` behaviors changed without compatibility shims; every intentional break is marked **BREAKING** below.

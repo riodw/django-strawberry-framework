@@ -10,6 +10,13 @@ Hot-path declaration: Slice 0, R1 and R2 land no source and declare **none**. **
 Floor-verification scope: Slice 0, R1, R2 declare **none** (no source, no framework seam). **R3's scope is conditional on what it repairs** — a repair touching the write pipeline, the `strawberry.Schema` construction seam, or the live `/graphql/` request path re-runs its focused tests in an isolated floor venv at the versions `docs/builder/BUILD.md` `## Floor verification` states canonically, owned by **R3's builder pass**; the final gate is the backstop confirming it happened, not a second owner.
 Pre-flight: run on 2026-09-01 with three recorded deviations, all deliberate; baseline: **heavily dirty with a concurrent session's work** (see below); cleanup: cycle-scoped worker memory seeded empty (4 files), `docs/builder/temp-tests/036/` created, `docs/shadow/` deliberately left populated.
 
+> **Cycle artifacts retired.** The eight per-round `bld-036-*.md` artifacts this plan names were deleted
+> when the cycle closed; only this plan and `docs/builder/bld-036-final.md` survive on disk. All nine read
+> `Status: final-accepted` before deletion and every one is recoverable in full from the cycle's commit:
+> `git show e184bf79:<path>`. Treat every `bld-036-*.md` path below, and in `bld-036-final.md`, as
+> commit-resolvable rather than disk-resolvable -- they are retired records, not dead links. The
+> cycle-scoped worker-memory files are git-ignored scratch and were not preserved.
+
 ## Cycle shape (why this is not an ordinary spec build)
 
 `spec-036` shipped. Its five slices are `final-accepted` and its card is Done. This cycle is a **residual-reconciliation cycle** in the shape the `033`/`034` cycles established, driven by the maintainer's instruction, with three obligations:

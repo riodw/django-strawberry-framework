@@ -12,7 +12,9 @@ was inspected, per `docs/builder/BUILD.md` `## Coverage is the maintainer's gate
 No `git stash` / `git checkout` / `git restore` / `git worktree`. This pass edited no `.py` file, no
 spec, and no standing doc; it wrote this artifact, `docs/builder/bld-036-integration.md`, the appended
 `## Final verification (Worker 1)` in `docs/builder/bld-036-review-3-code_repair.md`, and
-`docs/builder/worker-memory/worker-1-036.md`.
+`docs/builder/worker-memory/worker-1-036.md`. Both `bld-036-*` artifacts named here were retired at
+cycle close and are recoverable at `git show e184bf79:<path>`; the worker-memory file is git-ignored scratch
+and was not preserved.
 
 ## Gate results
 
@@ -121,7 +123,9 @@ resolves as recorded. No unrun floor claim closes this gate.
 
 ## Deferred work catalog
 
-The next spec author's reading list. Walked from every `bld-036-*.md` artifact's spec-reconciliation
+The next spec author's reading list. Every source artifact cited below was retired at cycle close and
+is recoverable at `git show e184bf79:<path>`; this catalog is the surviving record, which is why each item
+carries its measurement inline rather than by reference. Walked from every `bld-036-*.md` artifact's spec-reconciliation
 notes, `What looks solid`, `DRY findings`, and `Notes for Worker 1` sections, plus this cycle's own
 integration pass. **21 items.** Each carries its source artifact section, the licensing decision or spec
 line where one exists, and a one-line description. Every figure was re-derived in this pass unless the
@@ -214,7 +218,8 @@ bullet says otherwise.
 
 10. **The 9-site denial-assertion block in `examples/fakeshop/test_query/test_products_api.py` wants an
     `_assert_denied(response)` helper.** Source: R3's Worker 3 review `### DRY findings`, judged in
-    `docs/builder/bld-036-integration.md` under `### The `_assert_denied(response)` helper`. Re-derived:
+    `docs/builder/bld-036-integration.md` (retired; `git show e184bf79:` that path) under
+    `### The `_assert_denied(response)` helper`. Re-derived:
     **7** occurrences at `HEAD`, **9** live. Deferred deliberately: consolidating widens a repair cycle's
     diff into seven pre-existing rows in a file clean at `HEAD`, and three of the sites carry a
     site-specific comment explaining that the denial nulls the whole `data` rather than producing an

@@ -11,10 +11,12 @@ Floor-verification scope: Slice 0, R1, R2 declare **none** (no source, no framew
 Pre-flight: run on 2026-09-01 with three recorded deviations, all deliberate; baseline: **heavily dirty with a concurrent session's work** (see below); cleanup: cycle-scoped worker memory seeded empty (4 files), `docs/builder/temp-tests/036/` created, `docs/shadow/` deliberately left populated.
 
 > **Cycle artifacts retired.** The eight per-round `bld-036-*.md` artifacts this plan names were deleted
-> when the cycle closed; only this plan and `docs/builder/bld-036-final.md` survive on disk. All nine read
+> when the cycle closed, and the final report `docs/builder/bld-036-final.md` was retired after its
+> durable residue was folded into this plan; only this plan survives on disk. All nine read
 > `Status: final-accepted` before deletion and every one is recoverable in full from the cycle's commit:
-> `git show e184bf79:<path>`. Treat every `bld-036-*.md` path below, and in `bld-036-final.md`, as
-> commit-resolvable rather than disk-resolvable -- they are retired records, not dead links. The
+> `git show e184bf79:<path>`, and the final report at `git show f7644e7c:docs/builder/bld-036-final.md`.
+> Treat every `bld-036-*.md` path below as commit-resolvable rather than disk-resolvable -- they are
+> retired records, not dead links. The
 > cycle-scoped worker-memory files are git-ignored scratch and were not preserved.
 
 ## Cycle shape (why this is not an ordinary spec build)
@@ -107,7 +109,7 @@ Performed by Worker 1 as a procedural-closure pass before this plan existed. Rec
 - `docs/builder/bld-036-review-2-spec_reconciliation.md`
 - `docs/builder/bld-036-review-3-code_repair.md` — **conditional.** Created only if an R1 cohort returns a non-empty SKIPPED enumeration whose repair is inside this cycle's scope and is not already closed in the concurrent session's working tree.
 - `docs/builder/bld-036-integration.md`
-- `docs/builder/bld-036-final.md`
+- `docs/builder/bld-036-final.md` (retired last, after its residue was folded into this plan)
 
 ## Ownership partition
 
@@ -156,7 +158,7 @@ R2 is single-cohort **within** its own round by construction — two custodians 
 - [x] R2: spec reconciliation — spec states the current contract; rationale takes the history -> `docs/builder/bld-036-review-2-spec_reconciliation.md`
 - [x] R3: code repair — **conditional** on a SKIPPED contract surviving the live-tree re-check -> `docs/builder/bld-036-review-3-code_repair.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-036-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-036-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-036-final.md` (retired; outcome below)
 
 ## Conformance grading vocabulary (used by every R1 cohort)
 
@@ -234,7 +236,7 @@ Three concurrent cohorts were pointed at one shared memory file, `docs/builder/w
 
 **Nothing in R3's diff fails.** R3 deliberately left the walker row un-re-pinned because that contract is mid-flight in another session, which `AGENTS.md` rule 34 and this cycle's scope both require.
 
-**Floor verification.** One scope for the whole cycle, owned by R3's builder pass and discharged there; the gate corroborated it read-only rather than re-running it, per `docs/builder/BUILD.md` `## Floor verification` ("the backstop confirming it happened, not a second owner"). Scratch venv outside the repo, every install carrying an explicit `--python`, shared `.venv` never written to. Resolved: Python **3.10.19**, django **5.2.16**, strawberry-graphql **0.316.0**. New live rows → `3 passed`; whole `test_products_api.py` → `132 passed`.
+**Floor verification.** One scope for the whole cycle, owned by R3's builder pass and discharged there; the gate corroborated it read-only rather than re-running it, per `docs/builder/BUILD.md` `## Floor verification` ("the backstop confirming it happened, not a second owner"). Scratch venv outside the repo, every install carrying an explicit `--python`, shared `.venv` never written to. Resolved: Python **3.10.19**, django **5.2.16**, strawberry-graphql **0.316.0**, graphql-core **3.2.12** — read from `docs/builder/BUILD.md` `## Floor verification` canonically, never from memory. New live rows → `3 passed` (`-k "missing_change_perm or missing_delete_perm or snapshot_carries_connection_child"`); whole `examples/fakeshop/test_query/test_products_api.py` → `132 passed`.
 
 **Round-status chain.** Every `bld-036-*.md` artifact's `Status:` line was read on disk before the final checkbox was ticked; all nine read `final-accepted`, with none left `built`, `review-accepted`, or `revision-needed`.
 
@@ -250,15 +252,111 @@ Three concurrent cohorts were pointed at one shared memory file, `docs/builder/w
 
 ## Deferred-work disposition
 
-`docs/builder/bld-036-final.md` `### Deferred work catalog` carries **21 items**, plus a deliberate second list of **6 items the artifacts route forward that this cycle actually closed**, struck so the next author does not go fix what is already fixed.
+The cycle's deferred-work catalog held **21 items**, plus a second list of **6** the artifacts routed
+forward that this cycle had already closed. Both lived in `docs/builder/bld-036-final.md`, retired once
+its durable residue was folded in here; the full text, with each item's source-artifact section and
+re-derived figures, is at `git show f7644e7c:docs/builder/bld-036-final.md`. What follows is that
+residue: what this cycle fixed, where the rest went, and what nobody owns.
 
-The load-bearing five:
+### Closed by this cycle — do not re-raise
 
-1. **The `0.0.14` write hardening has no owning spec.** Nine specs carry the `0_0_14` version segment and none scopes it; the corpus-wide grep's top hit is `spec-039` (10 occurrences), the serializer card at `0.0.13`. Maintainer Decision A deferred **10 of R1c's rows** on these grounds (`X3`-`X12`; `X13` partially discharged). `spec-036` is **not** that spec. A recurrence of a known class — a surface with no owning spec silently inverts the specs describing it — previously homed on cards `051` / `052` / `064`.
-2. **The broken Decision-8 heading-slug defect is live in two sibling specs**: `spec-038` (36 dead uses) and `spec-039` (34), the same defect Slice 0 repaired here where it had 16.
-3. **`mutations/inputs.py::FieldError`'s docstring still claims the type is "frozen … byte-identical"** three lines above the two additive fields it documents. The file is baseline-dirty (`31/38`) with the concurrent session's work, so this cycle could not touch it.
-4. **No automated gate greps for staged `TODO(spec-<NNN>)` anchors anywhere** — verified absent from `scripts/`, `.pre-commit-config.yaml`, and `.github/workflows/`. That absence is why this card's two anchors rotted for four release lines. 24 anchors naming other specs survive, one of them (`spec-035`) shipped.
-5. **`examples/fakeshop/apps/products/services.py::create_users`' docstring calls `staff_<n>` a superuser** while the code sets `is_staff=True` only. It matters because `delete_users` never deletes superusers, so a reader trusting the docstring expects `staff_<n>` to survive `delete_users all`. The file is clean at `HEAD` and so is technically inside this cycle's file-type scope, but it is unrelated to any `spec-036` contract — deferred rather than widening the cycle. A ready-to-fix one-liner.
+- **The broken Decision-8 heading-slug defect in the two sibling specs.** `spec-038` (36 dead uses) and
+  `spec-039` (34) spelled `optimizer-refetch` while their headings slug to `optimizer-re-fetch`, the same
+  defect Slice 0 repaired here where it had 16. **All 70 repaired**; all three mutation specs now resolve
+  **0** dead in-file anchors.
+- **`mutations/inputs.py::FieldError`'s "frozen … byte-identical" docstring claim.** Corrected: the type
+  is ADDITIVE, not frozen — 2 members grew to 4 when `codes` and `path` landed at `0.0.13`. The last
+  surviving copy of the retired claim is `CHANGELOG.md [0.0.12]`, homed on `TODO-ALPHA-056-0.0.17`.
+- **`mutations/resolvers.py::_full_clean_or_field_errors`' `exclude=None`-for-create claim.** Corrected:
+  its single caller passes the computed unprovided-field list for BOTH operations, so the model path
+  never passes `None`.
+- **`examples/fakeshop/apps/products/services.py::create_users`' docstring calling `staff_<n>` a
+  superuser.** Corrected, with the reason recorded in the docstring: `delete_users` never deletes
+  superusers, and the live write-authorization tier depends on `staff_<n>` running the real permission
+  checks rather than short-circuiting on `is_superuser`.
+- **`mutations/inputs.py::_audit_mutation_input_surface`'s `to_camel_case` fallback**, raised by R1a as a
+  divergence from the package's `graphql_camel_name`. **Verified and rejected — the finding inverts the
+  contract.** That audit predicts the name the SCHEMA publishes, and Strawberry routes an unnamed field
+  through `NameConverter.get_graphql_name` -> `apply_naming_config` -> `to_camel_case`. Applying the
+  "fix" would open the hole the guard exists to close: a consumer-authored `field_2` beside a generated
+  `field2` reports two distinct names under the package caser and collapses to a single `field2` in real
+  SDL. Proven by emitting the SDL. The invariant now sits in that function's own docstring.
+
+### Homed on cards
+
+- **`TODO-ALPHA-056-0.0.17`** takes six: the missing owner for the `0.0.14` write hardening; the absent
+  staged-anchor gate; the 184-review-tag ruling; `CHANGELOG.md [0.0.12]`'s "byte-identical"; the
+  `docs/GLOSSARY.md` gap on `FieldError.codes` / `.path`; and the two glossary headings missing from
+  `spec-036-mutations-0_0_11-terms.csv`.
+- **`TODO-ALPHA-053-0.0.15`** takes four: `mutations/sets.py`'s flavor-label and operation-map literal
+  duplication; `types/finalizer.py::finalize_django_types`' decomposition; and the two contract-level
+  module-home questions — whether `FieldError` / `NON_FIELD_ERROR_KEY` belong in `mutations/inputs.py`
+  (WP-A `import-linter`), and whether `mutations/sets.py` should own the cross-flavor write substrate
+  (WP-B).
+- **`TODO-BETA-067-0.1.5`** takes the four-part `test_products_api.py` DRY bundle: the `_assert_denied`
+  helper and where its three site-specific comments live, the `_grant_perms` split, the unnamed GlobalID
+  literals, and the one inline document duplicating a module-level wire constant.
+
+**The load-bearing item, unchanged:** the `0.0.14` write hardening has no owning spec and `spec-036` is
+not it. Nine specs carry the `0_0_14` segment and none scopes the completion-spanning transaction, the
+`DjangoSchema` requirement, `Meta.select_for_update`'s lock semantics, single-write-alias pinning, the
+retryable `conflict` envelope, the immutable authorized-pk snapshot, the phased alias guard, the
+strict-`bool` authorization contract, or the point-in-time authorization rule; the corpus-wide grep's top
+hit is `spec-039` (10 occurrences), the serializer card at `0.0.13`, and `require_managed_write` greps to
+**0** across the whole board. Maintainer Decision A deferred **10 of R1c's rows** on these grounds
+(`X3`-`X12`; `X13` partially discharged). Treat `spec-036`'s corrected Decisions 8, 10 and 15 as the
+**boundary of what `036` claims**, not as an outline for the missing spec. A recurrence of a known class —
+a surface with no owning spec silently inverts the specs describing it — previously homed on cards
+`051` / `052` / `064`.
+
+### Owned by nobody — needs the maintainer's clean-`HEAD` tree
+
+**DoD item 6, and the four suite failures above.** "The full suite is green at the 100% coverage gate;
+`ruff format` + `ruff check` are clean; no B1-B8 optimizer regression" is a **runtime** claim, and it
+cannot be discharged from this tree: another session's work is in it and `--cov*` flags are forbidden to
+workers. R2 applied R1d's option (a) and read the spec's sentence as a historical claim about the card,
+so no spec edit follows; the *current-tree* half is what still needs the clean run. This is the only
+catalog item carrying neither a card nor a fix.
+
+### Process observation — recorded, no agentflow edit this cycle
+
+`docs/builder/BUILD.md`'s fenced failability loop puts the anchor check **before** the pre-mutation copy
+(`BUILD.md` #"must print exactly 1, BEFORE the copy"), and grounds that ordering specifically on `cp`
+otherwise copying a mutated file. `scripts/prove_failability.py::prove_one` does the reverse: it copies,
+then verifies the anchor, and its own docstring opens "copy, verify the anchor". The **outcome** is
+equivalent — an absent anchor aborts the entry before anything is written, and the copy is a read to a
+scratch path outside the repo — but the prose's stated rationale does not describe the tool, so a worker
+following the prose and a worker running the tool are performing two different orderings. Worth one
+sentence in whichever cycle next edits that section, under `## The corpus ratchet`. The second
+observation from this cycle's execution is recorded above under
+`### Process defect in Worker 0's own dispatch, recorded`.
+
+### Struck from the catalog: routed forward by the artifacts, already closed
+
+Kept so the next author does not go fix what is fixed, and does not read the routing as still-open:
+
+- **The AR-M7 package mirror's decoupling from `optimizer/extension.py::mutation_payload_child_selections`**
+  (R1d Medium, R2 deferred item 6) — closed by R3's Repair 5. The mirror now derives its selection through
+  that production entry point; the symbol had exactly one occurrence in `tests/` / `examples/` at `HEAD`,
+  inside a docstring, so the same mutation failed **0** rows before the repair and **3** after.
+- **The package suite's blindness to a phase-2.5 ordering regression** (R1b Medium-1) — closed by R3's
+  Repair 6b. `tests/mutations/test_inputs.py` now carries a relation target declaring Relay through
+  `Meta.interfaces = (relay.Node,)` plus the payload-slot consequence at a second call site, where
+  `git grep -c 'interfaces' HEAD -- 'tests/mutations/*.py'` had been **0** across all eight modules.
+- **The `FieldError` field set having no gate at all** (R1a's headline Medium) — closed by R3's Repair 6a,
+  with two independently-failing rows: the Python attribute set, and the wire-name set as it reaches a
+  client off a generated payload.
+- **The two undischarged `TODO(spec-036 Slice N)` anchors** (R1a row 82, R1b High-1, R1c M5, R1d note 12)
+  — closed by R3's Repairs 1 and 2; `grep -rn --include='*.py' 'TODO(spec-036' .` returns nothing.
+- **The live write-authorization denial matrix pinned for `create` only** (R1d SKIPPED row S4.7) — closed
+  by R3's Repair 3. All three operations now carry a live denial row, so DoD item 5's clause is true as
+  written and **must not** be softened to match the old gap.
+- **Two DRY findings R1a raised and then found already closed in the concurrent session's work** — the
+  bare `codes=` literals in `utils/errors.py` (now `FIELD_ERROR_CODE_*` constants plus `null_field_error()`
+  / `coded_error_extensions()`), and `editable_input_fields`' hand-rolled narrowing walk (now routed
+  through `utils/inputs.py::resolve_effective_fields`). Reported as already-closed-in-flight per this
+  plan's own rule: **not** this cycle's work, and not open. Neither is visible in this cycle's commit, so
+  a later DRY audit reading only `e184bf79` would otherwise re-raise both.
 
 ## Hand-off
 

@@ -17,7 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.14`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.15`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -92,6 +92,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [Async queryset completion adapter](#async-queryset-completion-adapter) | planned for `0.0.15` |
 | [Async SQL-capture boundary](#async-sql-capture-boundary) | shipped (`0.0.14`) |
 | [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
@@ -152,6 +153,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Hard dependency](#hard-dependency) | shipped |
 | [Input type generation](#input-type-generation) | shipped (`0.0.11`) |
 | [Joint version cut](#joint-version-cut) | shipped (`0.0.13`) |
+| [List offset order precondition](#list-offset-order-precondition) | planned for `0.0.15` |
+| [`ListArgumentError`](#listargumenterror) | planned for `0.0.15` |
 | [Live-first coverage mandate](#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [Masking-extension ordering](#masking-extension-ordering) | shipped (`0.0.14`) |
 | [`max_value_depth`](#max_value_depth) | shipped (`0.0.14`) |
@@ -240,15 +243,15 @@ For readers exploring rather than looking up a specific term:
 
 - **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names) · [`auto`-typed annotations](#auto-typed-annotations).
-- **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+- **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [Async queryset completion adapter](#async-queryset-completion-adapter).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
-- **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`Meta.orderset_class`](#metaorderset_class).
+- **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`Meta.orderset_class`](#metaorderset_class) · [List offset order precondition](#list-offset-order-precondition).
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info) · [Channels request adapter](#channels-request-adapter) · [Visibility boundary](#visibility-boundary) · [Sealed execution queryset](#sealed-execution-queryset) · [Prove-then-clone AST trust](#prove-then-clone-ast-trust) · [Callable shadow defect](#callable-shadow-defect) · [Prefetch alias threading](#prefetch-alias-threading) · [WebSocket Host boundary](#websocket-host-boundary) · [Connection-scoped revocation](#connection-scoped-revocation).
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
-- **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
+- **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling) · [`ListArgumentError`](#listargumenterror) · [Async queryset completion adapter](#async-queryset-completion-adapter) · [List offset order precondition](#list-offset-order-precondition).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoFilePathType`](#djangofilepathtype) · [`DjangoImagePathType`](#djangoimagepathtype) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
 - **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity) · [Async SQL-capture boundary](#async-sql-capture-boundary) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Cookbook parity](#cookbook-parity) · [Debug exception row](#debug-exception-row) · [Debug payload availability](#debug-payload-availability) · [Debug SQL row](#debug-sql-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Django debug-cursor capture](#django-debug-cursor-capture) · [`DjangoDebugExtension`](#djangodebugextension) · [Graphene debug migration](#graphene-debug-migration) · [Hard dependency](#hard-dependency) · [Masking-extension ordering](#masking-extension-ordering) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Response-extension merge semantics](#response-extension-merge-semantics) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [`DjangoGraphQLView`](#djangographqlview) · [Request-body cap](#request-body-cap) · [UTF-8 wire contract](#utf-8-wire-contract) · [WebSocket consumer-injection seam](#websocket-consumer-injection-seam) · [WebSocket revalidation window](#websocket-revalidation-window) · [Execution resource policy](#execution-resource-policy) · [`ResourcePolicy`](#resourcepolicy) · [`DjangoResourcePolicyExtension`](#djangoresourcepolicyextension) · [Value-budget walker](#value-budget-walker) · [`max_value_depth`](#max_value_depth) · [Correlation identifier](#correlation-identifier) · [Debug fail-closed gate](#debug-fail-closed-gate) · [Debug payload caps](#debug-payload-caps) · [`DjangoErrorPolicyExtension`](#djangoerrorpolicyextension) · [`ErrorPolicy`](#errorpolicy) · [Production error policy](#production-error-policy) · [Structural error classification](#structural-error-classification) · [GraphQLRequestBodyBoundaryMiddleware](#graphqlrequestbodyboundarymiddleware) · [Upstream patches](#upstream-patches).
@@ -302,6 +305,14 @@ qs = await aapply_cascade_permissions(cls, qs, info)
 **Composition.** The cascade narrows rows first; the shipped [`FilterSet`](#filterset) / [`OrderSet`](#orderset) `check_<field>_permission` input gates then judge input on the surviving rows (a denial never leaks a cascade-hidden row's existence). It composes with [connections](#djangoconnectionfield) (edges and `totalCount` narrow together), [node refetch](#djangonodefield) (a hidden row refetches as `null`), [list fields](#djangolistfield), and nested filter branches through their existing `get_queryset` seams — under the optimizer's `Prefetch` downgrade, with **zero** added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`).
 
 **See also:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [Per-field permission hooks](#per-field-permission-hooks).
+
+## Async queryset completion adapter
+
+**Status:** planned for `0.0.15`.
+
+The package-internal async-only queryset-row wrapper planned by spec-050 for safe list completion under [`AsyncDjangoGraphQLView`](#djangographqlview). graphql-core's `complete_list_value` checks synchronous `Iterable` before `AsyncIterable`, and Django querysets implement both, so a queryset returned to an async view is otherwise iterated synchronously inside the event loop. The adapter's `__aiter__` delegates to Django's safe `QuerySet.__aiter__`, and it deliberately implements no `__iter__`; it wraps the FINAL sliced queryset so the value stays lazy across the resolver boundary. [`DjangoOptimizerExtension`](#djangooptimizerextension) unwraps it ahead of `_optimize`'s first step, applies the root plan to the inner queryset, and rewraps on EVERY return path — unrecognized, the adapter would fall through the non-queryset branch with root-list optimization silently gone while every row assertion still passed. Removes the need for `DJANGO_ALLOW_ASYNC_UNSAFE` in async list completion.
+
+**See also:** [`DjangoListField`](#djangolistfield) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Async SQL-capture boundary](#async-sql-capture-boundary).
 
 ## Async SQL-capture boundary
 
@@ -1067,6 +1078,22 @@ The release rule when multiple kanban cards share one patch version: the version
 
 Moved only by the cut — the version quintet: `[project].version` in `pyproject.toml`, `__version__`, `tests/base/test_init.py::test_version`, this glossary's package-version line, and the package's own `version` entry in `uv.lock`. Also deferred to the cut: the glossary status flips to `shipped (...)`, the `README.md` / `docs/README.md` "Coming next" → "Shipped today" moves, and the `CHANGELOG.md` bullets (which additionally require an explicit maintainer grant). `uv.lock` **dependency** entries are not version state — a card's own dependency-gate lock regeneration lands with that card.
 
+## List offset order precondition
+
+**Status:** planned for `0.0.15`.
+
+Spec-050's rule that `offset > 0` on a [`DjangoListField`](#djangolistfield) requires a materially active order on the post-visibility queryset: either a supplied `orderBy` whose surviving non-null [`Ordering`](#ordering) terms leave the validated post-apply queryset ordered, or a still-effective stable model `Meta.ordering` (Django's own default-ordering rule: default ordering enabled, no explicit or extra order replacing it, no grouping suppressing it). Random terms — the literal `"?"` or a recognized `Random()` expression — never qualify; `.reverse()` still does; a resolver's private `.order_by(...)` does not substitute for the public contract; opaque Python iterables cannot establish it. No pk tiebreaker and no `DISTINCT` are injected — an active order is deliberately weaker than the connection's total-order cursor contract, so consumers paging through ties add a unique final term themselves. Violations raise [`ListArgumentError`](#listargumenterror) with `reason: "order_required"`.
+
+**See also:** [`OrderSet`](#orderset) · [`ListArgumentError`](#listargumenterror) · [`DjangoConnectionField`](#djangoconnectionfield).
+
+## `ListArgumentError`
+
+**Status:** planned for `0.0.15`.
+
+The typed runtime rejection planned for [`DjangoListField`](#djangolistfield)'s client arguments (spec-050): a dual-base `GraphQLError` + package-error class on the `ResourceLimitExceeded` precedent (same pickle-safe `__reduce__` shape), raised when a structurally valid GraphQL `Int` is an invalid list argument. Stable `extensions`: `code: "LIST_ARGUMENT_INVALID"`, `argument` (always the ACTIVE schema wire spelling derived through [`strawberry_config`](#strawberry_config)'s name converter, never a hard-coded literal), and `reason` — `negative` / `over_ceiling` for numeric-domain failures (both carry `value`; only the latter carries `ceiling`), `non_integer` for direct Python calls that bypass GraphQL coercion, `order_required` for a nonzero offset failing the [list offset order precondition](#list-offset-order-precondition), and `queryset_required` for `orderBy` over a non-queryset source. Actual wire-type failures stay GraphQL-owned `Int` coercion errors: the package never replaces the scalar to attach its code.
+
+**See also:** [`DjangoListField`](#djangolistfield) · [`ResourcePolicy`](#resourcepolicy) · [List offset order precondition](#list-offset-order-precondition).
+
 ## Live-first coverage mandate
 
 **Status:** shipped (`0.0.4`).
@@ -1441,6 +1468,8 @@ Declarative `Meta.model` / `Meta.fields` (list form or `"__all__"` shorthand for
 To-many paths are row-preserving: ascending terms order each parent by `Min(path)` and descending terms by `Max(path)`, so reverse-FK / M2M joins do not duplicate nodes or inflate `totalCount`. A root `DjangoConnectionField` cursor-slices that grouped queryset and appends its deterministic primary-key tiebreaker. Nested relation connections carrying `orderBy:` deliberately bypass window/lateral planning and use the per-parent pipeline, so a to-many aggregate is never stacked below the optimizer's row-number window. This contract runs unchanged on SQLite and PostgreSQL.
 
 The resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value, queryset, info)` and `OrderSet.apply_async(input_value, queryset, info)` (sync resolvers call the former; async resolvers await the latter), mirroring the shipped filter subsystem's shape. `orderBy: []`, an empty input object, omitted fields, and explicit `null` directions contribute no terms and preserve the queryset's existing order.
+
+**Hidden-column warning:** the `"__all__"` expansion is independent of the owning type's field surface: it exposes every column-backed model field as an ordering key, including columns the GraphQL type never returns. A client who cannot read such a hidden column can still infer its relative values from the row order that ordering key produces — the type's-own-column counterpart of the position-side-channel note on [`RelatedOrder`](#relatedorder). When the type does not expose a column, narrow the order set's `Meta.fields` explicitly (as `EntryOrder` does in `examples/fakeshop/apps/products/orders.py`) instead of using `"__all__"`.
 
 **See also:** [`Meta.orderset_class`](#metaorderset_class) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`FilterSet`](#filterset).
 

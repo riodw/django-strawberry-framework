@@ -29,7 +29,7 @@ the spec, stated directly and without chronology.
 ## Provenance of this record
 
 Created by pre-flight step 7 of the `037` residual-reconciliation cycle, whose
-plan is [`docs/builder/build-037-upload_file_image_mapping-0_0_11.md`][build-037]
+plan is [`docs/builder/DONE/build-037-upload_file_image_mapping-0_0_11.md`][build-037]
 and whose record of the move itself was the per-cycle artifact
 `docs/builder/bld-037-slice-0-rationale_extraction.md`, retired when that cycle
 closed and recoverable at
@@ -963,7 +963,7 @@ Findings and provenance that belong to no single Decision.
 [spec-037]: ../spec-037-upload_file_image_mapping-0_0_11.md
 
 <!-- docs/builder/ -->
-[build-037]: ../../builder/build-037-upload_file_image_mapping-0_0_11.md
+[build-037]: ../../builder/DONE/build-037-upload_file_image_mapping-0_0_11.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

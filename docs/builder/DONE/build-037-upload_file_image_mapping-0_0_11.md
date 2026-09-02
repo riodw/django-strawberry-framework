@@ -9,17 +9,30 @@ Hot-path declaration: none. No slice in this cycle adds runtime cost — the cyc
 Floor-verification scope: none by default. No slice is planned to change a Django / Strawberry integration seam; if Slice 2 proves a code gap and a builder lands source, Worker 1 re-declares the scope in that slice's artifact before the final gate.
 Pre-flight: passed with recorded deviations on 2026-09-01 (see `## Pre-flight record`).
 
-> **Cycle artifacts retired.** The six per-round `bld-037-*.md` artifacts this plan names were
-> deleted when the cycle closed; only this plan and the final report
-> `docs/builder/bld-037-final.md` survive on disk. All six read `Status: final-accepted` before
-> deletion and every one is recoverable in full from the cycle's commit:
-> `git show f9ae3f93:<path>`. Treat every retired `bld-037-*.md` path below as
-> **commit-resolvable rather than disk-resolvable** -- they are retired records, not dead links.
-> The retired six are `bld-037-slice-0-rationale_extraction.md`,
-> `bld-037-slice-1-code_conformance.md`, `bld-037-slice-2-spec_reconciliation.md`,
-> `bld-037-integration.md`, `bld-037-review-1-residue_repair_spec.md` and
-> `bld-037-review-1-residue_repair_source.md`. The cycle-scoped worker-memory files are
-> git-ignored scratch and were not preserved.
+> **Cycle artifacts retired; this plan is the only survivor.** All seven `bld-037-*.md` artifacts
+> this plan names were deleted when the cycle closed, and every one read `Status: final-accepted`
+> before deletion. **Treat every `bld-037-*.md` path below as commit-resolvable rather than
+> disk-resolvable** -- they are retired records, not dead links.
+>
+> - The six per-round artifacts are recoverable at `git show f9ae3f93:<path>`:
+>   `bld-037-slice-0-rationale_extraction.md`, `bld-037-slice-1-code_conformance.md`,
+>   `bld-037-slice-2-spec_reconciliation.md`, `bld-037-integration.md`,
+>   `bld-037-review-1-residue_repair_spec.md`, `bld-037-review-1-residue_repair_source.md`.
+> - The final report `bld-037-final.md` was retired last, after its durable residue was folded
+>   into `## Final test-run gate (folded in from the retired final report)` below; it is
+>   recoverable at `git show 6dc83f0e:docs/builder/bld-037-final.md`.
+>
+> The cycle-scoped worker-memory files are git-ignored scratch and were not preserved.
+>
+> **Filed to `docs/builder/DONE/` at close.** The extra directory level is why the sibling
+> citations below are spelled absolutely (`docs/builder/BUILD.md`, `docs/builder/ARTIFACT.md`,
+> `docs/builder/worker-2.md`) rather than bare. Every other backticked path that does not resolve
+> from here is **deliberate shorthand**, unchanged by the move and equally unresolvable before it:
+> package-relative (`types/base.py`, `mutations/inputs.py`, `scalars.py`, `optimizer/walker.py`,
+> `sets_mixins.py`, ... under `django_strawberry_framework/`), fakeshop-relative
+> (`apps/products/schema.py`, `test_query/*.py` under `examples/fakeshop/`), and script-relative
+> (`check_kanban_anchors.py` under `scripts/`). All were confirmed to resolve under those roots at
+> retirement; none is a dead reference.
 
 ## Cycle shape: a residual-reconciliation cycle, not a feature build
 
@@ -45,7 +58,7 @@ The cycle's question is the maintainer's, stated as three tests every finding is
   the build introduced is graded on which one is right, and the losing side changes.
 - **Did a later card change the contract deliberately?** Then the code stands and the **spec
   is rewritten to state the shipped contract directly** — no amendment block, no "as of
-  spec-048" hedge (`BUILD.md` `## Spec rationale extraction`: the spec is a contract, not a
+  spec-048" hedge (`docs/builder/BUILD.md` `## Spec rationale extraction`: the spec is a contract, not a
   changelog). *What* changed, *why*, and *what it replaced* land in the rationale companion
   as a `**Post-ship:**` bullet under the owning Decision.
 
@@ -100,11 +113,11 @@ at the moment a worker reads it, not a frozen list.
 baseline, so the read side and the scalar re-export are gradeable against the working copy
 directly. `mutations/inputs.py` and `mutations/resolvers.py` are **dirty**, so any conformance
 claim about them is stated against `git show HEAD:<path>` into a scratch path outside the repo,
-with the command quoted (`BUILD.md` `## Claims are proven mechanically, never accepted on prose`).
+with the command quoted (`docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose`).
 
 ## Worker-0 verification pass (findings carried into dispatch)
 
-`BUILD.md` `### Worker 0 verifies every finding against source before dispatching` — every
+`docs/builder/BUILD.md` `### Worker 0 verifies every finding against source before dispatching` — every
 finding below was read out of source before this plan was written, so no worker re-derives it.
 Each is a **verified observation**, not an instruction: the grading is Worker 1's.
 
@@ -169,7 +182,7 @@ Each is a **verified observation**, not an instruction: the grading is Worker 1'
 - **D5 — Decision 9 carries a `> **Superseded (post-ship, …)**` block.** A live fakeshop
   file/image surface (`MediaSpecimen`, `test_query/test_uploads_api.py`) landed in commit
   `4dca5ec9`, and the spec records it as a chronology block quoting its own retracted text.
-  `BUILD.md` `## Spec rationale extraction` forbids exactly that shape: the Decision states the
+  `docs/builder/BUILD.md` `## Spec rationale extraction` forbids exactly that shape: the Decision states the
   current contract directly, and the supersession narrative moves to the rationale companion.
 - **D6 — `## Out of scope` still defers the live fakeshop upload surface** to
   `TODO-BETA-062-0.1.5`, contradicting D5's own supersession block four hundred lines earlier.
@@ -190,7 +203,7 @@ about the release this card closed is not stale, and no worker "updates" it to `
 
 ## Contract-level escalations
 
-`BUILD.md` `### Contract-level findings are escalated as maintainer decisions before dispatch`.
+`docs/builder/BUILD.md` `### Contract-level findings are escalated as maintainer decisions before dispatch`.
 Two questions in this cycle turn on which contract the package should offer rather than on a
 defect, and both were settled by the maintainer's own framing of the task:
 
@@ -210,7 +223,7 @@ defect, and both were settled by the maintainer's own framing of the task:
 - `docs/builder/bld-037-slice-1-code_conformance.md`
 - `docs/builder/bld-037-slice-2-spec_reconciliation.md`
 - `docs/builder/bld-037-integration.md`
-- `docs/builder/bld-037-final.md`
+- `docs/builder/bld-037-final.md` (retired last, after its residue was folded into this plan)
 
 ## Checklist
 
@@ -218,7 +231,7 @@ defect, and both were settled by the maintainer's own framing of the task:
 - [x] Slice 1: code conformance — grade every Decision and Definition-of-done item against `HEAD` source and tests; dispatch Worker 2 / Worker 3 only if a real gap is proven -> `docs/builder/bld-037-slice-1-code_conformance.md`
 - [x] Slice 2: spec reconciliation — rewrite every stale contract statement to the shipped shape, and record what changed and why as `**Post-ship:**` bullets in the rationale companion -> `docs/builder/bld-037-slice-2-spec_reconciliation.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-037-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-037-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-037-final.md` (retired; outcome folded in below)
 
 ## Review round 1 — residue repair (maintainer-dispatched, 2026-09-02)
 
@@ -372,8 +385,8 @@ created; cohort B closed R3 (2 comment renumbers) through build -> review ->
 revision -> re-review -> final verification, with the reviewer's M1 discharged by
 an appended withdrawal rather than a rewrite.
 
-**Why the append was accepted over the prescribed rewrite.** `ARTIFACT.md`
-`## Re-pass sections` and `worker-2.md` `## Scope` forbid editing a prior build
+**Why the append was accepted over the prescribed rewrite.** `docs/builder/ARTIFACT.md`
+`## Re-pass sections` and `docs/builder/worker-2.md` `## Scope` forbid editing a prior build
 report unconditionally, and **no role at all** may place a forward pointer at the
 original site — Worker 2 is barred by Scope, Worker 3 may append review sections
 only, Worker 1 owns the plan and final sections rather than another worker's
@@ -425,3 +438,142 @@ exit 0; the `KANBAN.md` diff stands at **6 lines** across the whole round.
 ### Round checklist
 
 - [x] Round 1 closed; both artifacts `final-accepted`; handed to the maintainer.
+
+## Final test-run gate (folded in from the retired final report)
+
+`docs/builder/bld-037-final.md` was retired after this section absorbed its
+durable residue; it is recoverable at
+`git show 6dc83f0e:docs/builder/bld-037-final.md`. Three of its claims were
+**deliberately not folded** because they went stale after it was written, and
+folding a stale figure is worse than losing it: its non-edit byte proof (spec
+1,666 / 104,947 and companion 971 / 61,019, with the claim that neither file had
+been written since the integration pass) was falsified by review round 1, which
+is why the figures below are re-derived at retirement rather than copied; its
+correction of an inherited negative-control count now corrects prose in an
+artifact that no longer exists; and its trailing-whitespace attribution points at
+a concurrent session's file that this cycle never touched.
+
+### The four failing rows, and why they are not this cycle's
+
+The full sweep at the gate was **`4 failed, 7148 passed, 42 skipped`**:
+
+```text
+FAILED tests/optimizer/test_walker.py::test_divergent_key_windows_shared_payload_uses_none_key
+FAILED tests/orders/test_inputs.py::test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declaration
+FAILED tests/test_sets_mixins.py::test_permission_family_config_stays_on_each_set_class
+FAILED tests/test_sets_mixins.py::test_filter_normalizer_honors_a_subclass_unset_sentinel_override
+```
+
+**The totals are not the comparison; the node-id set is.** Slice 1's Worker 3 and
+Worker 1 each swept `tests/` alone and recorded `4 failed, 6188 passed, 40
+skipped`. The gate sweeps all three trees, so the passed / skipped figures differ
+by construction. The **failing set is identical member for member** across all
+three runs - nothing added, nothing dropped.
+
+**The deselect control, run at the gate's own scope** (a control at a narrower
+scope does not settle a wider one), removing exactly the three node ids this
+cycle added: `4 failed, 7145 passed, 42 skipped`, `7148 - 3 = 7145`, failing set
+byte-identical. **This cycle's diff neither causes nor masks any of the four** -
+a measurement, not an argument.
+
+**Both signatures name a mid-refactor seam in the concurrent session's dirty
+modules**, neither reachable from the file/image surface this cycle graded:
+
+- `assert [(None, ConnectionWindowBounds(offset=0, limit=2, reverse=False), None)] == [(None, (0, 2, False), None)]` - a tuple being converted to a structured object in `optimizer/walker.py`.
+- `TypeError: ActiveInputPermissionAttrs.__init__() got an unexpected keyword argument 'unset_sentinel'` and `AttributeError: 'ActiveInputPermissionAttrs' object has no attribute 'related_attr'` - a dataclass losing fields while callers still pass them, in `sets_mixins.py`.
+
+**What no worker can settle**: whether these four are green at a clean `HEAD`.
+`docs/builder/BUILD.md` `## Claims are proven mechanically, never accepted on prose` makes a
+failing test not worker-verifiable at all - reproducing it needs the whole tree at
+`HEAD`, and this tree is legitimately dirty. Recorded, evidenced, escalated; not
+investigated, not edited, not reverted (`AGENTS.md` rule 34).
+
+### Floor verification
+
+**Re-declared from the plan's `none`** because the three new tests construct a
+`DjangoType` through `__init_subclass__` and read the annotations Strawberry
+consumes - `docs/builder/BUILD.md` `### When it is required` lists that as "schema and type
+construction against Strawberry internals". Owned by Slice 1's Worker 2 build
+pass; Worker 3 re-ran the three node ids independently in the same venv.
+
+Venv `/tmp/dsf-floor-037`, outside the working tree. **It lives in `/tmp` and will
+not survive a reboot, so this table is the durable copy of the floor point this
+cycle verified against** - re-read at retirement, 2026-09-02:
+
+```text
+Python 3.10.19
+channels                    4.3.2
+django                      5.2.16
+django-filter               26.1
+djangorestframework         3.18.0
+pytest                      9.1.1
+pytest-django               4.14.0
+strawberry-graphql          0.316.0
+```
+
+Result: **`6 passed`** - the three new node ids plus the existing `spec-037`
+file-override block, six ids given in full on the command line, `--no-cov`.
+
+**The shared `.venv` was not mutated, verified rather than asserted**: read at the
+gate as django 6.1 / strawberry-graphql 0.324.0 / Python 3.14.2. A leaked
+`--python` would have pulled it to 5.2.16 / 3.10; it did not. **`strawberry-graphql
+0.324.0` is a FIRST reading, not a delta** - Slice 1 recorded the shared venv's
+Django and Python but never its Strawberry, so no later pass should read that
+number as drift.
+
+Slice 0, Slice 2 and the integration pass each declared `none` and each is
+confirmed with its recorded reason: all three are procedural passes writing no
+`.py` file and touching no Django / Strawberry / channels seam. **No declared
+floor scope went unrun.**
+
+### Staged-anchor sweep
+
+No `TODO(spec-037` or `TODO-{ALPHA,BETA,STABLE}-037` anchor outlived the cycle.
+Population printed before the sweep, arrays used because zsh does not word-split:
+**440 tracked source/test/example/script files + 1 untracked**, **0** `037`
+anchors. Re-derived at retirement: still **0**.
+
+**The zero is meaningful because both instruments are demonstrably live in this
+tree**: the card-id grammar hits **30** times and the `TODO(spec-NNN` grammar **25**
+times for *other* cards, over the same printed population. A zero from a mistyped
+pattern would have shown as a zero there too.
+
+### Repo-wide lint and format
+
+`ruff format --check .` reports **438 files already formatted** and `ruff check .`
+exits `0`, both repo-wide - so the concurrent session's ~55 dirty package files
+carry no format or lint failure needing attribution.
+
+### The gate's counts, each with the command that produced it
+
+| Count | Command | Result |
+| --- | --- | --- |
+| full sweep | `uv run pytest --no-cov -q` | 4 failed, 7148 passed, 42 skipped |
+| deselect control | same + 3 `--deselect` | 4 failed, 7145 passed, 42 skipped |
+| package-tree sweep (slices 1) | `uv run pytest tests/ --no-cov` | 4 failed, 6188 passed, 40 skipped |
+| this cycle's tracked diff at the gate | `git diff HEAD --numstat` | spec `298 495`, test `57 0` |
+| ruff format scope | `uv run ruff format --check .` | 438 files already formatted |
+| staged-anchor population | zsh array over `git ls-files` | 440 tracked + 1 untracked |
+| `037` anchors | `grep -rEo 'TODO\(spec-037\|TODO-(ALPHA\|BETA\|STABLE)-037'` | 0 |
+| negative controls | the two other-card grammars, same population | 30 and 25 |
+| new node ids present | `grep -c` over the three `def test_` names | 3 |
+| spec / companion size **at retirement** | `wc -l -c` on both | 1,666 / 104,976 and 987 / 62,266 |
+
+### Failability posture of the gate pass
+
+`None; this pass introduced no new boundary` - the gate lands no runtime code.
+What makes its zeros mean something is that **each measurement carries its own
+negative control**: the failing-set comparison is paired with the deselect control
+at the gate's own scope; the diff check is paired with the same command restricted
+to this cycle's tracked files; the anchor sweep is paired with two live grammars
+over the same printed population; the floor confirmation reads both the floor venv
+and the shared `.venv`, so a leaked `--python` would surface as movement in the
+second reading. Slice 1's own failability record - the mutation, its failing node
+ids and the byte-proved revert - lives in the retired
+`bld-037-slice-1-code_conformance.md` at `git show f9ae3f93:<path>`; it was audited
+field by field at that slice's final verification and re-run independently by
+Worker 3 at the recorded scope with an identical node-id set. **No fail-open shape
+landed**: the cycle's source diff is three test functions and five assertions over
+an unchanged code path.
+
+Hot-path budget: `Not applicable; plan declares no hot path.`

@@ -6,13 +6,13 @@ contract: on the **read** side it replaces the placeholder `FileField` /
 `ImageField` → `str` mapping (the earliest [`spec-001`][spec-001] "URL/path
 string" simplification) with structured
 [`DjangoFileType`][glossary-djangofiletype] /
-[`DjangoImageType`][glossary-djangoimagetype] output objects (`name` / `path` /
-`size` / `url`, plus `width` / `height` for images); on the **write** side it
+[`DjangoImageType`][glossary-djangoimagetype] output objects (`name` / `size` /
+`url`, plus `width` / `height` for images); on the **write** side it
 plugs Strawberry's [`Upload` scalar][glossary-upload-scalar] into the
 [auto-generated mutation `Input` types][glossary-input-type-generation] that
 [`DONE-036-0.0.11`][kanban] ([`spec-036`][spec-036]) built — turning the
-staged-seam `NotImplementedError` that card left at
-[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam (TODO-ALPHA-037-0.0.11)"
+staged-seam `NotImplementedError` that card left in
+[`mutations/inputs.py::model_column_write_annotation`][mutations-inputs]
 into a real `Upload`-typed input field. It is a
 Required [`strawberry-graphql-django`][upstream-field-types] parity item (the
 card's own 🍓 Required tag): upstream's `field_type_map` maps `files.FileField` →
@@ -95,48 +95,11 @@ adds a file/image row to
 [Specialized scalar conversions][glossary-specialized-scalar-conversions]), and
 moves the package-version line to `0.0.11`.
 
-Revision history (kept inline so the spec is self-contained):
-
-- **Revision 1** — initial draft authored from the
-  [`TODO-ALPHA-037-0.0.11`][kanban] card body via the
-  [`docs/SPECS/NEXT.md`][next] flow (2026-06-19). Pinned: the canonical
-  structured filename
-  ([Decision 1](#decision-1--spec-filename-and-canonical-naming)); the
-  card-scope boundary as a file/image conversion card, not a multipart-transport
-  or storage-abstraction card
-  ([Decision 2](#decision-2--card-scope-boundary-fileimage-conversion-only-not-transport-or-storage-abstraction));
-  the `DjangoFileType` / `DjangoImageType` output shapes mirroring
-  [`strawberry-graphql-django`][upstream-field-types] with an empty-file
-  resolver guard
-  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream));
-  **storage-safe nullable subfields** (`path` / `size` / `url` / `width` /
-  `height` nullable; `name` non-null) so a non-filesystem backend or a vanished
-  file degrades to `null` rather than a GraphQL 500, and the default-nullable
-  object shape (file/image output is `<object> | None` by default to match the
-  empty-file resolver `None`)
-  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability));
-  the `Upload` re-export from the package root — no `_PACKAGE_SCALAR_MAP` entry,
-  since `Upload` is already in Strawberry's built-in scalar registry (the
-  contrast with the package-custom [`BigInt`][glossary-bigint-scalar])
-  ([Decision 5](#decision-5--re-export-upload-rather-than-register-it));
-  the write-side seam-to-`Upload` swap and the write-resolver file assignment,
-  lifting the `036` file-column merge-override exception
-  ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload));
-  the three net-new root-exported public symbols
-  ([Decision 7](#decision-7--public-surface-three-net-new-root-exported-symbols));
-  no new `DjangoType` `Meta` key or settings key
-  ([Decision 8](#decision-8--no-new-meta-key-no-new-setting-no-dynamic-storage-policy));
-  the synthetic-model test strategy with live coverage only where a real
-  fakeshop path exists
-  ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models));
-  and **this card owning the final `0.0.11` version bump**
-  ([Decision 10](#decision-10--this-card-owns-the-final-0011-version-bump)).
-  Three card-body conflicts are carried into
-  [Risks and open questions](#risks-and-open-questions) rather than silently
-  reconciled (the stale `"Pairs with 028"` note, the stale
-  `mutations/ (planned)` predicted-file annotation, and the stale
-  `TODO-ALPHA-035-0.0.11` reference in the [`scalars.py`][scalars] docstring),
-  each with a preferred reading.
+This spec's deliberative layer — the authoring revision history that produced
+the contract, every Decision's justification, every alternative each Decision
+rejected, and the risk / open-question deliberation that settled the card's
+design questions — lives in the rationale companion
+[`docs/SPECS/appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md`][spec-037-rationale].
 
 ## Key glossary references
 
@@ -152,9 +115,13 @@ vocabulary used throughout the spec:
   `shipped (0.0.11)` in Slice 4.
 - [`DjangoFileType`][glossary-djangofiletype] /
   [`DjangoImageType`][glossary-djangoimagetype] — the read-side subjects.
-  `DjangoFileType` carries `name` / `path` / `size` / `url`; `DjangoImageType`
+  `DjangoFileType` carries `name` / `size` / `url`; `DjangoImageType`
   adds `width` / `height` image dimensions (the dimension-test dependency is
-  settled in [Risks](#risks-and-open-questions)).
+  settled in [Risks and open questions][rationale-risks]). The server's absolute
+  filesystem `path` is not among the default subfields — a deployment that
+  serves it opts in per column through `Meta.filesystem_path_fields`, which
+  swaps the column onto the path-bearing siblings `DjangoFilePathType` /
+  `DjangoImagePathType`.
   [Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
   /
   [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)
@@ -216,10 +183,10 @@ vocabulary used throughout the spec:
   because they reuse the same
   [Input type generation][glossary-input-type-generation] and
   [`FieldError` envelope][glossary-fielderror-envelope] this card extends.
-- [`TestClient`][glossary-testclient] — the `0.0.14` multipart test-client card
-  that *depends on* this card: it must send multipart requests once `Upload`
-  exists. The dependency is one-directional — this card ships the scalar, that
-  card ships the transport helper ([Non-goals](#non-goals)).
+- [`TestClient`][glossary-testclient] — the `0.0.14` multipart test-client that
+  *depends on* this card: it sends multipart requests, which needs `Upload`. The
+  dependency is one-directional — this card ships the scalar, that card ships the
+  transport helper ([Non-goals](#non-goals)).
 - [relation handling][glossary-relation-handling] /
   [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — context for
   why a file column is a **scalar** column, not a relation: it carries no FK and
@@ -272,13 +239,18 @@ version-cut only.
   [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability))
   - [ ] [`types/converters.py`][types-converters]: define `DjangoFileType`
     (`@strawberry.type` with **resolver-backed** fields `name: str`,
-    `path: str | None`, `size: int | None`, `url: str | None`) and
+    `size: int | None`, `url: str | None`) and
     `DjangoImageType(DjangoFileType)` (adds `width: int | None`,
     `height: int | None`), each subfield delegating to a shared `_safe_file_attr`
     guard ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
+    The server's absolute filesystem `path` is not a default subfield; it is
+    published only on the opt-in siblings `DjangoFilePathType` /
+    `DjangoImagePathType`, reached by naming the column in
+    `Meta.filesystem_path_fields`.
     Add a new `FIELD_OUTPUT_TYPE_MAP` (`models.FileField → DjangoFileType`,
     `models.ImageField → DjangoImageType`) consulted by a new read-only
-    `convert_field_output(field, type_name, *, force_nullable=None)` wrapper
+    `convert_field_output(field, type_name, *, force_nullable=None, expose_filesystem_path=False)`
+    wrapper
     (which delegates to `convert_scalar` for scalar columns, keeping
     `convert_scalar` / `scalar_for_field` scalar-only so no output object can
     reach the filter-input path); **leave** [`SCALAR_MAP`][types-converters]'s
@@ -328,8 +300,9 @@ version-cut only.
     raises before package code runs);
     [`tests/types/test_resolvers.py`][test-types] — the empty-file → `None`
     parent guard, the populated-`FieldFile` pass-through, and **per-subfield
-    isolation** (a failing `path` returns `null` while `url` / `name` still
-    resolve, each selected one subfield at a time);
+    isolation** (on a column opted into `Meta.filesystem_path_fields`, a
+    failing `path` returns `null` while `url` / `name` still resolve, each
+    selected one subfield at a time);
     [`tests/types/test_base.py`][test-types] — the consumer-annotation override
     (`avatar: str`) gets no generated resolver or object type.
 - [ ] Slice 2: write-side `Upload` input + the `Upload` re-export (per
@@ -340,11 +313,11 @@ version-cut only.
     from `strawberry.file_uploads.scalars` for the public surface. **Do not**
     add it to `_PACKAGE_SCALAR_MAP` — `Upload` already resolves via Strawberry's
     built-in `DEFAULT_SCALAR_REGISTRY`
-    ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)); fix
-    the stale `TODO-ALPHA-035-0.0.11` reference in the module docstring to
-    `TODO-ALPHA-037-0.0.11`.
-  - [ ] [`mutations/inputs.py`][mutations-inputs]: remove the staged seam at
-    #"Upload staged seam (TODO-ALPHA-037-0.0.11)" — a `FileField` / `ImageField`
+    ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)); remove
+    the stale `TODO-ALPHA-035-0.0.11` reference from the module docstring — this
+    slice ships the seam it staged, so no replacement anchor takes its place.
+  - [ ] [`mutations/inputs.py`][mutations-inputs]: remove the staged
+    `NotImplementedError` seam — a `FileField` / `ImageField`
     input field now maps to `Upload`, required per the shipped per-field rule (a
     `blank=False` / `null=False` / no-default file column is required in the
     create `<Model>Input`, optional otherwise and in `<Model>PartialInput`),
@@ -365,8 +338,8 @@ version-cut only.
     An omitted field (`UNSET`) leaves the file unchanged on partial update;
     explicit `null` on a `null=False` file column returns a `FieldError` via the
     shipped `_explicit_null_error` guard (omittable ≠ nullable — not a silent
-    clear), and clearing is a [Risks](#risks-and-open-questions) item, not
-    promised here.
+    clear), and clearing is a [Risks and open questions][rationale-risks] item,
+    not promised here.
   - [ ] Package coverage: [`tests/test_scalars.py`][test-scalars] — an
     `Upload`-annotated field resolves through a schema built with
     `strawberry_config()` **and** through a plain `StrawberryConfig` (proving
@@ -414,7 +387,7 @@ version-cut only.
     [`README.md`][readme] (move the `Upload` scalar + generated file/image field
     typing from "Coming next (`0.0.11`)" to "Shipped today" — wording the
     *scalar and generated mutation-field typing*, **not** full multipart HTTP
-    upload ergonomics, which await the `0.0.14` [`TestClient`][glossary-testclient]
+    upload ergonomics, which the `0.0.14` [`TestClient`][glossary-testclient] carries
     — and the README **Status** line from `0.0.10` to `0.0.11`), [`GOAL.md`][goal]
     (note that criterion 6's `Upload` / `FileField` / `ImageField` part ships for
     generated `DjangoMutation` inputs — the `ModelForm` / `ModelSerializer`
@@ -513,13 +486,13 @@ A true description of the repo as this spec is authored:
   `django_strawberry_framework/mutations/ (planned)`, but `mutations/` shipped
   with [`DONE-036-0.0.11`][kanban]; [`mutations/inputs.py`][mutations-inputs] /
   [`mutations/resolvers.py`][mutations-resolvers] are on disk. The annotation is
-  stale ([Risks](#risks-and-open-questions)).
+  stale ([Risks and open questions][rationale-risks]).
 - **No example app uses a file/image column.**
   `grep -rln "FileField\|ImageField" examples/` returns nothing — `products` /
   `library` / `scalars` carry no file column, so the read-side break invalidates
-  no in-repo schema and the card's "synthetic-model tests" scoping is sufficient
-  for coverage
-  ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
+  no in-repo schema. What that scoping means for test placement is settled by
+  [Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models),
+  which adds the file/image column this bullet finds missing.
 
 ## Goals
 
@@ -528,7 +501,9 @@ A true description of the repo as this spec is authored:
    [`DjangoImageType`][glossary-djangoimagetype] via a new `FIELD_OUTPUT_TYPE_MAP`
    (kept off the shared `SCALAR_MAP` / filter-input path), mirroring
    [`strawberry-graphql-django`][upstream-field-types], so a client gets `name` /
-   `path` / `size` / `url` (+ `width` / `height`) in one selection
+   `size` / `url` (+ `width` / `height`) in one selection, and the server's
+   absolute filesystem `path` only where a deployment opts the column into
+   `Meta.filesystem_path_fields`
    ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 2. **Handle empty / unreadable files deliberately.** An absent file resolves to
    `null` (the whole object); a storage property that cannot be produced degrades
@@ -558,14 +533,15 @@ A true description of the repo as this spec is authored:
 
 ## Non-goals
 
-- **Multipart test-client helper.** The future
-  [`TestClient`][glossary-testclient] card (`0.0.14`) references
-  `TODO-ALPHA-037` because it must send multipart requests once `Upload` exists;
-  the helper itself is `0.0.14`, not this card
+- **Multipart test-client helper.** The [`TestClient`][glossary-testclient]
+  helper is `0.0.14`'s, not this card's; the dependency runs one way — that card
+  needs the `Upload` scalar this card ships in order to send multipart requests
   ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
-- **A new fakeshop upload domain.** This card does not add a fake image/product
-  app or unrelated model just to force live HTTP coverage; if a real file/image
-  field is later added to fakeshop, it earns live coverage then
+- **A new fakeshop upload domain.** This card adds no fake image/product app and
+  no unrelated model just to force live HTTP coverage. The file/image column it
+  does add — `MediaSpecimen` on the existing `scalars` app — earns live coverage
+  because a `FileField` / `ImageField` is SQLite-reachable and its public HTTP
+  contract must be pinned over the wire
   ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 - **Nested writes / file-replacement policy beyond the direct field.** This card
   maps the scalar and lets the shipped mutation pipeline assign Django's
@@ -576,7 +552,8 @@ A true description of the repo as this spec is authored:
 - **Storage abstraction / signed URLs / image processing.** The package does not
   wrap every Django storage backend; it exposes safe nullable subfields where
   storage properties may be unavailable and lets Django's storage object answer
-  `url` / `path` / `size` ([Edge cases](#edge-cases-and-constraints)).
+  `url` / `size` (and the opted-in `path`)
+  ([Edge cases](#edge-cases-and-constraints)).
 - **`DurationField` / `BinaryField` and other unmapped scalars.** They remain
   intentionally absent from [`SCALAR_MAP`][types-converters] with their
   documented custom-scalar plugs.
@@ -601,7 +578,7 @@ Strawberry output object because the engine is Strawberry.
 
 | Upstream | `django-strawberry-framework` | Status |
 | --- | --- | --- |
-| [`strawberry_django.fields.types.DjangoFileType`][upstream-field-types] (`name` / `path` / `size` / `url`) | [`DjangoFileType`][glossary-djangofiletype] public output type; `FIELD_OUTPUT_TYPE_MAP[models.FileField]` read row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity |
+| [`strawberry_django.fields.types.DjangoFileType`][upstream-field-types] (`name` / `path` / `size` / `url`) | [`DjangoFileType`][glossary-djangofiletype] public output type (`name` / `size` / `url`; `path` on the opt-in `DjangoFilePathType`); `FIELD_OUTPUT_TYPE_MAP[models.FileField]` read row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity (subfields widened nullable and `path` moved behind an opt-in, [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)) |
 | [`strawberry_django.fields.types.DjangoImageType`][upstream-field-types] (file fields + dimensions) | [`DjangoImageType`][glossary-djangoimagetype] public output type; `FIELD_OUTPUT_TYPE_MAP[models.ImageField]` read row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity (subfields widened nullable, field-level guard, [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)) |
 | [`strawberry_django` `input_field_type_map` maps file/image → `Upload`][upstream-field-types] | the [`mutations/inputs.py`][mutations-inputs] generator maps both to [`Upload`][glossary-upload-scalar] ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)) | this card — required parity |
 | `strawberry.file_uploads.scalars.Upload` | re-exported from the package root; resolves via Strawberry's built-in default registry — no `_PACKAGE_SCALAR_MAP` entry ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)) | this card — adopt upstream scalar; like upstream, rely on the built-in registry |
@@ -609,12 +586,15 @@ Strawberry output object because the engine is Strawberry.
 
 ### From `strawberry-graphql-django` — borrow the output shapes and the input mapping
 
-- **Output types.** `DjangoFileType` (`name` / `path` / `size` / `url`) and
-  `DjangoImageType(DjangoFileType)` (+ `width` / `height`) — adopted
-  field-for-field, so a migrating consumer's `{ avatar { url width } }`
-  selection ports unchanged. The one deliberate divergence is subfield
-  nullability
-  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
+- **Output types.** `DjangoFileType` (`name` / `size` / `url`) and
+  `DjangoImageType(DjangoFileType)` (+ `width` / `height`) — the type names and
+  field names are upstream's, so a migrating consumer's `{ avatar { url width } }`
+  selection ports unchanged. Two deliberate divergences: subfield nullability
+  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)),
+  and the server's absolute filesystem `path`, which is not a default subfield
+  here — a deployment opts a column into it through
+  `Meta.filesystem_path_fields` and gets `DjangoFilePathType` /
+  `DjangoImagePathType`.
 - **Input mapping.** `FileField` / `ImageField` → `Upload` on the mutation input
   — adopted; the empty-file / partial-update write semantics are the package's
   own
@@ -647,9 +627,11 @@ Strawberry output object because the engine is Strawberry.
 
 ## User-facing API
 
-No new `DjangoType` `Meta` key, no new constructor argument — a file/image
-column is converted automatically by being in the type's `Meta.fields`
-selection. Three net-new public symbols are added to the package root
+No new constructor argument — a file/image column is converted automatically by
+being in the type's `Meta.fields` selection, and the only file-specific `Meta`
+key on the read side is the per-column `Meta.filesystem_path_fields` opt-in that
+publishes the server's absolute filesystem `path`. Three net-new public symbols
+are added to the package root
 ([Decision 7](#decision-7--public-surface-three-net-new-root-exported-symbols)).
 
 Read side — a `DjangoType` over a model with file/image columns:
@@ -685,20 +667,24 @@ type AssetType {
 
 type DjangoFileType {
   name: String!
-  path: String
   size: Int
   url: String
 }
 
 type DjangoImageType {
   name: String!
-  path: String
   size: Int
   url: String
   width: Int
   height: Int
 }
 ```
+
+Naming a column in `Meta.filesystem_path_fields` swaps it onto
+`DjangoFilePathType` / `DjangoImagePathType`, which carry the same subfields
+plus `path: String` — the server's absolute filesystem path, deployment
+metadata a client never needs to render a file, and so opt-in per column rather
+than a default.
 
 The object field is **nullable by default**, regardless of `null` / `blank`: the
 generated parent resolver returns `None` for an empty / falsy `FieldFile`, and an
@@ -707,10 +693,10 @@ direct `Model.objects.create()`, fixtures, and manual SQL all store `""`), so th
 SDL must be nullable to represent it.
 [`Meta.required_overrides`][glossary-metarequired-overrides] is the explicit
 opt-in for a caller asserting a stronger non-empty contract (`DjangoFileType!`).
-`name` is non-null for a present file; `path` / `size` / `url` /
-`width` / `height` are **nullable** because storage backends and
-corrupt/vanished rows can make individual properties unavailable even when a
-file name exists
+`name` is non-null for a present file; `size` / `url` /
+`width` / `height` (and the opted-in `path`) are **nullable** because storage
+backends and corrupt/vanished rows can make individual properties unavailable
+even when a file name exists
 ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
 A missing/empty file resolves the whole object as `null`, never a
 `FieldFile.url` `ValueError`. A consumer who wants the legacy `str` (URL/name)
@@ -807,25 +793,12 @@ schema = strawberry.Schema(query=Query, mutation=Mutation, config=strawberry_con
 
 ### Decision 1 — Spec filename and canonical naming
 
-The spec file lives at **`docs/spec-037-upload_file_image_mapping-0_0_11.md`**.
+The spec file is named `spec-037-upload_file_image_mapping-0_0_11.md` and lives
+at **`docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md`**, with its
+`-terms.csv` and `-rationale.md` companions under `docs/SPECS/appx/`.
 
-Justification:
-
-- The structured `spec-<NNN>-<topic>-<0_0_X>.md` convention pinned in
-  [`docs/SPECS/NEXT.md`][next] Step 6 bakes the card's NNN (`037`) and target
-  patch (`0_0_11`) into the filename.
-- The topic slug is `upload_file_image_mapping` — short, snake-case, and broad
-  enough to name **both** halves of the card (the write-side `Upload` scalar
-  *and* the read-side file/image output objects), which a slug like `uploads` or
-  `upload_scalar` undersells.
-
-Alternatives considered (and rejected):
-
-- **`spec-037-upload_scalar-0_0_11.md` / `spec-037-uploads-0_0_11.md`.**
-  Rejected: narrows the filename to the write half, while the read-side
-  `DjangoFileType` / `DjangoImageType` change is equally in the card DoD.
-- **`spec-037-files-0_0_11.md`.** Rejected: too vague; it does not name the
-  write-side `Upload` scalar.
+Rationale companion — this Decision's justification and its two rejected
+alternatives: [Decision 1][rationale-d1].
 
 ### Decision 2 — Card-scope boundary: file/image conversion only, not transport or storage abstraction
 
@@ -837,38 +810,32 @@ policies, image processing, or nested upload writes — each named in
 [Non-goals](#non-goals) /
 [Out of scope](#out-of-scope-explicitly-tracked-elsewhere).
 
-Justification: the card is sized **S** and its DoD is a converter-table change,
-a mutation-input mapping, synthetic-model tests, and glossary docs. The `0.0.14`
-[`TestClient`][glossary-testclient] card already owns multipart helper
-ergonomics and explicitly depends on this card for the scalar, not vice versa.
-Keeping scope here small prevents a file-upload transport design from delaying
-the foundational mapping ([`START.md`][start] scope-creep rule).
-
-Alternatives considered (and rejected):
-
-- **Ship only the read side now, write later.** Rejected: the card pairs read
-  and write (its DoD names both), and the write seam already exists as a `036`
-  `NotImplementedError` waiting to be filled — splitting would leave a
-  half-mapped field type and a dangling seam.
-- **Add a live fakeshop file model in this card.** Rejected: a `FileField` on a
-  fakeshop model needs a media-root fixture and multipart HTTP plumbing —
-  heavier than an S card; synthetic-model tests give full coverage
-  ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
+Rationale companion — this Decision's justification and its two rejected
+alternatives: [Decision 2][rationale-d2].
 
 ### Decision 3 — Read-side output types: `DjangoFileType` / `DjangoImageType` mirroring upstream
 
-[`types/converters.py`][types-converters] defines two `@strawberry.type` output
-types and a **new read-output field-type map**, kept separate from
-[`SCALAR_MAP`][types-converters]:
+[`types/converters.py`][types-converters] defines the file/image
+`@strawberry.type` output types and the **read-output field-type maps** that
+select among them, kept separate from [`SCALAR_MAP`][types-converters]:
 
-- `DjangoFileType` — `name`, `path`, `size`, `url` (the four fields
-  [`strawberry-graphql-django`][upstream-field-types] ships), as
-  **resolver-backed** Strawberry fields (Decision 4 explains why the subfields
-  are resolvers, not bare annotations).
+- `DjangoFileType` — `name`, `size`, `url`, as **resolver-backed** Strawberry
+  fields (Decision 4 explains why the subfields are resolvers, not bare
+  annotations). [`strawberry-graphql-django`][upstream-field-types] ships a
+  fourth field, the server's absolute filesystem `path`; here that field is
+  deployment metadata rather than client data, so it lives on the opt-in
+  siblings below instead of in the default output.
 - `DjangoImageType(DjangoFileType)` — adds `width`, `height`.
+- `DjangoFilePathType(DjangoFileType)` / `DjangoImagePathType(DjangoImageType)` —
+  the same subfields plus `path`, reached only by naming the column in
+  `Meta.filesystem_path_fields`. The opt-in is per column and lives in the
+  type's own `Meta`, so a reviewer reading one class sees every path the type
+  publishes.
 - `FIELD_OUTPUT_TYPE_MAP[models.FileField] = DjangoFileType`;
   `FIELD_OUTPUT_TYPE_MAP[models.ImageField] = DjangoImageType` — a new
   module-level map the **read** converter consults; *not* a `SCALAR_MAP` row.
+  A second, output-type-keyed map substitutes the path-bearing sibling for an
+  opted-in column, so the MRO walk that resolved the default is never repeated.
 
 **Why a separate map, not a `SCALAR_MAP` rewrite.**
 [`SCALAR_MAP`][types-converters] is shared: the read path
@@ -891,13 +858,17 @@ A function still named [`convert_scalar`][types-converters] returning a
 `DjangoFileType` / `DjangoImageType` *object* type would blur an abstraction the
 filter-input path also depends on. So [`convert_scalar`][types-converters] and
 [`scalar_for_field`][types-converters] stay scalar-shaped, and a new read-only
-helper `convert_field_output(field, type_name, *, force_nullable=None)` in
+helper
+`convert_field_output(field, type_name, *, force_nullable=None, expose_filesystem_path=False)`
+in
 [`types/converters.py`][types-converters] owns the `FIELD_OUTPUT_TYPE_MAP` MRO
 lookup: for a file/image column it returns the matching output object (nullable
 by default as `<object> | None`, independent of `blank` / `null`, per
 [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)),
 and otherwise delegates to [`convert_scalar`][types-converters] for true scalar
-columns. [`types/base.py`][types-base] `_build_annotations` calls
+columns. `expose_filesystem_path` carries the per-column
+`Meta.filesystem_path_fields` opt-in and is read only inside the file branch, so
+it can never silently change a scalar column's annotation. [`types/base.py`][types-base] `_build_annotations` calls
 `convert_field_output` for non-relation columns (where it calls
 [`convert_scalar`][types-converters] directly today), so "scalar conversion"
 never emits an object type and the scalar/output split stays legible to future
@@ -949,42 +920,8 @@ the one-line opt-out. The **filter** input shape for a file column is unchanged
 (still scalar `str`), so no filter schema breaks. No in-repo example breaks (no
 fakeshop model uses a file column).
 
-Justification: structured output is the read-side parity goal and the lossy
-`str` was always a placeholder; mirroring upstream's field names lets a
-migrating consumer's selection port unchanged. Two distinct types keep dimension
-fields off non-image files. A separate output map keeps the read change off the
-shared scalar/filter surface.
-
-Alternatives considered (and rejected):
-
-- **Put the object types directly in `SCALAR_MAP`.** Rejected (the P0 finding):
-  a [`FilterSet`][glossary-filterset] over a file column would emit an output
-  object as a filter input — an invalid schema. The read-output map keeps the
-  read change off the shared scalar/filter path; a package test pins the
-  filter-input scalar lookup over a synthetic `FileField` / `ImageField` to a
-  scalar `str` (`scalar_for_field` and `_scalar_from_model_field` both return
-  `str`, `SCALAR_MAP` rows untouched) so this cannot regress silently. (The test
-  pins the delegation path the FilterSet input generator uses rather than a full
-  `FilterSet.Meta.fields` materialization, because django_filter raises an
-  `AssertionError` on an auto-generated bare-`FileField` filter — an
-  unrecognized field type — before any package code runs; the scalar-lookup pin
-  is equally distinguishing.)
-- **Reject file/image filters with `ConfigurationError` and route reads through
-  a renamed converter.** Considered: cleaner once file filtering has a
-  deliberate contract, but it is a behavior change for any consumer filtering on
-  a file column's stored name today. Deferred — file columns keep their scalar
-  `str` filter mapping until a file-filter contract is designed
-  ([Risks](#risks-and-open-questions)).
-- **Leave output as `str` and ship only `Upload`.** Rejected: fails the
-  read-side DoD and leaves consumers hand-rolling file metadata.
-- **Map output to `str | None` but document custom resolvers for metadata.**
-  Rejected: preserves the weak contract and ignores the upstream parity target.
-- **One `DjangoFileType` with nullable `width` / `height`.** Rejected: a
-  non-image `FileField` has no dimensions; the `DjangoImageType` subclass scopes
-  them to images, matching upstream.
-- **Add a settings flag to keep `str` globally.** Rejected: a settings key for a
-  one-line per-field override is over-engineering ([`AGENTS.md`][agents]); the
-  annotation override is the finer-grained opt-out.
+Rationale companion — this Decision's justification and its six rejected
+alternatives: [Decision 3][rationale-d3].
 
 ### Decision 4 — Read-side resolution: empty file as `null` and storage-safe subfield nullability
 
@@ -1007,9 +944,10 @@ Two layers, at two different levels:
   opt-in to the stricter `DjangoFileType!` contract, for a consumer that
   guarantees a file is always present (the "contract, not data" caveat the
   override entry documents).
-- **Subfield nullability (field level).** `path` / `size` / `url` (and `width` /
-  `height` on images) are **nullable**, while `name` stays non-null — a
-  deliberate divergence from upstream's all-non-null `path: str`.
+- **Subfield nullability (field level).** `size` / `url` (and `width` /
+  `height` on images, and `path` on the opt-in path-bearing siblings) are
+  **nullable**, while `name` stays non-null — a deliberate divergence from
+  upstream's all-non-null subfields, its `path: str` included.
 
 **The guard must live on the subfields, not the parent resolver.** The parent
 resolver returns the bound `FieldFile`; Strawberry then resolves each *selected*
@@ -1023,8 +961,8 @@ are defined with **resolver-backed** fields, each delegating to a shared
 `_safe_file_attr(file_file, attr)` helper that performs the **narrow** catch
 (`ValueError` / `OSError` / storage `NotImplementedError` → `None`). The parent
 resolver decides only object nullability (`not value` → `None`); each subfield
-owns its own guard, so selecting only `{ url }`, only `{ path }`, or several
-subfields each degrade **independently**. `name` is read without the guard (a
+owns its own guard, so selecting only `{ url }`, only `{ path }` on an opted-in
+column, or several subfields each degrade **independently**. `name` is read without the guard (a
 stored string, always present whenever the object is non-null).
 
 **Django path-safety exceptions are *not* silently nulled.** A corrupt or
@@ -1037,41 +975,10 @@ error, not hide as a `null` subfield. This is an intentional decision, not an
 accidental gap. Fallback: if operators prefer graceful degradation over
 visibility, `SuspiciousFileOperation` can be added to the helper's catch set,
 but the default is to let it propagate
-([Risks](#risks-and-open-questions)).
+([Risks and open questions][rationale-risks]).
 
-Justification: a file field with no file must resolve to `null`, not raise; a
-storage quirk on one property must not take down the query; and the guard must
-sit where the raising access happens (the subfield), which the parent resolver
-cannot reach. The narrow catch list keeps the guard from swallowing genuine
-resolver bugs and from masking security-relevant path errors. `name` is reliably
-present whenever the object exists (the object is `null` for an absent file), so
-it stays non-null.
-
-Alternatives considered (and rejected):
-
-- **Guard only in the parent resolver (return the `FieldFile`, catch there).**
-  Rejected (the P0 finding): subfield property access happens later, in
-  Strawberry's default per-field resolution, outside the parent's `try/except`;
-  a blank or vanished-file selection of `{ url }` would still 500. The guard
-  must be at the field level.
-- **A wrapper object whose properties perform the catch.** Considered and
-  equivalent; resolver-backed `@strawberry.field`s on the two types are the
-  chosen shape because they keep the guard in the type definition and need no
-  extra wrapper class. Either satisfies the field-level requirement.
-- **Match upstream's all-non-null subfields and document the `path` caveat.**
-  Rejected: it leaves a latent 500 on non-filesystem storage / vanished files;
-  the nullable-subfield contract is the safer engineering choice and the SDL
-  divergence is small and documented.
-- **Widen the object on `field.null` only — or on `null` / `blank`.** Rejected:
-  the resolver returns `None` for *any* empty `FieldFile`, including on a
-  `null=False, blank=False` column (legacy rows, direct `Model.objects.create()`,
-  fixtures, and manual SQL all store `""`), so keying nullability on the column
-  flags at all leaves a guaranteed non-null violation. The object is **nullable
-  by default**; `required_overrides` is the explicit opt-in to a non-null
-  contract.
-- **Catch a broad `Exception` (or fold `SuspiciousFileOperation` into the
-  guard) by default.** Rejected: it would hide real bugs and mask path-traversal
-  signals; the catch list is narrowed to storage-shaped errors.
+Rationale companion — this Decision's justification and its five rejected
+alternatives: [Decision 4][rationale-d4].
 
 ### Decision 5 — Re-export `Upload` rather than register it
 
@@ -1081,10 +988,10 @@ converter seeds that registry into every schema (`{**DEFAULT_SCALAR_REGISTRY}`)
 *before* merging any package `scalar_map`. So an `Upload`-annotated field
 resolves in **any** schema — with or without
 [`strawberry_config`][glossary-strawberry-config].
-[`scalars.py`][scalars] (and the package root, [`__init__.py`][init]) therefore
-only **re-export** `Upload` (and `UploadDefinition`) from
-`strawberry.file_uploads.scalars` for the public surface; the package adds **no**
-`_PACKAGE_SCALAR_MAP` entry for it.
+[`scalars.py`][scalars] therefore only **re-exports** `Upload` and its
+`UploadDefinition` from `strawberry.file_uploads.scalars` for the public surface,
+and the package root ([`__init__.py`][init]) re-exports `Upload` alone; the
+package adds **no** `_PACKAGE_SCALAR_MAP` entry for it.
 
 This is the deliberate contrast with [`BigInt`][glossary-bigint-scalar]:
 `BigInt = NewType("BigInt", int)` is a package-custom scalar **absent** from
@@ -1093,33 +1000,13 @@ to resolve. `Upload` shares BigInt's structural shape (a `NewType` paired with a
 `scalar(...)` `ScalarDefinition`) but **not** its registration need — it is
 already a pre-registered scalar.
 
-Justification: registering `Upload` in `_PACKAGE_SCALAR_MAP` would be redundant
-(it already resolves) and misleading (it would imply a binding requirement that
-does not exist). [`strawberry-graphql-django`][upstream-field-types] takes
-exactly this approach — its `input_field_type_map` maps `FileField` /
-`ImageField` to the bare `Upload` `NewType` with no custom scalar registration,
-relying on the built-in registry. Re-using Strawberry's scalar also keeps
-multipart-request parsing on the engine.
-
-Alternatives considered (and rejected):
-
-- **Add `Upload` to `_PACKAGE_SCALAR_MAP` for symmetry with `BigInt`.**
-  Rejected: redundant (the default registry already resolves it) and
-  misleading; it would also manufacture an `extra_scalar_map={Upload: ...}`
-  collision contract for a scalar the package does not own.
-- **Define a wrapper `NewType` instead of re-exporting Strawberry's `Upload`.**
-  Rejected: a second upload scalar would be incompatible with the engine's
-  built-in multipart conventions and force clients to special-case it.
-- **Do not export `Upload` at all; let consumers import it from Strawberry.**
-  Rejected: generated inputs reference `Upload`, and a consumer hand-writing an
-  upload field should reach for it at the package root alongside
-  [`BigInt`][glossary-bigint-scalar] — re-export is the public-surface
-  convenience ([Decision 7](#decision-7--public-surface-three-net-new-root-exported-symbols)).
+Rationale companion — this Decision's justification and its three rejected
+alternatives: [Decision 5][rationale-d5].
 
 ### Decision 6 — Write-side input mapping: the mutation seam becomes `Upload`
 
 The [`spec-036`][spec-036] fail-loud branch in
-[`mutations/inputs.py`][mutations-inputs] #"Upload staged seam (TODO-ALPHA-037-0.0.11)"
+[`mutations/inputs.py::model_column_write_annotation`][mutations-inputs]
 is removed and replaced with a real mapping:
 `FileField` / `ImageField` → `Upload`, required per the shipped per-field rule
 (a `blank=False` / `null=False` / no-default file column is required in the
@@ -1152,7 +1039,8 @@ inputs, so they inherit this guard for free: omitting the field leaves the file
 untouched, while sending explicit `null` on a `null=False` file column is a
 field-keyed error, not a silent clear. A `null=True` file column treats `None` as
 a valid clear only insofar as the model field and shipped pipeline already accept
-it; clearing is otherwise out of scope ([Risks](#risks-and-open-questions)).
+it; clearing is otherwise out of scope
+([Risks and open questions][rationale-risks]).
 
 **The `036` file-column merge-override exception is lifted.**
 [`spec-036`][spec-036] CR-6 pinned that file columns were "the one exception to
@@ -1163,25 +1051,8 @@ emits a valid field, so a file column now participates in the
 `Meta.partial_input_class` merge override like any scalar; Slice 2 removes the
 CR-6 carve-out and updates its `test_inputs.py` coverage.
 
-Justification: the seam was built for exactly this card; reusing the generator
-prevents a second write-input path just for uploads and keeps custom-input merge
-consistent with every other scalar.
-
-Alternatives considered (and rejected):
-
-- **Keep the `NotImplementedError` and require `Meta.exclude`.** Rejected: that
-  was the staging guard before `037`; after this card it would make the card a
-  no-op for generated mutation inputs.
-- **Require a consumer-authored `input_class` for upload fields.** Rejected:
-  violates the generated-input goal and creates a bespoke escape hatch where the
-  core package should know the mapping.
-- **Represent uploads as `str` paths.** Rejected: unsafe and not a GraphQL
-  upload contract; the client sends multipart upload values, not server paths.
-- **Add a dedicated file-assignment branch in the write resolver up front.**
-  Rejected by default (the P2 finding): the existing scalar `setattr` /
-  `model(**attrs)` path already assigns an `UploadedFile`, so a branch is added
-  only if a test proves the generic path fails — avoiding a divergent write path
-  for files.
+Rationale companion — this Decision's justification and its four rejected
+alternatives: [Decision 6][rationale-d6].
 
 ### Decision 7 — Public surface: three net-new root-exported symbols
 
@@ -1193,41 +1064,23 @@ promotes the existing entries to `shipped (0.0.11)` and adds the three to the
 glossary **Public exports** list; no net-new glossary *heading* is created by
 this card.
 
-Justification: root export matches the audience — `Upload` is referenced
-wherever a consumer hand-writes an input field, and the two output types are the
-field types a consumer names in custom resolvers / `strawberry.field`
-annotations; all belong at the root alongside [`BigInt`][glossary-bigint-scalar]
-/ [`DjangoType`][glossary-djangotype], parallel to how
-[`BigInt`][glossary-bigint-scalar] ([`spec-017`][spec-017]) is root-exported.
-These are **framework-provided generated / helper output types**, not a new
-consumer-authored decorator API — they stay within the package's `class
-Meta`-driven, DRF-first posture ([`GOAL.md`][goal]) and add no decorator-first
-consumer surface.
-
-Alternatives considered (and rejected):
-
-- **Export only from a `scalars` / `types` namespace.** Rejected: the symbols
-  are referenced inside schema modules alongside root-exported types; the
-  package's settled posture is to root-export consumer-facing scalars and types.
-- **Do not export the output types (auto-generated, never named).** Rejected: a
-  consumer overriding a file field's resolver, or annotating a computed file
-  field, must be able to name them; the glossary already lists them as public.
+Rationale companion — this Decision's justification and its two rejected
+alternatives: [Decision 7][rationale-d7].
 
 ### Decision 8 — No new `Meta` key, no new setting, no dynamic storage policy
 
 This card changes existing conversion behavior; it adds no new `DjangoType`
-`Meta` key and no `DJANGO_STRAWBERRY_FRAMEWORK` setting.
+`Meta` key and no `DJANGO_STRAWBERRY_FRAMEWORK` setting. The conversion is
+driven entirely by the column type and the selectors that already exist:
 [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude]
-remain the opt-in / opt-out selectors;
+are the opt-in / opt-out selectors;
 [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
-[`Meta.required_overrides`][glossary-metarequired-overrides] remain the
-nullability overrides; consumer-authored scalar overrides still bypass generated
-conversion.
-
-Justification: the repository rule is explicit — add settings keys only when the
-feature needs them ([`AGENTS.md`][agents]). The file/image mapping has no
-project-wide policy knob; the existing scalar-override semantics already provide
-the escape hatch.
+[`Meta.required_overrides`][glossary-metarequired-overrides] are the
+nullability overrides; consumer-authored scalar overrides bypass generated
+conversion. `Meta.filesystem_path_fields` is the one file-specific `Meta` key
+the read side reads, and it is a per-column output-shape opt-in rather than a
+storage policy: it selects which output object a column resolves to and reads no
+setting.
 
 This card reads **no** setting, so it adds no settings-read or per-query
 validation overhead. For the record, the standing architectural line — should a
@@ -1242,48 +1095,42 @@ cycles); and any setting that affects request behavior is
 without re-reading or re-validating the setting. A query-time settings read is
 not introduced here and would be rejected if proposed.
 
+Rationale companion — this Decision's justification:
+[Decision 8][rationale-d8].
+
 ### Decision 9 — Test placement: package tests own synthetic file/image models
 
-> **Superseded (post-ship, 2026-06-20 round-4 review).** A live fakeshop
-> file/image acceptance surface was added after all. The `scalars` app gained a
-> `MediaSpecimen` model (`FileField` + `ImageField`), a `MediaSpecimenType`, and a
-> file-backed `createMediaSpecimen` mutation, with live `/graphql/` tests in
-> `examples/fakeshop/test_query/test_uploads_api.py`: the read output objects, the
-> default-nullable SDL shape (a *required* column rendering nullable), the
-> empty-file object-`null` case, the `Upload` input SDL, and a **real multipart
-> upload** (the fakeshop `GraphQLView` enables `multipart_uploads_enabled=True`).
-> The [`examples/fakeshop/test_query/README.md`][test-query-readme] live-coverage
-> rule prevailed over the "prefer the card" deferral recorded below: file/image
-> output IS SQLite-reachable, so its public HTTP contract must be earned live. The
-> synthetic-model package tests below **remain** for the storage-backend
-> fault-injection and corrupt-image-dimension edges, which need a mocked
-> non-filesystem backend and so are genuinely unreachable from a live request. The
-> broader products/fakeshop activation stays [`TODO-BETA-062-0.1.5`][kanban]. The
-> original (now-historical) deferral rationale follows.
+The file/image contract is covered on **both** tiers, split by what a real HTTP
+request can reach:
 
-No fakeshop model has a file/image field, and adding one solely for this card
-would be example-app churn, not a real acceptance path. Therefore:
+- **Live `/graphql/` tests own the public wire contract.** A `FileField` /
+  `ImageField` stores its relative name as `TEXT`, so it is SQLite-reachable and
+  the [`examples/fakeshop/test_query/README.md`][test-query-readme] rule applies
+  in full: a line reachable through a real fakeshop query earns its coverage over
+  HTTP. The `scalars` app carries a `MediaSpecimen` model (a required
+  `FileField` plus a required `ImageField`), its generated read type, and a
+  file-backed create mutation; `examples/fakeshop/test_query/test_uploads_api.py`
+  drives them over `/graphql/` — the structured read output objects and their
+  subfields, the default-nullable SDL shape (a *required* column still rendering
+  nullable), the empty-file object-`null` case, the absence of the filesystem
+  `path` from the default output and its presence under the opt-in, the `Upload`
+  input SDL, and a **real multipart upload** (the fakeshop `GraphQLView` sets
+  `multipart_uploads_enabled=True`).
+- **Package tests own what a live request cannot reach.** Storage-backend fault
+  injection (a non-filesystem `path`, a vanished file) and corrupt-image
+  dimensions need a mocked backend or a deliberately broken file, so they stay in
+  [`tests/types/`][test-types] over **synthetic models** (a test-only model with
+  `FileField` / `ImageField` columns on a `tmp_path` storage) — the
+  [`spec-017`][spec-017] converter-table precedent. Generated mutation input
+  behavior lives in [`tests/mutations/`][test-mutations]; scalar registration /
+  resolution and root-export pins live in [`tests/test_scalars.py`][test-scalars]
+  / [`tests/base/test_init.py`][test-base-init].
 
-- converter and generated-output behavior live in [`tests/types/`][test-types];
-- generated mutation input behavior lives in
-  [`tests/mutations/`][test-mutations];
-- scalar registration / resolution and root-export pins live in
-  [`tests/test_scalars.py`][test-scalars] /
-  [`tests/base/test_init.py`][test-base-init];
-- live `/graphql/` tests are added **only** if implementation naturally exposes
-  a file/image field through an existing fakeshop app.
-
-Coverage uses **synthetic models** (a test-only model with `FileField` /
-`ImageField` columns over a `tmp_path` storage) — the [`spec-017`][spec-017]
-converter-table precedent. Per the
-[`examples/fakeshop/test_query/README.md`][test-query-readme] rule, a line
-reachable through a real fakeshop query belongs in live HTTP; a synthetic
-file/image model that exists only for a converter branch belongs in package
-tests. Per the [`docs/SPECS/NEXT.md`][next] "prefer the card" rule (the card DoD
-scopes to synthetic-model tests), the synthetic-model strategy wins and a live
-fakeshop file-upload surface is deferred to fakeshop activation
-([`TODO-BETA-062-0.1.5`][kanban]); the tension is recorded, not silently
-resolved.
+Neither tier substitutes for the other: a synthetic converter test cannot prove
+the SDL a client receives, and a live request cannot make Django storage raise on
+demand. The broader products/fakeshop activation remains
+[`TODO-BETA-066-0.1.5`][kanban]; it is not a precondition for the file/image
+surface's own live coverage.
 
 **Fixture shape.** Converter-only tests can use an unmanaged synthetic model with
 no table, but resolver and mutation tests need real rows and real storage side
@@ -1292,21 +1139,14 @@ pattern (`tests/test_relay_connection.py`, `tests/test_permissions.py`): a
 test-only model under a unique `app_label` with `managed = False`, given a real
 table via `connection.schema_editor().create_model(...)` (dropped in reverse on
 teardown), and `override_settings(MEDIA_ROOT=tmp_path)` (or a field-level temp
-`storage=`) so writes land in a throwaway directory. This keeps the file/image
-tests local to [`tests/`][test-types] with **no** migrations and **no** fakeshop
-app churn, and exercises `FieldFile.path` / `.size` / `.url` (and image
-dimensions) over honest temp storage.
+`storage=`) so writes land in a throwaway directory. This keeps the
+fault-injection tests local to [`tests/`][test-types] with **no** migrations,
+and exercises `FieldFile.path` / `.size` / `.url` (and image dimensions) over
+honest temp storage.
 
-Alternatives considered (and rejected):
-
-- **Add a live fakeshop file model + multipart HTTP test now.** Rejected: out of
-  scope for an S converter card.
-- **Mock the storage backend instead of a real `tmp_path` storage.** Rejected: a
-  real temp-dir storage exercises `FieldFile.path` / `.size` / `.url` honestly;
-  mock only the non-filesystem-`path` case, where a real backend is impractical,
-  to cover the
-  [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)
-  guard.
+Rationale companion — this Decision's two rejected alternatives, and the
+deliberation behind the two-tier split:
+[Decision 9][rationale-d9].
 
 ### Decision 10 — This card owns the final `0.0.11` version bump
 
@@ -1326,20 +1166,8 @@ aligns the version quintet:
 - the [`docs/GLOSSARY.md`][glossary] package-version line
 - `uv.lock` if it carries the package version
 
-Justification: `037` closes the `0.0.11` feature set, so it owns the cut —
-exactly the card `036` Decision 13 deferred to. The bump moves only after the
-mapping, tests, and docs are complete (Slice 4), never in Slice 1.
-
-Alternatives considered (and rejected):
-
-- **Defer again to a separate release-alignment card.** Rejected: no such WIP
-  card exists, and `036` already deferred to this joint cut; a second deferral
-  would orphan the bump.
-- **Treat `036` (DONE) as a co-WIP card and defer per the multi-card rule.**
-  Rejected: the NEXT.md rule keys on the `## In progress` column, where `037`
-  stands alone; a DONE card is not a WIP co-owner.
-- **Bump in Slice 1.** Rejected: the version should move only after the feature
-  and docs are complete.
+Rationale companion — this Decision's justification and its three rejected
+alternatives: [Decision 10][rationale-d10].
 
 ## Implementation plan
 
@@ -1348,7 +1176,7 @@ on both; Slice 4 is doc + version-cut only. Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — read output objects + `FIELD_OUTPUT_TYPE_MAP` + file-column resolver | [`types/converters.py`][types-converters] (resolver-backed `DjangoFileType` / `DjangoImageType` + `_safe_file_attr` + new `FIELD_OUTPUT_TYPE_MAP` + read-only `convert_field_output` wrapper; `convert_scalar` / `scalar_for_field` / `SCALAR_MAP` file rows stay scalar-only), [`types/base.py`][types-base] (`_build_annotations` calls `convert_field_output` + default-nullable file/image shape), [`types/resolvers.py`][types-resolvers] (define `_attach_file_resolvers` parent empty-file resolver), [`types/finalizer.py`][types-finalizer] (call `_attach_file_resolvers` in the relation-resolver loop, passing `consumer_authored_fields`), [`pyproject.toml`][pyproject] (add Pillow to the dev/test extras for image-dimension tests, unless the [Risks](#risks-and-open-questions) stand-in fallback is taken) | [`tests/types/test_converters.py`][test-types] (~11 — incl. `FilterSet` over `FileField` stays scalar) + [`tests/types/test_resolvers.py`][test-types] (~8 — empty→null, populated subfields, per-subfield isolation, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` gets no resolver) | `+190 / -10` |
+| 1 — read output objects + `FIELD_OUTPUT_TYPE_MAP` + file-column resolver | [`types/converters.py`][types-converters] (resolver-backed `DjangoFileType` / `DjangoImageType` + `_safe_file_attr` + new `FIELD_OUTPUT_TYPE_MAP` + read-only `convert_field_output` wrapper; `convert_scalar` / `scalar_for_field` / `SCALAR_MAP` file rows stay scalar-only), [`types/base.py`][types-base] (`_build_annotations` calls `convert_field_output` + default-nullable file/image shape), [`types/resolvers.py`][types-resolvers] (define `_attach_file_resolvers` parent empty-file resolver), [`types/finalizer.py`][types-finalizer] (call `_attach_file_resolvers` in the relation-resolver loop, passing `consumer_authored_fields`), [`pyproject.toml`][pyproject] (add Pillow to the dev dependency group for image-dimension tests) | [`tests/types/test_converters.py`][test-types] (~11 — incl. the filter-input delegation path over a `FileField` stays scalar) + [`tests/types/test_resolvers.py`][test-types] (~8 — empty→null, populated subfields, per-subfield isolation, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` gets no resolver) | `+190 / -10` |
 | 2 — `Upload` re-export + mutation input (+ verify write path) | [`scalars.py`][scalars] (re-export + docstring fix), [`mutations/inputs.py`][mutations-inputs] (seam → `Upload`), [`mutations/resolvers.py`][mutations-resolvers] (verify generic scalar path; branch only if a test proves a gap) | [`tests/test_scalars.py`][test-scalars] (~3 — incl. resolves with/without `strawberry_config()`) + [`tests/mutations/test_inputs.py`][test-mutations] (~6 — file→`Upload` required/optional, `| None`, lifted CR-6) + [`tests/mutations/test_resolvers.py`][test-mutations] (~5 — create/partial via the generic path, no `NotImplementedError`) | `+110 / -40` |
 | 3 — public exports + coverage hardening | [`__init__.py`][init] (3 exports + `__all__`) | [`tests/base/test_init.py`][test-base-init] (~3 exports) + storage/null/dimension hardening | `+50 / -0` |
 | 4 — docs + `0.0.11` version cut + card wrap | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban], version files ([`pyproject.toml`][pyproject], [`__init__.py`][init], [`tests/base/test_init.py`][test-base-init]) | `test_version` → `0.0.11` | `+90 / -45` |
@@ -1376,12 +1204,25 @@ nullable-subfield rationale need explanatory comments.
   **nullable by default**, independent of `null` / `blank`, unless
   [`Meta.required_overrides`][glossary-metarequired-overrides] forces the
   stricter contract.
-- **`Meta.required_overrides` on a blank file field.** Allowed, but the consumer
-  owns the invariant; if the row contains an empty value, Strawberry's ordinary
-  non-null violation is the correct signal ("contract, not data").
-- **Storage without local `path`.** `path` is nullable; a backend that cannot
-  provide a filesystem path degrades that subfield to `null`, not a top-level
-  failure.
+- **Nullability overrides on a file/image column.**
+  [`Meta.required_overrides`][glossary-metarequired-overrides] on a blank file
+  field is allowed, forcing the bare non-null object; the consumer owns the
+  invariant, and if the row contains an empty value Strawberry's ordinary
+  non-null violation is the correct signal ("contract, not data"). The mirror
+  direction is allowed too:
+  [`Meta.nullable_overrides`][glossary-metanullable-overrides] on a file column
+  is a redundant declaration the validator **accepts** and the annotation
+  ignores, since file/image output is already nullable by default. Both
+  directions are pinned through the public `Meta` surface rather than at the
+  converter seam, by
+  [`tests/types/test_base.py::test_meta_required_overrides_forces_non_null_file_output`][test-types],
+  [`::test_meta_required_overrides_forces_non_null_image_output`][test-types] and
+  [`::test_meta_nullable_overrides_on_a_file_column_is_a_no_op`][test-types],
+  each carrying an un-overridden sibling column in the same type as its control.
+- **Storage without local `path`.** The absolute filesystem `path` is not a
+  default subfield at all; on the opt-in `DjangoFilePathType` /
+  `DjangoImagePathType` it is nullable, so a backend that cannot provide a
+  filesystem path degrades that subfield to `null`, not a top-level failure.
 - **Missing file in storage.** `size` / `url` / `width` / `height` are nullable
   so a storage lookup failure degrades to a `null` subfield via the narrow catch
   (`ValueError` / `OSError` / storage `NotImplementedError`) on each subfield
@@ -1394,7 +1235,7 @@ nullable-subfield rationale need explanatory comments.
   relation-planned. This card guards storage-shaped failures (degrade-to-`null`)
   but does **not** cache or batch storage calls; selecting file metadata over a
   large connection is a read-side cost the consumer weighs
-  ([Risks](#risks-and-open-questions)).
+  ([Risks and open questions][rationale-risks]).
 - **Path-safety errors are not nulled.**
   `django.core.exceptions.SuspiciousFileOperation` from a corrupt / hostile
   stored name is **not** caught by `_safe_file_attr` (it is a
@@ -1405,8 +1246,9 @@ nullable-subfield rationale need explanatory comments.
   to `null` via `_safe_file_attr` when the stored image is missing / corrupt or
   the backend cannot read dimensions; they are not forced to validate the image
   during schema resolution. A consumer using `ImageField` already has Pillow
-  (Django requires it for the field); the Pillow **test** dependency is settled
-  in [Risks](#risks-and-open-questions).
+  (Django requires it for the field); `pyproject.toml` declares
+  `pillow>=10.0.0` in the `dev` dependency group so the dimension tests run
+  unconditionally ([Risks and open questions][rationale-risks]).
 - **Consumer scalar override.** A consumer annotation *or* `strawberry.field` on
   a file/image column lands in `consumer_authored_fields`, which the file-resolver
   attachment skips — so `attachment: str` bypasses both the `FIELD_OUTPUT_TYPE_MAP`
@@ -1431,49 +1273,73 @@ nullable-subfield rationale need explanatory comments.
   rejected with a field-keyed `FieldError` by the existing `_explicit_null_error`
   decode guard (omittable ≠ nullable); clearing with `null` is not guaranteed by
   this card unless the field is `null=True` and the shipped pipeline accepts it
-  ([Risks](#risks-and-open-questions)).
-- **Multipart transport.** The package exposes `Upload` without shipping a
-  test-client helper; consumers use Strawberry/Django's existing multipart
-  request handling until the `0.0.14` [`TestClient`][glossary-testclient] helper
-  lands.
+  ([Risks and open questions][rationale-risks]).
+- **Multipart transport.** This card exposes `Upload` and ships no
+  test-client helper of its own; consumers drive multipart requests through
+  Strawberry/Django's existing handling, or through the
+  [`TestClient`][glossary-testclient] helper `0.0.14` ships.
 - **`Upload` resolves without extra config.** `Upload` is in Strawberry's
   built-in `DEFAULT_SCALAR_REGISTRY`, so an `Upload`-annotated field resolves in
   any schema, with or without `config=strawberry_config()`. The config factory
   is still required by the package-custom [`BigInt`][glossary-bigint-scalar]
   scalar, which is absent from the default registry.
-- **No `DjangoType` `Meta` key added.** [`DEFERRED_META_KEYS`][types-base] /
-  `ALLOWED_META_KEYS` are byte-unchanged; the conversion is automatic from the
-  column type.
+- **No `DjangoType` `Meta` key added by this card.** The file/image
+  conversion is automatic from the column type, so this card leaves
+  [`DEFERRED_META_KEYS`][types-base] / `ALLOWED_META_KEYS` byte-unchanged. The
+  one file-specific key those sets carry, `filesystem_path_fields`, selects the
+  output object for an opted-in column and changes no conversion rule stated
+  here.
 
 ## Test plan
 
-Test placement follows the [`AGENTS.md`][agents] mirror rule; coverage uses
-**synthetic models** (a test-only model with `FileField` / `ImageField` columns
-over a `tmp_path` storage), with no live fakeshop surface
-([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
+Test placement follows the [`AGENTS.md`][agents] mirror rule and the two-tier
+split of
+[Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models):
+the public wire contract is earned over live `/graphql/` against the `scalars`
+app's `MediaSpecimen`, while the storage-fault and corrupt-dimension edges a
+live request cannot reach use **synthetic models** (a test-only model with
+`FileField` / `ImageField` columns over a `tmp_path` storage).
 
 - **Converter / map tests** ([`tests/types/test_converters.py`][test-types]):
   `FileField` → `DjangoFileType`, `ImageField` → `DjangoImageType` via
   `FIELD_OUTPUT_TYPE_MAP`, MRO precedence (incl. a consumer `ImageField`
   subclass), file/image output is `| None` by default (independent of `null` /
-  `blank`), `Meta.nullable_overrides` / `Meta.required_overrides` still win, `Meta.exclude`
-  remains the opt-out; **and a [`FilterSet`][glossary-filterset] over a synthetic
-  `FileField` still produces a scalar (`str`) filter input, never
-  `DjangoFileType`** (the P0 split regression guard).
+  `blank`), and the `force_nullable` tri-state still wins when passed to
+  `convert_field_output` directly; **and the package's own filter-input
+  delegation path over a synthetic `FileField` / `ImageField` still yields a
+  scalar (`str`), never `DjangoFileType`** — `scalar_for_field`,
+  [`filters/inputs.py`][filters-inputs] `_scalar_from_model_field` and the
+  [`SCALAR_MAP`][types-converters] rows are all pinned to `str` (the P0 split
+  regression guard). The pin is the delegation path rather than a materialized
+  [`FilterSet`][glossary-filterset], because django_filter's auto `Meta.fields`
+  filter for a bare `FileField` raises before package code runs.
+- **`Meta`-level override tests** ([`tests/types/test_base.py`][test-types]):
+  `Meta.nullable_overrides` / `Meta.required_overrides` reach the file/image
+  branch through the **public `Meta` surface**, not through a
+  `convert_field_output(force_nullable=…)` keyword — this is the contract's own
+  spelling, and pinning it only at the converter seam leaves the
+  `Meta` → `_build_annotations` → `convert_field_output` path unpinned. Pinned by
+  `test_meta_required_overrides_forces_non_null_file_output`,
+  `::test_meta_required_overrides_forces_non_null_image_output` and
+  `::test_meta_nullable_overrides_on_a_file_column_is_a_no_op`. Also here: the
+  consumer-annotation override (`attachment: str`) gets no generated resolver and
+  no object type, and `Meta.fields` / `Meta.exclude` remain the read-side
+  selectors.
 - **Generated output resolver tests**
   ([`tests/types/test_resolvers.py`][test-types]): a synthetic model with
-  non-empty file/image values resolves `name` / `path` / `size` / `url` (+
-  `width` / `height`) through schema execution; an empty file resolves the
-  object as `null` (including on a required `null=False, blank=False` column —
-  the default-nullable regression guard for the empty-required-file edge);
-  **per-subfield isolation** — a failing `path` returns `null`
-  while `url` / `name` still resolve, selecting one subfield at a time (each
-  subfield resolver guards independently, not the parent); the
+  non-empty file/image values resolves `name` / `size` / `url` (+
+  `width` / `height`, and `path` on a column opted into
+  `Meta.filesystem_path_fields`) through schema execution; an empty file
+  resolves the object as `null` (including on a required
+  `null=False, blank=False` column — the default-nullable regression guard for
+  the empty-required-file edge);
+  **per-subfield isolation** — on an opted-in column a failing `path` returns
+  `null` while `url` / `name` still resolve, selecting one subfield at a time
+  (each subfield resolver guards independently, not the parent); the
   consumer-annotation override (`attachment: str`) receives **no** generated
   resolver or object type (the attachment skips `consumer_authored_fields`).
   Image dimensions (`width` / `height`) are covered against a tiny valid
-  in-memory image via the dev-only Pillow dependency (or the lightweight stand-in
-  of the [Risks](#risks-and-open-questions) fallback) — never a Pillow-conditional
+  in-memory image via the dev-only Pillow dependency — never a Pillow-conditional
   `skip`, which would slip uncovered branches past `fail_under = 100`.
 - **Mutation input tests** ([`tests/mutations/test_inputs.py`][test-mutations]):
   replace the staged `NotImplementedError` tests with positive `Upload`
@@ -1500,9 +1366,14 @@ over a `tmp_path` storage), with no live fakeshop surface
   `DjangoFileType` / `DjangoImageType` / `Upload`; `test_version` moves to
   `0.0.11`
   ([Decision 10](#decision-10--this-card-owns-the-final-0011-version-bump)).
-- **Live HTTP tests.** None required unless implementation adds or discovers a
-  genuine fakeshop file/image field; do not add a fake upload domain solely for
-  coverage.
+- **Live HTTP tests** (`examples/fakeshop/test_query/test_uploads_api.py`): the
+  `scalars` app's `MediaSpecimen` file/image columns are exercised over
+  `/graphql/` — the read output objects and their subfields, the
+  default-nullable SDL shape on a required column, the empty-file object-`null`
+  case, the filesystem-`path` opt-in's absence and presence, the `Upload` input
+  SDL, and a real multipart upload. No fake upload domain is invented for
+  coverage; the model rides an existing app
+  ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 - **Cross-cutting — no regression.** The full suite is green at the 100%
   coverage gate (`fail_under = 100`); `ruff format` + `ruff check` are clean; no
   other converter row changes and no read-side regression for non-file scalars.
@@ -1545,7 +1416,7 @@ authorized.
   [`README.md`][readme] move the `Upload` scalar + generated file/image field
   typing from "Coming next (`0.0.11`)" to "Shipped today" — wording the **scalar
   and generated file/image mutation-field typing**, not full multipart HTTP
-  test-client ergonomics (those await the `0.0.14` [`TestClient`][glossary-testclient]) — and
+  test-client ergonomics (those belong to the `0.0.14` [`TestClient`][glossary-testclient]) — and
   move the README **Status** line from `0.0.10` to `0.0.11`; [`GOAL.md`][goal] —
   criterion 6's `Upload` / `FileField` / `ImageField` part ships for generated
   `DjangoMutation` inputs, while the `ModelForm` / `ModelSerializer` flavors in
@@ -1563,116 +1434,33 @@ authorized.
   `[Unreleased]` → `0.0.11` bullets **only when the Slice 4 maintainer prompt
   explicitly requests it**.
 - **Slice 4 — card wrap**: [`KANBAN.md`][kanban] moves
-  [`TODO-ALPHA-037-0.0.11`][kanban] to Done with the next `DONE-NNN-0.0.11` id,
+  [`TODO-ALPHA-037-0.0.11`][kanban] to Done as [`DONE-037-0.0.11`][kanban],
   keeping its `SpecDoc` pointing at the canonical card spec (a `SpecDoc` DB edit
   re-rendered via `scripts/build_kanban_md.py`, never a hand-edit).
 
 ## Risks and open questions
 
-Each item names a preferred answer for the `0.0.11` cut and a fallback if
-implementation reveals it is wrong.
-
-- **Clearing an existing file via mutation input.** Preferred answer
-  ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)):
-  omitted upload leaves unchanged; provided upload replaces; an explicit `null`
-  on a `null=False` file column is already a field-keyed `FieldError`
-  (`_explicit_null_error`), so it can never be an accidental clear; clearing is
-  not promised unless a `null=True` field plus `null` assignment already works
-  through the shipped mutation pipeline. Fallback: add an explicit clear-file
-  sentinel in a future form/serializer flavor if real users need it — do not
-  overload empty upload values in this card.
-- **Output subfield nullability vs upstream parity.** Preferred answer
-  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)):
-  `path` / `size` / `url` / `width` / `height` nullable (storage-safe), `name`
-  non-null — a deliberate, documented divergence from upstream's all-non-null
-  `path: str`. Fallback: if nullable subfields prove awkward in
-  Strawberry/Django, keep `path` nullable at minimum and document
-  local-storage-only behavior for the others, but never let an empty/unreadable
-  file descriptor raise.
-- **Where to define `DjangoFileType` / `DjangoImageType`.** Preferred answer
-  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)):
-  define them in [`types/converters.py`][types-converters], where the
-  field-class mapping lives, and root-export them. Fallback: a tiny
-  `types/files.py` module if importing them from `converters.py` creates a cycle
-  — do not create a broad `fields/` package that collides conceptually with the
-  planned `FieldSet`.
-- **Image dimension dependency + test strategy.** Production `width` / `height`
-  stay nullable and resolve from Django's image-file object
-  (`ImageFieldFile.width` / `.height`) through the same `_safe_file_attr` guard.
-  The card must pick a *test* strategy up front, because Django's **model**
-  `ImageField` and its dimension accessors require Pillow, and the project does
-  **not** currently declare Pillow in runtime or dev dependencies. **Preferred
-  answer: add Pillow as a dev/test-only dependency** — it joins `pytest-django`
-  in the dev extras (the package itself never imports it, so no runtime surface
-  changes) — and exercise `width` / `height` against a tiny valid in-memory image
-  (a few-byte PNG) over the synthetic-model `tmp_path` storage. Fallback: if
-  adding Pillow is undesirable, keep the production fields nullable and unit-test
-  the resolver logic with a lightweight stand-in object exposing `width` /
-  `height`, marking real image parsing out of scope. Either way, do **not**
-  `pytest.skip` the dimension tests when Pillow is absent: under
-  `fail_under = 100` a conditional skip would let the gate pass over uncovered
-  dimension branches. Pillow (preferred) or the stand-in (fallback) makes the
-  coverage unconditional.
-- **File-column filtering contract.** Preferred answer
-  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)):
-  file columns keep their scalar `str` filter mapping in `SCALAR_MAP` (no
-  regression) — i.e. filtering the stored **name / path string**, not file
-  metadata (`url` / `size` / `width` / `height`) — and the read-output objects
-  live in a separate `FIELD_OUTPUT_TYPE_MAP`, so no output type leaks into a
-  [`FilterSet`][glossary-filterset] input. Fallback: if string-filtering a file
-  column proves meaningless, reject file/image filters with a
-  [`ConfigurationError`][glossary-configurationerror] once a deliberate
-  file-filter contract is designed — a follow-up, not this card.
-- **Path-safety exception policy.** Preferred answer
-  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)):
-  `SuspiciousFileOperation` is **not** folded into the `_safe_file_attr`
-  degrade-to-`null` catch; it propagates as a top-level error so a
-  path-traversal / hostile-name condition stays visible. Fallback: if operators
-  prefer graceful degradation, add it to the catch set — but the default is
-  visibility.
-- **Storage-metadata read cost.** Preferred answer
-  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)):
-  selecting `size` / `url` / `width` / `height` asks Django storage for metadata
-  per selected object and subfield; the framework guards storage-shaped failures
-  but does **not** cache or batch storage calls in this card, and the optimizer
-  cannot prefetch object-store metadata. Fallback: a batching / caching layer (or
-  a storage-metadata dataloader) is a follow-up if profiling shows it matters —
-  not this card.
-- **Card conflict — stale `"Pairs with 028"` note.** The card's "Other" section
-  says "Pairs with 028", but `028` is the
-  [ordering subsystem][glossary-orderset] (`DONE-028-0.0.8`), unrelated to
-  uploads. Preferred reading: the genuine pairing is with the mutations card
-  [`DONE-036-0.0.11`][kanban] (whose input seam this card fills) — the `028`
-  reference is a stale copy-paste. Recorded per the [`docs/SPECS/NEXT.md`][next]
-  "prefer the card, surface the conflict" rule.
-- **Card conflict — stale `mutations/ (planned)` predicted file.** The card's
-  "Predicted files" annotates
-  `django_strawberry_framework/mutations/ (planned)`, but `mutations/` shipped
-  with [`DONE-036-0.0.11`][kanban]. Preferred reading: the directory exists;
-  this card edits [`mutations/inputs.py`][mutations-inputs] /
-  [`mutations/resolvers.py`][mutations-resolvers] in place.
-- **Card conflict — stale `TODO-ALPHA-035-0.0.11` in the `scalars.py`
-  docstring.** [`scalars.py`][scalars] #"Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here."
-  names `035`, but `035` is the
-  optimizer-hardening card; the real `Upload` owner is this card, `037`.
-  Preferred reading: a stale number — Slice 2 corrects the docstring to
-  `TODO-ALPHA-037-0.0.11`. (The [`mutations/inputs.py`][mutations-inputs] seam
-  already names `037` correctly.)
+Every question this card opened is answered by a Decision above. The
+deliberation that answered them — each question's preferred answer for the
+`0.0.11` cut, its fallback if implementation proved the preferred answer
+wrong, and the three card-citation corrections the cut chose to record rather
+than silently reconcile — is recorded in the rationale companion under
+[Risks and open questions][rationale-risks].
 
 ## Out of scope (explicitly tracked elsewhere)
 
 - **Multipart request helper** — [`TestClient`][glossary-testclient]
-  (`TODO-ALPHA-043-0.0.14`); depends on this scalar existing but is not
-  implemented here.
+  (`0.0.14`, card [`DONE-043-0.0.14`][kanban]); it depends on this scalar
+  existing and is not implemented here.
 - **Form-based mutations** ([`DjangoFormMutation`][glossary-djangoformmutation])
   — `0.0.12` (`DONE-038-0.0.12`); reuses `Upload` through the same
   scalar-map helper where form fields need it.
 - **DRF serializer mutations + auth mutations**
   ([`SerializerMutation`][glossary-serializermutation]) — `0.0.13`; serializer
   upload handling builds on this scalar.
-- **A live fakeshop file-upload surface** — deferred to fakeshop activation
-  ([`TODO-BETA-062-0.1.5`][kanban]); this card covers both directions with
-  synthetic-model tests
+- **The broader products/fakeshop activation** — [`TODO-BETA-066-0.1.5`][kanban].
+  The file/image surface's own live coverage is not part of it: this card ships
+  the `MediaSpecimen` columns and their live `/graphql/` tests
   ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 - **Field-level read gates** — `FieldSet` / per-field permission hooks in
   `0.1.1`; file-metadata permissions are not special-cased here.
@@ -1688,16 +1476,20 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 
 **Spec + companion CSV**
 
-1. `docs/spec-037-upload_file_image_mapping-0_0_11.md` (the canonical card spec)
-   and its companion `spec-037-upload_file_image_mapping-0_0_11-terms.csv`
+1. `docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md` (the canonical card
+   spec) and its companions
+   `docs/SPECS/appx/spec-037-upload_file_image_mapping-0_0_11-terms.csv` and
+   `docs/SPECS/appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md`
    exist;
-   `uv run python scripts/check_spec_glossary.py --spec docs/spec-037-upload_file_image_mapping-0_0_11.md`
+   `uv run python scripts/check_spec_glossary.py --spec docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md`
    reports `OK: <N> terms`.
 
 **Slice 1 — read output objects**
 
 2. [`types/converters.py`][types-converters] defines `DjangoFileType` (`name`
-   non-null; `path` / `size` / `url` nullable, **resolver-backed**) and
+   non-null; `size` / `url` nullable, **resolver-backed**; no default `path`
+   subfield — it is published only on the opt-in `DjangoFilePathType` /
+   `DjangoImagePathType`) and
    `DjangoImageType(DjangoFileType)` (+ nullable `width` / `height`) and adds a
    new `FIELD_OUTPUT_TYPE_MAP` (`FileField` → `DjangoFileType`, `ImageField` →
    `DjangoImageType`) consulted by a new read-only `convert_field_output` wrapper
@@ -1762,12 +1554,12 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
    breaking-wire-format change, and moves the package-version line to `0.0.11`;
    [`docs/README.md`][docs-readme] / [`README.md`][readme] move the `Upload`
    scalar **and generated file/image mutation-field typing** (not full multipart
-   HTTP test-client ergonomics, which await the `0.0.14` [`TestClient`][glossary-testclient]) to
+   HTTP test-client ergonomics, which belong to the `0.0.14` [`TestClient`][glossary-testclient]) to
    "Shipped today" and the Status to `0.0.11`; [`GOAL.md`][goal] /
    [`TODAY.md`][today] reflect that scalar + generated-typing capability and the
    rewritten scalar table; [`CHANGELOG.md`][changelog] carries the bullets **only when the
    Slice 4 maintainer prompt explicitly requests the edit**;
-   [`KANBAN.md`][kanban] records the card `DONE-NNN-0.0.11` with the `SpecDoc`
+   [`KANBAN.md`][kanban] records the card [`DONE-037-0.0.11`][kanban] with the `SpecDoc`
    reference at the canonical card spec (kanban DB + re-render).
 7. **The `0.0.11` version bump lands in this card**
    ([Decision 10](#decision-10--this-card-owns-the-final-0011-version-bump)):
@@ -1812,7 +1604,6 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 [glossary-metamodel]: ../GLOSSARY.md#metamodel
 [glossary-metanullable-overrides]: ../GLOSSARY.md#metanullable_overrides
 [glossary-metarequired-overrides]: ../GLOSSARY.md#metarequired_overrides
-[glossary-orderset]: ../GLOSSARY.md#orderset
 [glossary-relation-handling]: ../GLOSSARY.md#relation-handling
 [glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
 [glossary-scalar-field-override-semantics]: ../GLOSSARY.md#scalar-field-override-semantics
@@ -1825,11 +1616,23 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 
 <!-- docs/SPECS/ -->
 [next]: NEXT.md
+[rationale-d10]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-10--this-card-owns-the-final-0011-version-bump
+[rationale-d1]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d2]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-2--card-scope-boundary-fileimage-conversion-only-not-transport-or-storage-abstraction
+[rationale-d3]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream
+[rationale-d4]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability
+[rationale-d5]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-5--re-export-upload-rather-than-register-it
+[rationale-d6]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload
+[rationale-d7]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-7--public-surface-three-net-new-root-exported-symbols
+[rationale-d8]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-8--no-new-meta-key-no-new-setting-no-dynamic-storage-policy
+[rationale-d9]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#decision-9--test-placement-package-tests-own-synthetic-fileimage-models
+[rationale-risks]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md#risks-and-open-questions
 [spec-001]: spec-001-django_types-0_0_1.md
 [spec-017]: spec-017-deferred_scalars-0_0_6.md
 [spec-025]: spec-025-scalar_map_helper-0_0_7.md
 [spec-026]: spec-026-scalar_conversion_fakeshop-0_0_7.md
 [spec-036]: spec-036-mutations-0_0_11.md
+[spec-037-rationale]: appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md
 
 <!-- docs/builder/ -->
 

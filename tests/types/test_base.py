@@ -2167,6 +2167,63 @@ def _make_file_override_model_type(model, *, namespace=None):
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
 
 
+# The three tests below reuse ``_make_path_optin_model`` / ``_make_path_optin_type``
+# from the next block: that pair is the only fixture carrying a file column, an
+# image column and a scalar in one model, which is what a per-column override
+# needs an unnamed sibling for.
+
+
+def test_meta_required_overrides_forces_non_null_file_output():
+    """``Meta.required_overrides`` on a ``FileField`` yields the BARE ``DjangoFileType``.
+
+    The file/image output object is nullable by default (spec-037 Decision 4), and
+    ``required_overrides`` is the documented opt-out from that default. This pins
+    the whole public path - ``Meta`` through ``_build_annotations``'
+    ``force_nullable=False`` into ``convert_field_output``'s file branch - where
+    the converter-level tests pin only the ``force_nullable`` keyword one layer
+    below the contract's own spelling.
+
+    ``preview`` is the control: an unnamed sibling file/image column in the SAME
+    type stays ``| None``, so a passing first assertion cannot be explained by
+    "file columns are non-null".
+    """
+    model = _make_path_optin_model()
+    override_type = _make_path_optin_type(model, required_overrides=("attachment",))
+    finalize_django_types()
+
+    assert override_type.__annotations__["attachment"] is DjangoFileType
+    assert override_type.__annotations__["preview"] == (DjangoImageType | None)
+
+
+def test_meta_required_overrides_forces_non_null_image_output():
+    """The override reaches an ``ImageField`` too, so the branch is not ``FileField``-only.
+
+    ``attachment`` is the control in the mirrored direction: the unnamed file
+    column stays ``| None`` while the named image column loses it.
+    """
+    model = _make_path_optin_model()
+    override_type = _make_path_optin_type(model, required_overrides=("preview",))
+    finalize_django_types()
+
+    assert override_type.__annotations__["preview"] is DjangoImageType
+    assert override_type.__annotations__["attachment"] == (DjangoFileType | None)
+
+
+def test_meta_nullable_overrides_on_a_file_column_is_a_no_op():
+    """``nullable_overrides`` on an already-nullable file column changes nothing.
+
+    The redundant-declaration direction for the file branch, matching
+    ``test_override_redundant_is_no_op``'s shape for scalars: the output object is
+    already ``| None`` by default, so naming it must neither raise nor widen it
+    twice.
+    """
+    model = _make_path_optin_model()
+    override_type = _make_path_optin_type(model, nullable_overrides=("attachment",))
+    finalize_django_types()
+
+    assert override_type.__annotations__["attachment"] == (DjangoFileType | None)
+
+
 # ---------------------------------------------------------------------------
 # Meta.filesystem_path_fields (spec-048 Decision 2)
 # ---------------------------------------------------------------------------

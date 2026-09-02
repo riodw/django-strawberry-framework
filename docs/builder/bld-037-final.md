@@ -230,6 +230,9 @@ untracked in those trees: 1
 
 All four prior artifacts were read **in full, in order**, before anything above was written: `bld-037-slice-0-rationale_extraction.md` (278 lines), `bld-037-slice-1-code_conformance.md` (846), `bld-037-slice-2-spec_reconciliation.md` (399), `bld-037-integration.md` (372). All four carry `Status: final-accepted`. Plus `AGENTS.md`, `START.md`, `docs/builder/BUILD.md`, `docs/builder/ARTIFACT.md`, `docs/builder/worker-1.md`, `docs/builder/bld-003-final.md`, the build plan, the active spec and its companion, and `docs/builder/worker-memory/worker-1.md` (read first). No other worker's memory file was opened.
 
+> **The four artifacts named in this paragraph were retired when the cycle closed** and are recoverable in full from the cycle's commit: `git show f9ae3f93:<path>`. They were read from disk at the time this pass ran; the paths are commit-resolvable, not disk-resolvable.
+
+
 **The build plan's `spec-048` version, verified corrected.** The integration pass's `### Routed to the maintainer` item 4 recorded that the plan's `## Worker-0 verification pass` D1 named `spec-048` as `0.0.17`, a version the card never shipped at, and that the plan was not writable by that pass. Re-measured here:
 
 ```shell
@@ -242,6 +245,8 @@ grep -n '0\.0\.17' docs/builder/build-037-upload_file_image_mapping-0_0_11.md \
 The plan's D1 now reads `` `spec-048` (commit `567cc6d0`) ``, with no version at all. **Worker 0 corrected it; the corpus carries zero `0.0.17` occurrences outside the integration artifact's own record of the finding** (2 lines, which are the historical record and correctly retain the wrong value they describe). Catalog item 4 is closed on this measurement.
 
 ### Deferred work catalog
+
+> **Provenance paths in this catalog are commit-resolvable.** Every `bld-037-*.md` source cited below was retired when the cycle closed; recover any of them with `git show f9ae3f93:<path>`. The catalog's own figures were re-derived in this pass, so no item depends on reading the artifact it names.
 
 The next spec author's reading list. Every per-slice and integration artifact's `### Notes for Worker 1 (spec reconciliation)`, `### What looks solid`, `### DRY findings`, `### Routed to the maintainer` and `### Not a finding` sections were walked. **Five items.**
 

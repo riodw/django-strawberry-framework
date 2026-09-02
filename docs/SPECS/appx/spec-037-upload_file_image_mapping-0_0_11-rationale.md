@@ -30,9 +30,10 @@ the spec, stated directly and without chronology.
 
 Created by pre-flight step 7 of the `037` residual-reconciliation cycle, whose
 plan is [`docs/builder/build-037-upload_file_image_mapping-0_0_11.md`][build-037]
-and whose record of the move itself is
-[`docs/builder/bld-037-slice-0-rationale_extraction.md`][bld-037-slice-0] (a
-per-cycle scratch artifact that closes with the cycle). `spec-037` shipped in
+and whose record of the move itself was the per-cycle artifact
+`docs/builder/bld-037-slice-0-rationale_extraction.md`, retired when that cycle
+closed and recoverable at
+`git show f9ae3f93:docs/builder/bld-037-slice-0-rationale_extraction.md`. `spec-037` shipped in
 `0.0.11` with a [`-terms.csv`][spec-037-terms] companion and no `-rationale.md`
 sibling; this file closes that gap. Nothing in it is new reasoning: every passage
 below was cut from the spec in the same pass that created this file, except the
@@ -962,7 +963,6 @@ Findings and provenance that belong to no single Decision.
 [spec-037]: ../spec-037-upload_file_image_mapping-0_0_11.md
 
 <!-- docs/builder/ -->
-[bld-037-slice-0]: ../../builder/bld-037-slice-0-rationale_extraction.md
 [build-037]: ../../builder/build-037-upload_file_image_mapping-0_0_11.md
 [build-md]: ../../builder/BUILD.md
 

@@ -29,7 +29,7 @@ the spec, stated directly and without chronology.
 ## Provenance of this record
 
 Created by Slice 0 of the `038` residual-reconciliation cycle, whose plan is
-[`docs/builder/build-038-form_mutations-0_0_12.md`][build-038] and whose record of
+[`docs/builder/DONE/build-038-form_mutations-0_0_12.md`][build-038] and whose record of
 the move itself is the per-cycle artifact
 `docs/builder/bld-038-slice-0-rationale_extraction.md`,
 retired when that cycle closed and recoverable at
@@ -1226,7 +1226,7 @@ Findings and provenance that belong to no single Decision.
 [spec-038]: ../spec-038-form_mutations-0_0_12.md
 
 <!-- docs/builder/ -->
-[build-038]: ../../builder/build-038-form_mutations-0_0_12.md
+[build-038]: ../../builder/DONE/build-038-form_mutations-0_0_12.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

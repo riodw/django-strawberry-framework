@@ -192,7 +192,7 @@ def cached_build_input(
 
     The promoted guard-before-cache-lookup core for flavors whose cache key is
     known BEFORE the build (today: the form ``build_input`` seam). The
-    load-bearing ordering (spec-038 Decision 7 P2 / spec-039 Decision 7): the
+    load-bearing ordering (spec-038 Decision 7 / spec-039 Decision 7): the
     create-required-narrowing ``guard`` runs PER declaration, BEFORE the
     per-shape cache lookup, so a waiving mutation (guard a no-op, having
     overridden the construction hook) that materializes a narrowed shape FIRST

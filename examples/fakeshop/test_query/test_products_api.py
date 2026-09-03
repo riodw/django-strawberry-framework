@@ -2910,9 +2910,12 @@ def test_get_query_with_pathologically_nested_param_returns_400_not_500(
 # =============================================================================
 # Form-mutation live surface (spec-038 / Decision 12). The products
 # schema exposes `DjangoModelFormMutation` (`createItemViaForm` /
-# `updateItemViaForm` over `ItemModelForm`, `createItemWithFileViaForm` over
-# `ItemFileModelForm`, `createStampedItemViaForm` over `StampedItemModelForm`)
-# and a plain `DjangoFormMutation` (`submitContact` over `ContactForm`). Every
+# `updateItemViaForm` over `ItemModelForm`, `createItemWithFileViaForm` /
+# `updateItemWithFileViaForm` over `ItemFileModelForm`,
+# `createDefaultCategoryItemViaForm` over `DefaultCategoryItemModelForm`,
+# `createStampedItemViaForm` over `StampedItemModelForm`) and plain
+# `DjangoFormMutation`s (`submitContact` over `ContactForm`, `submitPing` over
+# `PingForm`) - eight fields in all, the count this comment must keep. Every
 # test seeds via `seed_data` / `create_users` / `seed_cascade_split` first line
 # and reuses the existing reload fixture + `_post_graphql` / `_login_with_perm` /
 # `_global_id` helpers. The `ModelForm` wire envelope is
@@ -2980,7 +2983,7 @@ def test_create_item_via_form_happy_path():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_via_form_category_id_writes_through_form_category_field():
-    """`categoryId` validates + writes through the form's `category` field (P1 reverse map).
+    """`categoryId` validates + writes through the form's `category` field.
 
     The created `Item.category_id` equals the submitted category pk, and the only
     channel the test query offers for setting it is the generated `categoryId` input
@@ -3152,7 +3155,7 @@ def test_update_item_via_form_partial_update_preserves_category_and_description(
     assert result["errors"] == []
     item.refresh_from_db()
     assert item.name == "PreserveAfter"
-    # The unprovided FK + scalar are reconstructed (not dropped) - the P1 preservation.
+    # The unprovided FK + scalar are reconstructed (not dropped) - the partial-update preservation.
     assert item.category_id == original_category_id
     assert item.description == "preserve this description"
 
@@ -3375,7 +3378,7 @@ def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found(
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
-    """RIGHT-PATH / LOAD-BEARING (P1): a permitted writer cannot attach a `Category` they cannot SEE.
+    """RIGHT-PATH / LOAD-BEARING: a permitted writer cannot attach a `Category` they cannot SEE.
 
     `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user granted
     `add_item` cannot see it, so `createItemViaForm(categoryId=<private cat gid>)` is a
@@ -3437,7 +3440,7 @@ def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
-    """A raw `django.test.Client` multipart upload to a form-backed `Upload` field (P1 file-routing).
+    """A raw `django.test.Client` multipart upload to a form-backed `Upload` field.
 
     Mirrors `test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`'s
     transport: under `override_settings(MEDIA_ROOT=tmp_path)`, a permitted caller
@@ -3513,8 +3516,175 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path):
+    """A `name`-only `updateItemWithFileViaForm` leaves the stored file byte-identical.
+
+    The preserve half of the file contract, over real HTTP. The row is created with a
+    multipart upload, then updated with `name` alone: the partial reconstruction
+    contributes NO key for `attachment`, so the bound `ItemFileModelForm(instance=...)`
+    resolves it from `initial` - never re-supplied from the stored relative path and
+    never cleared. **Load-bearing:** the new `name` landed, and the stored
+    `attachment.name` plus its bytes are unchanged.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item", "change_item")
+
+    create_mutation = (
+        "mutation($d: ItemFileModelFormInput!) { createItemWithFileViaForm(data: $d) { "
+        "node { id name } errors { field messages } } }"
+    )
+    operations = {
+        "query": create_mutation,
+        "variables": {
+            "d": {
+                "name": "PreservedFormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+                "attachment": None,
+            },
+        },
+    }
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        # Raw-multipart exemption (spec-043), as in the upload sibling above: the
+        # create leg needs the hand-built {operations, map, "0"} envelope to attach
+        # a file at all. The update leg below is an ordinary JSON POST.
+        response = client.post(
+            "/graphql/",
+            data={
+                "operations": json.dumps(operations),
+                "map": json.dumps({"0": ["variables.d.attachment"]}),
+                "0": SimpleUploadedFile(
+                    "keepme.txt",
+                    b"bytes that must survive",
+                    content_type="text/plain",
+                ),
+            },
+        )
+        assert response.status_code == 200
+        created_payload = response.json()
+        assert "errors" not in created_payload, created_payload
+        created_result = created_payload["data"]["createItemWithFileViaForm"]
+        assert created_result["errors"] == []
+        created = models.Item.objects.get(name="PreservedFormWidget")
+        stored_name = created.attachment.name
+        assert stored_name.endswith("keepme.txt")
+
+        response = _post_graphql(
+            "mutation($id: ID!, $d: ItemFileModelFormPartialInput!) { "
+            "updateItemWithFileViaForm(id: $id, data: $d) { "
+            "node { name } errors { field messages } } }",
+            client=client,
+            variables={
+                "id": created_result["node"]["id"],
+                "d": {"name": "PreservedFormWidgetRenamed"},
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        result = payload["data"]["updateItemWithFileViaForm"]
+        assert result["errors"] == []
+        assert result["node"] == {"name": "PreservedFormWidgetRenamed"}
+
+        created.refresh_from_db()
+        assert created.name == "PreservedFormWidgetRenamed"
+        assert created.attachment.name == stored_name
+        # Read + close the handle so the suite's `-W error` does not catch a leaked
+        # file finalizer (the FieldFile leaves the underlying file open after read()).
+        with created.attachment.open("rb") as handle:
+            assert handle.read() == b"bytes that must survive"
+
+
+_CREATE_DEFAULT_CATEGORY_ITEM_VIA_FORM = (
+    "mutation($d: DefaultCategoryItemModelFormInput!) { "
+    "createDefaultCategoryItemViaForm(data: $d) { "
+    "node { name } errors { field messages } } }"
+)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_default_category_item_via_form_injects_the_default_category():
+    """`get_form_kwargs` is what supplies `category`, and the created row's FK proves it.
+
+    The positive leg of the write-time pair. `DefaultCategoryItemModelFormInput` carries
+    only `name` - `category` is narrowed out of `Meta.fields` - so a created row whose
+    `category_id` is the app's default category can only have been given that FK by
+    `CreateDefaultCategoryItemViaForm.get_form_kwargs`. **Load-bearing:** without this
+    row the pair does not distinguish its driver, because `Item.category` is non-nullable
+    and `DefaultCategoryItemModelForm.__init__`'s `if category is not None:` guard is
+    silent - a broken injection still passes `form.is_valid()` and still raises an
+    `IntegrityError` at `save()` (NOT NULL instead of unique), which
+    `save_or_field_errors` maps to the same `"__all__"` envelope the negative row below
+    asserts. The equality is a real selection rather than the only possibility: another
+    `Category` with a different pk exists, and `get_form_kwargs` picks the lowest.
+    """
+    create_users(1)
+    seed_data(1)
+    default_category = models.Category.objects.order_by("pk").first()
+    assert models.Category.objects.exclude(pk=default_category.pk).exists()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_DEFAULT_CATEGORY_ITEM_VIA_FORM,
+        client=client,
+        variables={"d": {"name": "RaceFormFresh"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createDefaultCategoryItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "RaceFormFresh"}
+
+    created = models.Item.objects.get(name="RaceFormFresh")
+    assert created.category_id == default_category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_default_category_item_via_form_write_time_integrity_error_uses_envelope():
+    """A post-validation `form.save()` `IntegrityError` returns the envelope, not a top-level error.
+
+    `DefaultCategoryItemModelForm` narrows `category` out of `Meta.fields`, so Django's
+    `_get_validation_exclusions` drops it and `_post_clean`'s `validate_constraints()`
+    never checks `unique_item_per_category`; the mutation's `get_form_kwargs` injects the
+    default category. A duplicate `name` under that category therefore passes
+    `form.is_valid()` and fails only at the INSERT - the real write-time race, driven with
+    no mock. **Load-bearing:** the collision is the save-time mapper's own
+    `"A database constraint was violated."` on the `"__all__"` sentinel and NOT a
+    field-level error, which is what separates this row from the validation-time
+    `validate_constraints` row above. It is the negative leg of a pair: the positive row
+    above pins that the injected FK is what makes the row saveable at all, so a broken
+    `get_form_kwargs` cannot leave both rows green.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.order_by("pk").first()
+    existing = models.Item.objects.create(name="RaceFormDup", category=category)
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_DEFAULT_CATEGORY_ITEM_VIA_FORM,
+        client=client,
+        variables={"d": {"name": existing.name}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createDefaultCategoryItemViaForm"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "__all__"
+    # The save-time mapper's wording - proof the row passed validation and failed at
+    # the write, rather than being caught by `validate_constraints`.
+    assert result["errors"][0]["messages"] == ["A database constraint was violated."]
+    assert models.Item.objects.filter(name="RaceFormDup", category=category).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
-    """A `get_form_kwargs` override injecting `user` drives a kwarg-requiring form (P2).
+    """A `get_form_kwargs` override injecting `user` drives a kwarg-requiring form.
 
     `StampedItemModelForm.__init__` REQUIRES a `user` kwarg and its `clean()` requires
     `user.is_authenticated`; `CreateStampedItemViaForm.get_form_kwargs` injects

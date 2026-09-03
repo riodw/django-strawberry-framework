@@ -136,7 +136,7 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # ``(input_cls, field_specs)`` pair (spec-038): the reverse-map
 # ``field_specs`` MUST survive the dedupe so the bind can stash them on the mutation
 # (``_input_field_specs``) for the decode - caching only ``input_cls`` would
-# discard the load-bearing P1 reverse map. Cleared at the start of
+# discard the load-bearing decode reverse map. Cleared at the start of
 # ``bind_form_mutations()`` and co-cleared from ``registry.clear()`` so a stale class
 # from a prior (failed or re-run) finalize never leaks. Both flavors' ``build_input``
 # consult it via ``_cached_build_form_input``.
@@ -217,7 +217,7 @@ def _cached_build_form_input(
     (``guard_create_required_fields``) runs PER declaration, BEFORE the cache
     lookup, so a waiving mutation that materializes a narrowed shape first cannot
     suppress the guard for a later non-waiving mutation reusing the cached shape
-    (the cache key excludes ``guard_required`` - spec-038 Decision 7 P2).
+    (the cache key excludes ``guard_required`` - spec-038 Decision 7).
     The create-shaped kinds (``CREATE`` / ``FORM``) then route through
     ``build_form_inputs`` (with ``guard_required=False`` - already guarded), and
     only the matching input + its specs are returned (the partial it also builds is
@@ -226,7 +226,7 @@ def _cached_build_form_input(
 
     Returns the ``(input_cls, field_specs)`` pair so the reverse-map specs
     survive the per-shape dedupe and reach the bind's ``_input_field_specs`` stash
-    (spec-038 - the P1 decode reverse map).
+    (spec-038 Decision 7 - the decode reverse map).
     """
     effective = _resolve_effective_form_field_names(
         form_class,
@@ -241,7 +241,7 @@ def _cached_build_form_input(
     # (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
     # that materializes this shape FIRST must not suppress the guard for a later
     # non-waiving mutation reusing the same cached shape - the guard is tied to the
-    # declaration, not the built input shape (spec-038 Decision 7 P2). The create
+    # declaration, not the built input shape (spec-038 Decision 7). The create
     # shape rejects ANY dropped required field; the partial (update) shape rejects
     # only dropped required COLUMN-LESS fields - a model-backed
     # required field is widened optional and reconstructed from the row, but a
@@ -646,7 +646,7 @@ class DjangoModelFormMutation(DjangoMutation):
         override injects whatever fields a narrowing dropped, so the guard trusts it.
         The reverse-map ``field_specs`` are stashed on the mutation
         (``cls._input_field_specs``) so the decode can produce a
-        form-field-keyed payload (the P1 reverse map).
+        form-field-keyed payload (the decode reverse map).
         """
         del primary_type  # the form input derives from the form, not the model primary.
         return _build_and_stash_form_input(
@@ -756,7 +756,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
           ``ModelForm`` with a confusing generic message, and a let-through
           ``ModelForm`` would silently ``form.save()`` with no object slot / no
           ``DjangoModelPermission`` default / no optimizer re-fetch, defeating the
-          two-base split - P2).
+          two-base split).
         - **``form_class`` not a ``forms.Form``** - the general type gate after the
           targeted ``ModelForm`` reject, via ``require_subclass``.
         - **any ``Meta.operation``** - rejected outright (a model-less mutation has
@@ -770,7 +770,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
           explicit ``permission_classes = []`` opt-out (Decision 11).
 
         The snapshot carries ``model=None`` + the ``"form"`` operation sentinel +
-        ``form_class`` (Decision 7 P2 - the fixed shape-identity component a plain
+        ``form_class`` (spec-038 Decision 7 - the fixed shape-identity component a plain
         form carries in place of a model operation).
         """
         name = cls.__name__
@@ -814,7 +814,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             base_label="DjangoFormMutation",
             expected_label="forms.Form",
         )
-        # Check ``ModelForm`` FIRST (Edge case P2): ``forms.ModelForm`` is NOT a
+        # Check ``ModelForm`` FIRST (the plain-base edge case): ``forms.ModelForm`` is NOT a
         # subclass of ``forms.Form`` - both are siblings under ``forms.BaseForm`` -
         # so a bare ``issubclass(_, forms.Form)`` gate would reject a ``ModelForm``
         # with a confusing "not a Form" message. The targeted reject names the
@@ -906,7 +906,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         ``guard_required`` is waived when the concrete mutation overrides
         ``get_form_kwargs`` / ``get_form`` (spec-038 waiver). The
         reverse-map ``field_specs`` are stashed on the mutation for the
-        decode (the P1 reverse map).
+        decode.
         """
         del primary_type
         return _build_and_stash_form_input(

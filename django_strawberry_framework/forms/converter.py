@@ -63,7 +63,7 @@ from ..utils.converters import (
 # ``utils/inputs.py`` (one conceptual enum, not a per-flavor
 # copy); re-exported here (the ``as`` form marks the explicit re-export) so the
 # form resolver, the input builder, and the tests keep addressing them on
-# this module (spec-038 Decision 7 P1).
+# this module (spec-038 Decision 7).
 from ..utils.inputs import FILE as FILE
 from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
 from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
@@ -235,7 +235,7 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
     ``make_scalar_converter`` registry hit. It is NOT a
     ``functools.singledispatch`` with a ``forms.Field`` -> ``str`` catch-all
     (which would shadow the raise so every custom field silently became
-    ``String`` - spec-038 Decision 7 P2):
+    ``String`` - spec-038 Decision 7):
 
     - relation / file kinds are matched first by ``isinstance`` (``ModelChoiceField``
       subclasses ``ChoiceField``, so it MUST win before the scalar walk reaches

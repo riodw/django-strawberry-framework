@@ -4,10 +4,10 @@ These are plain Django forms (declared the standard Django way - no package impo
 beyond ``django.forms``); ``apps/products/schema.py`` wraps them in the shipped
 ``DjangoModelFormMutation`` / ``DjangoFormMutation`` bases so the live ``/graphql/``
 tests in ``test_query/test_products_api.py`` exercise the form-mutation pipeline end to
-end. Four forms cover the spec's Decision-12 live matrix:
+end. These forms cover the spec's Decision-12 live matrix:
 
 * ``ItemModelForm`` - a ``ModelForm`` over ``Item`` carrying ``name`` / ``description`` /
-  ``category`` (the FK that drives the ``categoryId``-through-the-form P1 reverse map).
+  ``category`` (the FK that drives the ``categoryId``-through-the-form reverse map).
   Its ``clean_name`` rejects a sentinel value for the field-level ``form.errors`` case,
   and the model's ``unique_item_per_category`` constraint surfaces through ``_post_clean``
   as a ``NON_FIELD_ERRORS`` -> ``"__all__"`` entry (the constraint case needs no custom
@@ -16,14 +16,21 @@ end. Four forms cover the spec's Decision-12 live matrix:
   ``EmailField``) with a ``clean_subject`` that can fail, for the plain-form
   ``{ ok, errors }`` success / validation-failure shapes.
 * ``StampedItemModelForm`` - a ``ModelForm`` over ``Item`` whose ``__init__`` REQUIRES a
-  ``user`` kwarg (popped + validated in ``clean()``), for the P2 ``get_form_kwargs``
+  ``user`` kwarg (popped + validated in ``clean()``), for the ``get_form_kwargs``
   override-injects-``user`` case. Schema-time discovery reads ``base_fields`` (no
   instantiation), so the required-kwarg ``__init__`` is fine at bind; the mutation's
   ``get_form_kwargs`` override supplies the ``user`` at runtime.
+* ``PingForm`` - a trivial model-less ``forms.Form`` backing the mutation that declares
+  NO ``permission_classes``, for the plain-form deny-by-default posture.
 * ``ItemFileModelForm`` - a ``ModelForm`` over ``Item`` carrying the nullable
   ``attachment`` ``FileField``, for the raw multipart ``Upload`` test (the form's
   converter maps the ``FileField`` -> ``Upload`` and the resolver routes the upload into
-  ``files=``).
+  ``files=``) and for the omit-the-file partial update that must preserve the stored file
+  via the bound form's ``initial``.
+* ``DefaultCategoryItemModelForm`` - a ``ModelForm`` over ``Item`` narrowing ``category``
+  out of its ``Meta.fields`` and receiving it as a constructor kwarg, so a duplicate
+  ``name`` reaches a real write-time ``IntegrityError`` (the post-validation constraint
+  case Django's own validation cannot see).
 """
 
 from django import forms
@@ -39,7 +46,7 @@ class ItemModelForm(forms.ModelForm):
     """``ModelForm`` over ``Item`` for the create / update / partial-update live matrix.
 
     ``Meta.fields`` covers ``name`` / ``description`` / ``category`` - the FK
-    ``category`` is the field the generated ``categoryId`` input writes through (the P1
+    ``category`` is the field the generated ``categoryId`` input writes through (the decode
     reverse map). ``clean_name`` rejects ``REJECTED_ITEM_NAME`` so a field-level
     ``form.errors`` entry keys to ``name``; the model's ``unique_item_per_category``
     constraint surfaces automatically through ``_post_clean`` -> ``validate_constraints``
@@ -90,7 +97,7 @@ class PingForm(forms.Form):
 
 
 class StampedItemModelForm(forms.ModelForm):
-    """``ModelForm`` over ``Item`` whose ``__init__`` REQUIRES a ``user`` kwarg (P2 case).
+    """``ModelForm`` over ``Item`` whose ``__init__`` REQUIRES a ``user`` kwarg.
 
     Models the construction-hook migration case: the form cannot be instantiated without
     a ``user``, and its ``clean()`` requires ``user.is_authenticated``. Schema-time
@@ -134,3 +141,28 @@ class ItemFileModelForm(forms.ModelForm):
     class Meta:
         model = Item
         fields = ("name", "category", "attachment")
+
+
+class DefaultCategoryItemModelForm(forms.ModelForm):
+    """``ModelForm`` over ``Item`` that narrows ``category`` away and takes it as a kwarg.
+
+    The write-time ``IntegrityError`` driver, with no mock anywhere in the path.
+    ``Meta.fields`` carries only ``name``, so Django's ``_get_validation_exclusions``
+    excludes ``category`` and ``_post_clean``'s ``validate_constraints()`` skips the
+    ``unique_item_per_category`` constraint entirely - a duplicate ``(category, name)``
+    therefore passes ``form.is_valid()`` and only fails at ``form.save()``'s INSERT,
+    which is the post-validation database failure the ``FieldError`` envelope must
+    absorb. The ``category`` itself arrives through the mutation's ``get_form_kwargs``
+    override (the app's default category), the same construction-hook shape
+    ``StampedItemModelForm`` uses for ``user``; it is attached to the unsaved instance so
+    the row is complete by the time ``save()`` runs.
+    """
+
+    class Meta:
+        model = Item
+        fields = ("name",)
+
+    def __init__(self, *args, category=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if category is not None:
+            self.instance.category = category

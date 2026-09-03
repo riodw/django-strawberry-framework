@@ -296,7 +296,7 @@ class CreateItemWithFileViaForm(DjangoModelFormMutation):
 
     The form's ``attachment`` ``FileField`` maps to the ``Upload`` scalar in the
     generated input; the resolver routes the uploaded value into the form's ``files=``,
-    proving the ``data=`` / ``files=`` split (the P1 file-routing contract).
+    proving the ``data=`` / ``files=`` split (the file-routing contract).
     """
 
     class Meta:
@@ -304,8 +304,53 @@ class CreateItemWithFileViaForm(DjangoModelFormMutation):
         operation = "create"
 
 
+class UpdateItemWithFileViaForm(DjangoModelFormMutation):
+    """Update an ``Item`` through ``ItemFileModelForm`` - the omit-the-file partial update.
+
+    The preserve half of the file contract: a partial update that omits ``attachment``
+    must leave the stored file untouched. The reconstruction supplies the row's other
+    fields under their form keys but contributes NO key for a file field, so the bound
+    ``ItemFileModelForm(instance=...)`` resolves ``attachment`` from its ``initial`` -
+    never re-supplied from the stored path and never cleared.
+    """
+
+    class Meta:
+        form_class = forms.ItemFileModelForm
+        operation = "update"
+
+
+class CreateDefaultCategoryItemViaForm(DjangoModelFormMutation):
+    """Create an ``Item`` through ``DefaultCategoryItemModelForm`` - the write-time race.
+
+    ``get_form_kwargs`` injects the app's default ``Category`` (the same
+    construction-hook shape ``CreateStampedItemViaForm`` uses for ``user``) into a form
+    whose ``Meta.fields`` omits ``category``. Django therefore excludes ``category`` from
+    ``_post_clean``'s validation, ``unique_item_per_category`` is never checked before
+    the write, and a duplicate ``name`` surfaces as a genuine ``IntegrityError`` at
+    ``form.save()`` - the post-validation database failure the ``save_or_field_errors``
+    wrap maps to the ``"__all__"`` ``FieldError`` envelope instead of a top-level
+    ``GraphQLError``.
+    """
+
+    class Meta:
+        form_class = forms.DefaultCategoryItemModelForm
+        operation = "create"
+
+    def get_form_kwargs(
+        self,
+        info,
+        *,
+        data,
+        files,
+        instance=None,
+    ):
+        kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
+        kwargs["category"] = models.Category.objects.order_by("pk").first()
+        return kwargs
+
+
 class CreateStampedItemViaForm(DjangoModelFormMutation):
-    """Create an ``Item`` through ``StampedItemModelForm``, injecting ``user`` (the P2 case).
+    """Create an ``Item`` through ``StampedItemModelForm``, injecting ``user``.
 
     ``StampedItemModelForm.__init__`` REQUIRES a ``user`` kwarg, so this mutation
     overrides ``get_form_kwargs`` to inject ``user=info.context.request.user`` at
@@ -424,11 +469,16 @@ class Mutation:
 
     The form-mutation surface (spec-038) adds the `DjangoModelFormMutation`
     create / update over `Item` via `ItemModelForm` (`createItemViaForm` /
-    `updateItemViaForm`), the file-backed `Upload` form (`createItemWithFileViaForm`),
-    the `get_form_kwargs`-injects-`user` form (`createStampedItemViaForm`), and the
-    model-less plain `DjangoFormMutation` (`submitContact`). The `ModelForm` flavors
-    inherit the same `DjangoModelPermission` default (codenames `add_item` /
-    `change_item`); the plain form opts in with an explicit empty `permission_classes = []`.
+    `updateItemViaForm`), the file-backed `Upload` form (`createItemWithFileViaForm`
+    for the upload and `updateItemWithFileViaForm` for the omit-the-file preserve),
+    the `get_form_kwargs`-injects-`user` form (`createStampedItemViaForm`), the
+    narrowed-constraint form whose duplicate reaches a write-time `IntegrityError`
+    (`createDefaultCategoryItemViaForm`), and the two model-less plain
+    `DjangoFormMutation` flavors - `submitContact`, which opts into anonymous access
+    with an explicit empty `permission_classes = []`, and `submitPing`, which leaves
+    the key unset and so falls to the `DenyAll` deny-by-default (spec-038 Decision 11).
+    The `ModelForm` flavors inherit the same `DjangoModelPermission` default (codenames
+    `add_item` / `change_item`).
 
     The serializer-mutation surface (spec-039) adds the `SerializerMutation`
     create / update over `Item` via `ItemSerializer` (`createItemViaSerializer` /
@@ -449,6 +499,8 @@ class Mutation:
     create_item_via_form = DjangoMutationField(CreateItemViaForm)
     update_item_via_form = DjangoMutationField(UpdateItemViaForm)
     create_item_with_file_via_form = DjangoMutationField(CreateItemWithFileViaForm)
+    update_item_with_file_via_form = DjangoMutationField(UpdateItemWithFileViaForm)
+    create_default_category_item_via_form = DjangoMutationField(CreateDefaultCategoryItemViaForm)
     create_stamped_item_via_form = DjangoMutationField(CreateStampedItemViaForm)
     submit_contact = DjangoMutationField(SubmitContact)
     submit_ping = DjangoMutationField(SubmitPing)

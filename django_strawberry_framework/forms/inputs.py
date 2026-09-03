@@ -20,7 +20,7 @@ The shape is the ``036`` discipline adapted to forms (spec-038 Decision 7):
 
 - The input derives from the **form's declared fields** (``form_class.base_fields``,
   the stable class-level set - read with NO instantiation, so a kwarg-requiring
-  form still has a discoverable shape, P2), not the model's editable columns.
+  form still has a discoverable shape), not the model's editable columns.
 - Where a ``ModelForm`` field has a backing model column, the annotation routes
   through ``model_column_input_annotation`` so the wire contract is symmetric
   with the read ``DjangoType``. A plain ``Form`` field with no column uses
@@ -91,7 +91,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.forms.inputs"
 # the shape-identity component a plain ``DjangoFormMutation`` carries in place of
 # a ``"create"`` / ``"update"`` model operation, so a plain form's input cache
 # key ``(form_class, "form", effective set)`` is well-defined (spec-038
-# Decision 7 P2). The bind keys on it; the generators here do not branch on it.
+# Decision 7). The bind keys on it; the generators here do not branch on it.
 FORM: str = "form"
 
 # The create-shaped operation kinds (everything that is NOT ``PARTIAL``): a
@@ -180,8 +180,7 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
     creation (for a ``ModelForm`` it already includes the model-derived fields).
     Reading it needs no ``form_class()`` call, so a form whose ``__init__``
     requires constructor kwargs (``user``, ``request``, a tenant) still has a
-    discoverable, request-independent stable field shape (spec-038 Decision 7
-    P2 - the kwarg-requiring-form fix). The overridable
+    discoverable, request-independent stable field shape (spec-038 Decision 7). The overridable
     ``get_form_fields(cls)`` classmethod on the base delegates here for its
     default; this module ships the module-level discovery function only.
     """
@@ -243,7 +242,7 @@ def resolve_effective_form_fields(
     """Return the effective ``{name: forms.Field}`` dict after ``fields`` / ``exclude``.
 
     Normalizes + fail-loud validates the narrowing against the form's
-    ``base_fields`` (spec-038 Decision 7 P3):
+    ``base_fields`` (spec-038 Decision 7):
 
     - ``fields`` and ``exclude`` are mutually exclusive;
     - each is normalized (bare-string / duplicate rejection);
@@ -285,7 +284,7 @@ def form_input_type_name(
     *,
     full_field_names: tuple[str, ...],
 ) -> str:
-    """Return the generated input-class name for a form shape (spec-038 Decision 7 P1).
+    """Return the generated input-class name for a form shape (spec-038 Decision 7).
 
     The canonical full shape takes the stable ``<FormClass>Input`` /
     ``<FormClass>PartialInput`` name; a narrowed shape (``Meta.fields`` /
@@ -537,7 +536,7 @@ def build_form_input_class(
     ``PARTIAL`` (the update-shaped input). In the partial input, model-backed
     fields are forced optional (the reconstruction supplies them from the
     located row), but a **non-model extra field keeps its declared
-    ``field.required``** (spec-038 Decision 7 P2 - so a required ``confirm`` stays
+    ``field.required``** (spec-038 Decision 7 - so a required ``confirm`` stays
     required on update). Optional fields widen ``annotation | None`` + a
     ``strawberry.UNSET`` default, the ``036`` shape.
 
@@ -633,7 +632,7 @@ def guard_create_required_fields(
     having overridden ``get_form_kwargs`` / ``get_form``) that materializes a
     narrowed shape FIRST must not suppress the guard for a later non-waiving
     mutation reusing the same cached shape. The guard is tied to the declaration,
-    not the built input shape (spec-038 Decision 7 P2, the create-required guard).
+    not the built input shape (spec-038 Decision 7, the create-required guard).
 
     The drop-detection (``required - effective - waived``) is single-sited in
     ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the
@@ -714,7 +713,7 @@ def build_form_inputs(
     create, or the ``FORM`` sentinel for a plain ``DjangoFormMutation``); the
     partial input is always ``PARTIAL``.
 
-    **The create-required-narrowing guard (spec-038 Decision 7 P2).** A bound
+    **The create-required-narrowing guard (spec-038 Decision 7).** A bound
     form fails required-validation for any ``field.required`` field absent from
     its bound ``data=``, so a create whose effective field set (after
     ``Meta.fields`` / ``Meta.exclude``) omits a still-declared required form field

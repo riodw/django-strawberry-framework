@@ -376,7 +376,7 @@ def _reconstruct_partial_data(
     narrowing drops excluded model-backed fields from the GraphQL input, but the
     bound ``ModelForm`` still validates EVERY field it declares, so an excluded
     required field (e.g. a narrowed-away ``category``) must still be reconstructed
-    from the located row (the prior P1 fix). A file field's ``model_to_dict`` value
+    from the located row. A file field's ``model_to_dict`` value
     is the stored relative path, not a re-bindable ``data=`` value, so file fields
     are excluded (``forms.ImageField`` subclasses ``forms.FileField``, so the one
     ``isinstance`` catches both). Net-new vs. ``036``: the model update does

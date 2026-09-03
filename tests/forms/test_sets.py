@@ -61,6 +61,7 @@ from django_strawberry_framework.forms.inputs import (
 from django_strawberry_framework.forms.sets import (
     _cached_build_form_input,
     _default_mutation_get_form_fields,
+    _form_kwargs_overridden,
     _form_mutation_registry,
     clear_form_shape_build_cache,
     iter_form_mutations,
@@ -588,6 +589,55 @@ def test_cached_build_form_input_runs_required_guard_per_declaration():
             exclude=None,
             guard_required=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("mutation_base", "form_factory"),
+    [(DjangoModelFormMutation, _item_model_form), (DjangoFormMutation, _contact_form)],
+    ids=["modelform", "plain_form"],
+)
+def test_get_form_only_override_trips_the_construction_hook_waiver(mutation_base, form_factory):
+    """Overriding ONLY ``get_form`` counts as a construction-hook override on both flavors.
+
+    ``_form_kwargs_overridden`` tests BOTH construction hooks, and every other
+    consumer in the trees overrides the finer ``get_form_kwargs`` - which
+    short-circuits the check - so the coarser ``get_form`` is the operand that
+    only ever decides for a mutation overriding it ALONE. Both flavors are driven
+    because each detects against its own framework base
+    (``DjangoModelFormMutation`` / ``DjangoFormMutation``), and the
+    overrides-neither control in the same row pins that the detection is not
+    simply always ``True``.
+    """
+    form_cls = form_factory()
+    meta_body = {"form_class": form_cls}
+    if mutation_base is DjangoModelFormMutation:
+        meta_body["operation"] = "create"
+
+    def get_form(
+        self,
+        info,
+        *,
+        data,
+        files,
+        instance=None,
+    ):
+        return form_cls(
+            **self.get_form_kwargs(info, data=data, files=files, instance=instance),
+        )
+
+    Overriding = type(
+        "Overriding",
+        (mutation_base,),
+        {"Meta": type("Meta", (), dict(meta_body)), "get_form": get_form},
+    )
+    Inheriting = type(
+        "Inheriting",
+        (mutation_base,),
+        {"Meta": type("Meta", (), dict(meta_body))},
+    )
+
+    assert _form_kwargs_overridden(Overriding, mutation_base) is True
+    assert _form_kwargs_overridden(Inheriting, mutation_base) is False
 
 
 # ---------------------------------------------------------------------------

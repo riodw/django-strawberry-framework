@@ -36,6 +36,7 @@ from apps.scalars import models as scalars_models
 from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
@@ -982,6 +983,160 @@ def test_get_form_kwargs_override_waives_create_required_guard():
     assert res.data["submit"]["ok"] is True
 
 
+@pytest.mark.django_db
+def test_get_form_only_override_builds_the_form_and_waives_the_required_guard():
+    """A ``get_form``-ONLY override is honored at bind AND at construction.
+
+    The coarser construction hook, exercised without ``get_form_kwargs`` in the
+    picture: the mutation narrows a still-required form field away, which the
+    create-required-narrowing guard rejects unless a construction hook is
+    overridden - so ``finalize_django_types()`` succeeding is itself the assertion
+    that the ``get_form`` override is what waived the guard. The pipeline must then
+    validate the very form object the override returned (not a reconstructed
+    default), pinned by the sentinel the override injects reaching
+    ``cleaned_data`` and by identity against the captured instance.
+    """
+
+    class TwoFieldForm(forms.Form):
+        keep = forms.CharField()
+        injected = forms.CharField()  # required, but dropped by Meta.fields below
+
+    built = {}
+    captured = {}
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = TwoFieldForm
+            fields = ("keep",)
+            permission_classes = []
+
+        def get_form(
+            self,
+            info,
+            *,
+            data,
+            files,
+            instance=None,
+        ):
+            merged = dict(data)
+            merged["injected"] = "from-get-form"
+            built["form"] = TwoFieldForm(data=merged, files=files)
+            return built["form"]
+
+        def perform_mutate(self, form, info):
+            captured["form"] = form
+            captured["injected"] = form.cleaned_data["injected"]
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    # Must NOT raise: the narrowing dropped the required ``injected`` and only
+    # ``get_form`` is overridden, so the waiver has to reach through that operand.
+    finalize_django_types()
+    schema = _schema(Mutation)
+    res = schema.execute_sync(
+        "mutation($d: TwoFieldFormKeepInput!){ submit(data:$d){ ok errors{ field messages } } }",
+        variable_values={"d": {"keep": "k"}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["submit"]["ok"] is True
+    assert captured["injected"] == "from-get-form"
+    assert captured["form"] is built["form"]
+
+
+@pytest.mark.django_db
+def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_unchanged():
+    """A ``get_form_kwargs`` override scoping a relation queryset changes runtime, not the input.
+
+    Two mutations over ONE form, one plain and one overriding ``get_form_kwargs``
+    to pass the request-scoped ``ModelChoiceField`` queryset the form applies in
+    its ``__init__``. Both halves are asserted because either alone is
+    non-distinguishing: the generated input's NAME and annotation set must be
+    identical across the pair (the shape derives from ``get_form_fields()``, never
+    from the construction hook), and a category outside the narrowed queryset must
+    be rejected by the scoped mutation as a field-keyed ``FieldError`` while the
+    unscoped mutation accepts the same id (so the override demonstrably took
+    effect at runtime).
+    """
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class CategoryPickForm(forms.Form):
+        category = forms.ModelChoiceField(queryset=product_models.Category.objects.all())
+
+        def __init__(self, *args, allowed_categories=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            if allowed_categories is not None:
+                self.fields["category"].queryset = allowed_categories
+
+    allowed = {}
+
+    class PickAnyCategory(DjangoFormMutation):
+        class Meta:
+            form_class = CategoryPickForm
+            permission_classes = []
+
+    class PickScopedCategory(DjangoFormMutation):
+        class Meta:
+            form_class = CategoryPickForm
+            permission_classes = []
+
+        def get_form_kwargs(
+            self,
+            info,
+            *,
+            data,
+            files,
+            instance=None,
+        ):
+            kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
+            kwargs["allowed_categories"] = allowed["queryset"]
+            return kwargs
+
+    @strawberry.type
+    class Mutation:
+        pick_any = DjangoMutationField(PickAnyCategory)
+        pick_scoped = DjangoMutationField(PickScopedCategory)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+
+    def _shape(mutation_cls):
+        definition = mutation_cls._input_class.__strawberry_definition__
+        return definition.name, {(f.python_name, str(f.type)) for f in definition.fields}
+
+    any_name, any_fields = _shape(PickAnyCategory)
+    scoped_name, scoped_fields = _shape(PickScopedCategory)
+    assert scoped_name == any_name
+    assert scoped_fields == any_fields
+
+    inside = product_models.Category.objects.create(name=_uniq("Inside"))
+    outside = product_models.Category.objects.create(name=_uniq("Outside"))
+    allowed["queryset"] = product_models.Category.objects.filter(pk=inside.pk)
+
+    outside_id = global_id_for(CategoryT, outside.pk)
+    scoped = schema.execute_sync(
+        "mutation($d: CategoryPickFormInput!){ pickScoped(data:$d){ ok errors{ field messages } } }",
+        variable_values={"d": {"categoryId": outside_id}},
+    )
+    assert scoped.errors is None, scoped.errors
+    assert scoped.data["pickScoped"]["ok"] is False
+    assert [e["field"] for e in scoped.data["pickScoped"]["errors"]] == ["category"]
+
+    unscoped = schema.execute_sync(
+        "mutation($d: CategoryPickFormInput!){ pickAny(data:$d){ ok errors{ field messages } } }",
+        variable_values={"d": {"categoryId": outside_id}},
+    )
+    assert unscoped.errors is None, unscoped.errors
+    assert unscoped.data["pickAny"]["ok"] is True
+    assert unscoped.data["pickAny"]["errors"] == []
+
+
 # ---------------------------------------------------------------------------
 # partial-update reconstruction
 # ---------------------------------------------------------------------------
@@ -1281,6 +1436,121 @@ def test_partial_update_preserves_unprovided_fk_with_to_field_name():
     book.refresh_from_db()
     assert book.title == "Renamed"
     assert book.shelf_id == shelf.pk  # the unchanged FK preserved
+
+
+@pytest.mark.django_db(transaction=True)
+def test_partial_update_omitting_file_field_keeps_it_out_of_the_reconstructed_data(tmp_path):
+    """An omitted file field is never reconstructed into the bound ``data=``, and survives.
+
+    The file exclusion is implemented by omission - the reconstruction skips a
+    ``forms.FileField`` - so the load-bearing property is the ABSENCE of the file
+    key from the reconstructed bound payload, not merely that the stored file
+    happens to survive: ``model_to_dict`` yields the stored relative PATH, a value
+    a field fed from ``files=`` cannot re-bind, and Django can still leave the
+    column alone in some of those shapes. The reconstruction is therefore asserted
+    directly (as this file's decode rows assert ``_decode_form_data`` directly),
+    alongside the end-to-end proof that a scalar-only update leaves the stored
+    ``FieldFile`` name and bytes untouched while the unprovided required FK IS
+    reconstructed from the row.
+    """
+
+    class ItemFileForm(forms.ModelForm):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "attachment")
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        (
+            schema,
+            (
+                _CategoryT,
+                ItemT,
+                _C,
+                UpdateItem,
+            ),
+        ) = _build_item_form_schema(form_class=ItemFileForm)
+        cat = product_models.Category.objects.create(name=_uniq("Cat"))
+        item = product_models.Item(name="Before", category=cat)
+        item.attachment.save("orig.txt", SimpleUploadedFile("orig.txt", b"original"), save=False)
+        item.save()
+        original_name = item.attachment.name
+
+        # The distinguishing assertion: no ``attachment`` key at all, while the
+        # unprovided required FK and the provided scalar are both present.
+        reconstructed = form_resolvers._reconstruct_partial_data(
+            UpdateItem,
+            item,
+            {"name": "After"},
+        )
+        assert "attachment" not in reconstructed
+        assert reconstructed["category"] == cat.pk
+        assert reconstructed["name"] == "After"
+
+        res = schema.execute_sync(
+            "mutation($id: ID!, $d: ItemFileFormPartialInput!){ updateItem(id:$id, data:$d){ "
+            "node{ name } errors{ field messages } } }",
+            variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "After"}},
+        )
+        assert res.errors is None, res.errors
+        payload = res.data["updateItem"]
+        assert payload["errors"] == [], payload["errors"]
+        assert payload["node"]["name"] == "After"
+
+        item.refresh_from_db()
+        assert item.name == "After"
+        assert item.attachment.name == original_name
+        with item.attachment.open("rb") as handle:
+            assert handle.read() == b"original"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "file_field_name",
+    ["attachment", "image"],
+)
+def test_partial_reconstruction_excludes_every_file_field_flavor(file_field_name):
+    """Both a ``FileField`` and its ``ImageField`` subclass stay out of the reconstructed data.
+
+    The exclusion is one ``isinstance(form_field, forms.FileField)``, and
+    ``forms.ImageField`` subclasses ``forms.FileField``, so the two flavors are
+    driven as separate rows over one form: an omitted column of either kind must
+    contribute NO key to the bound ``data=``, while the omitted scalar beside them
+    is reconstructed from the row. ``model_to_dict`` would otherwise hand a
+    ``FieldFile`` to a field whose value can only arrive through ``files=``.
+    """
+
+    class MediaForm(forms.ModelForm):
+        class Meta:
+            model = scalars_models.MediaSpecimen
+            fields = ("label", "attachment", "image")
+
+    class MediaT(DjangoType):
+        class Meta:
+            model = scalars_models.MediaSpecimen
+            fields = ("id", "label")
+            primary = True
+
+    class UpdateMedia(DjangoModelFormMutation):
+        class Meta:
+            form_class = MediaForm
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_media = DjangoMutationField(UpdateMedia)
+
+    finalize_django_types()
+    _schema(Mutation)
+    specimen = scalars_models.MediaSpecimen.objects.create(
+        label=_uniq("Spec"),
+        attachment="scalar_media/files/stored.txt",
+        image="scalar_media/images/stored.png",
+    )
+
+    reconstructed = form_resolvers._reconstruct_partial_data(UpdateMedia, specimen, {})
+    assert file_field_name not in reconstructed
+    assert reconstructed["label"] == specimen.label
 
 
 @pytest.mark.django_db

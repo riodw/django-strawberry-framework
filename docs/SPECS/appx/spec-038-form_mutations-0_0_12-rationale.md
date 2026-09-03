@@ -31,7 +31,9 @@ the spec, stated directly and without chronology.
 Created by Slice 0 of the `038` residual-reconciliation cycle, whose plan is
 [`docs/builder/build-038-form_mutations-0_0_12.md`][build-038] and whose record of
 the move itself is the per-cycle artifact
-[`docs/builder/bld-038-slice-0-rationale_extraction.md`][bld-038-slice-0].
+`docs/builder/bld-038-slice-0-rationale_extraction.md`,
+retired when that cycle closed and recoverable at
+`git show cce37373:docs/builder/bld-038-slice-0-rationale_extraction.md`.
 `spec-038` shipped in `0.0.12` with a [`-terms.csv`][spec-038-terms] companion and
 no `-rationale.md` sibling; this file closes that gap. Nothing in it is new
 reasoning: every passage below was cut from the spec in the same pass that created
@@ -156,7 +158,9 @@ checked nothing against the tree; the cycle's Slice 2 graded the whole corpus an
 rewrote every stale contract statement, recording what changed and why as the
 `**Post-ship:**` bullets under each Decision below, plus the entries under
 [Non-Decision deliberation](#non-decision-deliberation). Its record is
-[`docs/builder/bld-038-slice-2-spec_reconciliation.md`][bld-038-slice-2].
+the per-cycle artifact `docs/builder/bld-038-slice-2-spec_reconciliation.md`,
+retired when that cycle closed and recoverable at
+`git show cce37373:docs/builder/bld-038-slice-2-spec_reconciliation.md`.
 
 **The one shape a move could not discharge is discharged.**
 [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-re-fetch--payload)
@@ -1222,8 +1226,6 @@ Findings and provenance that belong to no single Decision.
 [spec-038]: ../spec-038-form_mutations-0_0_12.md
 
 <!-- docs/builder/ -->
-[bld-038-slice-0]: ../../builder/bld-038-slice-0-rationale_extraction.md
-[bld-038-slice-2]: ../../builder/bld-038-slice-2-spec_reconciliation.md
 [build-038]: ../../builder/build-038-form_mutations-0_0_12.md
 [build-md]: ../../builder/BUILD.md
 

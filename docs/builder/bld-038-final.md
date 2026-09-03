@@ -192,6 +192,8 @@ grep.
 
 ## Cross-artifact walk: how the deferred-work catalog was harvested
 
+> **Every artifact this walk enumerates was retired when the cycle closed** and is recoverable in full from the cycle's commit: `git show cce37373:<path>`. Each was read from disk at the time this pass ran; the paths are commit-resolvable, not disk-resolvable.
+
 `START.md` "Past mistakes": harvesting items from a doc is an **enumerate-and-tick over the
 source's own numbering**, not a section sweep — a sweep looks complete and leaves items unhomed.
 So every source list below was enumerated by its own numbering and every item ticked to a
@@ -216,6 +218,8 @@ and spec-reconciliation sections were read in full.
 `START.md` is explicit that an item routed forward without a named owner dies.
 
 ## `### Deferred work catalog`
+
+> **Provenance paths in this catalog are commit-resolvable.** Every `bld-038-*.md` source cited below other than this report was retired when the cycle closed; recover any of them with `git show cce37373:<path>`. Every item's figures were re-derived in this pass, so no item depends on reading the artifact it names.
 
 Every item carries its source artifact section, the spec line that licenses the deferral if any,
 a one-line description, and a **named owner in prose**. Each was **re-derived in this pass**, not

@@ -9,6 +9,17 @@ Hot-path declaration: none. No slice in this cycle adds runtime cost — the cyc
 Floor-verification scope: none by default. No slice is planned to change a Django / Strawberry integration seam; if Slice 1 proves a code gap and a builder lands source, Worker 1 re-declares the scope in that slice's artifact before the final gate.
 Pre-flight: passed with recorded deviations on 2026-09-02 (see `## Pre-flight record`).
 
+> **Cycle artifacts retired.** The five per-round `bld-038-*.md` artifacts this plan names were
+> deleted when the cycle closed; only this plan and the final report
+> `docs/builder/bld-038-final.md` survive on disk. All five read `Status: final-accepted` before
+> deletion and every one is recoverable in full from the cycle's commit:
+> `git show cce37373:<path>`. Treat every retired `bld-038-*.md` path below as
+> **commit-resolvable rather than disk-resolvable** -- they are retired records, not dead links.
+> The retired five are `bld-038-slice-0-rationale_extraction.md`,
+> `bld-038-slice-1-code_conformance.md`, `bld-038-slice-2-spec_reconciliation.md`,
+> `bld-038-integration.md` and `bld-038-review-1-citation_residue.md`. The
+> cycle-scoped worker-memory files are git-ignored scratch and were not preserved.
+
 ## Cycle shape: a residual-reconciliation cycle, not a feature build
 
 `spec-038` is **shipped**. Its five slices were built and final-accepted at `0.0.12`. This

@@ -9,16 +9,18 @@ Hot-path declaration: none. No slice in this cycle adds runtime cost — the cyc
 Floor-verification scope: none by default. No slice is planned to change a Django / Strawberry integration seam; if Slice 1 proves a code gap and a builder lands source, Worker 1 re-declares the scope in that slice's artifact before the final gate.
 Pre-flight: passed with recorded deviations on 2026-09-02 (see `## Pre-flight record`).
 
-> **Cycle artifacts retired.** The five per-round `bld-038-*.md` artifacts this plan names were
-> deleted when the cycle closed; only this plan and the final report
-> `docs/builder/bld-038-final.md` survive on disk. All five read `Status: final-accepted` before
-> deletion and every one is recoverable in full from the cycle's commit:
-> `git show cce37373:<path>`. Treat every retired `bld-038-*.md` path below as
-> **commit-resolvable rather than disk-resolvable** -- they are retired records, not dead links.
-> The retired five are `bld-038-slice-0-rationale_extraction.md`,
+> **Cycle artifacts retired; this plan is the only survivor.** All six `bld-038-*.md` artifacts
+> this plan names were deleted when the cycle closed. Every one read `Status: final-accepted`
+> before deletion, and every one is recoverable in full from a commit: the five per-round
+> artifacts at `git show cce37373:<path>`, and the final report — retired last, after its durable
+> residue was folded into `## Final test-run gate (folded in from the retired final report)`
+> below — at `git show 31e03eed:docs/builder/bld-038-final.md`. Treat every `bld-038-*.md`
+> path below as **commit-resolvable rather than disk-resolvable**; they are retired records, not
+> dead links. The retired six are `bld-038-slice-0-rationale_extraction.md`,
 > `bld-038-slice-1-code_conformance.md`, `bld-038-slice-2-spec_reconciliation.md`,
-> `bld-038-integration.md` and `bld-038-review-1-citation_residue.md`. The
-> cycle-scoped worker-memory files are git-ignored scratch and were not preserved.
+> `bld-038-integration.md`, `bld-038-review-1-citation_residue.md` and `bld-038-final.md`. The
+> cycle-scoped worker-memory files and `docs/builder/temp-tests/` are git-ignored scratch and were
+> not preserved.
 
 ## Cycle shape: a residual-reconciliation cycle, not a feature build
 
@@ -456,6 +458,162 @@ this round's, and neither is spec-039's live vocabulary. Round 1 fixes spec-038'
 only; the `spec-030` pair goes to the deferred catalog so the class is recorded rather than
 silently half-fixed.
 
+## Final test-run gate (folded in from the retired final report)
+
+`docs/builder/bld-038-final.md` was retired after this section absorbed everything in it that
+survives nowhere else; it is recoverable in full at `git show 31e03eed:docs/builder/bld-038-final.md`.
+Its 18-item deferred catalog is not reproduced — every item's disposition is mapped below.
+
+### The gate as run, 2026-09-02, against the working tree
+
+| # | Command | Result | Verdict |
+| --- | --- | --- | --- |
+| 1 | `uv run pytest --no-cov` | `7306 passed, 40 skipped in 77.45s`, exit **0** | **PASS** |
+| 2a | `uv run python examples/fakeshop/manage.py check` | `System check identified no issues (0 silenced).` | **PASS** |
+| 2b | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | `No changes detected` | **PASS** |
+| 3a | `uv run ruff format --check .` | `438 files already formatted`, exit **0** | **PASS** |
+| 3b | `uv run ruff check .` | `All checks passed!`, exit **0** | **PASS** |
+| 3c | `git diff --check` | exit **2** — 4 trailing-whitespace lines in `docs/feedback2.md` | **RED, not this cycle's** |
+| 4 | Floor verification backstop | record present, re-read this pass; shared `.venv` unmutated | **PASS** |
+
+Method notes worth keeping, because each is a way the reading goes wrong:
+
+- **A pass count cannot see a population that silently shrank.** The run's own output was grepped:
+  `^FAILED` 0, `^ERROR` 0, `errors during collection` 0, and pytest's summary carries an
+  `N errors` term whenever collection failed and this one does not.
+- **Every `--check` measures the WORKING TREE**, which was 180 paths dirty from a concurrent
+  session. The four generator `--check` runs were green, and all four outputs, their DB input and
+  all five renderer scripts were themselves dirty — so that green says the concurrent session's
+  dirty outputs are self-consistent with their dirty inputs under their dirty renderers, and
+  makes **no claim about `HEAD`**. Rendering `HEAD`'s DB with the working tree's renderer is an
+  instrument mismatch, not evidence of drift.
+- **Staged-anchor backstop.** `grep -rn 'TODO(spec-038'` over `.py` and `.md` returned 13 hits and
+  **0** staged anchors in shipped source or tests — all 13 prose about the convention. Positive
+  control on the same instrument: `TODO(spec-050` returns 22 live anchors, so the zero is a
+  reading rather than an empty grep.
+
+### The gate re-run on the committed tree, 2026-09-03
+
+The gate above measured a tree carrying another session's work. The commit was therefore verified
+separately, by materializing `git write-tree` into a detached scratch worktree and running there,
+so the figures below describe **`cce37373` itself** and nothing else: **6950 passed, 40 skipped, 0
+failed**; `ruff format --check` 437 files clean; `ruff check` clean; `check_citations` 909 resolve;
+`check_trailing_commas --check` clean; `manage.py check` and `makemigrations --check` clean;
+`build_kanban_md` / `build_kanban_html` / `build_tree_md` `--check`, `check_kanban_anchors` and
+`check_alpha_parity` all exit 0; `git diff --check` exit 0. `docs/GLOSSARY.md` is stale against its
+own generator at `cce37373`, and a control at pristine `HEAD` shows that staleness pre-exists this
+cycle.
+
+### Floor verification — the cycle's only surviving record
+
+The plan declares scope `none` build-wide; **Slice 1 re-declared it in-scope for GAP-2 and GAP-3**
+(Django's upload / body-parsing and `validate_unique` seams), owned by that slice's Worker 2 build
+pass, verified by two reviewers and re-executed by that slice's Worker 1 final verification. Both
+environments were read at the gate, never stated from memory:
+
+| Environment | Versions as read |
+| --- | --- |
+| floor venv `/tmp/dsf-floor`, outside the working tree | `django 5.2.16`, `strawberry-graphql 0.316.0`, `django-filter 26.1`, `pillow 12.3.0`, Python **3.10.19** |
+| shared `.venv` | `django 6.1`, `strawberry-graphql 0.324.0`, `django-filter 26.1`, `channels 4.3.2`, `djangorestframework 3.18.0`, `pillow 12.3.0`, Python **3.14.2** |
+
+The floor reading is exactly the floor `docs/builder/BUILD.md` states, and the shared `.venv`
+carrying the newest supported set rather than the floor is the mechanical statement that **it was
+not mutated**. No `uv pip install` was issued by any pass. Focused results:
+`tests/forms/test_resolvers.py -k "file or upload or preserve or integrity"` → 11 passed, 57
+deselected; `examples/fakeshop/test_query/test_products_api.py -k "with_file or integrity"` → 3
+passed, 131 deselected, and 4 passed for the union including `default_category`.
+
+### Failability proofs — five, and where the detail went
+
+Slice 1 added five boundaries and proved each failable. The proofs' own manifest and transcripts
+live under `docs/builder/temp-tests/slice-1/` (`proofs.json`, `proofs.md`, `proofs-pass2.md`,
+`proofs-pass2-narrowing.md`), which **`.gitignore:192` declares scratch**, so that detail is not
+preserved in the repository and dies with the scratch tree; the retired Slice 1 artifact
+(`git show cce37373:docs/builder/bld-038-slice-1-code_conformance.md`) is the durable record. At the
+gate all five anchors matched exactly once in the live tree, no `ACTIVE-MUTATION.json` /
+`RESTORE-FAILED.json` existed anywhere, and both control suffixes swept to 0. The first proof's
+shape, as an example of the class this cycle existed to find:
+`forms/sets.py::_form_kwargs_overridden` was mutated by deleting the `get_form` disjunct, leaving
+only the `get_form_kwargs` operand.
+
+Review round 1's own proof is the inverse one owed by a comment-only diff: docstring-stripped AST
+identity across all eight files it touched, re-run at final verification with four controls — two
+firing on executable mutations in two different files, one confirming docstring blindness, one
+confirming the uniqueness abort.
+
+### Hot-path budget
+
+The plan's build-wide `none` holds: this cycle changed **0** executable lines in
+`django_strawberry_framework/`. The only two costs it added are example-app costs, neither package
+cost nor per-request — the two new `DjangoMutationField`s cost one construction each **at schema
+build**, and `CreateDefaultCategoryItemViaForm.get_form_kwargs` issues one
+`Category.objects.order_by("pk").first()` read **per call of that one example-app mutation**,
+inside the pipeline's read phase.
+
+### What the cycle graded, in numbers
+
+**140 contract rows: 96 conformant, 21 spec-stale, 6 deviated, 4 missing an assertion.** Nothing
+planned was left unbuilt, and no package `.py` byte changed to close the four. Two of the four
+were `or` disjuncts that a 100%-covered, fully green subsystem had carried for three releases,
+which neither reading the diff nor a coverage run could surface — the finding that justifies the
+cycle. Slice 2 then rewrote 33 stale contract statements across the spec's five redundant homes;
+the integration pass cross-checked 26 contract classes and repaired 2 divergences; Review round 1
+retired the 32 stranded ordinal citations Slice 2's own label sweep had falsified.
+
+### The one finding no card carries
+
+**Rule 27's `#"substring"` half is as ungated as its ordinal half, and its unresolved population
+is already large.** Measured at the gate: **1,434** substring citations over the 709 readable of
+711 tracked paths, of which **~128 already do not resolve**, concentrated overwhelmingly in
+`docs/builder/DONE/` plans and archived specs. The ordinal half — 36 occurrences — is homed on
+`TODO-ALPHA-053-0.0.15` and `TODO-ALPHA-056-0.0.17`; this half is homed nowhere, and any gate
+written for the ordinal half should be scoped knowing it.
+
+### Cleared by reading, and NOT defects — do not re-flag
+
+A literal-string citation resolver over-reports in both directions, so these were each graded to a
+real anchor and cleared: `spec-028 DoD 4(c)`, `spec-043 scenario 4` (resolves against that spec's
+`## Test plan` numbered item 4), `spec-048 D1` (`### Decision 1`; `D<N>` is a measured repo-wide
+shorthand — 26 such citations exist and 20 resolve), `spec-044 D4-D5` and `spec-044 Test plan 1-7`
+(both read as unresolved only because the spec writes the range with an **en dash** and an
+ASCII-only `.py` citer cannot), and four `spec-099-example-0_0_9` fixture-data hits. A future
+sweep that re-flags them is repeating a graded pass.
+
+### Two CI-blocking reds this cycle does not own
+
+Both were live at the gate, are the concurrent session's, and were left untouched under
+`AGENTS.md` rule 34; they are still live and will fail CI's `lint` job for whoever commits that
+work. `git diff --check` is red on 4 trailing-whitespace lines in `docs/feedback2.md`, a tracked
+maintainer review-input document. `scripts/check_trailing_commas.py --check` is red on 7 layout
+violations — 5 in two untracked `docs/spec-037-*` drafts, 2 in `tests/utils/test_input_values.py`
+and `tests/utils/test_permissions.py`. Neither was fixed: that script's default mode is a
+repo-wide auto-fix that would rewrite another session's untracked files.
+
+### Where the deferred catalog's 18 items went
+
+Discharged on the maintainer's instruction 2026-09-03, which widened the fence to the board DB:
+
+- **Fixed outright** (in `cce37373`): item 1, `TODAY.md`'s three homes naming six of the eight
+  shipped form mutations; item 7, `examples/fakeshop/apps/products/schema.py::Mutation`'s
+  docstring omitting `submitPing`. Both now name all eight.
+- **Carded on `TODO-ALPHA-056-0.0.17`**: item 12, the ordinal gate — its existing
+  `check_citations.py` bullet was widened from `Decision <N>` to any ordinal token and now carries
+  the en-dash and numbered-list/abbreviation provisions plus the maintainer policy call. A new
+  bullet carries items 8, 10, 11, 15, 16 and 18's live row as 13 stranded sites in `tests/` and
+  `examples/`. Item 6's measurement was folded into that card's `TODO-ALPHA-` id sweep, corrected:
+  its own command now returns 34 rather than 75 because the companions moved to
+  `docs/SPECS/appx/`, and the spec-036 pair names three shipped cards over six occurrences with no
+  `TODO-ALPHA-037` among them.
+- **Carded on `TODO-ALPHA-053-0.0.15`**: a new bullet carries items 9, 13, 14 and the package half
+  of items 8 and 16 as 26 stranded sites in that card's own WP files. Item 17's `[spec-011]`
+  bullet was corrected there — the documentation half is `056`'s, not `057`'s, and the
+  re-derivation trap's `9` is now 42.
+- **Recorded in the rationale companion, no card owed**: item 3, the two `forms/inputs.py` guards
+  the spec is deliberately silent about, under Decision 7; item 2, the concurrent session's five
+  working-tree-only hunks, under `## Non-Decision deliberation`.
+- **Not deferrals**: item 4 (`docs/SPECS/NEXT.md` dirty, the concurrent session's); item 5 (four
+  `unset_sentinel` failures, moot); item 18's two struck rows (kept above as cleared cases).
+
 ## Artifact list
 
 - `docs/builder/bld-038-slice-0-rationale_extraction.md`
@@ -463,7 +621,7 @@ silently half-fixed.
 - `docs/builder/bld-038-slice-2-spec_reconciliation.md`
 - `docs/builder/bld-038-integration.md`
 - `docs/builder/bld-038-review-1-citation_residue.md`
-- `docs/builder/bld-038-final.md`
+- `docs/builder/bld-038-final.md` (retired last, after its residue was folded into this plan)
 
 ## Checklist
 
@@ -472,4 +630,4 @@ silently half-fixed.
 - [x] Slice 2: spec reconciliation — rewrite every stale contract statement to the shipped shape, and record what changed and why as `**Post-ship:**` bullets in the rationale companion -> `docs/builder/bld-038-slice-2-spec_reconciliation.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-038-integration.md`
 - [x] Review round 1: citation residue — the spec-038 ordinal citations Slice 2's rewrite falsified in package source -> `docs/builder/bld-038-review-1-citation_residue.md`
-- [x] Final test-run gate -> `docs/builder/bld-038-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-038-final.md` (retired last; its residue is folded into `## Final test-run gate (folded in from the retired final report)` above)
